@@ -203,6 +203,9 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
             .map(|bar| bar.input.read(cx).text().to_string()),
     );
     out += &format!("[dump] archive_after_seconds={:?}\n", browser.archive_after.map(|duration| duration.as_secs()));
+    if let Some(toast) = &this.toast {
+        out += &format!("[dump] toast={:?}\n", toast.message);
+    }
     if let Some(find) = &this.find_bar {
         out += &format!("[dump] find={:?} count={:?} active={} searching={}\n", find.input.read(cx).text(), find.count, find.active, find.searching);
     }

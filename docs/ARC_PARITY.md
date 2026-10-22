@@ -72,8 +72,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 |---|---|---|---|
 | Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | missing | No undo manager for the sidebar. Undo in the Command Bar input not checked either (?) |
 | Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in our `TextInput` and on pages through CEF (?). No menu items |
-| Copy URL (clean link without trackers) | ⇧⌘C | missing | Also needs the "Copied a clean link without trackers" toast |
-| Copy URL as Markdown | ⌥⇧⌘C | missing | — |
+| Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
+| Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
 | Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | missing | — |
 | Paste and Match Style | ⇧⌘V | missing | — |
 | Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | partial | Find in Page via CEF, live matches/count, next/previous (Enter/Shift+Enter, ⌘G/⇧⌘G), Escape to close. Find and Replace and Jump to Selection remain missing |
@@ -416,12 +416,13 @@ rows marked partial expose the setting from the Command Bar instead.
 
 ## 18. Notifications and toasts
 
-The main toasts from the `Toasts` module. We have no toast mechanism at all.
+The main toasts from the `Toasts` module. Passive GPUI child-window toasts
+are implemented for copied links; the remaining notifications follow below.
 
 | Toast | Status |
 |---|---|
 | Undo for actions ("“%@”. ⌘Z to Undo.") | missing |
-| Copied Current URL / clean link without trackers / Copied item links / as quote | missing |
+| Copied Current URL / clean link without trackers / Copied item links / as quote | partial (URL, clean URL and Markdown done; multi-item links and quotes remain) |
 | Pinned Tab to “%@” / Un-Pinned Tab from “%@” | missing |
 | Auto archived %d tabs; Tab/Folder restored to … | missing |
 | New Tab Created in %@ (with the sidebar hidden); New Space Created | missing |
@@ -494,9 +495,9 @@ The main toasts from the `Toasts` module. We have no toast mechanism at all.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 42
-- **partial**: 19
-- **missing**: 234
+- **done**: 44
+- **partial**: 20
+- **missing**: 231
 
 ### Biggest gaps (by importance for parity)
 
@@ -516,7 +517,7 @@ rows without a status aren't counted.
 8. **Profiles.** Currently one cache for everything.
 9. **Settings window**, including the shortcut editor with the "Arc or
    website" priority.
-10. **Shortcuts.** Missing ⇧⌘C, ⌘Y and ⇧⌘L.
+10. **Shortcuts.** Missing ⌘Y and ⇧⌘L.
 11. **Basic browser features:** history, downloads,
     DevTools, print, loading indicator, new and incognito windows.
 12. **Media controls and PiP, toasts with Undo, onboarding and import.**

@@ -2,6 +2,7 @@
 mod automation;
 mod native;
 mod find;
+mod toast;
 pub mod pages;
 pub mod text_input;
 pub mod window;

@@ -55,6 +55,8 @@ actions!(
     browser,
     [
         OpenCommandBar,
+        CopyUrl,
+        CopyUrlAsMarkdown,
         NewSpace,
         EditCurrentUrl,
         CloseTab,
@@ -111,6 +113,8 @@ macro_rules! window_shortcuts {
 window_shortcuts! {
     "cmd-t" => OpenCommandBar,
     "cmd-l" => EditCurrentUrl,
+    "cmd-shift-c" => CopyUrl,
+    "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
     "cmd-shift-t" => RestoreTab,
     "cmd-shift-k" => ClearToday,
@@ -270,6 +274,8 @@ pub enum Command {
     RenameSpace,
     FindPage,
     ArchiveSettings,
+    CopyUrl,
+    CopyUrlAsMarkdown,
     ToggleSidebar,
     TogglePin,
     TogglePinnedSection,
@@ -310,6 +316,7 @@ pub struct CommandBar {
 pub enum OverlayKind {
     CommandBar,
     Find,
+    Toast,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
 }
@@ -343,6 +350,7 @@ impl Render for Overlay {
             .update(cx, |browser, cx| match kind {
                 OverlayKind::CommandBar => browser.render_command_bar_overlay(cx),
                 OverlayKind::Find => browser.render_find_bar(cx),
+                OverlayKind::Toast => browser.render_toast(),
                 OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
             })
             .unwrap_or_else(|_| div().into_any_element())
@@ -369,6 +377,8 @@ pub struct BrowserWindow {
     pub sidebar_visible: bool,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
+    pub(crate) toast: Option<crate::toast::Toast>,
+    pub(crate) toast_generation: u64,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
     pub floating_sidebar: Option<FloatingSidebar>,
@@ -433,6 +443,8 @@ impl BrowserWindow {
             sidebar_visible: true,
             command_bar: None,
             find_bar: None,
+            toast: None,
+            toast_generation: 0,
             pages,
             floating_sidebar: None,
             main_window: window.window_handle(),
@@ -671,6 +683,8 @@ impl BrowserWindow {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let commands = [
+                (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
+                (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::ArchiveSettings, "Archive Tabs After…", "archive tabs after|auto archive settings|change auto archiving", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
@@ -787,6 +801,8 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::CopyUrl => self.copy_url(false, cx),
+            Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
             Command::ArchiveSettings => {
                 if let Some(bar) = &mut self.command_bar {
                     bar.target = Target::ArchiveInterval;
@@ -1636,6 +1652,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(Self::on_open_command_bar))
             .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
             .on_action(cx.listener(Self::on_edit_current_url))
+            .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))
+            .on_action(cx.listener(|this, _: &CopyUrlAsMarkdown, _, cx| this.copy_url(true, cx)))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))

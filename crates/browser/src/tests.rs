@@ -1155,3 +1155,49 @@ fn auto_archive_picker_preserves_a_custom_saved_interval_on_enter(cx: &mut TestA
     bar(&view, cx).simulate_keystrokes("enter enter");
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(12345)));
 }
+
+#[gpui::test]
+fn copy_url_cleans_trackers_and_keeps_page_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/article?utm_source=mail&id=4#part".into() });
+    fake.take_calls();
+    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, shift: true, key: "c".into(), ..Default::default() }));
+    let clipboard = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(clipboard.as_deref(), Some("https://example.com/article?id=4#part"));
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Copied a clean link without trackers"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusUi)));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_keystrokes("cmd-v");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("https://example.com/article?id=4#part"));
+}
+
+#[gpui::test]
+fn markdown_copy_and_command_actions_write_links(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::TitleChanged { view: page(1), title: "A [page]".into() });
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/a(b)?fbclid=track&lang=en".into() });
+    cx.simulate_keystrokes("cmd-alt-shift-c");
+    let clipboard = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(clipboard.as_deref(), Some("[A \\[page\\]](https://example.com/a%28b%29?lang=en)"));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("copy url as markdown");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx), None);
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())), clipboard);
+}
+
+#[gpui::test]
+fn repeated_toasts_replace_each_other_and_expire_without_stealing_focus(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-shift-c");
+    assert!(view.read_with(cx, |w, _| w.toast.is_some()));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-alt-shift-c");
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Copied URL as Markdown"));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.toast.is_none()));
+}

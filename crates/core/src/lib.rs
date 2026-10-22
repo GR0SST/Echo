@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 pub mod omnibox;
+pub mod links;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
