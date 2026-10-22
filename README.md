@@ -13,7 +13,7 @@ not its name, logos or assets.
 ## Status
 
 What Arc has and what we already have is tracked in
-[`docs/ARC_PARITY.md`](docs/ARC_PARITY.md) (in Russian), built from the
+[`docs/ARC_PARITY.md`](docs/ARC_PARITY.md), built from the
 Arc 1.169.0 app bundle. Each item is marked done, partial or missing.
 
 Working so far: the vertical sidebar with Pinned and Today tabs, Spaces that
@@ -59,8 +59,8 @@ and replays real input, e.g. `scripts/drive.sh "key cmd-t; type example.com;
 key enter; wait 3; shot /tmp/a.png; quit"`. Commands are listed in
 `crates/browser/src/automation.rs`.
 
-Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md)
-(in Russian). In short: match Arc, write Rust, build the UI in GPUI, cover
+Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md).
+In short: match Arc, write Rust, build the UI in GPUI, cover
 UI behavior with tests, and commit each finished change to `main`.
 
 ### Chromium fork

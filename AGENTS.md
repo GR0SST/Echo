@@ -1,115 +1,118 @@
 # AGENTS.md
 
-Правила для всех агентов (Claude, Codex и др.), работающих в этом репозитории.
-`CLAUDE.md` — символическая ссылка на этот файл; редактируйте только `AGENTS.md`.
+Rules for every agent (Claude, Codex and others) working in this repository.
+`CLAUDE.md` is a symlink to this file; edit only `AGENTS.md`.
 
-## Цель проекта
+## Goal
 
-The Browser Company закрывает браузер Arc 22 декабря 2026 года.
-Наша задача — **к 22.12.2026 как минимум сделать полную копию Arc**.
-Дальнейшее развитие (собственные фичи, отличия от Arc) — только после этого.
+The Browser Company is shutting down the Arc browser on December 22, 2026.
+Our task: **by 22.12.2026, at minimum, ship a complete copy of Arc**.
+Anything beyond that (our own features, departures from Arc) comes after.
 
-- Ориентир по функциональности и поведению — Arc. Если сомневаетесь, как
-  должна работать фича, делайте так, как в Arc. Это касается и «ощущения»:
-  жесты, анимации, физика (например, свайп по сайдбару листает Spaces
-  вслед за пальцами, а не переключает рывком).
-- Приоритет — паритет с Arc к дедлайну. Не тратьте время на функции,
-  которых в Arc нет, пока не закрыт паритет.
-- Ключевые фичи Arc, которые должны быть: вертикальный сайдбар с вкладками,
-  Spaces и профили, закреплённые (Pinned) и избранные (Favorites) вкладки,
-  автоархивация вкладок, Split View, Little Arc, Command Bar, Peek,
-  Boosts, Easels, Library, Air Traffic Control, Picture-in-Picture,
-  темы/цвета Spaces, синхронизация.
-- Полный список отличий от Arc (по бандлу Arc 1.169.0) — `docs/ARC_PARITY.md`,
-  статусы «сделано / частично / нет». Берите задачи оттуда и обновляйте
-  статус строки в том же изменении, где закрываете пункт.
+- Arc is the reference for features and behavior. When unsure how something
+  should work, do what Arc does. That includes the feel: gestures,
+  animations, physics (e.g. a swipe on the sidebar drags Spaces along with
+  the fingers instead of switching with a jump).
+- Parity with Arc by the deadline comes first. Don't spend time on features
+  Arc doesn't have until parity is reached.
+- Key Arc features we must have: vertical sidebar with tabs, Spaces and
+  profiles, Pinned and Favorites tabs, tab auto-archiving, Split View,
+  Little Arc, Command Bar, Peek, Boosts, Easels, Library, Air Traffic
+  Control, Picture-in-Picture, Space themes and colors, sync.
+- The full list of differences from Arc (built from the Arc 1.169.0 bundle)
+  is `docs/ARC_PARITY.md`, with statuses done / partial / missing. Take tasks
+  from there and update the row's status in the same change that closes it.
 
-## Платформы и язык
+## Platforms and language
 
-- Браузер **кроссплатформенный**: macOS, Windows, Linux. Никакого
-  macOS-only кода в собственной логике.
-- Собственный код пишем **на Rust**. Swift/Objective-C не используем
-  (они привязывают к маку) — кроме неизбежных платформенных прослоек,
-  которые нужно держать минимальными и изолированными.
-- Платформенно-зависимый код изолировать за общими интерфейсами,
-  чтобы остальная логика собиралась на всех платформах.
+- The browser is **cross-platform**: macOS, Windows, Linux. No macOS-only
+  code in our own logic.
+- Our code is written **in Rust**. No Swift/Objective-C (they tie us to the
+  Mac), except unavoidable platform shims, kept minimal and isolated.
+- Isolate platform-specific code behind shared interfaces so the rest of
+  the logic builds on every platform.
+- Everything in the repository is in English: docs, comments, commit
+  messages, UI strings.
 
-## Архитектура
+## Architecture
 
-- **Весь интерфейс браузера — на [GPUI](https://www.gpui.rs/)** (UI-фреймворк
-  Zed, крейт `gpui`): сайдбар, Spaces, Command Bar, Split View, Little Arc,
-  настройки — всё. UI Chromium (Views, WebUI-страницы вроде настроек)
-  для интерфейса браузера не используем и не дорабатываем.
-- **Chromium — только движок**, отрисовывает веб-страницы. В GPUI-окно он
-  встраивается через CEF (Chromium Embedded Framework, крейт `cef`).
-- Rust-приложение — Cargo workspace в корне репозитория (`Cargo.toml`,
+- **The whole browser UI is built with [GPUI](https://www.gpui.rs/)** (Zed's
+  UI framework, crate `gpui`): sidebar, Spaces, Command Bar, Split View,
+  Little Arc, settings, everything. Chromium's UI (Views, WebUI pages such
+  as settings) is not used or extended for the browser's interface.
+- **Chromium is only the engine** that renders web pages. It is embedded in
+  the GPUI window through CEF (Chromium Embedded Framework, crate `cef`).
+- The Rust app is a Cargo workspace at the repository root (`Cargo.toml`,
   `crates/`):
-  - `crates/browser` — GPUI-приложение (окна, вьюхи, обработка ввода);
-  - `crates/core` — модель браузера без UI и без движка (Spaces, вкладки,
-    закрепление, архивация и т.п.), покрыта unit-тестами;
-  - `crates/engine` — обёртка над CEF; остальной код работает с движком
-    только через неё, чтобы движок можно было заменить. Там же бинарник
-    `browser_helper` — подпроцессы Chromium;
-  - `crates/bundle` — сборщик `.app` (на macOS CEF работает только из бандла).
-- Страницы Chromium — нативные виды поверх окна GPUI, поэтому GPUI не может
-  рисовать поверх них в том же окне. UI, который должен лежать над страницей
-  (Command Bar и т.п.), — отдельное прозрачное дочернее окно
-  (`CommandBarOverlay`). Браузерные горячие клавиши, нажатые внутри страницы,
-  перехватывает движок (`WINDOW_SHORTCUTS` в `window.rs` — единый список).
-- `Engine::pump()` (CEF) обрабатывает события AppKit изнутри себя: не держать
-  `borrow` состояния окна/страниц во время прокачки, иначе повторный вход.
-- `src/` (форк Chromium) правим только для изменений самого движка, которых
-  нельзя добиться через CEF. Готовые сборки CEF отстают от форка (CEF 154
-  против Chromium 158 в `src/`), поэтому патчи движка позже переносим на
-  ветку Chromium, которую поддерживает CEF.
+  - `crates/browser`: the GPUI app (windows, views, input handling);
+  - `crates/core`: the browser model without UI or engine (Spaces, tabs,
+    pinning, archiving, sessions), covered by unit tests;
+  - `crates/engine`: the CEF wrapper. The rest of the code talks to the
+    engine only through it, so the engine can be replaced. It also holds
+    the `browser_helper` binary, Chromium's subprocesses;
+  - `crates/bundle`: builds the `.app` (on macOS CEF only runs from a bundle).
+- Chromium pages are native views on top of the GPUI window, so GPUI can't
+  draw over them in the same window. UI that must lie over a page (Command
+  Bar etc.) is a separate transparent child window (`Overlay` in
+  `window.rs`). Browser shortcuts pressed inside a page are intercepted by
+  the engine (`WINDOW_SHORTCUTS` in `window.rs` is the single list).
+- `Engine::pump()` (CEF) may process AppKit events inside itself: don't hold
+  a `borrow` of window or page state while pumping, or it re-enters. It also
+  leaves queued events to the toolkit's loop, otherwise AppKit's mouse
+  tracking (window buttons, resizing) breaks.
+- Edit `src/` (the Chromium fork) only for changes to the engine itself that
+  CEF can't provide. Prebuilt CEF lags behind the fork (CEF 154 vs Chromium
+  158 in `src/`), so engine patches are later ported to the Chromium branch
+  CEF supports.
 
-## Устройство репозитория
+## Repository layout
 
-См. `README.md`. Кратко:
+See `README.md`. In short:
 
-- `src/` — исходники Chromium, форк `https://github.com/GR0SST/chromium`,
-  рабочая ветка `browser/main`; `upstream` — официальный Chromium.
-- `depot_tools/` — официальные инструменты Chromium, не редактировать.
-- `config/args.gn` — настройки сборки, `scripts/` — обёртки для команд.
-- Команды: `bun run sync`, `bun run build`, `bun run browser`.
+- `src/`: Chromium sources, fork `https://github.com/GR0SST/chromium`,
+  working branch `browser/main`; `upstream` is official Chromium.
+- `depot_tools/`: official Chromium tools, do not edit.
+- `config/args.gn`: build settings; `scripts/`: command wrappers.
+- Commands: `bun run sync`, `bun run build`, `bun run browser`.
 
-## Правила работы
+## Working rules
 
-- Тесты — `cargo test`. Приложение с движком: `cargo run -p bundle`, затем
-  `open target/bundle/browser.app` (`cargo run -p browser` — только UI,
-  страницы будут заглушками). Бинарники CEF лежат в `third_party/cef`
-  (`.cargo/config.toml`), скачиваются автоматически.
-- Dev-сборки запускают Chromium с `--use-mock-keychain`, иначе macOS просит
-  пароль от связки ключей после каждой пересборки.
-- После тестов проверять изменение в настоящем приложении:
-  `scripts/drive.sh "<сценарий>"` запускает копию бандла с отдельным
-  профилем и выполняет сценарий из `crates/browser/src/automation.rs`
+- Tests: `cargo test`. App with the engine: `cargo run -p bundle`, then
+  `open target/bundle/browser.app` (`cargo run -p browser` is UI only,
+  pages are placeholders). CEF binaries live in `third_party/cef`
+  (`.cargo/config.toml`) and are downloaded automatically.
+- Dev builds run Chromium with `--use-mock-keychain`, otherwise macOS asks
+  for the keychain password after every rebuild.
+- After the tests, check the change in the real app:
+  `scripts/drive.sh "<script>"` runs a copy of the bundle with a separate
+  profile and executes a script from `crates/browser/src/automation.rs`
   (`key cmd-t; type text; click x y [hold_ms]; drag x1 y1 x2 y2;
   swipe x y dx [hold]; shot file.png; shotstack file.png; views; windows;
-  dump; quit`). Скриншоты смотреть глазами.
-  Нажатия идут настоящими `NSEvent`, поэтому ловят баги фокуса и
-  маршрутизации клавиш, которые тесты GPUI не видят. Для кнопок окна и
-  ресайза нужен клик с удержанием (`click 20 20 300`) или `drag`: так
-  работают циклы отслеживания мыши AppKit, как с живой рукой.
-  Если `windows` показывает `onScreen=false`, окно закрыто другими окнами
-  и macOS его не перерисовывает: снимки и `dump` устаревают, это не баг.
-- Любое поведение интерфейса (горячие клавиши, клики, ввод текста, фокус)
-  покрывать тестом в `crates/browser/src/tests.rs`. Такой тест открывает
-  настоящее окно на тестовой платформе GPUI и действует как пользователь:
-  `simulate_keystrokes`, `simulate_input`, клик по `debug_selector`
-  с наведением мыши. Не сообщать «готово», пока `cargo test` не зелёный.
-- Command Bar (⌘T) — главный способ открыть страницу, как в Arc:
-  ⌘T не создаёт пустую вкладку, а открывает всплывающее окно ввода.
-- Наш код (всё, кроме `src/` и `depot_tools/`) лежит в репозитории
-  `https://github.com/GR0SST/browser`, ветка `main`. Каждое законченное
-  изменение (`cargo test` зелёный, проверено в приложении) сразу коммитить
-  и пушить прямо в `main` отдельным небольшим коммитом, чтобы при
-  проблемах можно было откатиться. Не копить незакоммиченную работу.
-- Изменения в `src/` — отдельными осмысленными коммитами в `browser/main`,
-  чтобы их было легко переносить при обновлении Chromium.
-- Минимизировать правки в существующем коде Chromium: новую логику класть
-  в Rust-крейты, а в Chromium оставлять только тонкие точки интеграции.
-  Это упрощает ребейз на новый upstream.
-- Сохранять LICENSE и уведомления сторонних компонентов.
-- Не использовать торговые марки, логотипы и ассеты Arc / The Browser
-  Company — копируем функциональность и UX, а не бренд.
+  dump; quit`). Look at the screenshots yourself.
+  Input is sent as real `NSEvent`s, so it catches focus and key routing
+  bugs that GPUI tests miss. Window buttons and resizing need a held click
+  (`click 20 20 300`) or `drag`: that is how AppKit's mouse tracking loops
+  work, as with a real hand.
+  If `windows` shows `onScreen=false`, the window is covered by other
+  windows and macOS doesn't redraw it: screenshots and `dump` go stale,
+  that is not a bug.
+- Cover any UI behavior (shortcuts, clicks, text input, focus) with a test
+  in `crates/browser/src/tests.rs`. Such a test opens a real window on
+  GPUI's test platform and acts like a user: `simulate_keystrokes`,
+  `simulate_input`, clicking a `debug_selector` after hovering it. Don't
+  report "done" until `cargo test` is green.
+- The Command Bar (⌘T) is the main way to open a page, as in Arc:
+  ⌘T doesn't create an empty tab, it opens a popup input.
+- Our code (everything except `src/` and `depot_tools/`) lives in
+  `https://github.com/GR0SST/browser`, branch `main`. Commit and push each
+  finished change (`cargo test` green, checked in the app) straight to
+  `main` as a separate small commit, so it can be rolled back if needed.
+  Don't let uncommitted work pile up.
+- Changes in `src/` go as separate meaningful commits on `browser/main`,
+  so they are easy to carry over when updating Chromium.
+- Keep edits to existing Chromium code minimal: put new logic in the Rust
+  crates and leave only thin integration points in Chromium. That makes
+  rebasing onto a new upstream easier.
+- Keep LICENSE files and third-party notices.
+- Don't use Arc / The Browser Company trademarks, logos or assets: we copy
+  the functionality and UX, not the brand.

@@ -1,520 +1,522 @@
-# Паритет с Arc
+# Parity with Arc
 
-Сравнение с Arc для macOS версии 1.169.0 (`/Applications/Arc.app`). Наш код:
-`crates/core`, `crates/browser`, `crates/engine` на дату документа.
+Comparison with Arc for macOS version 1.169.0 (`/Applications/Arc.app`).
+Our code: `crates/core`, `crates/browser`, `crates/engine` as of this
+document's date.
 
-**Откуда данные.** Arc не запускали. Всё взято из файлов бандла:
-главное меню в `Base.lproj/MainMenu.nib` (пункты, клавиши, синонимы
-для Command Bar), AppleScript-словарь `Arc.sdef`, строки интерфейса
-и комментарии переводчиков из бинарника (`Contents/MacOS/Arc`, сгруппированы
-по исходным модулям: `PreferencesFeature`, `ContextMenus`, `TypeTravel`,
-`CommandBar`, `SpaceStyleEditor`, `Toasts`, `LittleBrowser`, `PictureInPicture`
-и др.), ресурсные бандлы `ARC_*.bundle`. Пометка **(?)** значит, что пункт
-выведен косвенно. Например, клавиша не записана в nib и назначается в коде,
-или строка есть, но её точное место в интерфейсе неизвестно.
+**Where the data comes from.** Arc was never launched. Everything comes from
+the bundle's files: the main menu in `Base.lproj/MainMenu.nib` (items,
+shortcuts, Command Bar synonyms), the AppleScript dictionary `Arc.sdef`,
+interface strings and translator comments in the binary
+(`Contents/MacOS/Arc`, grouped by source module: `PreferencesFeature`,
+`ContextMenus`, `TypeTravel`, `CommandBar`, `SpaceStyleEditor`, `Toasts`,
+`LittleBrowser`, `PictureInPicture` and others), and the `ARC_*.bundle`
+resource bundles. **(?)** marks an item that was inferred indirectly, e.g.
+a shortcut that isn't in the nib and is assigned in code, or a string whose
+exact place in the UI is unknown.
 
-Easels не входят в сравнение по решению пользователя. Notes (документы Arc)
-упомянуты один раз.
+Easels are left out of the comparison by the owner's decision. Notes (Arc's
+documents) are mentioned once.
 
-Статусы: **сделано**, **частично**, **нет**.
+Statuses: **done**, **partial**, **missing**.
 
 ---
 
-## 1. Главное меню и горячие клавиши
+## 1. Main menu and keyboard shortcuts
 
-Клавиши взяты из nib. У пунктов меню есть `arcKeyBindingID`, поэтому
-пользователь может их переназначить (см. раздел «Настройки → Shortcuts»).
-Пункты с пометкой «скрыт» есть в меню, но не видны. Обычно это
-альтернативные клавиши.
+Shortcuts come from the nib. Menu items have an `arcKeyBindingID`, so users
+can rebind them (see "Settings → Shortcuts"). Items marked "hidden" exist in
+the menu but aren't shown; usually they are alternative shortcuts.
 
-### Arc (меню приложения)
+### Arc (app menu)
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| About Arc | — | нет | Окно «О программе» с лицензиями (в Arc это `Credits.html`) |
-| Preferences… | ⌘, | нет | Окна настроек нет совсем |
-| Share Arc (реферальная ссылка) | — | нет | Вне паритета (сервис Arc) |
-| Set as Default Browser | — | нет | Регистрация браузером по умолчанию, промпты |
-| Import from Another Browser… | — | нет | См. «Онбординг/импорт» |
-| Check for Updates… | — | нет | Автообновление |
-| Privacy Policy | — | нет | — |
-| Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | нет | Стандартные пункты меню не заведены (у нас в меню только Quit) |
-| Sign Out | — | нет | Аккаунта нет |
-| Quit | ⌘Q | сделано | Подтверждения «Warn before quitting» нет |
+| About Arc | — | missing | About window with licenses (Arc's `Credits.html`) |
+| Preferences… | ⌘, | missing | No settings window at all |
+| Share Arc (referral link) | — | missing | Out of parity (Arc service) |
+| Set as Default Browser | — | missing | Registering as the default browser, prompts |
+| Import from Another Browser… | — | missing | See "Onboarding and import" |
+| Check for Updates… | — | missing | Auto-update |
+| Privacy Policy | — | missing | — |
+| Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | missing | Standard menu items not set up (our menu only has Quit) |
+| Sign Out | — | missing | No account |
+| Quit | ⌘Q | done | No "Warn before quitting" confirmation |
 
 ### File
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Tab… (открывает Command Bar) | ⌘T | сделано | — |
-| New Window | ⌘N | нет | Окно у нас одно |
-| Blank Window | ⌃⌘N | нет | — |
-| New Incognito Window | ⇧⌘N | нет | Инкогнито-окно с отдельным сайдбаром («Incognito Tabs») |
-| New Little Arc Window | ⌥⌘N | нет | См. «Little Arc» |
-| Restore Last Closed Tab | ⇧⌘T | сделано | Возвращает последнюю вкладку из архива в её Space |
-| Open Command Bar (на текущем URL) | ⌘L | сделано | — |
-| New Boost / Edit Boost / Boost Gallery | скрыт | нет | См. «Boosts» |
-| New Profile | — | нет | Профилей нет |
-| New Note | ⌃⇧N | нет | Заметки (Arc Notes) |
-| New Note (in Split) | ⌃⌥N (скрыт) | нет | — |
-| Close Window | ⇧⌘W | нет | — |
-| Archive Tab | ⌘W | сделано | Today уходит в архив, закреплённая закрывается, остаётся в Pinned и возвращается к закреплённому адресу |
-| Share… | — | нет | Системное меню «Поделиться» |
-| Capture… | ⇧⌘2 | нет | Снимок области страницы |
-| Capture Full Page / Capture in Portrait Mode | — | нет | — |
-| Save Page As | ⇧⌘S | нет | — |
-| Print | ⌘P | нет | — |
+| New Tab… (opens the Command Bar) | ⌘T | done | — |
+| New Window | ⌘N | missing | We have a single window |
+| Blank Window | ⌃⌘N | missing | — |
+| New Incognito Window | ⇧⌘N | missing | Incognito window with its own sidebar ("Incognito Tabs") |
+| New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
+| Restore Last Closed Tab | ⇧⌘T | done | Brings the last archived tab back to its Space |
+| Open Command Bar (on the current URL) | ⌘L | done | — |
+| New Boost / Edit Boost / Boost Gallery | hidden | missing | See "Boosts" |
+| New Profile | — | missing | No profiles |
+| New Note | ⌃⇧N | missing | Notes (Arc Notes) |
+| New Note (in Split) | ⌃⌥N (hidden) | missing | — |
+| Close Window | ⇧⌘W | missing | — |
+| Archive Tab | ⌘W | done | Today tabs go to the archive; a pinned tab closes, stays in Pinned and returns to its pinned URL |
+| Share… | — | missing | System share menu |
+| Capture… | ⇧⌘2 | missing | Screenshot of a page area |
+| Capture Full Page / Capture in Portrait Mode | — | missing | — |
+| Save Page As | ⇧⌘S | missing | — |
+| Print | ⌘P | missing | — |
 
 ### Edit
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Undo / Redo (в том числе для действий сайдбара: «Undo moving a space», «Close Peek» и т.п.) | ⌘Z / ⇧⌘Z | нет | Undo-менеджера для сайдбара нет. Undo в поле ввода Command Bar тоже не проверялось (?) |
-| Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | частично | Работают в нашем `TextInput` и на странице через CEF (?). Пунктов меню нет |
-| Copy URL (чистая ссылка без трекеров) | ⇧⌘C | нет | Ещё нужен тост «Copied a clean link without trackers» |
-| Copy URL as Markdown | ⌥⇧⌘C | нет | — |
-| Copy URL as Quote (ссылка на выделенный текст) | ⌃⇧⌘C | нет | — |
-| Paste and Match Style | ⇧⌘V | нет | — |
-| Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | нет | Поиска по странице нет |
-| Spelling, Substitutions, Transformations, Speech, Format (Bold/Italic/Underline) | ⌘: ⌘; ⌘B ⌘I ⌘U | нет | Стандартные подменю macOS |
+| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | missing | No undo manager for the sidebar. Undo in the Command Bar input not checked either (?) |
+| Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in our `TextInput` and on pages through CEF (?). No menu items |
+| Copy URL (clean link without trackers) | ⇧⌘C | missing | Also needs the "Copied a clean link without trackers" toast |
+| Copy URL as Markdown | ⌥⇧⌘C | missing | — |
+| Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | missing | — |
+| Paste and Match Style | ⇧⌘V | missing | — |
+| Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | missing | No find in page |
+| Spelling, Substitutions, Transformations, Speech, Format (Bold/Italic/Underline) | ⌘: ⌘; ⌘B ⌘I ⌘U | missing | Standard macOS submenus |
 
 ### View
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Appearance: сайты используют Automatic / Light / Dark | — | нет | — |
-| Show/Hide Sidebar | ⌘S | сделано | — |
-| Show/Hide Toolbar (режим верхней панели) | ⇧⌘D (скрыт) | нет | Панели с URL вверху нет |
-| Expand/Collapse Pinned Section | скрыт | нет | — |
-| Reveal Current Tab | ⌃Space (скрыт) | нет | — |
-| Stop Loading | ⌘. | нет | В движке есть reload, а stop не выведен |
-| Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | частично | ⌘R есть, ⇧⌘R (без кэша) нет |
-| Clear Cookies and Refresh / Clear Cache and Refresh | — | нет | — |
-| Add Split View | ⌃⇧= | нет | См. «Split View» |
-| Close this Split Pane | ⌃⇧- | нет | — |
-| Separate Page from Split View / Expand Current Split | — | нет | — |
-| Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | нет | — |
-| Cast | — | нет | — |
-| Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | нет | DevTools через CEF не подключены |
-| Developer: Allow JavaScript from Apple Events | — | нет | — |
-| Toggle Developer Mode (для сайта) | ⌃D | нет | — |
-| Enter/Exit Full Screen | ⌃⌘F | нет | Есть ли полноэкранный режим через системную кнопку, не проверялось (?) |
-| Exit (выход из контекста: Peek, полный экран) | ⌘Esc | нет | — |
+| Appearance: websites use Automatic / Light / Dark | — | missing | — |
+| Show/Hide Sidebar | ⌘S | done | — |
+| Show/Hide Toolbar (top bar mode) | ⇧⌘D (hidden) | missing | No URL bar at the top |
+| Expand/Collapse Pinned Section | hidden | missing | — |
+| Reveal Current Tab | ⌃Space (hidden) | missing | — |
+| Stop Loading | ⌘. | missing | The engine has reload but no stop |
+| Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | partial | ⌘R works, ⇧⌘R (bypass cache) doesn't |
+| Clear Cookies and Refresh / Clear Cache and Refresh | — | missing | — |
+| Add Split View | ⌃⇧= | missing | See "Split View" |
+| Close this Split Pane | ⌃⇧- | missing | — |
+| Separate Page from Split View / Expand Current Split | — | missing | — |
+| Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | missing | — |
+| Cast | — | missing | — |
+| Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
+| Developer: Allow JavaScript from Apple Events | — | missing | — |
+| Toggle Developer Mode (per site) | ⌃D | missing | — |
+| Enter/Exit Full Screen | ⌃⌘F | missing | Full screen through the window's green button not checked (?) |
+| Exit (leave a context: Peek, full screen) | ⌘Esc | missing | — |
 
 ### Spaces
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Space… | — | нет | Создать Space из интерфейса нельзя, есть только демо-данные |
-| Edit Theme… | — | нет | См. «Темы Spaces» |
-| Rename Space | — | нет | — |
-| Change Profile | — | нет | — |
-| Next Space / Previous Space | ⌥⌘→ / ⌥⌘← | сделано | — |
-| Перейти к Space N («Jumps over to your %@ Space») | ⌃1…⌃9 (?) | сделано | Клавиши по умолчанию в nib не записаны |
-| Manage Spaces… (Space Manager в Library) | — | нет | — |
+| New Space… | — | missing | Spaces can't be created from the UI, only demo data |
+| Edit Theme… | — | missing | See "Space themes" |
+| Rename Space | — | missing | — |
+| Change Profile | — | missing | — |
+| Next Space / Previous Space | ⌥⌘→ / ⌥⌘← | done | — |
+| Go to Space N ("Jumps over to your %@ Space") | ⌃1…⌃9 (?) | done | Default shortcuts aren't in the nib |
+| Manage Spaces… (Space Manager in Library) | — | missing | — |
 
 ### Tabs
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Tab… | ⌘T | сделано | — |
-| New ChatGPT Message… | ⌥⌘G (скрыт) | нет | Функция Arc Max |
-| Join Meeting (ссылка на ближайшую встречу) | ⌃⌘J (скрыт) | нет | — |
-| Peek Email… (код из письма) | ⇧⌘E (скрыт) | нет | — |
-| Pin/Unpin Tab | ⌘D | сделано | — |
-| Open Little Arc or Peek in… (выбор Space) | ⌘O | нет | — |
-| New Folder… | ⇧⌘N по nib (?) | нет | В nib стоит та же клавиша, что у Incognito. Реальная раскладка задаётся в коде |
-| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | скрыт | нет | — |
-| Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | сделано | — |
-| Tab Switcher вперёд/назад (оверлей «Recent Items», MRU, как ⌘Tab) | ⌃Tab / ⌃⇧Tab | частично | У нас ⌃Tab листает вкладки по порядку сайдбара. Оверлея и порядка по недавности (MRU) нет |
-| Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (скрыт) | нет | — |
-| Go to Sidebar Item 1–8 / last item (с Favorites или без) | ⌘1…⌘9 (?) | частично | Pinned, затем Today. Нет Favorites и опции «Include Favorites in ordering» |
-| Switch to Split View 1–4 / next / previous | (?) | нет | — |
-| Reveal Tab in Sidebar | — | нет | — |
-| Clear Unpinned Tabs (Today) | ⇧⌘K | сделано | — |
-| Reset all tabs in this Space | — | нет | — |
-| Reset Tab to Original URL (закреплённой) | скрыт | нет | — |
+| New Tab… | ⌘T | done | — |
+| New ChatGPT Message… | ⌥⌘G (hidden) | missing | Arc Max feature |
+| Join Meeting (link to the next meeting) | ⌃⌘J (hidden) | missing | — |
+| Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
+| Pin/Unpin Tab | ⌘D | done | — |
+| Open Little Arc or Peek in… (pick a Space) | ⌘O | missing | — |
+| New Folder… | ⇧⌘N per nib (?) | missing | The nib gives it the same shortcut as Incognito; the real binding is set in code |
+| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | missing | — |
+| Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
+| Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
+| Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | missing | — |
+| Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | partial | Pinned, then Today. No Favorites and no "Include Favorites in ordering" option |
+| Switch to Split View 1–4 / next / previous | (?) | missing | — |
+| Reveal Tab in Sidebar | — | missing | — |
+| Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
+| Reset all tabs in this Space | — | missing | — |
+| Reset Tab to Original URL (pinned) | hidden | missing | — |
 
-### Archive (меню называется так)
+### Archive (that's the menu's name)
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Go Back / Go Forward | ⌘[ / ⌘] (и ⌘← / ⌘→ скрыт) | частично | ⌘[ и ⌘] есть, ⌘← и ⌘→ нет. Нет меню истории по долгому нажатию на «Назад» |
-| View History | ⌘Y | нет | В Arc открывает историю в новой вкладке Today |
-| View Archive | — | нет | — |
-| Clear Archive (с подтверждением «This action is permanent.») | — | нет | — |
+| Go Back / Go Forward | ⌘[ / ⌘] (and ⌘← / ⌘→ hidden) | partial | ⌘[ and ⌘] work, ⌘← and ⌘→ don't. No history menu on long-pressing Back |
+| View History | ⌘Y | missing | Arc opens history in a new Today tab |
+| View Archive | — | missing | — |
+| Clear Archive (with the "This action is permanent." confirmation) | — | missing | — |
 
 ### Extensions / Window / Help
 
-| Функция | Клавиша Arc | Статус | Чего не хватает |
+| Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Add Extension… / Manage Extensions… | — | нет | Расширений Chrome нет |
-| Minimize / Zoom / Bring All to Front | ⌘M | нет | — |
-| View Library | ⇧⌘L | нет | См. «Library» |
-| View Downloads | ⇧⌘J | нет | — |
-| View Media / View Boosts | — | нет | — |
-| Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | нет | Важны для нас «Essential Keyboard Shortcuts» (окно-шпаргалка) и «Restore Data» |
-| Troubleshooting: Record Trace, Task Manager, Reveal Arc Data, Copy Arc Info | — | нет | — |
+| Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
+| Minimize / Zoom / Bring All to Front | ⌘M | missing | — |
+| View Library | ⇧⌘L | missing | See "Library" |
+| View Downloads | ⇧⌘J | missing | — |
+| View Media / View Boosts | — | missing | — |
+| Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | missing | Relevant for us: "Essential Keyboard Shortcuts" (cheat sheet window) and "Restore Data" |
+| Troubleshooting: Record Trace, Task Manager, Reveal Arc Data, Copy Arc Info | — | missing | — |
 
 ---
 
-## 2. Сайдбар
+## 2. Sidebar
 
-| Функция | Клавиша/жест | Статус | Чего не хватает |
+| Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
-| Вертикальный сайдбар со вкладками | — | сделано | Ширину нельзя менять (?) |
-| Кнопки окна (светофор) внутри сайдбара | — | сделано | — |
-| Адресное поле вверху сайдбара (клик открывает Command Bar с URL) | — | сделано | Нет кнопок назад/вперёд/обновить и кнопки Site Control Center |
-| Скрытие сайдбара и выезд при наведении на левый край | ⌘S | сделано | — |
-| Режим «Show as Toolbar» (контекстное меню: Show as Toolbar / Hide Toolbar) | ⇧⌘D | нет | — |
-| **Favorites** (Top Apps): сетка иконок над Spaces, общая для всех Spaces профиля | — | нет | Нужны перетаскивание («Drag to add Favorites»), бейджи непрочитанного (Gmail, GitHub, X, WhatsApp), подписи календаря («Show Time to Next Meeting») |
-| Hover-превью для Favorites, Pinned и папок (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | наведение | нет | Настраивается в «Previews Settings…» |
-| **Pinned** секция Space | ⌘D | частично | Нет «Edit Pinned Page» (свой URL), «Replace Pinned URL with Current», «Reset Tab to Original URL». Закрытие должно оставлять вкладку в Pinned («Close and Keep Pinned»), а у нас удаляет. Нет сворачивания секции |
-| **Today** секция (незакреплённые) и кнопка «+ New Tab» | — | сделано | — |
-| Кнопка «Clear» над Today (архивирует незакреплённые) | ⇧⌘K | частично | Работает только клавиша, кнопки нет |
-| «Tidy Tabs»: группировка Today по темам с помощью ИИ | — | нет | Функция Arc Max, можно отложить |
-| Папки: вложенные, свернуть/развернуть, сделать Space из папки, папка из выделенных вкладок | ⇧⌘N (?) | нет | — |
-| Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | нет | — |
-| Перетаскивание вкладок (между секциями, в папки, в Favorites, в другой Space) | drag | нет | — |
-| Тактильный отклик при перестановке вкладок | — | нет | Опция в Advanced |
-| Мультивыделение вкладок (⌘/⇧-клик) | — | нет | — |
-| Переименование вкладки двойным кликом («Double-click to rename») | двойной клик | нет | Нужен ещё сброс «Reset Name and Icon» |
-| Своя иконка вкладки («Customize Tab») | — | нет | — |
-| Кнопка закрытия при наведении (× для Today, − для Pinned) | наведение | сделано | — |
-| Индикатор звука, Mute/Unmute в контекстном меню | — | нет | — |
-| Индикатор камеры/микрофона на вкладке | — | нет | — |
-| Элемент Split View в сайдбаре (группа вкладок) | — | нет | — |
-| Заголовок Space (имя), Show/Hide Space Header | — | частично | Имя показывается, скрыть его нельзя |
-| Док Spaces внизу (иконки Spaces) | клик | частично | У нас цветные точки, а в Arc иконки или эмодзи Spaces |
-| Кнопка «+» в доке: New Tab, New Space, New Folder, New Split (справа/снизу), New Note, New Boost | — | нет | — |
-| Анимация «пружинящего» клика по ячейкам | — | нет | — |
-| Сайдбар инкогнито-окна («Incognito Tabs») | — | нет | — |
-| Баннеры внизу сайдбара: обновление, «We cleaned up!» после автоархивации, ускорение (несколько блокировщиков рекламы) | — | нет | — |
-| Медиаконтролы в сайдбаре | — | нет | См. «Медиа и PiP» |
+| Vertical sidebar with tabs | — | done | Width can't be changed (?) |
+| Window buttons (traffic lights) inside the sidebar | — | done | — |
+| Address field at the top of the sidebar (click opens the Command Bar with the URL) | — | done | No back/forward/reload buttons, no Site Control Center button |
+| Hiding the sidebar and sliding it in when hovering the left edge | ⌘S | done | — |
+| "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | ⇧⌘D | missing | — |
+| **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | missing | Needs drag and drop ("Drag to add Favorites"), unread badges (Gmail, GitHub, X, WhatsApp), calendar captions ("Show Time to Next Meeting") |
+| Hover previews for Favorites, Pinned and folders (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | hover | missing | Configured in "Previews Settings…" |
+| **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL), "Replace Pinned URL with Current", "Reset Tab to Original URL", collapsing the section |
+| **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
+| "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | partial | Only the shortcut works, no button |
+| "Tidy Tabs": AI grouping of Today by topic | — | missing | Arc Max feature, can wait |
+| Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | missing | — |
+| Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | missing | — |
+| Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | missing | — |
+| Haptic feedback when reordering tabs | — | missing | Option in Advanced |
+| Multi-selecting tabs (⌘/⇧-click) | — | missing | — |
+| Renaming a tab by double-click ("Double-click to rename") | double-click | missing | Also needs "Reset Name and Icon" |
+| Custom tab icon ("Customize Tab") | — | missing | — |
+| Close button on hover (× for Today, − for Pinned) | hover | done | — |
+| Audio indicator, Mute/Unmute in the context menu | — | missing | — |
+| Camera/microphone indicator on a tab | — | missing | — |
+| Split View item in the sidebar (tab group) | — | missing | — |
+| Space header (name), Show/Hide Space Header | — | partial | The name is shown but can't be hidden |
+| Spaces dock at the bottom (Space icons) | click | partial | We show colored dots; Arc shows Space icons or emoji |
+| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | missing | — |
+| "Springy" click animation on sidebar items | — | missing | — |
+| Incognito window sidebar ("Incognito Tabs") | — | missing | — |
+| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | — |
+| Media controls in the sidebar | — | missing | See "Media and PiP" |
 
 ## 3. Spaces
 
-| Функция | Клавиша/жест | Статус | Чего не хватает |
+| Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
-| Несколько Spaces с отдельными Pinned/Today и своей активной вкладкой | — | сделано | — |
-| Свайп двумя пальцами по сайдбару: страницы Spaces идут за пальцами, пружинят на краях | жест | сделано | — |
-| Переключение Space с клавиатуры (с анимацией) | ⌥⌘→/← | сделано | — |
-| Создание Space (диалог «Create a Space»: имя, иконка, тема, профиль) | — | нет | — |
-| Переименование Space | — | нет | — |
-| Иконка Space (эмодзи или символ, «Change Space Icon…», «Remove icon») | — | нет | — |
-| Удаление Space (с Undo) | — | нет | — |
-| Изменение порядка Spaces («Move Space») | drag | нет | — |
-| Сделать из Space папку («Export “%@” into Folder») | — | нет | — |
-| Live Folders для Space | — | нет | — |
-| Space Manager (Library → Spaces) | — | нет | — |
-| Привязка профиля к Space («Set Profile», «Edit Space profile») | — | нет | — |
+| Several Spaces, each with its own Pinned/Today and active tab | — | done | — |
+| Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | done | — |
+| Switching Spaces from the keyboard (animated) | ⌥⌘→/← | done | — |
+| Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | — | missing | — |
+| Renaming a Space | — | missing | — |
+| Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | — | missing | — |
+| Deleting a Space (with Undo) | — | missing | — |
+| Reordering Spaces ("Move Space") | drag | missing | — |
+| Turning a Space into a folder ("Export “%@” into Folder") | — | missing | — |
+| Live Folders for a Space | — | missing | — |
+| Space Manager (Library → Spaces) | — | missing | — |
+| Assigning a profile to a Space ("Set Profile", "Edit Space profile") | — | missing | — |
 
-## 4. Темы и цвета Spaces (Space Style Editor)
+## 4. Space themes and colors (Space Style Editor)
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Цвет Space окрашивает сайдбар и окно, при свайпе цвет плавно переходит | частично | У нас только оттенок (hue) и плавный переход при свайпе. Градиентов и зерна нет |
-| Редактор темы («Edit Theme Color…», «Tap to pick a color for this space») | нет | — |
-| Палитра с несколькими цветами («Add color» / «Remove color»), градиент из 2–3 цветов (?) | нет | — |
-| Готовые наборы цветов, листаются страницами: Brand, Drab, Greyscale, Pastel | нет | — |
-| Текстура шума («Cycle noise texture») | нет | — |
-| Ползунок «Intensity» | нет | — |
-| Режим: Automatic / Light / Dark Appearance | нет | — |
-| Undo «Update Theme» | нет | — |
-| Сайты могут читать тему («Allow websites to get your theme data», CSS-переменные `--arc-palette-*`) | нет | Опция в Advanced |
+| The Space color tints the sidebar and window; during a swipe the color blends smoothly | partial | We only have a hue and the blend during swipes. No gradients or grain |
+| Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | missing | — |
+| Palette with several colors ("Add color" / "Remove color"), gradient of 2–3 colors (?) | missing | — |
+| Preset color sets in pages: Brand, Drab, Greyscale, Pastel | missing | — |
+| Noise texture ("Cycle noise texture") | missing | — |
+| "Intensity" slider | missing | — |
+| Mode: Automatic / Light / Dark Appearance | missing | — |
+| Undo "Update Theme" | missing | — |
+| Websites can read the theme ("Allow websites to get your theme data", CSS variables `--arc-palette-*`) | missing | Option in Advanced |
 
 ## 5. Command Bar (⌘T / ⌘L)
 
-| Функция | Клавиша | Статус | Чего не хватает |
+| Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Всплывающее окно поверх страницы | ⌘T | сделано | — |
-| Ввод URL или поиск («Search or Enter URL…») | — | сделано | Поисковик зашит (Google). В Arc он выбирается в настройках профиля |
-| Редактирование текущего URL | ⌘L | сделано | — |
-| Навигация ↑/↓, ⌃N/⌃P, Enter, Esc, клик вне окна закрывает | — | сделано | — |
-| Переключение на открытую вкладку | — | частично | У нас только вкладки текущего Space. В Arc вкладки всех Spaces с подписью «… and switch there» и в Split View |
-| Подсказки поисковика (Chromium: Search Suggestion, Navigate Suggest) | — | нет | Нужен ещё экран о приватности подсказок |
-| История и закладки в подсказках (Chromium: History / Bookmark / Search History) | — | нет | — |
-| Калькулятор (Search Calculator Answer) | — | нет | — |
-| Популярные домены (Popular Domains, ARC_TopDomains) | — | нет | — |
-| Site Search: Tab или Space после имени сайта ищет по сайту, есть меню управления | Tab / Space | нет | — |
-| Удаление подсказки («Delete Suggestion») | — | нет | — |
-| **Действия (Type Travel)**: каждый пункт меню доступен по названию и синонимам (`arcTypeTravelTriggers` в nib) | — | нет | Это центральная фича Command Bar Arc |
-| Действия Space: «Focus on <space>», «Switch to …» | — | нет | — |
-| Перенос вкладки: «Move to Pinned in <space>», «Move to Today in <space>», «Move to Folder» | — | нет | — |
-| Favorites: «Favorite Tab», «Unfavorite Tab», «Pin to Top Apps» | — | нет | — |
-| Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | нет | — |
-| Папки: Create New Folder, Collapse/Expand All Folders | — | нет | — |
-| Вкладки: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | нет | — |
-| Прочее: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <действие> | — | нет | — |
-| Запуск расширения по имени («Extension …») | — | нет | — |
-| Join next video call / Zoom | — | нет | — |
-| Подсказки при пустом поле (Air Traffic Control, Tips for Organizing, Help Center) | — | нет | — |
-| ChatGPT в Command Bar, «Browse for Me» (Arc Max) | — | нет | ИИ-функции, приоритет ниже |
+| Popup over the page | ⌘T | done | — |
+| Entering a URL or searching ("Search or Enter URL…") | — | done | The search engine is hardcoded (Google). Arc lets you pick it in profile settings |
+| Editing the current URL | ⌘L | done | — |
+| Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | — |
+| Switching to an open tab | — | partial | We only list tabs of the current Space. Arc lists tabs of all Spaces with "… and switch there", including Split View |
+| Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | missing | Also needs the suggestions privacy screen |
+| History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | missing | — |
+| Calculator (Search Calculator Answer) | — | missing | — |
+| Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
+| Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
+| Removing a suggestion ("Delete Suggestion") | — | missing | — |
+| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | missing | This is the central feature of Arc's Command Bar |
+| Space actions: "Focus on <space>", "Switch to …" | — | missing | — |
+| Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | missing | — |
+| Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
+| Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
+| Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
+| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | missing | — |
+| Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | missing | — |
+| Running an extension by name ("Extension …") | — | missing | — |
+| Join next video call / Zoom | — | missing | — |
+| Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | missing | — |
+| ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | missing | AI features, lower priority |
 
-## 6. Контекстные меню
+## 6. Context menus
 
-Строки взяты из модуля `ContextMenus/SidebarMenu+*`. Короткие названия
-пунктов (до 15 байт: Copy Link, Rename…, Duplicate и т.п.) хранятся
-в коде отдельно, поэтому часть из них восстановлена по комментариям (?).
+Strings come from the `ContextMenus/SidebarMenu+*` module. Short item names
+(under 15 bytes: Copy Link, Rename…, Duplicate etc.) are stored separately
+in code, so some were reconstructed from translator comments (?).
 
-| Меню / пункт | Статус | Чего не хватает |
+| Menu / item | Status | What's missing |
 |---|---|---|
-| **Вкладка**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, профиль), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | нет | Контекстных меню у нас нет совсем |
-| **Мультивыделение**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | нет | — |
-| **Папка**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | нет | — |
-| **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | нет | — |
-| **Split View в сайдбаре**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | нет | — |
-| **Панель Split View** (меню управления): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | нет | — |
-| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | нет | — |
-| **Favorite с календарём** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, напоминание за 2/5/10 минут | нет | — |
-| **Загрузка**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | нет | — |
-| **Заголовок группы вкладок**: Remove header | нет | — |
-| **Страница** (меню Chromium плюс пункты Arc) (?) | нет | Через CEF контекстное меню страницы не настроено (?) |
+| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | missing | We have no context menus at all |
+| **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
+| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | missing | — |
+| **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
+| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | missing | — |
+| **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | missing | — |
+| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | missing | — |
+| **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |
+| **Download**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | missing | — |
+| **Tab group header**: Remove header | missing | — |
+| **Page** (Chromium's menu plus Arc's items) (?) | missing | The page context menu isn't set up through CEF (?) |
 
-## 7. Архив и автоархивация
+## 7. Archive and auto-archiving
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Автоархивация Today-вкладок после простоя, по умолчанию 12 часов | сделано | Таймер раз в минуту в `window.rs`, логика в `core::archive_idle` |
-| Интервалы: Never, 1 hour (?), 6 hours, 12 hours, 24 hours, 7 days, 30 days | частично | Модель поддерживает любой интервал и «никогда», а выбора в интерфейсе нет. Варианты 1h и 6h видны только как строки порогов, есть ли они в меню, неясно (?) |
-| Настройка на профиль и вопрос «применить ко всем профилям / только к этому» | нет | — |
-| Отдельный интервал «Archive Little Arcs after:» | нет | — |
-| ⌘W и × отправляют вкладку в архив | сделано | — |
-| Страница Archive в Library: «Today/Yesterday», фильтры по Space, «How was the tab closed?» (Auto-Closed/Manually Closed), Little Arc | нет | — |
-| Restore («Tab restored to …. Click to view.»), Delete, Clear Archive | нет | — |
-| Тост «Auto archived %d tabs» и баннер «We cleaned up!» | нет | — |
+| Auto-archiving idle Today tabs, 12 hours by default | done | A once-a-minute timer in `window.rs`, logic in `core::archive_idle` |
+| Intervals: Never, 1 hour (?), 6 hours, 12 hours, 24 hours, 7 days, 30 days | partial | The model supports any interval and "never", but the UI has no picker. 1h and 6h appear only as threshold strings; whether they are in the menu is unclear (?) |
+| Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
+| Separate "Archive Little Arcs after:" interval | missing | — |
+| ⌘W and × send the tab to the archive | done | — |
+| Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | missing | — |
+| Restore ("Tab restored to …. Click to view."), Delete, Clear Archive | missing | — |
+| "Auto archived %d tabs" toast and the "We cleaned up!" banner | missing | — |
 
 ## 8. Split View
 
-| Функция | Клавиша | Статус | Чего не хватает |
+| Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Добавить панель (до 4 панелей, тост «Cannot Add New Pane») | ⌃⇧= | нет | — |
-| Закрыть панель | ⌃⇧- | нет | — |
-| Создать перетаскиванием вкладки в центр окна | drag | нет | — |
-| Горизонтальная/вертикальная раскладка, Move Left/Right/Up/Down | — | нет | — |
-| Separate Page / Separate All Tabs / Expand Current Split | — | нет | — |
-| Фокус на панели N / следующей / предыдущей | (?) | нет | — |
-| Название Split View («Split view title text field placeholder») | — | нет | — |
-| Share Split View (ссылка) | — | нет | Сервис Arc |
+| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | missing | — |
+| Close a pane | ⌃⇧- | missing | — |
+| Create by dragging a tab to the middle of the window | drag | missing | — |
+| Horizontal/vertical layout, Move Left/Right/Up/Down | — | missing | — |
+| Separate Page / Separate All Tabs / Expand Current Split | — | missing | — |
+| Focus pane N / next / previous | (?) | missing | — |
+| Split View title ("Split view title text field placeholder") | — | missing | — |
+| Share Split View (link) | — | missing | Arc service |
 
 ## 9. Little Arc
 
-| Функция | Клавиша | Статус | Чего не хватает |
+| Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Маленькое окно для быстрых запросов | ⌥⌘N | нет | — |
-| Глобальная горячая клавиша «Open Little Arc when I press … in any app» | настраивается | нет | — |
-| Ссылки из других приложений открываются в Little Arc | — | нет | — |
-| ⌥⌘+клик по ссылке открывает её в Little Arc | — | нет | — |
-| Панель: Open in (Space, «More Spaces», «Search Spaces…»), Change profile, Extensions, Copy URL, загрузки | ⌘O | нет | — |
-| Show/Close all Little Arc windows | — | нет | — |
-| Подсказка для новичков «Links Open in Little Arc» | — | нет | — |
+| Small window for quick lookups | ⌥⌘N | missing | — |
+| Global shortcut "Open Little Arc when I press … in any app" | configurable | missing | — |
+| Links from other apps open in Little Arc | — | missing | — |
+| ⌥⌘-click on a link opens it in Little Arc | — | missing | — |
+| Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | ⌘O | missing | — |
+| Show/Close all Little Arc windows | — | missing | — |
+| Tip for new users "Links Open in Little Arc" | — | missing | — |
 
 ## 10. Peek
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Ссылки на другие сайты из Pinned/Favorites открываются в Peek (опция) | нет | — |
-| Shift+клик открывает ссылку в Peek (опция) | нет | — |
-| Закрытие Peek (⌘Esc / Esc), Undo «Close Peek» | нет | — |
-| Перенос Peek во вкладку или в Space («Open Little Arc or Peek in…» ⌘O) | нет | — |
-| Свайп для закрытия модального окна (`modal-v2-native-gestures`) (?) | нет | — |
+| Links to other sites from Pinned/Favorites open in Peek (option) | missing | — |
+| Shift-click opens a link in Peek (option) | missing | — |
+| Closing Peek (⌘Esc / Esc), Undo "Close Peek" | missing | — |
+| Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | missing | — |
+| Swipe to dismiss the modal (`modal-v2-native-gestures`) (?) | missing | — |
 
-## 11. Air Traffic Control (маршрутизация ссылок)
+## 11. Air Traffic Control (link routing)
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Правила «New Route»: URL или домен «Is equal to» … → Space / Most Recent Space / Little Arc | нет | — |
-| Доступ из Links → «Air Traffic Control…» и из Command Bar | нет | — |
-| Варианты открытия ссылки: новая вкладка (с фокусом и без), Split View, Peek, новое окно, Little Arc | частично | Всплывающие окна (`window.open`, target=_blank) у нас открываются новой вкладкой. Остальных режимов нет |
+| "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | missing | — |
+| Access from Links → "Air Traffic Control…" and from the Command Bar | missing | — |
+| Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | partial | Popups (`window.open`, target=_blank) open as a new tab. No other modes |
 
-## 12. Профили
+## 12. Profiles
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Профиль: отдельные история, cookies, пароли, расширения | нет | Движок работает с одним кэшем `Default` |
-| Создание профиля: имя и выбор Spaces, которые его используют | нет | — |
-| Смена профиля Space с предупреждениями («Switch to your … Profile?») | нет | — |
-| Удаление профиля вводом имени, «Delete unused Profiles». Профиль по умолчанию удалить нельзя | нет | — |
-| Настройки на профиль: поисковик, подсказки поиска, автоархивация, папка загрузок, приложение для документов, очистка данных | нет | — |
-| Профили не синхронизируются между компьютерами (так и в Arc) | — | Справка |
+| Profile: separate history, cookies, passwords, extensions | missing | The engine uses a single `Default` cache |
+| Creating a profile: name and which Spaces use it | missing | — |
+| Changing a Space's profile, with warnings ("Switch to your … Profile?") | missing | — |
+| Deleting a profile by typing its name, "Delete unused Profiles". The default profile can't be deleted | missing | — |
+| Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | missing | — |
+| Profiles don't sync between computers (same in Arc) | — | Reference |
 
-## 13. Настройки (Preferences, ⌘,)
+## 13. Settings (Preferences, ⌘,)
 
-Вкладки: General, Profiles, Links, Shortcuts, Max, Advanced, Account
-(синхронизация), Icon. Есть ещё служебная Staff. Окна настроек у нас нет,
-поэтому статус всех пунктов ниже **нет**.
+Tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account (sync),
+Icon. There is also an internal Staff tab. We have no settings window, so
+every item below is **missing**.
 
-| Вкладка → опция | Статус |
+| Tab → option | Status |
 |---|---|
-| General → Arc не браузер по умолчанию (кнопка «Set as default») | нет |
-| General → «Profile Settings…» (поисковик, автоархив, загрузки) | нет |
-| General → «Archive tabs after» | нет |
-| General → Встроенный блокировщик: Block Ads, Block Trackers, Block Cookie Banners, «Ad Block Settings…» (Advanced Ad Block Settings), совет оставить один блокировщик | нет |
-| General → «Previews Settings…» (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | нет |
-| General → Warn before quitting | нет |
-| General → Automatically update my Arc | нет |
-| General → Export Data (Spaces и вкладки в Markdown, «Arc Data Export.md») | нет |
-| Profiles → список профилей, создание и удаление, Default Search Engine, Include search engine suggestions, Search Settings…, автоархив, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | нет |
-| Links → Air Traffic Control…, Peek (2 опции), Little Arc (горячая клавиша, ссылки из других приложений, ⌥⌘-клик, Archive Little Arcs after) | нет |
-| Shortcuts → поиск («Type a feature name or shortcut»), Default / Customized Shortcuts, запись своей клавиши, конфликты («is already in use by …», Remove Conflicting Shortcut), приоритет на клавишу (Arc wins / Website wins / первое нажатие сайту, второе Arc), Reset Shortcut / Reset All, Extension Shortcuts…, «Include Favorites in ordering», «Learn the Essential Shortcuts» | нет |
-| Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | нет (ИИ, приоритет ниже) |
-| Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture при уходе с вкладки с видео, перетаскивание окна за верх страницы, Shared Quotes, Show full URL when Toolbar is enabled, восстановление окон при запуске, Haptic feedback при перестановке, Play Arc sound effects | нет |
-| Account → Arc Sync (E2E), Recovery Card и фраза восстановления, смена имени, email и пароля, Delete Account, удаление данных синхронизации, устаревшая iCloud Sync | нет |
-| Icon → альтернативные иконки приложения (открываются за рефералов) | нет (не копируем ассеты) |
+| General → Arc is not the default browser ("Set as default" button) | missing |
+| General → "Profile Settings…" (search engine, auto-archive, downloads) | missing |
+| General → "Archive tabs after" | missing |
+| General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | missing |
+| General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | missing |
+| General → Warn before quitting | missing |
+| General → Automatically update my Arc | missing |
+| General → Export Data (Spaces and tabs as Markdown, "Arc Data Export.md") | missing |
+| Profiles → profile list, creating and deleting, Default Search Engine, Include search engine suggestions, Search Settings…, auto-archive, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | missing |
+| Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | missing |
+| Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | missing |
+| Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | missing (AI, lower priority) |
+| Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture when leaving a tab with video, dragging the window by the top of the page, Shared Quotes, Show full URL when Toolbar is enabled, restoring windows on launch, Haptic feedback when reordering, Play Arc sound effects | missing |
+| Account → Arc Sync (E2E), Recovery Card and recovery phrase, changing name, email and password, Delete Account, deleting sync data, legacy iCloud Sync | missing |
+| Icon → alternative app icons (unlocked by referrals) | missing (we don't copy assets) |
 
 ## 14. Library (⇧⌘L)
 
-| Раздел | Статус | Чего не хватает |
+| Section | Status | What's missing |
 |---|---|---|
-| Spaces (Space Manager: порядок Spaces, папок, вкладок) | нет | — |
-| Archive (см. раздел 7) | нет | — |
-| Downloads (⇧⌘J): фильтр, фильтр по профилям, анимация «загрузка улетает в Library», «File deleted or moved» | нет | — |
-| Media: Captures и файлы из Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | нет | — |
-| Boosts: список, вкл/выкл, переименование, удаление | нет | — |
-| Easels & Notes | — | Вне сравнения (Easels). Notes имеют низкий приоритет |
+| Spaces (Space Manager: order of Spaces, folders, tabs) | missing | — |
+| Archive (see section 7) | missing | — |
+| Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | missing | — |
+| Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | missing | — |
+| Boosts: list, on/off, rename, delete | missing | — |
+| Easels & Notes | — | Out of scope (Easels). Notes are low priority |
 
 ## 15. Boosts
 
-| Функция | Статус |
+| Feature | Status |
 |---|---|
-| Редактор: цвет (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), шрифт, размер и регистр текста | нет |
-| Zap: выбор элемента для скрытия (Pick Selector, «Zap all related elements») | нет |
-| Свой CSS/JS («Refresh to Run»), Boosts с JS нельзя шарить | нет |
-| Включение и выключение на сайт, «Customize Page…» в контекстном меню, раздел Boosts в Site Control Center | нет |
-| Шаринг и установка чужого Boost («Add this Boost to Arc?»), Boost Gallery | нет (сервис Arc) |
+| Editor: color (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), font, text size and case | missing |
+| Zap: pick an element to hide (Pick Selector, "Zap all related elements") | missing |
+| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | missing |
+| Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | missing |
+| Sharing and installing someone else's Boost ("Add this Boost to Arc?"), Boost Gallery | missing (Arc service) |
 
-## 16. Страница, верхняя панель и Site Control Center
+## 16. Page, top bar and Site Control Center
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Страница во встроенной «карточке» со скруглёнными углами | сделано | — |
-| Индикатор загрузки (светящийся прогресс, `GlowProgressLoadingIndicator`) | нет | Событие загрузки из движка приходит, но не отображается |
-| Site Control Center: значок безопасности, Copy URL, Capture / Full Page / Portrait, Share, Boosts, расширения (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | нет | — |
-| Статус-строка с URL при наведении на ссылку (`StatusTextView`) | нет | — |
-| Find in Page («No results found»), Find and Replace | нет | — |
-| Перевод страницы: «Translate this page to %@?», Use Original, Choose Another Language, Never Translate This Site | нет | — |
-| Страница сбоя вкладки (Sad Tab) | нет | — |
-| Свайп назад/вперёд по странице (overscroll) | нет (?) | Не проверялось, работает ли жест в CEF |
-| Перетаскивание окна за верх страницы (опция) | нет | — |
-| Захват указателя: тост «Your cursor is hidden. Press 'esc'…» | нет | — |
-| Полноэкранный режим страницы: тост «To exit full screen, press …» | нет | — |
-| Режим разработчика для сайта, DevTools | нет | — |
-| Расширения Chrome (иконки, «Open pinned extensions picker») | нет | — |
-| Встроенный блокировщик рекламы и трекеров | нет | — |
-| Тихое создание вкладки при скрытом сайдбаре («New Tab Created in %@») | нет | — |
+| The page sits in an inset "card" with rounded corners | done | — |
+| Loading indicator (glowing progress, `GlowProgressLoadingIndicator`) | missing | The engine reports loading, but it isn't shown |
+| Site Control Center: security icon, Copy URL, Capture / Full Page / Portrait, Share, Boosts, extensions (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | missing | — |
+| Status bar with the URL when hovering a link (`StatusTextView`) | missing | — |
+| Find in Page ("No results found"), Find and Replace | missing | — |
+| Page translation: "Translate this page to %@?", Use Original, Choose Another Language, Never Translate This Site | missing | — |
+| Crashed tab page (Sad Tab) | missing | — |
+| Swipe back/forward on the page (overscroll) | missing (?) | Not checked whether the gesture works in CEF |
+| Dragging the window by the top of the page (option) | missing | — |
+| Pointer lock: "Your cursor is hidden. Press 'esc'…" toast | missing | — |
+| Page full screen: "To exit full screen, press …" toast | missing | — |
+| Developer mode for a site, DevTools | missing | — |
+| Chrome extensions (icons, "Open pinned extensions picker") | missing | — |
+| Built-in ad and tracker blocker | missing | — |
+| Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | missing | — |
 
-## 17. Медиа и Picture-in-Picture
+## 17. Media and Picture-in-Picture
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Мини-плеер в сайдбаре: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | нет | — |
-| Автоматический PiP при уходе с вкладки с видео (опция) | нет | — |
-| Окно PiP: Back to Tab, ±15 секунд, перемотка перетаскиванием вверх, Keep Window on Top, свернуть или закрыть, запоминание позиции | нет | — |
-| PiP для Google Meet (с чатом) и Document PiP | нет | — |
-| Mute/Unmute вкладки, Mute All / Unmute All | нет | — |
+| Mini player in the sidebar: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | missing | — |
+| Automatic PiP when leaving a tab with video (option) | missing | — |
+| PiP window: Back to Tab, ±15 seconds, seeking by dragging up, Keep Window on Top, minimize or close, remembered position | missing | — |
+| PiP for Google Meet (with chat) and Document PiP | missing | — |
+| Mute/Unmute a tab, Mute All / Unmute All | missing | — |
 
-## 18. Уведомления и тосты
+## 18. Notifications and toasts
 
-Ниже основные тосты из модуля `Toasts`. У нас нет механизма тостов вообще.
+The main toasts from the `Toasts` module. We have no toast mechanism at all.
 
-| Тост | Статус |
+| Toast | Status |
 |---|---|
-| Undo для действий («“%@”. ⌘Z to Undo.») | нет |
-| Copied Current URL / clean link without trackers / Copied item links / as quote | нет |
-| Pinned Tab to “%@” / Un-Pinned Tab from “%@” | нет |
-| Auto archived %d tabs; Tab/Folder restored to … | нет |
-| New Tab Created in %@ (при скрытом сайдбаре); New Space Created | нет |
-| Cannot Add New Pane (Split View) | нет |
-| Импорт: Now importing… / Success / partial / failure | нет |
-| Перевод: Translated to %@ / back to %@ / ошибка | нет |
-| Обновления: update pending / failed / in progress | нет |
-| Battery Saver Mode Activated/Deactivated | нет |
-| Ошибки синхронизации (password change, outdated device и т.п.) | нет |
-| Подсказки о клавишах («Copy links faster by pressing…», «… to easily show and hide your Sidebar!», Site Search) | нет |
-| Screenshot Copied to Clipboard, Capture in Progress… | нет |
+| Undo for actions ("“%@”. ⌘Z to Undo.") | missing |
+| Copied Current URL / clean link without trackers / Copied item links / as quote | missing |
+| Pinned Tab to “%@” / Un-Pinned Tab from “%@” | missing |
+| Auto archived %d tabs; Tab/Folder restored to … | missing |
+| New Tab Created in %@ (with the sidebar hidden); New Space Created | missing |
+| Cannot Add New Pane (Split View) | missing |
+| Import: Now importing… / Success / partial / failure | missing |
+| Translation: Translated to %@ / back to %@ / error | missing |
+| Updates: update pending / failed / in progress | missing |
+| Battery Saver Mode Activated/Deactivated | missing |
+| Sync errors (password change, outdated device etc.) | missing |
+| Shortcut tips ("Copy links faster by pressing…", "… to easily show and hide your Sidebar!", Site Search) | missing |
+| Screenshot Copied to Clipboard, Capture in Progress… | missing |
 
-## 19. Онбординг и импорт
+## 19. Onboarding and import
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Вход и регистрация в аккаунте Arc | нет | Вне паритета (сервис Arc). Для нас аналог — локальный профиль |
-| Импорт из Chrome-подобных браузеров, Safari, Firefox: история, cookies, пароли (Passwords.csv), автозаполнение, закладки с выбором папок | нет | — |
-| Выбор профиля для импорта («My Existing Arc Profile» / «Create a New Profile») | нет | — |
-| Шаги: тема («Add some flair with a theme.»), Favorites («Choose the apps you use most.»), блокировщик рекламы, Arc Max, браузер по умолчанию, карточка участника | нет | — |
-| Экран «Let’s settle in! Here are the basics.» (Pin tabs, Split View, Spaces, Open your first tab, с видео) | нет | — |
-| Окно «Essential Keyboard Shortcuts» (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | нет | — |
-| Пустое состояние: «Open your first tab. Click New Tab or press ⌘T…» | частично | У нас заглушка «No tab open / Press ⌘T to open a new tab» |
-| Промпты браузера по умолчанию («Try Arc as default for one week» и т.п.) | нет | — |
+| Signing in and signing up for an Arc account | missing | Out of parity (Arc service). Our equivalent is a local profile |
+| Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | missing | — |
+| Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | missing | — |
+| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | — |
+| "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | missing | — |
+| "Essential Keyboard Shortcuts" window (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | missing | — |
+| Empty state: "Open your first tab. Click New Tab or press ⌘T…" | partial | We show a "No tab open / Press ⌘T to open a new tab" placeholder |
+| Default browser prompts ("Try Arc as default for one week" etc.) | missing | — |
 
-## 20. Синхронизация
+## 20. Sync
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Сохранение сессии между запусками (Spaces, вкладки, архив) | сделано | `session.json` в папке профиля, демо-данные только при первом запуске. Сохраняются адреса, но не история «назад/вперёд» |
-| «When opening Arc, restore windows from previous session» | нет | — |
-| Arc Sync: синхронизация сайдбара (Spaces, Pinned, папки) между устройствами со сквозным шифрованием и фразой восстановления | нет | — |
-| Синхронизируемые настройки (`SyncedPreferences`) | нет | — |
-| Cookies сохраняются между запусками | сделано | `persist_session_cookies` в движке |
+| Saving the session between launches (Spaces, tabs, archive) | done | `session.json` in the profile folder; demo data only on the first launch. URLs are saved, back/forward history isn't |
+| "When opening Arc, restore windows from previous session" | missing | — |
+| Arc Sync: syncing the sidebar (Spaces, Pinned, folders) between devices with end-to-end encryption and a recovery phrase | missing | — |
+| Synced settings (`SyncedPreferences`) | missing | — |
+| Cookies persist between launches | done | `persist_session_cookies` in the engine |
 
-## 21. Жесты и «ощущение»
+## 21. Gestures and feel
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Свайп по сайдбару: Spaces идут за пальцами, сопротивление на краях, щелчок по скорости, возврат при коротком свайпе | сделано | — |
-| Анимированное переключение Space с клавиатуры | сделано | — |
-| Выезд скрытого сайдбара от края с задержкой скрытия | сделано | — |
-| Свайп назад/вперёд по странице | нет (?) | — |
-| Перетаскивание вкладок с анимацией, перетаскивание в центр для Split | нет | — |
-| Тактильный отклик и звуки Arc (`ARC_SoundEffects`) | нет | — |
-| Пружинящий клик по ячейкам сайдбара | нет | — |
+| Sidebar swipe: Spaces follow the fingers, resistance at the edges, flick by speed, snapping back after a short swipe | done | — |
+| Animated Space switching from the keyboard | done | — |
+| Hidden sidebar slides in from the edge and hides after a delay | done | — |
+| Swipe back/forward on the page | missing (?) | — |
+| Animated tab dragging, dragging to the middle for Split | missing | — |
+| Haptic feedback and Arc's sounds (`ARC_SoundEffects`) | missing | — |
+| Springy click on sidebar items | missing | — |
 
 ## 22. AppleScript (`Arc.sdef`)
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Классы: window (active tab, active space, incognito, mode), tab (id, title, URL, loading, location: topApp/pinned/unpinned), space (id, title) | нет | macOS-специфично. Можно заменить кроссплатформенным API автоматизации (?) |
-| Команды: make, close, select, go back, go forward, reload, stop, execute (JavaScript), focus (space) | нет | — |
+| Classes: window (active tab, active space, incognito, mode), tab (id, title, URL, loading, location: topApp/pinned/unpinned), space (id, title) | missing | macOS-specific. Could be replaced by a cross-platform automation API (?) |
+| Commands: make, close, select, go back, go forward, reload, stop, execute (JavaScript), focus (space) | missing | — |
 
-## 23. Прочее
+## 23. Other
 
-| Функция | Статус | Чего не хватает |
+| Feature | Status | What's missing |
 |---|---|---|
-| Capture (снимок области, ⇧⌘2), сохранение в Library | нет | — |
-| Тихие загрузки и трей загрузок | нет | — |
-| Режим экономии батареи (Battery Saver) | нет | — |
-| Task Manager, запись трассировки | нет | — |
-| Shared Quotes (ссылка на выделенный текст) | нет | — |
-| Arc Max (ИИ: Ask on Page, Tidy Titles и Downloads, 5-Second Previews, ChatGPT) | нет | Приоритет ниже основного паритета |
+| Capture (screenshot of an area, ⇧⌘2), saved to Library | missing | — |
+| Quiet downloads and the downloads tray | missing | — |
+| Battery Saver mode | missing | — |
+| Task Manager, trace recording | missing | — |
+| Shared Quotes (link to the selected text) | missing | — |
+| Arc Max (AI: Ask on Page, Tidy Titles and Downloads, 5-Second Previews, ChatGPT) | missing | Lower priority than core parity |
 
 ---
 
-## Итог
+## Summary
 
-Подсчёт по строкам таблиц выше. Пункты-справки без статуса не считались.
+Counted from the table rows above, including rows marked (?). Reference
+rows without a status aren't counted.
 
-- **сделано**: 33
-- **частично**: 14
-- **нет**: 243
+- **done**: 33
+- **partial**: 14
+- **missing**: 248
 
-### Главные пробелы (по важности для паритета)
+### Biggest gaps (by importance for parity)
 
-1. **Command Bar как центр управления.** Нужны действия по названию
-   (Type Travel) из всех пунктов меню, вкладки всех Spaces, история,
-   подсказки поисковика, Site Search по Tab. Сейчас есть только URL,
-   поиск и вкладки текущего Space.
-2. **Архив.** Нужны страница Archive с восстановлением, выбор интервала
-   и кнопка «Clear» над Today (⌘W, ×, ⇧⌘K и ⇧⌘T уже работают).
-3. **Сохранение сессии.** Не сохраняется история «назад/вперёд» вкладок.
-4. **Favorites, папки, перетаскивание и контекстные меню сайдбара.**
-5. **Split View** (⌃⇧=, перетаскивание в центр).
-6. **Peek, Little Arc (⌥⌘N) и Air Traffic Control.**
-7. **Управление Spaces и редактор темы.** Нужны создание, переименование,
-   иконка, удаление, а также градиент из нескольких цветов, наборы цветов,
-   шум, Intensity и Light/Dark.
-8. **Профили.** Сейчас один кэш на всё.
-9. **Окно настроек**, в том числе редактор горячих клавиш с приоритетом
-   «Arc или сайт».
-10. **Клавиши.** Нет ⇧⌘C, ⌘F, ⌘Y, ⌘+/⌘-/⌘0, ⇧⌘L.
-11. **Базовые функции браузера:** поиск по странице, масштаб, история,
-    загрузки, DevTools, печать, индикатор загрузки, новое и инкогнито-окно.
-12. **Медиаконтролы и PiP, тосты с Undo, онбординг и импорт.**
+1. **Command Bar as the control center.** Needs actions by name (Type
+   Travel) for every menu item, tabs from all Spaces, history, search
+   suggestions, Site Search with Tab. Today it only has URLs, search and
+   tabs of the current Space.
+2. **Archive.** Needs the Archive page with restore, an interval picker
+   and the "Clear" button above Today (⌘W, ×, ⇧⌘K and ⇧⌘T already work).
+3. **Sessions.** Back/forward history of tabs isn't saved.
+4. **Favorites, folders, drag and drop and sidebar context menus.**
+5. **Split View** (⌃⇧=, dragging to the middle).
+6. **Peek, Little Arc (⌥⌘N) and Air Traffic Control.**
+7. **Managing Spaces and the theme editor.** Needs creating, renaming,
+   icons, deleting, plus multi-color gradients, color sets, noise,
+   Intensity and Light/Dark.
+8. **Profiles.** Currently one cache for everything.
+9. **Settings window**, including the shortcut editor with the "Arc or
+   website" priority.
+10. **Shortcuts.** Missing ⇧⌘C, ⌘F, ⌘Y, ⌘+/⌘-/⌘0, ⇧⌘L.
+11. **Basic browser features:** find in page, zoom, history, downloads,
+    DevTools, print, loading indicator, new and incognito windows.
+12. **Media controls and PiP, toasts with Undo, onboarding and import.**
