@@ -42,6 +42,8 @@ enum Call {
     ForceReload(u64),
     StopLoading(u64),
     Zoom(u64, i32),
+    Find(u64, String, bool, bool),
+    StopFinding(u64),
     Reload(u64),
     Close(u64),
 }
@@ -110,6 +112,8 @@ impl WebEngine for FakeEngine {
     fn force_reload(&mut self, view: ViewId) { self.call(Call::ForceReload(raw(view))); }
     fn stop_loading(&mut self, view: ViewId) { self.call(Call::StopLoading(raw(view))); }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.call(Call::Zoom(raw(view), direction)); }
+    fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.call(Call::Find(raw(view), text.into(), forward, next)); }
+    fn stop_finding(&mut self, view: ViewId) { self.call(Call::StopFinding(raw(view))); }
     fn close(&mut self, view: ViewId) {
         self.call(Call::Close(raw(view)));
     }
@@ -954,7 +958,7 @@ fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut Te
     click(cx, "pinned-section");
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
     // GPUI retains old debug bounds, so check the actual layout movement.
-    cx.update(|window, cx| { window.draw(cx); });
+    cx.update(|window, cx| { let _ = window.draw(cx); });
     assert!(cx.debug_bounds("new-tab").unwrap().origin.y < expanded_y);
     let saved = view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser));
     let restored = browser_core::session::from_json(&saved).unwrap();
@@ -1021,4 +1025,88 @@ fn create_and_rename_space_actions_keep_focus_and_can_be_cancelled(cx: &mut Test
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 4);
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces[0].pinned.len()), 2);
+}
+
+fn find_overlay(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.find_bar.as_ref().and_then(|bar| bar.overlay)).expect("find overlay is not open");
+    VisualTestContext::from_window(overlay.into(), cx)
+}
+
+#[gpui::test]
+fn find_in_page_searches_as_you_type_and_navigates_matches(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-f");
+    let mut find = find_overlay(&view, cx);
+    let focused = find.update(|window, cx| view.read(cx).find_bar.as_ref().unwrap().input.read(cx).focus_handle(cx).is_focused(window));
+    assert!(focused);
+    find.simulate_input("needle");
+    assert!(fake.take_calls().contains(&Call::Find(1, "needle".into(), true, false)));
+    find.simulate_keystrokes("enter shift-enter cmd-g cmd-shift-g");
+    let calls = fake.take_calls();
+    assert_eq!(calls, vec![Call::Find(1, "needle".into(), true, true), Call::Find(1, "needle".into(), false, true), Call::Find(1, "needle".into(), true, true), Call::Find(1, "needle".into(), false, true)]);
+    click(&mut find, "find-next");
+    assert!(fake.take_calls().contains(&Call::Find(1, "needle".into(), true, true)));
+    click(&mut find, "find-previous");
+    assert!(fake.take_calls().contains(&Call::Find(1, "needle".into(), false, true)));
+    fake.send(cx, Event::FindResult { view: page(1), count: 4, active: 2, final_update: true });
+    assert_eq!(view.read_with(cx, |w, _| w.find_bar.as_ref().map(|bar| (bar.count, bar.active, bar.searching))), Some((Some(4), 2, false)));
+    find.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |w, _| w.find_bar.is_none()));
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::StopFinding(1)));
+    assert!(calls.contains(&Call::FocusPage(1)));
+}
+
+#[gpui::test]
+fn find_handles_no_matches_empty_input_and_refocus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-f");
+    let mut find = find_overlay(&view, cx);
+    find.simulate_input("missing");
+    fake.send(cx, Event::FindResult { view: page(1), count: 0, active: 0, final_update: true });
+    assert_eq!(view.read_with(cx, |w, _| w.find_bar.as_ref().unwrap().count), Some(0));
+    find.simulate_keystrokes("cmd-f");
+    find.simulate_input("replacement");
+    assert_eq!(view.read_with(cx, |w, cx| w.find_bar.as_ref().unwrap().input.read(cx).text().to_string()), "replacement");
+    fake.take_calls();
+    find.simulate_keystrokes("cmd-a backspace");
+    assert!(fake.take_calls().contains(&Call::StopFinding(1)));
+    // A late engine response after clearing the input cannot restore the old count.
+    fake.send(cx, Event::FindResult { view: page(1), count: 5, active: 1, final_update: true });
+    assert_eq!(view.read_with(cx, |w, _| w.find_bar.as_ref().unwrap().count), None);
+    click(&mut find, "find-close");
+    assert!(view.read_with(cx, |w, _| w.find_bar.is_none()));
+}
+
+#[gpui::test]
+fn find_shortcut_from_page_focus_and_tab_switch_clear_find(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, key: "f".into(), ..Default::default() }));
+    find_overlay(&view, cx).simulate_input("page text");
+    fake.take_calls();
+    // Clicking another sidebar item must not keep searching the old page.
+    click(cx, "tab-4");
+    cx.update(|window, cx| { let _ = window.draw(cx); });
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.find_bar.is_none()));
+    assert!(fake.take_calls().contains(&Call::StopFinding(1)));
+}
+
+#[gpui::test]
+fn find_command_opens_a_small_panel_with_input_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("find in page");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none()));
+    let mut find = find_overlay(&view, cx);
+    let panel = find.update(|window, _| window.bounds());
+    let main = cx.update(|window, _| window.bounds());
+    assert!(panel.size.height < main.size.height / 4.0);
+    assert!(panel.size.width < main.size.width);
+    assert!(find.update(|window, cx| view.read(cx).find_bar.as_ref().unwrap().input.read(cx).focus_handle(cx).is_focused(window)));
+    find.simulate_input("text");
+    assert!(fake.take_calls().contains(&Call::Find(1, "text".into(), true, false)));
 }

@@ -24,6 +24,8 @@ pub trait WebEngine {
     fn force_reload(&mut self, view: ViewId);
     fn stop_loading(&mut self, view: ViewId);
     fn zoom(&mut self, view: ViewId, direction: i32);
+    fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool);
+    fn stop_finding(&mut self, view: ViewId);
     fn close(&mut self, view: ViewId);
     /// Runs engine work. Takes no `self`: the engine may dispatch native UI
     /// events from inside it, which re-enter the window and its pages.
@@ -76,6 +78,8 @@ impl WebEngine for Chromium {
     fn force_reload(&mut self, view: ViewId) { self.engine.force_reload(view) }
     fn stop_loading(&mut self, view: ViewId) { self.engine.stop_loading(view) }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.engine.zoom(view, direction) }
+    fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.engine.find(view, text, forward, next) }
+    fn stop_finding(&mut self, view: ViewId) { self.engine.stop_finding(view) }
     fn close(&mut self, view: ViewId) {
         self.engine.close(view)
     }
@@ -271,6 +275,14 @@ impl Pages {
         if let Some(view) = self.view(tab) { self.engine.zoom(view, direction); }
     }
 
+    pub fn find(&mut self, tab: TabId, text: &str, forward: bool, next: bool) {
+        if let Some(view) = self.view(tab) { self.engine.find(view, text, forward, next); }
+    }
+
+    pub fn stop_finding(&mut self, tab: TabId) {
+        if let Some(view) = self.view(tab) { self.engine.stop_finding(view); }
+    }
+
     pub fn pump_fn(&self) -> fn() {
         self.engine.pump_fn()
     }
@@ -301,7 +313,7 @@ impl Pages {
                     };
                 }
             }
-            Event::TitleChanged { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) => {}
+            Event::TitleChanged { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
         }
     }
 }

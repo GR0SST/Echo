@@ -5,7 +5,7 @@
 //!
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
-//! Commands: `wait <seconds>`, `key <keystroke>`, `type <text>`,
+//! Commands: `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `click <x> <y>` (logical px from the window's top-left),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
@@ -39,6 +39,10 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
             match name {
+                "activate" => {
+                    unsafe { make_key(ns_view) };
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                }
                 "wait" => {
                     let secs: f64 = arg.parse().unwrap_or(1.0);
                     cx.background_executor()
@@ -198,6 +202,9 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
             .as_ref()
             .map(|bar| bar.input.read(cx).text().to_string()),
     );
+    if let Some(find) = &this.find_bar {
+        out += &format!("[dump] find={:?} count={:?} active={} searching={}\n", find.input.read(cx).text(), find.count, find.active, find.searching);
+    }
     let shown = this.pages.as_ref().and_then(|pages| pages.borrow().shown());
     for (section, tabs) in [("pinned", &space.pinned), ("today", &space.today)] {
         for tab in tabs {

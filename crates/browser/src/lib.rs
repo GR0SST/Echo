@@ -1,6 +1,7 @@
 #[cfg(target_os = "macos")]
 mod automation;
 mod native;
+mod find;
 pub mod pages;
 pub mod text_input;
 pub mod window;
@@ -26,6 +27,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     text_input::bind_keys(cx);
     window::bind_keys(cx);
+    find::bind_keys(cx);
 }
 
 /// Content of the first launch.

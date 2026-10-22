@@ -48,6 +48,7 @@ pub struct Shortcut {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     TitleChanged { view: ViewId, title: String },
+    FindResult { view: ViewId, count: i32, active: i32, final_update: bool },
     UrlChanged { view: ViewId, url: String },
     LoadingChanged {
         view: ViewId,
@@ -65,6 +66,7 @@ pub enum Event {
 #[derive(Debug)]
 enum RawEvent {
     Title(String),
+    Find(i32, i32, bool),
     Url(String),
     Loading(bool, bool, bool),
     Popup(String),
@@ -197,6 +199,7 @@ impl Engine {
                 Some(match event {
                     RawEvent::Shortcut(_) => unreachable!(),
                     RawEvent::Title(title) => Event::TitleChanged { view, title },
+                    RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
                     RawEvent::Url(url) => Event::UrlChanged { view, url },
                     RawEvent::Loading(loading, can_go_back, can_go_forward) => {
                         Event::LoadingChanged {
@@ -375,6 +378,18 @@ impl Engine {
         }
     }
 
+    pub fn find(&mut self, id: ViewId, text: &str, forward: bool, next: bool) {
+        if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
+            host.find(Some(&CefString::from(text)), forward.into(), 0, next.into());
+        }
+    }
+
+    pub fn stop_finding(&mut self, id: ViewId) {
+        if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
+            host.stop_finding(1);
+        }
+    }
+
     pub fn close(&mut self, id: ViewId) {
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
@@ -408,12 +423,34 @@ wrap_client! {
             Some(EngineDisplayHandler::new(self.events.clone()))
         }
 
+        fn find_handler(&self) -> Option<FindHandler> {
+            Some(EngineFindHandler::new(self.events.clone()))
+        }
+
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(EngineLoadHandler::new(self.events.clone()))
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(EngineLifeSpanHandler::new(self.events.clone()))
+        }
+    }
+}
+
+wrap_find_handler! {
+    struct EngineFindHandler { events: EventQueue }
+
+    impl FindHandler {
+        fn on_find_result(
+            &self,
+            browser: Option<&mut Browser>,
+            _identifier: ::std::os::raw::c_int,
+            count: ::std::os::raw::c_int,
+            _selection_rect: Option<&Rect>,
+            active_match_ordinal: ::std::os::raw::c_int,
+            final_update: ::std::os::raw::c_int,
+        ) {
+            push(&self.events, browser, RawEvent::Find(count, active_match_ordinal, final_update != 0));
         }
     }
 }

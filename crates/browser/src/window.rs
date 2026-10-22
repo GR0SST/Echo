@@ -115,6 +115,9 @@ window_shortcuts! {
     "cmd-alt-up" => PreviousTab,
     "cmd-[" => GoBack,
     "cmd-]" => GoForward,
+    "cmd-f" => crate::find::FindPage,
+    "cmd-g" => crate::find::NextMatch,
+    "cmd-shift-g" => crate::find::PreviousMatch,
     "cmd-r" => Reload,
     "cmd-shift-r" => ForceReload,
     "cmd-." => StopLoading,
@@ -258,6 +261,7 @@ pub enum Suggestion {
 pub enum Command {
     NewSpace,
     RenameSpace,
+    FindPage,
     ToggleSidebar,
     TogglePin,
     TogglePinnedSection,
@@ -297,6 +301,7 @@ pub struct CommandBar {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayKind {
     CommandBar,
+    Find,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
 }
@@ -311,7 +316,7 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    fn new(browser: WeakEntity<BrowserWindow>, kind: OverlayKind, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(browser: WeakEntity<BrowserWindow>, kind: OverlayKind, cx: &mut Context<Self>) -> Self {
         let observe = browser
             .upgrade()
             .map(|browser| cx.observe(&browser, |_, _, cx| cx.notify()));
@@ -329,6 +334,7 @@ impl Render for Overlay {
         self.browser
             .update(cx, |browser, cx| match kind {
                 OverlayKind::CommandBar => browser.render_command_bar_overlay(cx),
+                OverlayKind::Find => browser.render_find_bar(cx),
                 OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
             })
             .unwrap_or_else(|_| div().into_any_element())
@@ -354,15 +360,16 @@ pub struct BrowserWindow {
     pub browser: Browser,
     pub sidebar_visible: bool,
     pub command_bar: Option<CommandBar>,
+    pub(crate) find_bar: Option<crate::find::FindBar>,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
     pub floating_sidebar: Option<FloatingSidebar>,
-    main_window: AnyWindowHandle,
-    native_view: Option<*mut c_void>,
+    pub(crate) main_window: AnyWindowHandle,
+    pub(crate) native_view: Option<*mut c_void>,
     /// Native mouse tracking around the page, see `native::track_mouse_outside`.
     mouse_tracking: Rc<RefCell<MouseTracking>>,
     pub pager: Pager,
-    focus_handle: FocusHandle,
+    pub(crate) focus_handle: FocusHandle,
     _save_on_quit: Option<Subscription>,
 }
 
@@ -417,6 +424,7 @@ impl BrowserWindow {
             browser,
             sidebar_visible: true,
             command_bar: None,
+            find_bar: None,
             pages,
             floating_sidebar: None,
             main_window: window.window_handle(),
@@ -489,6 +497,15 @@ impl BrowserWindow {
                         window.dispatch_keystroke(keystroke, cx);
                     });
                 }
+                Event::FindResult { view, count, active, final_update } => {
+                    if let Some(bar) = &mut self.find_bar {
+                        if pages.borrow().tab_for(view) == Some(bar.tab) && !bar.input.read(cx).text().is_empty() {
+                            if count >= 0 { bar.count = Some(count); }
+                            if active >= 0 { bar.active = active; }
+                            bar.searching = !final_update;
+                        }
+                    }
+                }
                 Event::LoadingChanged { .. } => {}
             }
         }
@@ -529,6 +546,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_find(cx);
         let input = cx.new(|cx| {
             let placeholder = match target {
                 Target::NewSpace => "Name your Space…",
@@ -594,7 +612,7 @@ impl BrowserWindow {
         });
     }
 
-    fn close_command_bar(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_command_bar(&mut self, cx: &mut Context<Self>) {
         let Some(bar) = self.command_bar.take() else {
             return;
         };
@@ -632,6 +650,7 @@ impl BrowserWindow {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let commands = [
+                (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
                 (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar" } else { "toggle sidebar|show sidebar" }, true),
@@ -743,6 +762,7 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.edit_space_name(None, cx),
             Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
             Command::ToggleSidebar => self.toggle_sidebar(cx),
@@ -1557,6 +1577,9 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {
+            self.close_find(cx);
+        }
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => pages.sync(&self.browser, true),
@@ -1582,6 +1605,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
             .on_action(cx.listener(Self::on_go_back))
             .on_action(cx.listener(Self::on_go_forward))
+            .on_action(cx.listener(|this, _: &crate::find::FindPage, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &crate::find::NextMatch, _, cx| this.find_next(true, cx)))
+            .on_action(cx.listener(|this, _: &crate::find::PreviousMatch, _, cx| this.find_next(false, cx)))
             .on_action(cx.listener(Self::on_reload))
             .on_action(cx.listener(|this, _: &ForceReload, _, _| this.with_active_page(|pages, tab| pages.force_reload(tab))))
             .on_action(cx.listener(|this, _: &StopLoading, _, _| this.with_active_page(|pages, tab| pages.stop_loading(tab))))

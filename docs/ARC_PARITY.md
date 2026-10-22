@@ -76,7 +76,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Copy URL as Markdown | ⌥⇧⌘C | missing | — |
 | Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | missing | — |
 | Paste and Match Style | ⇧⌘V | missing | — |
-| Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | missing | No find in page |
+| Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | partial | Find in Page via CEF, live matches/count, next/previous (Enter/Shift+Enter, ⌘G/⇧⌘G), Escape to close. Find and Replace and Jump to Selection remain missing |
 | Spelling, Substitutions, Transformations, Speech, Format (Bold/Italic/Underline) | ⌘: ⌘; ⌘B ⌘I ⌘U | missing | Standard macOS submenus |
 
 ### View
@@ -239,7 +239,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
 | Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
 | Removing a suggestion ("Delete Suggestion") | — | missing | — |
-| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, back/forward, next/previous tab. Remaining menu actions follow their features |
+| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
 | Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | missing | — |
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
@@ -392,7 +392,7 @@ every item below is **missing**.
 | Loading indicator (glowing progress, `GlowProgressLoadingIndicator`) | missing | The engine reports loading, but it isn't shown |
 | Site Control Center: security icon, Copy URL, Capture / Full Page / Portrait, Share, Boosts, extensions (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | missing | — |
 | Status bar with the URL when hovering a link (`StatusTextView`) | missing | — |
-| Find in Page ("No results found"), Find and Replace | missing | — |
+| Find in Page ("No results found"), Find and Replace | partial | Small GPUI panel above CEF, live search, result counts, next/previous, close and focus restoration. Find and Replace remains missing |
 | Page translation: "Translate this page to %@?", Use Original, Choose Another Language, Never Translate This Site | missing | — |
 | Crashed tab page (Sad Tab) | missing | — |
 | Swipe back/forward on the page (overscroll) | missing (?) | Not checked whether the gesture works in CEF |
@@ -495,8 +495,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 41
-- **partial**: 17
-- **missing**: 237
+- **partial**: 19
+- **missing**: 235
 
 ### Biggest gaps (by importance for parity)
 
@@ -516,7 +516,7 @@ rows without a status aren't counted.
 8. **Profiles.** Currently one cache for everything.
 9. **Settings window**, including the shortcut editor with the "Arc or
    website" priority.
-10. **Shortcuts.** Missing ⇧⌘C, ⌘F, ⌘Y and ⇧⌘L.
-11. **Basic browser features:** find in page, zoom, history, downloads,
+10. **Shortcuts.** Missing ⇧⌘C, ⌘Y and ⇧⌘L.
+11. **Basic browser features:** history, downloads,
     DevTools, print, loading indicator, new and incognito windows.
 12. **Media controls and PiP, toasts with Undo, onboarding and import.**
