@@ -931,3 +931,38 @@ fn page_controls_are_available_by_name(cx: &mut TestAppContext) {
         assert!(fake.take_calls().contains(&expected), "{query}");
     }
 }
+
+
+#[gpui::test]
+fn clear_button_archives_today_without_touching_pinned_or_other_spaces(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    click(cx, "clear-today");
+    assert!(today_urls(&view, cx).is_empty());
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 2);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 3);
+
+    cx.simulate_keystrokes("cmd-shift-t");
+    assert_eq!(today_urls(&view, cx).len(), 1);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("clear-today").is_some());
+}
+
+#[gpui::test]
+fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let expanded_y = cx.debug_bounds("new-tab").unwrap().origin.y;
+    click(cx, "pinned-section");
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
+    // GPUI retains old debug bounds, so check the actual layout movement.
+    cx.update(|window, cx| { window.draw(cx); });
+    assert!(cx.debug_bounds("new-tab").unwrap().origin.y < expanded_y);
+    let saved = view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser));
+    let restored = browser_core::session::from_json(&saved).unwrap();
+    assert!(restored.space().pinned_collapsed);
+    assert!(!restored.spaces[1].pinned_collapsed);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("expand pinned section");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(!view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
+    assert_eq!(cx.debug_bounds("new-tab").unwrap().origin.y, expanded_y);
+}

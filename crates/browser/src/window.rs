@@ -63,6 +63,7 @@ actions!(
         ZoomOut,
         ResetZoom,
         TogglePin,
+        TogglePinnedSection,
         ToggleSidebar,
         NextSpace,
         PreviousSpace,
@@ -253,6 +254,7 @@ pub enum Suggestion {
 pub enum Command {
     ToggleSidebar,
     TogglePin,
+    TogglePinnedSection,
     CloseTab,
     ClearToday,
     RestoreTab,
@@ -616,8 +618,9 @@ impl BrowserWindow {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let commands = [
-                (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, "toggle sidebar|show sidebar|hide sidebar", true),
+                (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar" } else { "toggle sidebar|show sidebar" }, true),
                 (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some()),
+                (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned.is_empty()),
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
                 (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
@@ -715,6 +718,7 @@ impl BrowserWindow {
             Command::TogglePin => {
                 if let Some(id) = self.browser.space().active_tab { self.browser.toggle_pin(id); }
             }
+            Command::TogglePinnedSection => self.toggle_pinned_section(self.browser.active_space, cx),
             Command::CloseTab => {
                 if let Some(id) = self.browser.space().active_tab { self.close_tab(id, cx); }
             }
@@ -778,6 +782,13 @@ impl BrowserWindow {
 
     fn on_reload(&mut self, _: &Reload, _: &mut Window, _: &mut Context<Self>) {
         self.with_active_page(|pages, tab| pages.reload(tab));
+    }
+
+    fn toggle_pinned_section(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(space) = self.browser.spaces.get_mut(index) {
+            space.pinned_collapsed = !space.pinned_collapsed;
+            cx.notify();
+        }
     }
 
     fn on_toggle_pin(&mut self, _: &TogglePin, _: &mut Window, cx: &mut Context<Self>) {
@@ -1169,8 +1180,35 @@ impl BrowserWindow {
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .child(space.name.clone()),
             )
-            .children(pinned)
+            .when(!space.pinned.is_empty(), |this| {
+                this.child(div()
+                    .id(("pinned-section", index))
+                    .when(current, |this| this.debug_selector(|| "pinned-section".into()))
+                    .flex().items_center().gap_2().h(px(24.0)).px_2().rounded_md()
+                    .text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5))
+                    .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.2)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_pinned_section(index, cx)))
+                    .child(if space.pinned_collapsed { "›" } else { "⌄" })
+                    .child("Pinned"))
+            })
+            .when(!space.pinned_collapsed, |this| this.children(pinned))
             .child(div().h(px(1.0)).mx_2().my_2().bg(hsla(0.0, 0.0, 0.0, 0.12)))
+            .when(!space.today.is_empty(), |this| {
+                this.child(div().flex().items_center().justify_between().px_2().h(px(24.0))
+                    .text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5))
+                    .child("Today")
+                    .child(div().id(("clear-today", index))
+                        .when(current, |this| this.debug_selector(|| "clear-today".into()))
+                        .px_2().py_1().rounded_md()
+                        .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.browser.switch_space(index);
+                            this.browser.clear_today(SystemTime::now());
+                            this.settle_pager(cx);
+                            cx.notify();
+                        }))
+                        .child("Clear")))
+            })
             .child(
                 div()
                     .id(("new-tab", index))
@@ -1497,6 +1535,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
             .on_action(cx.listener(Self::on_toggle_pin))
+            .on_action(cx.listener(|this, _: &TogglePinnedSection, _, cx| this.toggle_pinned_section(this.browser.active_space, cx)))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousSpace, _, cx| this.cycle_space(-1, cx)))

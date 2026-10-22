@@ -86,7 +86,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Appearance: websites use Automatic / Light / Dark | — | missing | — |
 | Show/Hide Sidebar | ⌘S | done | — |
 | Show/Hide Toolbar (top bar mode) | ⇧⌘D (hidden) | missing | No URL bar at the top |
-| Expand/Collapse Pinned Section | hidden | missing | — |
+| Expand/Collapse Pinned Section | hidden | done | Click the Pinned header or use the Command Bar; state persists per Space |
 | Reveal Current Tab | ⌃Space (hidden) | missing | — |
 | Stop Loading | ⌘. | done | CEF stop_load; also available in the Command Bar |
 | Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | done | Reload and reload_ignore_cache through CEF |
@@ -170,9 +170,9 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | ⇧⌘D | missing | — |
 | **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | missing | Needs drag and drop ("Drag to add Favorites"), unread badges (Gmail, GitHub, X, WhatsApp), calendar captions ("Show Time to Next Meeting") |
 | Hover previews for Favorites, Pinned and folders (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | hover | missing | Configured in "Previews Settings…" |
-| **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL), "Replace Pinned URL with Current", "Reset Tab to Original URL", collapsing the section |
+| **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL), "Replace Pinned URL with Current", "Reset Tab to Original URL". Pinned section can be collapsed |
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
-| "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | partial | Only the shortcut works, no button |
+| "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | done | Click Clear above Today; preserves Pinned and other Spaces |
 | "Tidy Tabs": AI grouping of Today by topic | — | missing | Arc Max feature, can wait |
 | Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | missing | — |
 | Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | missing | — |
@@ -494,9 +494,9 @@ The main toasts from the `Toasts` module. We have no toast mechanism at all.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 37
-- **partial**: 15
-- **missing**: 243
+- **done**: 39
+- **partial**: 14
+- **missing**: 242
 
 ### Biggest gaps (by importance for parity)
 
@@ -505,7 +505,7 @@ rows without a status aren't counted.
    Search with Tab. Basic actions, Space switching and tabs from all Spaces
    are implemented.
 2. **Archive.** Needs the Archive page with restore, an interval picker
-   and the "Clear" button above Today (⌘W, ×, ⇧⌘K and ⇧⌘T already work).
+   (the Clear button, ⌘W, ×, ⇧⌘K and ⇧⌘T already work).
 3. **Sessions.** Back/forward history of tabs isn't saved.
 4. **Favorites, folders, drag and drop and sidebar context menus.**
 5. **Split View** (⌃⇧=, dragging to the middle).

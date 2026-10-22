@@ -48,6 +48,8 @@ pub struct Space {
     /// Accent hue in degrees, 0..360.
     pub hue: f32,
     pub pinned: Vec<Tab>,
+    #[serde(default)]
+    pub pinned_collapsed: bool,
     pub today: Vec<Tab>,
     pub active_tab: Option<TabId>,
 }
@@ -165,6 +167,7 @@ impl Browser {
             name: name.into(),
             hue,
             pinned: Vec::new(),
+            pinned_collapsed: false,
             today: Vec::new(),
             active_tab: None,
         });
