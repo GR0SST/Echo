@@ -165,6 +165,24 @@ impl Engine {
     /// Chromium may process native UI events inside this call, so the
     /// caller must not hold state that those events' handlers need.
     pub fn pump() {
+        // Chromium's work also takes native events off the queue and
+        // dispatches them itself. AppKit's mouse tracking (window buttons,
+        // resizing) then misses the button going up, so events are left to
+        // the toolkit's loop: Chromium runs once the queue is empty, or
+        // after a few skips so an event nobody takes cannot stall pages.
+        #[cfg(target_os = "macos")]
+        {
+            const MAX_SKIPS: u32 = 6;
+            thread_local!(static SKIPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+            if mac::is_tracking_events() {
+                return;
+            }
+            if mac::has_pending_events() && SKIPS.get() < MAX_SKIPS {
+                SKIPS.set(SKIPS.get() + 1);
+                return;
+            }
+            SKIPS.set(0);
+        }
         do_message_loop_work();
     }
 

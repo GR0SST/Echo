@@ -73,9 +73,11 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                     cx.background_executor().timer(Duration::from_millis(500)).await;
                 }
                 "click" => {
+                    // click <x> <y> [hold ms]
                     let mut coords = arg.split_whitespace().filter_map(|v| v.parse::<f64>().ok());
                     if let (Some(x), Some(y)) = (coords.next(), coords.next()) {
-                        unsafe { post_click(ns_view, x, y) };
+                        let hold = coords.next().map(|ms| Duration::from_secs_f64(ms / 1000.0));
+                        unsafe { post_click(ns_view, x, y, hold) };
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
@@ -93,11 +95,15 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                         let frame: NSRect = msg_send![window, frame];
                         let visible: Bool = msg_send![window, isVisible];
                         let ignores: Bool = msg_send![window, ignoresMouseEvents];
+                        let key: Bool = msg_send![window, isKeyWindow];
+                        // NSWindowOcclusionStateVisible: macOS stops drawing
+                        // windows hidden behind others, e.g. other apps'.
+                        let occlusion: usize = msg_send![window, occlusionState];
                         eprintln!(
-                            "[windows] {i} {} frame=({:.0},{:.0} {:.0}x{:.0}) visible={} ignoresMouse={}",
+                            "[windows] {i} {} frame=({:.0},{:.0} {:.0}x{:.0}) visible={} ignoresMouse={} key={} onScreen={}",
                             (*class).name().to_string_lossy(),
                             frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
-                            visible.as_bool(), ignores.as_bool(),
+                            visible.as_bool(), ignores.as_bool(), key.as_bool(), occlusion & 2 != 0,
                         );
                     }
                 },
@@ -379,29 +385,45 @@ unsafe fn post_key(view: *mut AnyObject, spec: &str) {
     }
 }
 
-unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64) {
+/// Clicks at window point (x, y). With `hold`, the button is released
+/// that much later from another thread, like a real hand: AppKit's own
+/// tracking loops (window buttons, resizing) then wait for it.
+unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64, hold: Option<Duration>) {
     unsafe {
         let window = window_of(view);
         let number: isize = msg_send![window, windowNumber];
         let content: *mut AnyObject = msg_send![window, contentView];
         let bounds: NSRect = msg_send![content, bounds];
-        let location = NSPoint::new(x, bounds.size.height - y);
-        let nil: *mut AnyObject = std::ptr::null_mut();
-        for kind in [MOUSE_DOWN, MOUSE_UP] {
-            let event: *mut AnyObject = msg_send![
-                AnyClass::get(c"NSEvent").unwrap(),
-                mouseEventWithType: kind,
-                location: location,
-                modifierFlags: 0usize,
-                timestamp: 0.0f64,
-                windowNumber: number,
-                context: nil,
-                eventNumber: 0isize,
-                clickCount: 1isize,
-                pressure: 1.0f32
-            ];
-            post(event);
+        let location = (x, bounds.size.height - y);
+        post_mouse_button(MOUSE_DOWN, location, number);
+        match hold {
+            None => post_mouse_button(MOUSE_UP, location, number),
+            Some(hold) => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(hold);
+                    post_mouse_button(MOUSE_UP, location, number);
+                });
+            }
         }
+    }
+}
+
+unsafe fn post_mouse_button(kind: usize, (x, y): (f64, f64), window_number: isize) {
+    unsafe {
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        let event: *mut AnyObject = msg_send![
+            AnyClass::get(c"NSEvent").unwrap(),
+            mouseEventWithType: kind,
+            location: NSPoint::new(x, y),
+            modifierFlags: 0usize,
+            timestamp: 0.0f64,
+            windowNumber: window_number,
+            context: nil,
+            eventNumber: 0isize,
+            clickCount: 1isize,
+            pressure: 1.0f32
+        ];
+        post(event);
     }
 }
 
@@ -493,37 +515,27 @@ unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
     }
 }
 
+/// Presses at `from`, moves to `to` and releases, paced like a hand from
+/// another thread, so AppKit's tracking loops (e.g. resizing) see it.
 unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64)) {
     const DRAGGED: usize = 6;
+    const STEPS: usize = 10;
     unsafe {
         let window = window_of(view);
         let number: isize = msg_send![window, windowNumber];
         let content: *mut AnyObject = msg_send![window, contentView];
         let bounds: NSRect = msg_send![content, bounds];
-        let nil: *mut AnyObject = std::ptr::null_mut();
-        let steps = 10;
-        for i in 0..=steps + 1 {
-            let (kind, t) = match i {
-                0 => (MOUSE_DOWN, 0.0),
-                i if i == steps + 1 => (MOUSE_UP, 1.0),
-                i => (DRAGGED, i as f64 / steps as f64),
-            };
-            let x = from.0 + (to.0 - from.0) * t;
-            let y = from.1 + (to.1 - from.1) * t;
-            let event: *mut AnyObject = msg_send![
-                AnyClass::get(c"NSEvent").unwrap(),
-                mouseEventWithType: kind,
-                location: NSPoint::new(x, bounds.size.height - y),
-                modifierFlags: 0usize,
-                timestamp: 0.0f64,
-                windowNumber: number,
-                context: nil,
-                eventNumber: 0isize,
-                clickCount: 1isize,
-                pressure: 1.0f32
-            ];
-            post(event);
-        }
+        let height = bounds.size.height;
+        let at = move |t: f64| (from.0 + (to.0 - from.0) * t, height - (from.1 + (to.1 - from.1) * t));
+        post_mouse_button(MOUSE_DOWN, at(0.0), number);
+        std::thread::spawn(move || {
+            for i in 1..=STEPS {
+                std::thread::sleep(Duration::from_millis(30));
+                post_mouse_button(DRAGGED, at(i as f64 / STEPS as f64), number);
+            }
+            std::thread::sleep(Duration::from_millis(30));
+            post_mouse_button(MOUSE_UP, at(1.0), number);
+        });
     }
 }
 

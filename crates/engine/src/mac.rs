@@ -104,6 +104,48 @@ unsafe fn add_protocol(class: *mut AnyClass, name: &CStr) {
     }
 }
 
+/// Whether the main run loop runs in AppKit's event tracking mode, i.e.
+/// inside a mouse tracking loop such as a window resize.
+pub fn is_tracking_events() -> bool {
+    unsafe {
+        let Some(class) = AnyClass::get(c"NSRunLoop") else {
+            return false;
+        };
+        let run_loop: *mut AnyObject = msg_send![class, currentRunLoop];
+        let mode: *mut AnyObject = msg_send![run_loop, currentMode];
+        if mode.is_null() {
+            return false;
+        }
+        let name: *const c_char = msg_send![mode, UTF8String];
+        !name.is_null() && CStr::from_ptr(name) == c"NSEventTrackingRunLoopMode"
+    }
+}
+
+/// Whether native events wait in the queue for the toolkit to dispatch.
+pub fn has_pending_events() -> bool {
+    const ANY: u64 = u64::MAX;
+    unsafe {
+        let (Some(app_class), Some(date_class), Some(string_class)) = (
+            AnyClass::get(c"NSApplication"),
+            AnyClass::get(c"NSDate"),
+            AnyClass::get(c"NSString"),
+        ) else {
+            return false;
+        };
+        let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+        let past: *mut AnyObject = msg_send![date_class, distantPast];
+        let mode: *mut AnyObject = msg_send![string_class, stringWithUTF8String: c"kCFRunLoopDefaultMode".as_ptr()];
+        let event: *mut AnyObject = msg_send![
+            app,
+            nextEventMatchingMask: ANY,
+            untilDate: past,
+            inMode: mode,
+            dequeue: Bool::NO
+        ];
+        !event.is_null()
+    }
+}
+
 /// Positions `view` inside `parent` using top-left-origin coordinates.
 pub fn set_frame(view: *mut c_void, parent: *mut c_void, frame: Bounds) {
     if view.is_null() || parent.is_null() {
