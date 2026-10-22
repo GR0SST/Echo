@@ -26,6 +26,11 @@ const MAX_TAB_SUGGESTIONS: usize = 6;
 const ARCHIVE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(1);
+const ARCHIVE_OPTIONS: &[(&str, Option<u64>)] = &[
+    ("Never", None), ("1 hour", Some(3600)), ("6 hours", Some(21600)),
+    ("12 hours", Some(43200)), ("24 hours", Some(86400)),
+    ("7 days", Some(604800)), ("30 days", Some(2592000)),
+];
 /// Fraction of the sidebar width a swipe must travel to change space.
 const SPACE_SWIPE_COMMIT: f32 = 0.25;
 /// Finger speed (px/s) that changes space regardless of distance (a flick).
@@ -246,6 +251,7 @@ pub enum Target {
     Tab(TabId),
     NewSpace,
     RenameSpace(SpaceId),
+    ArchiveInterval,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -254,6 +260,7 @@ pub enum Suggestion {
     SwitchToTab { id: TabId, title: String, url: String, space: String },
     Action { command: Command, label: String },
     SaveSpace { name: String },
+    ArchiveAfter { label: String, seconds: Option<u64> },
 }
 
 /// Commands currently implemented by the browser, also exposed by name.
@@ -262,6 +269,7 @@ pub enum Command {
     NewSpace,
     RenameSpace,
     FindPage,
+    ArchiveSettings,
     ToggleSidebar,
     TogglePin,
     TogglePinnedSection,
@@ -551,6 +559,7 @@ impl BrowserWindow {
             let placeholder = match target {
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
+                Target::ArchiveInterval => "Archive tabs after…",
                 _ => "Search or Enter URL…",
             };
             let mut input = TextInput::new(placeholder, cx);
@@ -640,6 +649,18 @@ impl BrowserWindow {
             return Vec::new();
         };
         let text = bar.input.read(cx).text();
+        if bar.target == Target::ArchiveInterval {
+            let query = text.trim().to_lowercase();
+            let current = self.browser.archive_after.map(|duration| duration.as_secs());
+            let mut options: Vec<_> = ARCHIVE_OPTIONS.iter().filter(|(label, _)| label.to_lowercase().contains(&query)).collect();
+            // Enter on the empty picker preserves the current setting.
+            options.sort_by_key(|(_, seconds)| *seconds != current);
+            let mut suggestions: Vec<_> = options.into_iter().map(|(label, seconds)| Suggestion::ArchiveAfter { label: (*label).into(), seconds: *seconds }).collect();
+            if query.is_empty() && !ARCHIVE_OPTIONS.iter().any(|(_, seconds)| *seconds == current) {
+                suggestions.insert(0, Suggestion::ArchiveAfter { label: "Current interval".into(), seconds: current });
+            }
+            return suggestions;
+        }
         if matches!(bar.target, Target::NewSpace | Target::RenameSpace(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveSpace { name: text.trim().to_string() }] };
         }
@@ -650,6 +671,7 @@ impl BrowserWindow {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let commands = [
+                (Command::ArchiveSettings, "Archive Tabs After…", "archive tabs after|auto archive settings|change auto archiving", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
@@ -732,7 +754,7 @@ impl BrowserWindow {
                         self.browser.navigate(id, resolved.url());
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) => return,
+                    Target::NewSpace | Target::RenameSpace(_) | Target::ArchiveInterval => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -746,6 +768,9 @@ impl BrowserWindow {
             Suggestion::Action { command, .. } => {
                 self.run_command(command, cx);
                 if self.command_bar.as_ref().is_some_and(|bar| bar.target != target) { return; }
+            }
+            Suggestion::ArchiveAfter { seconds, .. } => {
+                self.browser.archive_after = seconds.map(Duration::from_secs);
             }
             Suggestion::SaveSpace { name } => match target {
                 Target::NewSpace => {
@@ -762,6 +787,16 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::ArchiveSettings => {
+                if let Some(bar) = &mut self.command_bar {
+                    bar.target = Target::ArchiveInterval;
+                    bar.selected = 0;
+                    bar.input.update(cx, |input, cx| {
+                        input.set_placeholder("Archive tabs after…", cx);
+                        input.set_text("", cx);
+                    });
+                }
+            }
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.edit_space_name(None, cx),
             Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
@@ -1482,6 +1517,7 @@ impl BrowserWindow {
                     }
                     Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
                     Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
+                    Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
                 };
                 div()
                     .id(("suggestion", index))

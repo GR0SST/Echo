@@ -277,7 +277,7 @@ in code, so some were reconstructed from translator comments (?).
 | Feature | Status | What's missing |
 |---|---|---|
 | Auto-archiving idle Today tabs, 12 hours by default | done | A once-a-minute timer in `window.rs`, logic in `core::archive_idle` |
-| Intervals: Never, 1 hour (?), 6 hours, 12 hours, 24 hours, 7 days, 30 days | partial | The model supports any interval and "never", but the UI has no picker. 1h and 6h appear only as threshold strings; whether they are in the menu is unclear (?) |
+| Intervals: Never, 1 hour (?), 6 hours, 12 hours, 24 hours, 7 days, 30 days | done | Command Bar → Archive Tabs After… opens a searchable picker; current interval first, persisted in the session |
 | Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
 | Separate "Archive Little Arcs after:" interval | missing | — |
 | ⌘W and × send the tab to the archive | done | — |
@@ -342,14 +342,14 @@ in code, so some were reconstructed from translator comments (?).
 ## 13. Settings (Preferences, ⌘,)
 
 Tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account (sync),
-Icon. There is also an internal Staff tab. We have no settings window, so
-every item below is **missing**.
+Icon. There is also an internal Staff tab. We have no settings window;
+rows marked partial expose the setting from the Command Bar instead.
 
 | Tab → option | Status |
 |---|---|
 | General → Arc is not the default browser ("Set as default" button) | missing |
 | General → "Profile Settings…" (search engine, auto-archive, downloads) | missing |
-| General → "Archive tabs after" | missing |
+| General → "Archive tabs after" | partial (available from Command Bar; settings window remains missing) |
 | General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | missing |
 | General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | missing |
 | General → Warn before quitting | missing |
@@ -494,9 +494,9 @@ The main toasts from the `Toasts` module. We have no toast mechanism at all.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 41
+- **done**: 42
 - **partial**: 19
-- **missing**: 235
+- **missing**: 234
 
 ### Biggest gaps (by importance for parity)
 
@@ -504,8 +504,8 @@ rows without a status aren't counted.
    Travel) for remaining menu items, history, search suggestions and Site
    Search with Tab. Basic actions, Space switching and tabs from all Spaces
    are implemented.
-2. **Archive.** Needs the Archive page with restore, an interval picker
-   (the Clear button, ⌘W, ×, ⇧⌘K and ⇧⌘T already work).
+2. **Archive.** Needs the Archive page with restore. The interval picker,
+   Clear button, ⌘W, ×, ⇧⌘K and ⇧⌘T work.
 3. **Sessions.** Back/forward history of tabs isn't saved.
 4. **Favorites, folders, drag and drop and sidebar context menus.**
 5. **Split View** (⌃⇧=, dragging to the middle).

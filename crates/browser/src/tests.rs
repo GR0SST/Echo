@@ -1110,3 +1110,48 @@ fn find_command_opens_a_small_panel_with_input_focus(cx: &mut TestAppContext) {
     find.simulate_input("text");
     assert!(fake.take_calls().contains(&Call::Find(1, "text".into(), true, false)));
 }
+
+#[gpui::test]
+fn auto_archive_picker_offers_intervals_and_persists_never(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("archive tabs after");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(bar_input_focused(&view, cx));
+    let options = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert_eq!(options.len(), 7);
+    assert!(matches!(&options[0], Suggestion::ArchiveAfter { seconds: Some(43200), .. }));
+    bar(&view, cx).simulate_input("Never");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), None);
+    assert_eq!(bar_text(&view, cx), None);
+    let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
+    assert_eq!(restored.archive_after, None);
+}
+
+#[gpui::test]
+fn auto_archive_picker_changes_interval_and_escape_keeps_setting(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("auto archive settings");
+    bar(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("7 days");
+    click(&mut bar(&view, cx), "suggestion-0");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(7 * 86400)));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("archive tabs after");
+    bar(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("1 hour");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(7 * 86400)));
+}
+
+#[gpui::test]
+fn auto_archive_picker_preserves_a_custom_saved_interval_on_enter(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, _| w.browser.archive_after = Some(Duration::from_secs(12345)));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("archive tabs after");
+    bar(&view, cx).simulate_keystrokes("enter enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(12345)));
+}
