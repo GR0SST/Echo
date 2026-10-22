@@ -1,0 +1,3 @@
+[env]
+# Prebuilt CEF binaries; cef-dll-sys downloads them here when missing.
+CEF_PATH = { value = "third_party/cef", relative = true }

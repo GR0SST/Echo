@@ -1,0 +1,614 @@
+//! Browser model without UI or engine: spaces, pinned and today tabs,
+//! auto-archiving. Time is always passed in so behavior is testable.
+
+use std::time::{Duration, SystemTime};
+
+use serde::{Deserialize, Serialize};
+
+pub mod omnibox;
+pub mod session;
+
+/// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
+pub const DEFAULT_ARCHIVE_AFTER: Duration = Duration::from_secs(12 * 60 * 60);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TabId(u64);
+
+impl TabId {
+    /// Stable numeric value, e.g. for UI element ids.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SpaceId(u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    Pinned,
+    Today,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Tab {
+    pub id: TabId,
+    pub title: String,
+    pub url: String,
+    pub last_active: SystemTime,
+    /// The page a pinned tab returns to when closed, like Arc's.
+    #[serde(default)]
+    pub pinned_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Space {
+    pub id: SpaceId,
+    pub name: String,
+    /// Accent hue in degrees, 0..360.
+    pub hue: f32,
+    pub pinned: Vec<Tab>,
+    pub today: Vec<Tab>,
+    pub active_tab: Option<TabId>,
+}
+
+impl Space {
+    fn tabs(&self) -> impl Iterator<Item = &Tab> {
+        self.pinned.iter().chain(&self.today)
+    }
+
+    fn find(&self, id: TabId) -> Option<(Section, usize)> {
+        if let Some(i) = self.pinned.iter().position(|t| t.id == id) {
+            return Some((Section::Pinned, i));
+        }
+        self.today
+            .iter()
+            .position(|t| t.id == id)
+            .map(|i| (Section::Today, i))
+    }
+
+    fn section_mut(&mut self, section: Section) -> &mut Vec<Tab> {
+        match section {
+            Section::Pinned => &mut self.pinned,
+            Section::Today => &mut self.today,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ArchivedTab {
+    pub tab: Tab,
+    pub space: SpaceId,
+    pub archived_at: SystemTime,
+}
+
+/// What closing a tab did to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Closed {
+    /// A Today tab went to the archive.
+    Archived,
+    /// A pinned tab stays in the sidebar, back at its pinned page; its
+    /// page should be unloaded.
+    Unloaded,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Browser {
+    pub spaces: Vec<Space>,
+    pub active_space: usize,
+    pub archive: Vec<ArchivedTab>,
+    /// `None` disables auto-archiving.
+    pub archive_after: Option<Duration>,
+    next_id: u64,
+}
+
+impl Default for Browser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Browser {
+    pub fn new() -> Self {
+        let mut browser = Self {
+            spaces: Vec::new(),
+            active_space: 0,
+            archive: Vec::new(),
+            archive_after: Some(DEFAULT_ARCHIVE_AFTER),
+            next_id: 1,
+        };
+        browser.add_space("Personal", 250.0);
+        browser
+    }
+
+    /// Makes a deserialized model consistent: at least one space, a valid
+    /// active space and ids that never repeat.
+    fn repair(&mut self) {
+        if self.spaces.is_empty() {
+            self.add_space("Personal", 250.0);
+        }
+        self.active_space = self.active_space.min(self.spaces.len() - 1);
+        let max_id = self
+            .spaces
+            .iter()
+            .flat_map(|space| std::iter::once(space.id.0).chain(space.tabs().map(|t| t.id.0)))
+            .chain(self.archive.iter().map(|a| a.tab.id.0))
+            .max()
+            .unwrap_or(0);
+        self.next_id = self.next_id.max(max_id + 1);
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    pub fn space(&self) -> &Space {
+        &self.spaces[self.active_space]
+    }
+
+    fn space_mut(&mut self) -> &mut Space {
+        &mut self.spaces[self.active_space]
+    }
+
+    pub fn active_tab(&self) -> Option<&Tab> {
+        let space = self.space();
+        let id = space.active_tab?;
+        space.tabs().find(|t| t.id == id)
+    }
+
+    pub fn add_space(&mut self, name: impl Into<String>, hue: f32) -> SpaceId {
+        let id = SpaceId(self.next_id());
+        self.spaces.push(Space {
+            id,
+            name: name.into(),
+            hue,
+            pinned: Vec::new(),
+            today: Vec::new(),
+            active_tab: None,
+        });
+        id
+    }
+
+    pub fn switch_space(&mut self, index: usize) {
+        if index < self.spaces.len() {
+            self.active_space = index;
+        }
+    }
+
+    /// Opens a tab at the top of Today in the active space and focuses it.
+    pub fn new_tab(&mut self, url: impl Into<String>, now: SystemTime) -> TabId {
+        let id = TabId(self.next_id());
+        let url = url.into();
+        let space = self.space_mut();
+        space.today.insert(
+            0,
+            Tab {
+                id,
+                title: url.clone(),
+                url,
+                last_active: now,
+                pinned_url: None,
+            },
+        );
+        space.active_tab = Some(id);
+        id
+    }
+
+    pub fn activate_tab(&mut self, id: TabId, now: SystemTime) {
+        let space = self.space_mut();
+        let Some((section, i)) = space.find(id) else {
+            return;
+        };
+        space.section_mut(section)[i].last_active = now;
+        space.active_tab = Some(id);
+    }
+
+    /// Focuses the tab `delta` steps away in sidebar order (pinned, then
+    /// today), wrapping around. Like Ctrl+Tab / Ctrl+Shift+Tab.
+    pub fn cycle_tab(&mut self, delta: isize, now: SystemTime) {
+        let space = self.space();
+        let ids: Vec<TabId> = space.tabs().map(|t| t.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let current = space
+            .active_tab
+            .and_then(|id| ids.iter().position(|t| *t == id));
+        let next = match current {
+            Some(i) => (i as isize + delta).rem_euclid(ids.len() as isize) as usize,
+            None if delta < 0 => ids.len() - 1,
+            None => 0,
+        };
+        self.activate_tab(ids[next], now);
+    }
+
+    /// Removes a tab from the active space. Focus moves to the neighbor
+    /// below, or above when the removed tab was last, within the section.
+    fn remove_tab(&mut self, id: TabId) -> Option<Tab> {
+        let space = self.space_mut();
+        let (section, i) = space.find(id)?;
+        let tab = space.section_mut(section).remove(i);
+        if space.active_tab == Some(id) {
+            space.active_tab = neighbor(space, section, i);
+        }
+        Some(tab)
+    }
+
+    /// Closes a tab like Arc's ⌘W: Today tabs go to the archive, pinned
+    /// tabs stay pinned and return to their pinned page.
+    pub fn close_tab(&mut self, id: TabId, now: SystemTime) -> Option<Closed> {
+        let space = self.space_mut();
+        match space.find(id)? {
+            (Section::Pinned, i) => {
+                let tab = &mut space.pinned[i];
+                if let Some(url) = tab.pinned_url.clone() {
+                    tab.url = url;
+                }
+                if space.active_tab == Some(id) {
+                    // The tab stays in place, so focus moves past it.
+                    space.active_tab = space
+                        .pinned
+                        .get(i + 1)
+                        .or_else(|| space.today.first())
+                        .or_else(|| i.checked_sub(1).map(|j| &space.pinned[j]))
+                        .map(|t| t.id);
+                }
+                Some(Closed::Unloaded)
+            }
+            (Section::Today, _) => {
+                let space_id = space.id;
+                let tab = self.remove_tab(id)?;
+                self.archive.push(ArchivedTab { tab, space: space_id, archived_at: now });
+                Some(Closed::Archived)
+            }
+        }
+    }
+
+    /// Archives every Today tab of the active space (Arc's "Clear", ⇧⌘K).
+    /// Returns how many were archived.
+    pub fn clear_today(&mut self, now: SystemTime) -> usize {
+        let space = self.space_mut();
+        let space_id = space.id;
+        let cleared: Vec<Tab> = space.today.drain(..).collect();
+        if space.active_tab.is_some_and(|id| cleared.iter().any(|t| t.id == id)) {
+            space.active_tab = space.pinned.first().map(|t| t.id);
+        }
+        let count = cleared.len();
+        self.archive.extend(cleared.into_iter().map(|tab| ArchivedTab {
+            tab,
+            space: space_id,
+            archived_at: now,
+        }));
+        count
+    }
+
+    /// Brings back the most recently archived tab at the top of Today in
+    /// its space (Arc's "Restore Last Closed Tab", ⇧⌘T) and focuses it.
+    pub fn restore_last_archived(&mut self, now: SystemTime) -> Option<TabId> {
+        let archived = self.archive.pop()?;
+        let index = self
+            .spaces
+            .iter()
+            .position(|s| s.id == archived.space)
+            .unwrap_or(self.active_space);
+        self.active_space = index;
+        let mut tab = archived.tab;
+        tab.last_active = now;
+        let id = tab.id;
+        let space = self.space_mut();
+        space.today.insert(0, tab);
+        space.active_tab = Some(id);
+        Some(id)
+    }
+
+    /// Focuses the `n`th sidebar item (0-based, pinned then today), or the
+    /// last one for `None`. Like Arc's ⌘1…⌘8 and ⌘9.
+    pub fn activate_item(&mut self, n: Option<usize>, now: SystemTime) {
+        let ids: Vec<TabId> = self.space().tabs().map(|t| t.id).collect();
+        let id = match n {
+            Some(n) => ids.get(n),
+            None => ids.last(),
+        };
+        if let Some(&id) = id {
+            self.activate_tab(id, now);
+        }
+    }
+
+    /// Moves a tab between Pinned and Today. Newly pinned tabs go to the
+    /// bottom of Pinned; unpinned tabs go to the top of Today.
+    pub fn toggle_pin(&mut self, id: TabId) {
+        let space = self.space_mut();
+        match space.find(id) {
+            Some((Section::Pinned, i)) => {
+                let mut tab = space.pinned.remove(i);
+                tab.pinned_url = None;
+                space.today.insert(0, tab);
+            }
+            Some((Section::Today, i)) => {
+                let mut tab = space.today.remove(i);
+                tab.pinned_url = Some(tab.url.clone());
+                space.pinned.push(tab);
+            }
+            None => {}
+        }
+    }
+
+    /// Loads `url` in an existing tab of any space.
+    pub fn navigate(&mut self, id: TabId, url: impl Into<String>) {
+        let url = url.into();
+        for space in &mut self.spaces {
+            if let Some((section, i)) = space.find(id) {
+                let tab = &mut space.section_mut(section)[i];
+                tab.title = url.clone();
+                tab.url = url;
+                return;
+            }
+        }
+    }
+
+    /// Records the URL a tab's page actually shows (after redirects or
+    /// in-page navigation) without touching its title.
+    pub fn set_url(&mut self, id: TabId, url: impl Into<String>) {
+        let url = url.into();
+        for space in &mut self.spaces {
+            if let Some((section, i)) = space.find(id) {
+                space.section_mut(section)[i].url = url;
+                return;
+            }
+        }
+    }
+
+    /// Every tab in every space.
+    pub fn all_tabs(&self) -> impl Iterator<Item = &Tab> {
+        self.spaces.iter().flat_map(|space| space.tabs())
+    }
+
+    pub fn set_title(&mut self, id: TabId, title: impl Into<String>) {
+        let title = title.into();
+        for space in &mut self.spaces {
+            if let Some((section, i)) = space.find(id) {
+                space.section_mut(section)[i].title = title;
+                return;
+            }
+        }
+    }
+
+    /// Archives Today tabs idle longer than `archive_after` in every space.
+    /// Pinned tabs and each space's focused tab are never archived.
+    /// Returns the number of archived tabs.
+    pub fn archive_idle(&mut self, now: SystemTime) -> usize {
+        let Some(limit) = self.archive_after else {
+            return 0;
+        };
+        let mut archived = 0;
+        for space in &mut self.spaces {
+            let active = space.active_tab;
+            let (idle, keep): (Vec<_>, Vec<_>) = space.today.drain(..).partition(|t| {
+                Some(t.id) != active
+                    && now.duration_since(t.last_active).unwrap_or_default() >= limit
+            });
+            space.today = keep;
+            archived += idle.len();
+            self.archive.extend(idle.into_iter().map(|tab| ArchivedTab {
+                tab,
+                space: space.id,
+                archived_at: now,
+            }));
+        }
+        archived
+    }
+}
+
+/// The tab to focus after the one at `i` in `section` is removed.
+fn neighbor(space: &Space, section: Section, i: usize) -> Option<TabId> {
+    let tabs = match section {
+        Section::Pinned => &space.pinned,
+        Section::Today => &space.today,
+    };
+    tabs.get(i)
+        .or_else(|| i.checked_sub(1).and_then(|j| tabs.get(j)))
+        .map(|t| t.id)
+        .or_else(|| space.tabs().next().map(|t| t.id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOUR: Duration = Duration::from_secs(3600);
+
+    fn t0() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000)
+    }
+
+    fn ids(tabs: &[Tab]) -> Vec<TabId> {
+        tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn new_tabs_open_at_top_of_today_and_take_focus() {
+        let mut b = Browser::new();
+        let a = b.new_tab("a", t0());
+        let c = b.new_tab("c", t0());
+        assert_eq!(ids(&b.space().today), vec![c, a]);
+        assert_eq!(b.active_tab().unwrap().id, c);
+    }
+
+    #[test]
+    fn closing_focused_tab_focuses_neighbor() {
+        let mut b = Browser::new();
+        let a = b.new_tab("a", t0());
+        let c = b.new_tab("c", t0());
+        let d = b.new_tab("d", t0()); // order: d, c, a
+        b.activate_tab(c, t0());
+        assert_eq!(b.close_tab(c, t0()), Some(Closed::Archived));
+        assert_eq!(b.active_tab().unwrap().id, a);
+        b.close_tab(a, t0());
+        assert_eq!(b.active_tab().unwrap().id, d);
+        b.close_tab(d, t0());
+        assert!(b.active_tab().is_none());
+        assert_eq!(b.archive.iter().map(|a| a.tab.id).collect::<Vec<_>>(), vec![c, a, d]);
+    }
+
+    #[test]
+    fn closing_a_pinned_tab_keeps_it_at_its_pinned_page() {
+        let mut b = Browser::new();
+        let p = b.new_tab("https://pinned", t0());
+        b.toggle_pin(p);
+        let a = b.new_tab("a", t0());
+        b.activate_tab(p, t0());
+        b.navigate(p, "https://pinned/elsewhere");
+
+        assert_eq!(b.close_tab(p, t0()), Some(Closed::Unloaded));
+
+        assert_eq!(ids(&b.space().pinned), vec![p]);
+        assert_eq!(b.space().pinned[0].url, "https://pinned");
+        assert_eq!(b.active_tab().unwrap().id, a);
+        assert!(b.archive.is_empty());
+    }
+
+    #[test]
+    fn closing_the_only_pinned_tab_leaves_nothing_focused() {
+        let mut b = Browser::new();
+        let p = b.new_tab("p", t0());
+        b.toggle_pin(p);
+        b.close_tab(p, t0());
+        assert!(b.active_tab().is_none());
+    }
+
+    #[test]
+    fn restore_brings_back_the_last_archived_tab_in_its_space() {
+        let mut b = Browser::new();
+        let a = b.new_tab("a", t0());
+        b.close_tab(a, t0());
+        b.add_space("Work", 200.0);
+        b.switch_space(1);
+
+        assert_eq!(b.restore_last_archived(t0() + HOUR), Some(a));
+
+        assert_eq!(b.active_space, 0);
+        assert_eq!(b.active_tab().unwrap().id, a);
+        assert_eq!(b.active_tab().unwrap().last_active, t0() + HOUR);
+        assert!(b.archive.is_empty());
+        assert_eq!(b.restore_last_archived(t0()), None);
+    }
+
+    #[test]
+    fn clear_archives_today_and_focuses_pinned() {
+        let mut b = Browser::new();
+        let p = b.new_tab("p", t0());
+        b.toggle_pin(p);
+        b.new_tab("a", t0());
+        b.new_tab("c", t0());
+        assert_eq!(b.clear_today(t0()), 2);
+        assert!(b.space().today.is_empty());
+        assert_eq!(b.active_tab().unwrap().id, p);
+        assert_eq!(b.archive.len(), 2);
+    }
+
+    #[test]
+    fn activate_item_counts_pinned_then_today() {
+        let mut b = Browser::new();
+        let p = b.new_tab("p", t0());
+        b.toggle_pin(p);
+        let a = b.new_tab("a", t0());
+        let c = b.new_tab("c", t0()); // sidebar: p | c, a
+        b.activate_item(Some(0), t0());
+        assert_eq!(b.active_tab().unwrap().id, p);
+        b.activate_item(Some(1), t0());
+        assert_eq!(b.active_tab().unwrap().id, c);
+        b.activate_item(None, t0());
+        assert_eq!(b.active_tab().unwrap().id, a);
+        b.activate_item(Some(7), t0());
+        assert_eq!(b.active_tab().unwrap().id, a);
+    }
+
+    #[test]
+    fn session_round_trips_and_keeps_ids_unique() {
+        let mut b = Browser::new();
+        let p = b.new_tab("https://p", t0());
+        b.toggle_pin(p);
+        let a = b.new_tab("https://a", t0());
+        b.close_tab(a, t0());
+        b.add_space("Work", 200.0);
+        b.switch_space(1);
+
+        let mut restored = session::from_json(&session::to_json(&b)).unwrap();
+
+        assert_eq!(restored.active_space, 1);
+        assert_eq!(restored.spaces[0].pinned[0].pinned_url.as_deref(), Some("https://p"));
+        assert_eq!(restored.archive[0].tab.id, a);
+        let new = restored.new_tab("n", t0());
+        assert!(new != p && new != a);
+    }
+
+    #[test]
+    fn cycle_tab_walks_pinned_then_today_and_wraps() {
+        let mut b = Browser::new();
+        let p = b.new_tab("p", t0());
+        b.toggle_pin(p);
+        let a = b.new_tab("a", t0());
+        let c = b.new_tab("c", t0()); // sidebar: p | c, a
+        assert_eq!(b.active_tab().unwrap().id, c);
+        b.cycle_tab(1, t0());
+        assert_eq!(b.active_tab().unwrap().id, a);
+        b.cycle_tab(1, t0());
+        assert_eq!(b.active_tab().unwrap().id, p);
+        b.cycle_tab(-1, t0());
+        assert_eq!(b.active_tab().unwrap().id, a);
+    }
+
+    #[test]
+    fn toggle_pin_moves_between_sections() {
+        let mut b = Browser::new();
+        let a = b.new_tab("a", t0());
+        b.toggle_pin(a);
+        assert_eq!(ids(&b.space().pinned), vec![a]);
+        assert_eq!(b.space().pinned[0].pinned_url.as_deref(), Some("a"));
+        assert!(b.space().today.is_empty());
+        b.toggle_pin(a);
+        assert_eq!(ids(&b.space().today), vec![a]);
+        assert_eq!(b.space().today[0].pinned_url, None);
+    }
+
+    #[test]
+    fn archives_only_idle_unpinned_unfocused_tabs() {
+        let mut b = Browser::new();
+        let old = b.new_tab("old", t0());
+        let pinned = b.new_tab("pinned", t0());
+        b.toggle_pin(pinned);
+        let fresh = b.new_tab("fresh", t0() + 11 * HOUR);
+        let focused = b.new_tab("focused", t0()); // focused but stale
+
+        let archived = b.archive_idle(t0() + 12 * HOUR);
+
+        assert_eq!(archived, 1);
+        assert_eq!(b.archive[0].tab.id, old);
+        assert_eq!(ids(&b.space().today), vec![focused, fresh]);
+        assert_eq!(ids(&b.space().pinned), vec![pinned]);
+    }
+
+    #[test]
+    fn archiving_can_be_disabled() {
+        let mut b = Browser::new();
+        b.new_tab("a", t0());
+        b.new_tab("b", t0());
+        b.archive_after = None;
+        assert_eq!(b.archive_idle(t0() + 1000 * HOUR), 0);
+    }
+
+    #[test]
+    fn spaces_keep_separate_tabs_and_focus() {
+        let mut b = Browser::new();
+        let a = b.new_tab("a", t0());
+        b.add_space("Work", 200.0);
+        b.switch_space(1);
+        assert!(b.active_tab().is_none());
+        let w = b.new_tab("w", t0());
+        assert_eq!(b.active_tab().unwrap().id, w);
+        b.switch_space(0);
+        assert_eq!(b.active_tab().unwrap().id, a);
+    }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "chromium-fork-workspace",
+  "private": true,
+  "scripts": {
+    "sync": "bash scripts/sync.sh",
+    "configure": "bash scripts/configure.sh",
+    "build": "bash scripts/build.sh",
+    "browser": "bash scripts/browser.sh"
+  }
+}

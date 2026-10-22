@@ -1,0 +1,9 @@
+[package]
+name = "bundle"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cef = { version = "=154.5.0", features = ["build-util"] }
+semver = "1"

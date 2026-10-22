@@ -1,0 +1,16 @@
+/target
+/.browser-profile
+/third_party/cef
+
+# Chromium checkout and its tooling are separate repositories.
+/src
+/depot_tools
+/.cipd
+/.gclient
+/.gclient_entries
+/.gclient_previous_sync_commits
+/.gcs_entries
+/.checkout-revision
+/.checkout-status
+*.log
+.DS_Store

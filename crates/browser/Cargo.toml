@@ -1,0 +1,24 @@
+[package]
+name = "browser"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+# Read by `cargo run -p bundle` to assemble the macOS app bundle.
+[package.metadata.cef.bundle]
+helper_name = "browser_helper"
+
+[dependencies]
+browser_core = { package = "core", path = "../core" }
+engine = { path = "../engine" }
+# runtime_shaders: avoids requiring the Xcode Metal Toolchain at build time.
+gpui = { version = "0.2", features = ["runtime_shaders"] }
+raw-window-handle = "0.6"
+unicode-segmentation = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "NSString", "objc2-core-foundation"] }
+
+[dev-dependencies]
+gpui = { version = "0.2", features = ["runtime_shaders", "test-support"] }
