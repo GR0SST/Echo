@@ -106,9 +106,9 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Space… | — | missing | Spaces can't be created from the UI, only demo data |
+| New Space… | — | partial | Create a named Space from the dock + button or Command Bar. Icon, theme and profile choices in the creation dialog remain missing |
 | Edit Theme… | — | missing | See "Space themes" |
-| Rename Space | — | missing | — |
+| Rename Space | — | done | Command Bar action opens a focused name editor; Escape cancels |
 | Change Profile | — | missing | — |
 | Next Space / Previous Space | ⌥⌘→ / ⌥⌘← | done | — |
 | Go to Space N ("Jumps over to your %@ Space") | ⌃1…⌃9 (?) | done | Default shortcuts aren't in the nib |
@@ -187,7 +187,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Split View item in the sidebar (tab group) | — | missing | — |
 | Space header (name), Show/Hide Space Header | — | partial | The name is shown but can't be hidden |
 | Spaces dock at the bottom (Space icons) | click | partial | We show colored dots; Arc shows Space icons or emoji |
-| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | missing | — |
+| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + creates a Space. The multi-action menu remains missing |
 | "Springy" click animation on sidebar items | — | missing | — |
 | Incognito window sidebar ("Incognito Tabs") | — | missing | — |
 | Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | — |
@@ -200,8 +200,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Several Spaces, each with its own Pinned/Today and active tab | — | done | — |
 | Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | done | — |
 | Switching Spaces from the keyboard (animated) | ⌥⌘→/← | done | — |
-| Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | — | missing | — |
-| Renaming a Space | — | missing | — |
+| Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | — | partial | Named Spaces can be created from the dock or Command Bar with an automatic accent. Icon/theme/profile controls remain missing |
+| Renaming a Space | — | done | Name editor via the Command Bar; persisted with the same Space identity |
 | Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | — | missing | — |
 | Deleting a Space (with Undo) | — | missing | — |
 | Reordering Spaces ("Move Space") | drag | missing | — |
@@ -494,9 +494,9 @@ The main toasts from the `Toasts` module. We have no toast mechanism at all.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 39
-- **partial**: 14
-- **missing**: 242
+- **done**: 41
+- **partial**: 17
+- **missing**: 237
 
 ### Biggest gaps (by importance for parity)
 
@@ -510,8 +510,8 @@ rows without a status aren't counted.
 4. **Favorites, folders, drag and drop and sidebar context menus.**
 5. **Split View** (⌃⇧=, dragging to the middle).
 6. **Peek, Little Arc (⌥⌘N) and Air Traffic Control.**
-7. **Managing Spaces and the theme editor.** Needs creating, renaming,
-   icons, deleting, plus multi-color gradients, color sets, noise,
+7. **Managing Spaces and the theme editor.** Named Spaces can be created
+   and renamed. Needs icons, deleting, plus multi-color gradients, color sets, noise,
    Intensity and Light/Dark.
 8. **Profiles.** Currently one cache for everything.
 9. **Settings window**, including the shortcut editor with the "Arc or

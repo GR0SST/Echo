@@ -174,6 +174,15 @@ impl Browser {
         id
     }
 
+    /// Renames a Space without changing its identity, tabs or theme.
+    pub fn rename_space(&mut self, id: SpaceId, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() { return false; }
+        let Some(space) = self.spaces.iter_mut().find(|space| space.id == id) else { return false; };
+        space.name = name.to_string();
+        true
+    }
+
     pub fn switch_space(&mut self, index: usize) {
         if index < self.spaces.len() {
             self.active_space = index;

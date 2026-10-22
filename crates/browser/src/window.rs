@@ -50,6 +50,7 @@ actions!(
     browser,
     [
         OpenCommandBar,
+        NewSpace,
         EditCurrentUrl,
         CloseTab,
         NextTab,
@@ -240,6 +241,8 @@ impl Drag {
 pub enum Target {
     NewTab,
     Tab(TabId),
+    NewSpace,
+    RenameSpace(SpaceId),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -247,11 +250,14 @@ pub enum Suggestion {
     Load(Resolved),
     SwitchToTab { id: TabId, title: String, url: String, space: String },
     Action { command: Command, label: String },
+    SaveSpace { name: String },
 }
 
 /// Commands currently implemented by the browser, also exposed by name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    NewSpace,
+    RenameSpace,
     ToggleSidebar,
     TogglePin,
     TogglePinnedSection,
@@ -524,7 +530,12 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         let input = cx.new(|cx| {
-            let mut input = TextInput::new("Search or Enter URL…", cx);
+            let placeholder = match target {
+                Target::NewSpace => "Name your Space…",
+                Target::RenameSpace(_) => "Rename Space…",
+                _ => "Search or Enter URL…",
+            };
+            let mut input = TextInput::new(placeholder, cx);
             input.set_text(text.to_string(), cx);
             input
         });
@@ -611,6 +622,9 @@ impl BrowserWindow {
             return Vec::new();
         };
         let text = bar.input.read(cx).text();
+        if matches!(bar.target, Target::NewSpace | Target::RenameSpace(_)) {
+            return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveSpace { name: text.trim().to_string() }] };
+        }
         let query = text.trim().to_lowercase();
         let mut suggestions = Vec::new();
         // Commands are explicit suggestions: never interpret arbitrary prose as an action.
@@ -618,6 +632,8 @@ impl BrowserWindow {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let commands = [
+                (Command::NewSpace, "New Space…", "new space|create space|add space", true),
+                (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
                 (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar" } else { "toggle sidebar|show sidebar" }, true),
                 (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some()),
                 (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned.is_empty()),
@@ -697,6 +713,7 @@ impl BrowserWindow {
                         self.browser.navigate(id, resolved.url());
                         id
                     }
+                    Target::NewSpace | Target::RenameSpace(_) => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -707,13 +724,27 @@ impl BrowserWindow {
                     self.settle_pager(cx);
                 }
             }
-            Suggestion::Action { command, .. } => self.run_command(command, cx),
+            Suggestion::Action { command, .. } => {
+                self.run_command(command, cx);
+                if self.command_bar.as_ref().is_some_and(|bar| bar.target != target) { return; }
+            }
+            Suggestion::SaveSpace { name } => match target {
+                Target::NewSpace => {
+                    let hue = (self.browser.space().hue + 137.5).rem_euclid(360.0);
+                    self.browser.add_space(name, hue);
+                    self.switch_space(self.browser.spaces.len() - 1, cx);
+                }
+                Target::RenameSpace(id) => { self.browser.rename_space(id, &name); }
+                _ => return,
+            },
         }
         self.close_command_bar(cx);
     }
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::NewSpace => self.edit_space_name(None, cx),
+            Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
             Command::ToggleSidebar => self.toggle_sidebar(cx),
             Command::TogglePin => {
                 if let Some(id) = self.browser.space().active_tab { self.browser.toggle_pin(id); }
@@ -739,6 +770,20 @@ impl BrowserWindow {
             Command::FocusSpace(id) => {
                 if let Some(index) = self.browser.spaces.iter().position(|space| space.id == id) { self.switch_space(index, cx); }
             }
+        }
+        cx.notify();
+    }
+
+    /// Reuses the focused command input so the name editor keeps keyboard focus.
+    fn edit_space_name(&mut self, space: Option<SpaceId>, cx: &mut Context<Self>) {
+        let text = space.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).map(|space| space.name.clone()).unwrap_or_default();
+        if let Some(bar) = &mut self.command_bar {
+            bar.target = space.map_or(Target::NewSpace, Target::RenameSpace);
+            bar.selected = 0;
+            bar.input.update(cx, |input, cx| {
+                input.set_placeholder(if space.is_some() { "Rename Space…" } else { "Name your Space…" }, cx);
+                input.set_text(text, cx);
+            });
         }
         cx.notify();
     }
@@ -1257,6 +1302,13 @@ impl BrowserWindow {
                     .hover(move |s| s.bg(hsla(hue, 0.55, 0.5, 0.8)))
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_space(index, cx)))
             }))
+            .child(div().id("new-space").debug_selector(|| "new-space".into())
+                .w(px(20.0)).h(px(20.0)).mt(px(-6.0)).rounded_md()
+                .flex().items_center().justify_center().text_sm()
+                .text_color(hsla(0.0, 0.0, 0.0, 0.55))
+                .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
+                .on_click(cx.listener(|this, _, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
+                .child("+"))
     }
 
     fn render_content(&self) -> impl IntoElement {
@@ -1409,6 +1461,7 @@ impl BrowserWindow {
                         ("⇥", title, format!("Switch to Tab · {space}"))
                     }
                     Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
+                    Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
                 };
                 div()
                     .id(("suggestion", index))
@@ -1522,6 +1575,7 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
+            .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
             .on_action(cx.listener(Self::on_edit_current_url))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))

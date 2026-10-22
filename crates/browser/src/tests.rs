@@ -966,3 +966,59 @@ fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut Te
     assert!(!view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
     assert_eq!(cx.debug_bounds("new-tab").unwrap().origin.y, expanded_y);
 }
+
+#[gpui::test]
+fn dock_creates_named_space_and_rejects_blank_names(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    click(cx, "new-space");
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("   ");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
+    assert!(bar_text(&view, cx).is_some());
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("  Reading 📚  ");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Reading 📚");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 4);
+    assert!(today_urls(&view, cx).is_empty());
+    assert_eq!(bar_text(&view, cx), None);
+    let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
+    assert_eq!(restored.space().name, "Reading 📚");
+}
+
+#[gpui::test]
+fn create_and_rename_space_actions_keep_focus_and_can_be_cancelled(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("create space");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("Reading");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Reading");
+    let id = view.read_with(cx, |w, _| w.browser.space().id);
+
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rename space");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Reading"));
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("Research Archive");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Research Archive");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), id);
+
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rename space");
+    bar(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("Cancelled");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Research Archive");
+    click(cx, "new-space");
+    bar(&view, cx).simulate_input("Cancelled Space");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 4);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces[0].pinned.len()), 2);
+}
