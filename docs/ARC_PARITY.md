@@ -232,21 +232,21 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Entering a URL or searching ("Search or Enter URL…") | — | done | The search engine is hardcoded (Google). Arc lets you pick it in profile settings |
 | Editing the current URL | ⌘L | done | — |
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | — |
-| Switching to an open tab | — | partial | We only list tabs of the current Space. Arc lists tabs of all Spaces with "… and switch there", including Split View |
+| Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View remains missing |
 | Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | missing | Also needs the suggestions privacy screen |
 | History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | missing | — |
 | Calculator (Search Calculator Answer) | — | missing | — |
 | Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
 | Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
 | Removing a suggestion ("Delete Suggestion") | — | missing | — |
-| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | missing | This is the central feature of Arc's Command Bar |
-| Space actions: "Focus on <space>", "Switch to …" | — | missing | — |
+| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload, back/forward, next/previous tab. Remaining menu actions follow their features |
+| Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
 | Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | missing | — |
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
 | Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | missing | — |
-| Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | missing | — |
+| Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
 | Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | missing | — |
@@ -494,16 +494,16 @@ The main toasts from the `Toasts` module. We have no toast mechanism at all.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 33
-- **partial**: 14
-- **missing**: 248
+- **done**: 34
+- **partial**: 16
+- **missing**: 245
 
 ### Biggest gaps (by importance for parity)
 
 1. **Command Bar as the control center.** Needs actions by name (Type
-   Travel) for every menu item, tabs from all Spaces, history, search
-   suggestions, Site Search with Tab. Today it only has URLs, search and
-   tabs of the current Space.
+   Travel) for remaining menu items, history, search suggestions and Site
+   Search with Tab. Basic actions, Space switching and tabs from all Spaces
+   are implemented.
 2. **Archive.** Needs the Archive page with restore, an interval picker
    and the "Clear" button above Today (⌘W, ×, ⇧⌘K and ⇧⌘T already work).
 3. **Sessions.** Back/forward history of tabs isn't saved.

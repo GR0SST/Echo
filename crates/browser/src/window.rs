@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 use browser_core::omnibox::{self, Resolved};
-use browser_core::{Browser, Closed, Section, Tab, TabId};
+use browser_core::{Browser, Closed, Section, SpaceId, Tab, TabId};
 use engine::Event;
 use gpui::{
     actions, canvas, div, ease_out_quint, point, size, Animation, AnimationExt, AnyElement, Bounds,
@@ -230,7 +230,31 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
     Load(Resolved),
-    SwitchToTab { id: TabId, title: String, url: String },
+    SwitchToTab { id: TabId, title: String, url: String, space: String },
+    Action { command: Command, label: String },
+}
+
+/// Commands currently implemented by the browser, also exposed by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    ToggleSidebar,
+    TogglePin,
+    CloseTab,
+    ClearToday,
+    RestoreTab,
+    Reload,
+    GoBack,
+    GoForward,
+    NextTab,
+    PreviousTab,
+    FocusSpace(SpaceId),
+}
+
+fn matches_command(query: &str, names: &str) -> bool {
+    names.split('|').any(|name| {
+        let name = name.to_lowercase();
+        query.split_whitespace().all(|word| name.split_whitespace().any(|part| part.starts_with(word)))
+    })
 }
 
 pub struct CommandBar {
@@ -567,29 +591,51 @@ impl BrowserWindow {
         };
         let text = bar.input.read(cx).text();
         let query = text.trim().to_lowercase();
-        let mut suggestions: Vec<_> = omnibox::resolve(text)
-            .map(Suggestion::Load)
-            .into_iter()
-            .collect();
+        let mut suggestions = Vec::new();
+        // Commands are explicit suggestions: never interpret arbitrary prose as an action.
+        if !query.is_empty() {
+            let active = self.browser.active_tab();
+            let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
+            let commands = [
+                (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, "toggle sidebar|show sidebar|hide sidebar", true),
+                (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some()),
+                (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
+                (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
+                (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
+                (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
+                (Command::GoBack, "Go Back", "go back", active.is_some()),
+                (Command::GoForward, "Go Forward", "go forward", active.is_some()),
+                (Command::NextTab, "Next Tab", "next tab", active.is_some()),
+                (Command::PreviousTab, "Previous Tab", "previous tab", active.is_some()),
+            ];
+            suggestions.extend(commands.into_iter()
+                .filter(|(_, label, names, available)| *available && (matches_command(&query, label) || matches_command(&query, names)))
+                .map(|(command, label, _, _)| Suggestion::Action { command, label: label.into() }));
+            for space in &self.browser.spaces {
+                let names = format!("focus on {}|switch to {}|{}", space.name, space.name, space.name);
+                if matches_command(&query, &names) {
+                    suggestions.push(Suggestion::Action {
+                        command: Command::FocusSpace(space.id),
+                        label: format!("Focus on {}", space.name),
+                    });
+                }
+            }
+            suggestions.truncate(5);
+        }
+        suggestions.extend(omnibox::resolve(text).map(Suggestion::Load));
         if bar.target == Target::NewTab {
-            let space = self.browser.space();
-            suggestions.extend(
-                space
-                    .pinned
-                    .iter()
-                    .chain(&space.today)
-                    .filter(|tab| {
-                        query.is_empty()
-                            || tab.title.to_lowercase().contains(&query)
-                            || tab.url.to_lowercase().contains(&query)
-                    })
-                    .take(MAX_TAB_SUGGESTIONS)
-                    .map(|tab| Suggestion::SwitchToTab {
-                        id: tab.id,
-                        title: tab.title.clone(),
-                        url: tab.url.clone(),
-                    }),
+            // Current Space first, then every other Space, keeping duplicate URLs distinct.
+            let current = self.browser.active_space;
+            let spaces = std::iter::once(&self.browser.spaces[current]).chain(
+                self.browser.spaces.iter().enumerate().filter(|(index, _)| *index != current).map(|(_, space)| space)
             );
+            suggestions.extend(spaces.flat_map(|space| {
+                space.pinned.iter().chain(&space.today).map(move |tab| (space, tab))
+            }).filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query))
+                .take(MAX_TAB_SUGGESTIONS)
+                .map(|(space, tab)| Suggestion::SwitchToTab {
+                    id: tab.id, title: tab.title.clone(), url: tab.url.clone(), space: space.name.clone(),
+                }));
         }
         suggestions
     }
@@ -627,9 +673,41 @@ impl BrowserWindow {
                 };
                 self.browser.set_title(id, title);
             }
-            Suggestion::SwitchToTab { id, .. } => self.browser.activate_tab(id, now),
+            Suggestion::SwitchToTab { id, .. } => {
+                if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)) {
+                    self.browser.switch_space(index);
+                    self.browser.activate_tab(id, now);
+                    self.settle_pager(cx);
+                }
+            }
+            Suggestion::Action { command, .. } => self.run_command(command, cx),
         }
         self.close_command_bar(cx);
+    }
+
+    fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
+        match command {
+            Command::ToggleSidebar => self.toggle_sidebar(cx),
+            Command::TogglePin => {
+                if let Some(id) = self.browser.space().active_tab { self.browser.toggle_pin(id); }
+            }
+            Command::CloseTab => {
+                if let Some(id) = self.browser.space().active_tab { self.close_tab(id, cx); }
+            }
+            Command::ClearToday => { self.browser.clear_today(SystemTime::now()); }
+            Command::RestoreTab => {
+                if self.browser.restore_last_archived(SystemTime::now()).is_some() { self.settle_pager(cx); }
+            }
+            Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
+            Command::GoBack => self.with_active_page(|pages, tab| pages.go_back(tab)),
+            Command::GoForward => self.with_active_page(|pages, tab| pages.go_forward(tab)),
+            Command::NextTab => self.cycle_tab(1, cx),
+            Command::PreviousTab => self.cycle_tab(-1, cx),
+            Command::FocusSpace(id) => {
+                if let Some(index) = self.browser.spaces.iter().position(|space| space.id == id) { self.switch_space(index, cx); }
+            }
+        }
+        cx.notify();
     }
 
     // Window actions.
@@ -681,6 +759,10 @@ impl BrowserWindow {
     }
 
     fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_sidebar(cx);
+    }
+
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_visible = !self.sidebar_visible;
         // Window buttons live in the sidebar, like Arc's.
         if let Some(view) = self.native_view {
@@ -1256,9 +1338,10 @@ impl BrowserWindow {
                         ("⌕", query, "Google Search".into())
                     }
                     Suggestion::Load(Resolved::Url(url)) => ("↗", display_url(&url), "Open".into()),
-                    Suggestion::SwitchToTab { title, url, .. } => {
-                        ("⇥", title, format!("Switch to Tab · {}", display_url(&url)))
+                    Suggestion::SwitchToTab { title, space, .. } => {
+                        ("⇥", title, format!("Switch to Tab · {space}"))
                     }
+                    Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
                 };
                 div()
                     .id(("suggestion", index))

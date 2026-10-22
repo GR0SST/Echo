@@ -826,3 +826,76 @@ fn showing_the_sidebar_again_removes_the_floating_one(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.sidebar_visible && w.floating_sidebar.is_none()));
 }
+
+#[gpui::test]
+fn command_bar_runs_actions_and_preserves_search(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = today_urls(&view, cx).len();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("pin tab");
+    let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert!(matches!(&suggestions[0], Suggestion::Action { label, .. } if label == "Pin Tab"));
+    assert!(suggestions.iter().any(|s| matches!(s, Suggestion::Load(_))));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_some()));
+    assert_eq!(today_urls(&view, cx).len(), before - 1);
+    assert_eq!(bar_text(&view, cx), None);
+
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("unpin tab");
+    click(&mut bar(&view, cx), "suggestion-0");
+    assert_eq!(today_urls(&view, cx).len(), before);
+
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("hide sidebar");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(!view.read_with(cx, |w, _| w.sidebar_visible));
+    cx.simulate_keystrokes("cmd-s");
+    assert!(view.read_with(cx, |w, _| w.sidebar_visible));
+}
+
+#[gpui::test]
+fn command_bar_switches_spaces_by_name(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("switch to research");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 2);
+    assert!(today_urls(&view, cx).is_empty());
+    assert_eq!(bar_text(&view, cx), None);
+}
+
+#[gpui::test]
+fn command_bar_finds_and_focuses_tabs_in_other_spaces(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-2 cmd-t");
+    bar(&view, cx).simulate_input("gpui");
+    let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert!(matches!(&suggestions[1], Suggestion::SwitchToTab { space, .. } if space == "Personal"));
+    bar(&view, cx).simulate_keystrokes("down enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.gpui.rs"));
+    assert_eq!(today_urls(&view, cx).len(), 3);
+}
+
+#[gpui::test]
+fn unavailable_command_is_not_offered_and_escape_does_not_execute(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("restore last closed tab");
+    assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::Action { .. }))));
+    bar(&view, cx).simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("clear today");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(today_urls(&view, cx).len(), 3);
+
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("clear today");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(today_urls(&view, cx).is_empty());
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("reopen closed tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(today_urls(&view, cx).len(), 1);
+}
