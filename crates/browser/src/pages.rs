@@ -21,6 +21,9 @@ pub trait WebEngine {
     fn go_back(&mut self, view: ViewId);
     fn go_forward(&mut self, view: ViewId);
     fn reload(&mut self, view: ViewId);
+    fn force_reload(&mut self, view: ViewId);
+    fn stop_loading(&mut self, view: ViewId);
+    fn zoom(&mut self, view: ViewId, direction: i32);
     fn close(&mut self, view: ViewId);
     /// Runs engine work. Takes no `self`: the engine may dispatch native UI
     /// events from inside it, which re-enter the window and its pages.
@@ -70,6 +73,9 @@ impl WebEngine for Chromium {
     fn reload(&mut self, view: ViewId) {
         self.engine.reload(view)
     }
+    fn force_reload(&mut self, view: ViewId) { self.engine.force_reload(view) }
+    fn stop_loading(&mut self, view: ViewId) { self.engine.stop_loading(view) }
+    fn zoom(&mut self, view: ViewId, direction: i32) { self.engine.zoom(view, direction) }
     fn close(&mut self, view: ViewId) {
         self.engine.close(view)
     }
@@ -251,6 +257,18 @@ impl Pages {
         if let Some(view) = self.view(tab) {
             self.engine.reload(view);
         }
+    }
+
+    pub fn force_reload(&mut self, tab: TabId) {
+        if let Some(view) = self.view(tab) { self.engine.force_reload(view); }
+    }
+
+    pub fn stop_loading(&mut self, tab: TabId) {
+        if let Some(view) = self.view(tab) { self.engine.stop_loading(view); }
+    }
+
+    pub fn zoom(&mut self, tab: TabId, direction: i32) {
+        if let Some(view) = self.view(tab) { self.engine.zoom(view, direction); }
     }
 
     pub fn pump_fn(&self) -> fn() {

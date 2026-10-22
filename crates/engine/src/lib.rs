@@ -358,6 +358,23 @@ impl Engine {
         }
     }
 
+    /// Reloads from the network, bypassing the HTTP cache.
+    pub fn force_reload(&mut self, id: ViewId) {
+        if let Some(view) = self.views.get(&id) { view.browser.reload_ignore_cache(); }
+    }
+
+    pub fn stop_loading(&mut self, id: ViewId) {
+        if let Some(view) = self.views.get(&id) { view.browser.stop_load(); }
+    }
+
+    /// Steps through Chromium's standard zoom factors. Zero resets to 100%.
+    pub fn zoom(&mut self, id: ViewId, direction: i32) {
+        if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
+            let factor = next_zoom_factor(1.2_f64.powf(host.zoom_level()), direction);
+            host.set_zoom_level(factor.ln() / 1.2_f64.ln());
+        }
+    }
+
     pub fn close(&mut self, id: ViewId) {
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
@@ -559,5 +576,35 @@ wrap_app! {
                 }
             }
         }
+    }
+}
+
+
+/// Chromium expresses zoom logarithmically, while its UI uses these factors.
+fn next_zoom_factor(current: f64, direction: i32) -> f64 {
+    const FACTORS: &[f64] = &[0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0];
+    if direction > 0 {
+        FACTORS.iter().copied().find(|factor| *factor > current + 0.001).unwrap_or(5.0)
+    } else if direction < 0 {
+        FACTORS.iter().rev().copied().find(|factor| *factor < current - 0.001).unwrap_or(0.25)
+    } else {
+        1.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_steps_handle_rounding_custom_levels_limits_and_reset() {
+        assert_eq!(next_zoom_factor(1.0, 1), 1.1);
+        assert_eq!(next_zoom_factor(1.1 - 1e-12, 1), 1.25);
+        assert_eq!(next_zoom_factor(1.0, -1), 0.9);
+        assert_eq!(next_zoom_factor(1.13, -1), 1.1);
+        assert_eq!(next_zoom_factor(1.13, 1), 1.25);
+        assert_eq!(next_zoom_factor(5.0, 1), 5.0);
+        assert_eq!(next_zoom_factor(0.25, -1), 0.25);
+        assert_eq!(next_zoom_factor(2.5, 0), 1.0);
     }
 }

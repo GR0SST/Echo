@@ -57,6 +57,11 @@ actions!(
         GoBack,
         GoForward,
         Reload,
+        ForceReload,
+        StopLoading,
+        ZoomIn,
+        ZoomOut,
+        ResetZoom,
         TogglePin,
         ToggleSidebar,
         NextSpace,
@@ -109,6 +114,15 @@ window_shortcuts! {
     "cmd-[" => GoBack,
     "cmd-]" => GoForward,
     "cmd-r" => Reload,
+    "cmd-shift-r" => ForceReload,
+    "cmd-." => StopLoading,
+    "cmd-=" => ZoomIn,
+    "cmd-+" => ZoomIn,
+    "cmd-shift-=" => ZoomIn,
+    "cmd--" => ZoomOut,
+    "cmd-0" => ResetZoom,
+    "cmd-left" => GoBack,
+    "cmd-right" => GoForward,
     "cmd-d" => TogglePin,
     "cmd-s" => ToggleSidebar,
     "cmd-alt-right" => NextSpace,
@@ -243,6 +257,11 @@ pub enum Command {
     ClearToday,
     RestoreTab,
     Reload,
+    ForceReload,
+    StopLoading,
+    ZoomIn,
+    ZoomOut,
+    ResetZoom,
     GoBack,
     GoForward,
     NextTab,
@@ -603,6 +622,11 @@ impl BrowserWindow {
                 (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
                 (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
+                (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
+                (Command::StopLoading, "Stop Loading", "stop loading|stop page", active.is_some()),
+                (Command::ZoomIn, "Zoom In", "zoom in|increase zoom", active.is_some()),
+                (Command::ZoomOut, "Zoom Out", "zoom out|decrease zoom", active.is_some()),
+                (Command::ResetZoom, "Zoom to Actual Size", "zoom actual size|reset zoom|100%", active.is_some()),
                 (Command::GoBack, "Go Back", "go back", active.is_some()),
                 (Command::GoForward, "Go Forward", "go forward", active.is_some()),
                 (Command::NextTab, "Next Tab", "next tab", active.is_some()),
@@ -699,6 +723,11 @@ impl BrowserWindow {
                 if self.browser.restore_last_archived(SystemTime::now()).is_some() { self.settle_pager(cx); }
             }
             Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
+            Command::ForceReload => self.with_active_page(|pages, tab| pages.force_reload(tab)),
+            Command::StopLoading => self.with_active_page(|pages, tab| pages.stop_loading(tab)),
+            Command::ZoomIn => self.with_active_page(|pages, tab| pages.zoom(tab, 1)),
+            Command::ZoomOut => self.with_active_page(|pages, tab| pages.zoom(tab, -1)),
+            Command::ResetZoom => self.with_active_page(|pages, tab| pages.zoom(tab, 0)),
             Command::GoBack => self.with_active_page(|pages, tab| pages.go_back(tab)),
             Command::GoForward => self.with_active_page(|pages, tab| pages.go_forward(tab)),
             Command::NextTab => self.cycle_tab(1, cx),
@@ -1462,6 +1491,11 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(Self::on_go_back))
             .on_action(cx.listener(Self::on_go_forward))
             .on_action(cx.listener(Self::on_reload))
+            .on_action(cx.listener(|this, _: &ForceReload, _, _| this.with_active_page(|pages, tab| pages.force_reload(tab))))
+            .on_action(cx.listener(|this, _: &StopLoading, _, _| this.with_active_page(|pages, tab| pages.stop_loading(tab))))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
+            .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
             .on_action(cx.listener(Self::on_toggle_pin))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))

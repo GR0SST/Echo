@@ -38,6 +38,10 @@ enum Call {
     FocusUi,
     Navigate(u64, String),
     Back(u64),
+    Forward(u64),
+    ForceReload(u64),
+    StopLoading(u64),
+    Zoom(u64, i32),
     Reload(u64),
     Close(u64),
 }
@@ -99,10 +103,13 @@ impl WebEngine for FakeEngine {
     fn go_back(&mut self, view: ViewId) {
         self.call(Call::Back(raw(view)));
     }
-    fn go_forward(&mut self, _: ViewId) {}
+    fn go_forward(&mut self, view: ViewId) { self.call(Call::Forward(raw(view))); }
     fn reload(&mut self, view: ViewId) {
         self.call(Call::Reload(raw(view)));
     }
+    fn force_reload(&mut self, view: ViewId) { self.call(Call::ForceReload(raw(view))); }
+    fn stop_loading(&mut self, view: ViewId) { self.call(Call::StopLoading(raw(view))); }
+    fn zoom(&mut self, view: ViewId, direction: i32) { self.call(Call::Zoom(raw(view), direction)); }
     fn close(&mut self, view: ViewId) {
         self.call(Call::Close(raw(view)));
     }
@@ -898,4 +905,29 @@ fn unavailable_command_is_not_offered_and_escape_does_not_execute(cx: &mut TestA
     bar(&view, cx).simulate_input("reopen closed tab");
     bar(&view, cx).simulate_keystrokes("enter");
     assert_eq!(today_urls(&view, cx).len(), 1);
+}
+
+
+#[gpui::test]
+fn page_controls_work_from_ui_and_from_page_focus(cx: &mut TestAppContext) {
+    let (_, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-shift-r cmd-. cmd-= cmd-- cmd-0 cmd-left cmd-right");
+    assert_eq!(fake.take_calls(), vec![Call::ForceReload(1), Call::StopLoading(1), Call::Zoom(1, 1), Call::Zoom(1, -1), Call::Zoom(1, 0), Call::Back(1), Call::Forward(1)]);
+    for (key, shift) in [("r", true), (".", false), ("=", false), ("-", false), ("0", false)] {
+        fake.send(cx, Event::Shortcut(Shortcut { cmd: true, shift, key: key.into(), ..Default::default() }));
+    }
+    assert_eq!(fake.take_calls(), vec![Call::ForceReload(1), Call::StopLoading(1), Call::Zoom(1, 1), Call::Zoom(1, -1), Call::Zoom(1, 0)]);
+}
+
+#[gpui::test]
+fn page_controls_are_available_by_name(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    for (query, expected) in [("hard reload", Call::ForceReload(1)), ("stop loading", Call::StopLoading(1)), ("zoom in", Call::Zoom(1, 1)), ("zoom out", Call::Zoom(1, -1)), ("reset zoom", Call::Zoom(1, 0))] {
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input(query);
+        bar(&view, cx).simulate_keystrokes("enter");
+        assert!(fake.take_calls().contains(&expected), "{query}");
+    }
 }

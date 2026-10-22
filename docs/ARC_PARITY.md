@@ -88,13 +88,13 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Show/Hide Toolbar (top bar mode) | ⇧⌘D (hidden) | missing | No URL bar at the top |
 | Expand/Collapse Pinned Section | hidden | missing | — |
 | Reveal Current Tab | ⌃Space (hidden) | missing | — |
-| Stop Loading | ⌘. | missing | The engine has reload but no stop |
-| Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | partial | ⌘R works, ⇧⌘R (bypass cache) doesn't |
+| Stop Loading | ⌘. | done | CEF stop_load; also available in the Command Bar |
+| Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | done | Reload and reload_ignore_cache through CEF |
 | Clear Cookies and Refresh / Clear Cache and Refresh | — | missing | — |
 | Add Split View | ⌃⇧= | missing | See "Split View" |
 | Close this Split Pane | ⌃⇧- | missing | — |
 | Separate Page from Split View / Expand Current Split | — | missing | — |
-| Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | missing | — |
+| Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | done | Chromium zoom steps from 25% to 500%, reset to 100%; also in the Command Bar |
 | Cast | — | missing | — |
 | Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
 | Developer: Allow JavaScript from Apple Events | — | missing | — |
@@ -140,7 +140,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Go Back / Go Forward | ⌘[ / ⌘] (and ⌘← / ⌘→ hidden) | partial | ⌘[ and ⌘] work, ⌘← and ⌘→ don't. No history menu on long-pressing Back |
+| Go Back / Go Forward | ⌘[ / ⌘] (and ⌘← / ⌘→ hidden) | partial | ⌘[/⌘] and ⌘←/⌘→ work. No history menu on long-pressing Back |
 | View History | ⌘Y | missing | Arc opens history in a new Today tab |
 | View Archive | — | missing | — |
 | Clear Archive (with the "This action is permanent." confirmation) | — | missing | — |
@@ -239,7 +239,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
 | Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
 | Removing a suggestion ("Delete Suggestion") | — | missing | — |
-| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload, back/forward, next/previous tab. Remaining menu actions follow their features |
+| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, back/forward, next/previous tab. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
 | Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | missing | — |
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
@@ -494,9 +494,9 @@ The main toasts from the `Toasts` module. We have no toast mechanism at all.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 34
-- **partial**: 16
-- **missing**: 245
+- **done**: 37
+- **partial**: 15
+- **missing**: 243
 
 ### Biggest gaps (by importance for parity)
 
@@ -516,7 +516,7 @@ rows without a status aren't counted.
 8. **Profiles.** Currently one cache for everything.
 9. **Settings window**, including the shortcut editor with the "Arc or
    website" priority.
-10. **Shortcuts.** Missing ⇧⌘C, ⌘F, ⌘Y, ⌘+/⌘-/⌘0, ⇧⌘L.
+10. **Shortcuts.** Missing ⇧⌘C, ⌘F, ⌘Y and ⇧⌘L.
 11. **Basic browser features:** find in page, zoom, history, downloads,
     DevTools, print, loading indicator, new and incognito windows.
 12. **Media controls and PiP, toasts with Undo, onboarding and import.**
