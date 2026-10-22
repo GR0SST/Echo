@@ -196,6 +196,8 @@ pub fn bind_keys(cx: &mut App) {
     bind_window_keys(cx);
     let bar = Some(COMMAND_BAR_CONTEXT);
     cx.bind_keys([
+        KeyBinding::new("cmd-t", OpenCommandBar, bar),
+        KeyBinding::new("cmd-l", EditCurrentUrl, bar),
         KeyBinding::new("down", SelectNext, bar),
         KeyBinding::new("up", SelectPrevious, bar),
         KeyBinding::new("ctrl-n", SelectNext, bar),
@@ -256,6 +258,8 @@ pub enum Target {
     NewSpace,
     RenameSpace(SpaceId),
     ArchiveInterval,
+    Archive(Option<SpaceId>),
+    ConfirmClearArchive,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -265,6 +269,8 @@ pub enum Suggestion {
     Action { command: Command, label: String },
     SaveSpace { name: String },
     ArchiveAfter { label: String, seconds: Option<u64> },
+    ArchivedTab { id: TabId, title: String, detail: String },
+    ConfirmClearArchive,
 }
 
 /// Commands currently implemented by the browser, also exposed by name.
@@ -274,6 +280,8 @@ pub enum Command {
     RenameSpace,
     FindPage,
     ArchiveSettings,
+    ViewArchive,
+    RequestClearArchive,
     CopyUrl,
     CopyUrlAsMarkdown,
     ToggleSidebar,
@@ -572,6 +580,8 @@ impl BrowserWindow {
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
                 Target::ArchiveInterval => "Archive tabs after…",
+                Target::Archive(_) => "Search Archive…",
+                Target::ConfirmClearArchive => "Type “Clear Archive” to confirm…",
                 _ => "Search or Enter URL…",
             };
             let mut input = TextInput::new(placeholder, cx);
@@ -633,6 +643,18 @@ impl BrowserWindow {
         });
     }
 
+    fn reset_command_bar(&mut self, target: Target, text: &str, cx: &mut Context<Self>) {
+        if let Some(bar) = &mut self.command_bar {
+            bar.target = target;
+            bar.selected = 0;
+            bar.input.update(cx, |input, cx| {
+                input.set_placeholder("Search or Enter URL…", cx);
+                input.set_text(text.to_string(), cx);
+            });
+        }
+        cx.notify();
+    }
+
     pub(crate) fn close_command_bar(&mut self, cx: &mut Context<Self>) {
         let Some(bar) = self.command_bar.take() else {
             return;
@@ -661,6 +683,16 @@ impl BrowserWindow {
             return Vec::new();
         };
         let text = bar.input.read(cx).text();
+        if let Target::Archive(space) = bar.target {
+            return self.archive_suggestions(space, text);
+        }
+        if bar.target == Target::ConfirmClearArchive {
+            let mut suggestions = vec![Suggestion::Action { command: Command::ViewArchive, label: "Cancel".into() }];
+            if text.trim().eq_ignore_ascii_case("Clear Archive") {
+                suggestions.insert(0, Suggestion::ConfirmClearArchive);
+            }
+            return suggestions;
+        }
         if bar.target == Target::ArchiveInterval {
             let query = text.trim().to_lowercase();
             let current = self.browser.archive_after.map(|duration| duration.as_secs());
@@ -683,6 +715,8 @@ impl BrowserWindow {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let commands = [
+                (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs", true),
+                (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::ArchiveSettings, "Archive Tabs After…", "archive tabs after|auto archive settings|change auto archiving", true),
@@ -768,7 +802,7 @@ impl BrowserWindow {
                         self.browser.navigate(id, resolved.url());
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) | Target::ArchiveInterval => return,
+                    Target::NewSpace | Target::RenameSpace(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -782,6 +816,16 @@ impl BrowserWindow {
             Suggestion::Action { command, .. } => {
                 self.run_command(command, cx);
                 if self.command_bar.as_ref().is_some_and(|bar| bar.target != target) { return; }
+            }
+            Suggestion::ArchivedTab { id, .. } => {
+                if self.browser.restore_archived(id, now).is_some() {
+                    self.settle_pager(cx);
+                    self.show_toast(format!("Tab restored to {}", self.browser.space().name), cx);
+                }
+            }
+            Suggestion::ConfirmClearArchive => {
+                self.browser.archive.clear();
+                self.show_toast("Archive cleared".into(), cx);
             }
             Suggestion::ArchiveAfter { seconds, .. } => {
                 self.browser.archive_after = seconds.map(Duration::from_secs);
@@ -801,6 +845,8 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::ViewArchive => self.edit_archive_view(None, cx),
+            Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
             Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
             Command::ArchiveSettings => {
@@ -1523,6 +1569,7 @@ impl BrowserWindow {
             .enumerate()
             .map(|(index, suggestion)| {
                 let selected = index == bar.selected;
+                let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let (icon, label, detail): (&str, String, String) = match suggestion {
                     Suggestion::Load(Resolved::Search { query, .. }) => {
                         ("⌕", query, "Google Search".into())
@@ -1534,6 +1581,8 @@ impl BrowserWindow {
                     Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
                     Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
                     Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
+                    Suggestion::ArchivedTab { title, detail, .. } => ("↩", title, detail),
+                    Suggestion::ConfirmClearArchive => ("×", "Clear Archive".into(), "Permanently delete".into()),
                 };
                 div()
                     .id(("suggestion", index))
@@ -1564,6 +1613,14 @@ impl BrowserWindow {
                             .when(!selected, |this| this.text_color(hsla(0.0, 0.0, 0.0, 0.45)))
                             .child(detail),
                     )
+                    .when_some(archived_id, |this, id| this.child(div()
+                        .id(("delete-archived", id.get() as usize))
+                        .debug_selector(move || format!("delete-archived-{}", id.get()))
+                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.12)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.delete_archive_entry(id, cx);
+                        })).child("×")))
                     .into_any_element()
             })
             .collect();
@@ -1587,6 +1644,11 @@ impl BrowserWindow {
                     .id("command-bar")
                     .debug_selector(|| "command-bar".into())
                     .key_context(COMMAND_BAR_CONTEXT)
+                    .on_action(cx.listener(|this, _: &OpenCommandBar, _, cx| this.reset_command_bar(Target::NewTab, "", cx)))
+                    .on_action(cx.listener(|this, _: &EditCurrentUrl, _, cx| {
+                        let (target, text) = this.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone())).unwrap_or((Target::NewTab, String::new()));
+                        this.reset_command_bar(target, &text, cx);
+                    }))
                     .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select(1, cx)))
                     .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select(-1, cx)))
                     .on_action(cx.listener(|this, _: &Confirm, _, cx| {
@@ -1618,6 +1680,9 @@ impl BrowserWindow {
                             .line_height(px(32.0))
                             .child(bar.input.clone()),
                     )
+                    .when(matches!(bar.target, Target::Archive(_)), |this| this.child(self.render_archive_controls(cx)))
+                    .when(bar.target == Target::ConfirmClearArchive, |this| this.child(div().px_4().pb_2().text_sm().child("This action is permanent. Archived tabs from all Spaces will be deleted.")))
+                    .when(!has_rows && matches!(bar.target, Target::Archive(_)), |this| this.child(div().px_4().py_3().text_sm().child("No archived tabs match your search.")))
                     .when(has_rows, |this| {
                         this.child(div().h(px(1.0)).mb_2().bg(hsla(0.0, 0.0, 0.0, 0.08)))
                             .text_sm()

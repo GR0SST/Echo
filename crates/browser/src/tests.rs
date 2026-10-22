@@ -1201,3 +1201,89 @@ fn repeated_toasts_replace_each_other_and_expire_without_stealing_focus(cx: &mut
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.toast.is_none()));
 }
+
+fn open_archive(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("cmd-t");
+    bar(view, cx).simulate_input("view archive");
+    bar(view, cx).simulate_keystrokes("enter");
+}
+
+#[gpui::test]
+fn archive_search_restores_a_selected_tab_to_its_original_space(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-w cmd-w ctrl-2");
+    open_archive(&view, cx);
+    let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert_eq!(suggestions.len(), 2);
+    assert!(matches!(&suggestions[0], Suggestion::ArchivedTab { title, detail, .. } if title == "GPUI" && detail.contains("Manually Closed") && detail.contains("Personal")));
+    bar(&view, cx).simulate_input("chromium");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    assert_eq!(bar_text(&view, cx), None);
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Tab restored to Personal"));
+}
+
+#[gpui::test]
+fn archive_filters_spaces_and_deletes_without_restoring(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-w cmd-w ctrl-2 cmd-t");
+    bar(&view, cx).simulate_input("https://work.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-w ctrl-1");
+    open_archive(&view, cx);
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 3);
+    click(&mut bar(&view, cx), "archive-this-space");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 2);
+    bar(&view, cx).simulate_input("gpui");
+    click(&mut bar(&view, cx), "delete-archived-7");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 2);
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("gpui"));
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://thebrowser.company"));
+    bar(&view, cx).simulate_keystrokes("cmd-a backspace");
+    click(&mut bar(&view, cx), "archive-all-spaces");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 2);
+}
+
+#[gpui::test]
+fn clearing_the_archive_requires_confirmation_and_can_be_cancelled(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-w cmd-w");
+    open_archive(&view, cx);
+    click(&mut bar(&view, cx), "clear-archive");
+    bar(&view, cx).simulate_input("Clear Archive");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 2);
+    open_archive(&view, cx);
+    click(&mut bar(&view, cx), "clear-archive");
+    // Enter without the confirmation phrase returns to the archive.
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 2);
+    click(&mut bar(&view, cx), "clear-archive");
+    bar(&view, cx).simulate_input("Clear Archive");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+    assert_eq!(bar_text(&view, cx), None);
+    cx.simulate_keystrokes("cmd-shift-t");
+    assert_eq!(today_urls(&view, cx).len(), 1);
+}
+
+#[gpui::test]
+fn cmd_t_and_cmd_l_restart_the_command_overlay_from_archive_mode(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-w");
+    open_archive(&view, cx);
+    bar(&view, cx).simulate_input("no matches here");
+    bar(&view, cx).simulate_keystrokes("cmd-t");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    assert!(bar_input_focused(&view, cx));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    bar(&view, cx).simulate_keystrokes("cmd-l");
+    assert_eq!(bar_text(&view, cx), active_url(&view, cx));
+    bar(&view, cx).simulate_input("example.com");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+}

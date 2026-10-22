@@ -142,8 +142,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 |---|---|---|---|
 | Go Back / Go Forward | ⌘[ / ⌘] (and ⌘← / ⌘→ hidden) | partial | ⌘[/⌘] and ⌘←/⌘→ work. No history menu on long-pressing Back |
 | View History | ⌘Y | missing | Arc opens history in a new Today tab |
-| View Archive | — | missing | — |
-| Clear Archive (with the "This action is permanent." confirmation) | — | missing | — |
+| View Archive | — | partial | Command Bar → View Archive opens search, Space filters, restore/delete and clear controls. Library page remains missing |
+| Clear Archive (with the "This action is permanent." confirmation) | — | done | Clear Archive… requires typing the confirmation phrase; Escape or Cancel preserves the archive |
 
 ### Extensions / Window / Help
 
@@ -281,8 +281,8 @@ in code, so some were reconstructed from translator comments (?).
 | Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
 | Separate "Archive Little Arcs after:" interval | missing | — |
 | ⌘W and × send the tab to the archive | done | — |
-| Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | missing | — |
-| Restore ("Tab restored to …. Click to view."), Delete, Clear Archive | missing | — |
+| Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | partial | Command Bar archive browser searches title/URL, filters all/current Space, shows reason and relative age (8 results at a time). Library layout, calendar groups, reason filters and Little Arc remain missing |
+| Restore ("Tab restored to …. Click to view."), Delete, Clear Archive | done | Restore a selected entry and activate its original Space with a toast; delete an entry with ×; clear all with confirmation |
 | "Auto archived %d tabs" toast and the "We cleaned up!" banner | missing | — |
 
 ## 8. Split View
@@ -368,7 +368,7 @@ rows marked partial expose the setting from the Command Bar instead.
 | Section | Status | What's missing |
 |---|---|---|
 | Spaces (Space Manager: order of Spaces, folders, tabs) | missing | — |
-| Archive (see section 7) | missing | — |
+| Archive (see section 7) | partial | Available in the Command Bar; dedicated Library page remains missing |
 | Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | missing | — |
 | Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | missing | — |
 | Boosts: list, on/off, rename, delete | missing | — |
@@ -495,9 +495,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 44
-- **partial**: 20
-- **missing**: 231
+- **done**: 46
+- **partial**: 23
+- **missing**: 226
 
 ### Biggest gaps (by importance for parity)
 
@@ -505,8 +505,9 @@ rows without a status aren't counted.
    Travel) for remaining menu items, history, search suggestions and Site
    Search with Tab. Basic actions, Space switching and tabs from all Spaces
    are implemented.
-2. **Archive.** Needs the Archive page with restore. The interval picker,
-   Clear button, ⌘W, ×, ⇧⌘K and ⇧⌘T work.
+2. **Archive.** Search, Space filters, restore/delete/clear and interval
+   selection work in the Command Bar. Needs the dedicated Library page,
+   calendar groups, reason filters and Little Arc entries.
 3. **Sessions.** Back/forward history of tabs isn't saved.
 4. **Favorites, folders, drag and drop and sidebar context menus.**
 5. **Split View** (⌃⇧=, dragging to the middle).

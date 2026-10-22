@@ -202,6 +202,10 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
             .as_ref()
             .map(|bar| bar.input.read(cx).text().to_string()),
     );
+    out += &format!("[dump] archived_count={}\n", browser.archive.len());
+    if let Some(bar) = &this.command_bar {
+        out += &format!("[dump] command_target={:?} selected={} suggestions={}\n", bar.target, bar.selected, this.suggestions(cx).len());
+    }
     out += &format!("[dump] archive_after_seconds={:?}\n", browser.archive_after.map(|duration| duration.as_secs()));
     if let Some(toast) = &this.toast {
         out += &format!("[dump] toast={:?}\n", toast.message);

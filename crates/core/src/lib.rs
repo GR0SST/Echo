@@ -78,11 +78,22 @@ impl Space {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveReason {
+    #[default]
+    Unknown,
+    Manual,
+    Automatic,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArchivedTab {
     pub tab: Tab,
     pub space: SpaceId,
     pub archived_at: SystemTime,
+    #[serde(default)]
+    pub reason: ArchiveReason,
 }
 
 /// What closing a tab did to it.
@@ -273,7 +284,7 @@ impl Browser {
             (Section::Today, _) => {
                 let space_id = space.id;
                 let tab = self.remove_tab(id)?;
-                self.archive.push(ArchivedTab { tab, space: space_id, archived_at: now });
+                self.archive.push(ArchivedTab { tab, space: space_id, archived_at: now, reason: ArchiveReason::Manual });
                 Some(Closed::Archived)
             }
         }
@@ -293,6 +304,7 @@ impl Browser {
             tab,
             space: space_id,
             archived_at: now,
+            reason: ArchiveReason::Manual,
         }));
         count
     }
@@ -300,7 +312,13 @@ impl Browser {
     /// Brings back the most recently archived tab at the top of Today in
     /// its space (Arc's "Restore Last Closed Tab", ⇧⌘T) and focuses it.
     pub fn restore_last_archived(&mut self, now: SystemTime) -> Option<TabId> {
-        let archived = self.archive.pop()?;
+        self.restore_archived(self.archive.last()?.tab.id, now)
+    }
+
+    /// Restores a chosen archived tab to its original Space and focuses it.
+    pub fn restore_archived(&mut self, id: TabId, now: SystemTime) -> Option<TabId> {
+        let index = self.archive.iter().position(|archived| archived.tab.id == id)?;
+        let archived = self.archive.remove(index);
         let index = self
             .spaces
             .iter()
@@ -314,6 +332,13 @@ impl Browser {
         space.today.insert(0, tab);
         space.active_tab = Some(id);
         Some(id)
+    }
+
+    /// Permanently removes an archive entry without changing open tabs.
+    pub fn delete_archived(&mut self, id: TabId) -> bool {
+        let before = self.archive.len();
+        self.archive.retain(|archived| archived.tab.id != id);
+        self.archive.len() != before
     }
 
     /// Focuses the `n`th sidebar item (0-based, pinned then today), or the
@@ -408,6 +433,7 @@ impl Browser {
                 tab,
                 space: space.id,
                 archived_at: now,
+                reason: ArchiveReason::Automatic,
             }));
         }
         archived
@@ -599,6 +625,7 @@ mod tests {
 
         assert_eq!(archived, 1);
         assert_eq!(b.archive[0].tab.id, old);
+        assert_eq!(b.archive[0].reason, ArchiveReason::Automatic);
         assert_eq!(ids(&b.space().today), vec![focused, fresh]);
         assert_eq!(ids(&b.space().pinned), vec![pinned]);
     }
@@ -624,4 +651,37 @@ mod tests {
         b.switch_space(0);
         assert_eq!(b.active_tab().unwrap().id, a);
     }
+
+    #[test]
+    fn restoring_a_chosen_entry_preserves_the_rest_of_the_archive() {
+        let mut browser = Browser::new();
+        let a = browser.new_tab("a", t0());
+        let b = browser.new_tab("b", t0());
+        browser.close_tab(a, t0());
+        browser.close_tab(b, t0());
+        browser.add_space("Work", 200.0);
+        browser.switch_space(1);
+        assert_eq!(browser.restore_archived(a, t0() + HOUR), Some(a));
+        assert_eq!(browser.active_space, 0);
+        assert_eq!(browser.active_tab().unwrap().id, a);
+        assert_eq!(browser.archive.len(), 1);
+        assert_eq!(browser.archive[0].tab.id, b);
+        assert!(browser.delete_archived(b));
+        assert!(!browser.delete_archived(b));
+        assert_eq!(browser.restore_archived(a, t0()), None);
+        assert_eq!(browser.active_tab().unwrap().id, a);
+    }
+
+    #[test]
+    fn archive_reasons_survive_sessions_and_old_entries_are_unknown() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("manual", t0());
+        browser.close_tab(tab, t0());
+        assert_eq!(browser.archive[0].reason, ArchiveReason::Manual);
+        let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
+        json["archive"][0].as_object_mut().unwrap().remove("reason");
+        let restored = session::from_json(&json.to_string()).unwrap();
+        assert_eq!(restored.archive[0].reason, ArchiveReason::Unknown);
+    }
+
 }
