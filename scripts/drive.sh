@@ -7,8 +7,8 @@ SCRIPT="${1:?automation script required}"
 LIMIT="${2:-60}"
 # Run a private copy so rebuilding or a running app does not interfere.
 COPY="${TMPDIR:-/tmp}/browser-drive.app"
-rm -rf "$COPY" && cp -R target/bundle/browser.app "$COPY"
-APP="$COPY/Contents/MacOS/browser"
+rm -rf "$COPY" && cp -R target/bundle/Echo.app "$COPY"
+APP="$COPY/Contents/MacOS/Echo"
 LOG=$(mktemp -t browser-drive)
 # Snapshots of our own window cannot see layers hosted by Chromium's GPU
 # process without Screen Recording permission; in-process GPU keeps them local.

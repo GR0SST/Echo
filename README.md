@@ -47,8 +47,8 @@ a restart.
 
 ```sh
 cargo test                       # unit and UI tests
-cargo run -p bundle              # build target/bundle/browser.app
-open target/bundle/browser.app   # run with the engine
+cargo run -p bundle              # build target/bundle/Echo.app
+open target/bundle/Echo.app      # run with the engine
 cargo run -p browser             # UI only; pages are placeholders
 ```
 

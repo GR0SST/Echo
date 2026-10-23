@@ -83,7 +83,13 @@ fn profile_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA").map_or(home, PathBuf::from);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let base = std::env::var_os("XDG_DATA_HOME").map_or_else(|| home.join(".local/share"), PathBuf::from);
-    base.join(APP_NAME)
+    let dir = base.join(APP_NAME);
+    let legacy = base.join(LEGACY_APP_NAME);
+    // Keep the existing session and site data after the rename.
+    if !dir.exists() && legacy.is_dir() {
+        let _ = std::fs::rename(&legacy, &dir);
+    }
+    dir
 }
 
 /// The saved session, or demo content on first launch. A session that
@@ -113,7 +119,9 @@ fn start_engine(window: &gpui::Window, data_dir: &std::path::Path) -> Option<Box
     }
 }
 
-const APP_NAME: &str = "Browser";
+const APP_NAME: &str = "Echo";
+/// The profile folder used before the app was named.
+const LEGACY_APP_NAME: &str = "Browser";
 
 /// Opens the main browser window, restoring the last saved session.
 fn open_browser_window(cx: &mut App) {
@@ -122,7 +130,7 @@ fn open_browser_window(cx: &mut App) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some("Browser".into()),
+                title: Some(APP_NAME.into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))),
             }),

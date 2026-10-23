@@ -56,16 +56,16 @@ pub(crate) fn build() -> Vec<Menu> {
     let mut app = Vec::new();
     if native::supports_app_visibility() {
         app.extend([
-            MenuItem::action("Hide Browser", HideApp),
+            MenuItem::action("Hide Echo", HideApp),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAllApps),
             MenuItem::separator(),
         ]);
     }
-    app.push(MenuItem::action("Quit Browser", Quit));
+    app.push(MenuItem::action("Quit Echo", Quit));
     vec![
         Menu {
-            name: "Browser".into(),
+            name: "Echo".into(),
             items: app,
         },
         Menu {

@@ -8,6 +8,12 @@ publish.workspace = true
 [package.metadata.cef.bundle]
 helper_name = "browser_helper"
 
+# The executable carries the product name shown by the OS (Dock, menus,
+# Activity Monitor).
+[[bin]]
+name = "Echo"
+path = "src/main.rs"
+
 [dependencies]
 browser_core = { package = "core", path = "../core" }
 engine = { path = "../engine" }

@@ -90,7 +90,7 @@ See `README.md`. In short:
 ## Working rules
 
 - Tests: `cargo test`. App with the engine: `cargo run -p bundle`, then
-  `open target/bundle/browser.app` (`cargo run -p browser` is UI only,
+  `open target/bundle/Echo.app` (`cargo run -p browser` is UI only,
   pages are placeholders). CEF binaries live in `third_party/cef`
   (`.cargo/config.toml`) and are downloaded automatically.
 - Dev builds run Chromium with `--use-mock-keychain`, otherwise macOS asks
