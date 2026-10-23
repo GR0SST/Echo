@@ -80,6 +80,29 @@ The screenshots were inspected with the window on screen. Expansion
 animation remains a parity follow-up; this implementation changes the
 weights immediately.
 
+## View Source — 2026-10-23
+
+Inspected View → Developer → View Source on example.com in a separate Arc
+Blank Window. The result is a new Today tab with a `view-source:` address;
+the original Example Domain tab remains in the sidebar. Chromium supplies
+the source viewer with line numbers, syntax coloring, linked resources and
+a Line wrap checkbox. View Source becomes disabled on the source tab.
+The disposable window was closed after inspection.
+
+Our Developer submenu, Command Bar and Cmd+Alt+U use a new Today tab with
+the same engine-owned source viewer. The command preserves the exact source
+URL and targets the focused Split View pane without changing its original
+group. Internal pages and source tabs do not offer the action. Regression
+tests cover menu, keyboard, Command Bar, native page shortcut routing,
+preservation of loaded original pages, and returning to a split after closing
+its source tab.
+
+Native CEF verification confirmed source rendering, exact query preservation,
+repeat-shortcut suppression and Command Bar activation in an on-screen window.
+CEF's address callback reports the underlying document URL for a source view;
+the engine now reads the visible navigation entry's source URL so the address,
+session and command availability retain source mode.
+
 ## Space header and Pinned reveal — 2026-10-23
 
 Reference: the user's Arc sidebar screenshot and explicit interaction brief.

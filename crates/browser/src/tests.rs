@@ -1531,11 +1531,75 @@ fn pin_to_space_command_preserves_a_custom_tab_name(cx: &mut TestAppContext) {
 }
 
 fn menu_action(menu: &str, label: &str) -> Box<dyn gpui::Action> {
-    crate::menus::build().into_iter().find(|item| item.name.as_ref() == menu).unwrap()
-        .items.into_iter().find_map(|item| match item {
+    fn find(items: Vec<gpui::MenuItem>, label: &str) -> Option<Box<dyn gpui::Action>> {
+        items.into_iter().find_map(|item| match item {
             gpui::MenuItem::Action { name, action, .. } if name.as_ref() == label => Some(action),
+            gpui::MenuItem::Submenu(menu) => find(menu.items, label),
             _ => None,
-        }).unwrap_or_else(|| panic!("menu item missing: {menu} / {label}"))
+        })
+    }
+    find(crate::menus::build().into_iter().find(|item| item.name.as_ref() == menu).unwrap().items, label)
+        .unwrap_or_else(|| panic!("menu item missing: {menu} / {label}"))
+}
+
+#[gpui::test]
+fn view_source_from_menu_shortcut_and_command_bar_opens_a_new_tab(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx).unwrap();
+    let count = view.read_with(cx, |w, _| w.browser.all_tabs().count());
+    for route in 0..3 {
+        fake.take_calls();
+        match route {
+            0 => dispatch_menu(cx, "View", "View Source"),
+            1 => { cx.simulate_keystrokes("cmd-alt-u"); cx.run_until_parked(); }
+            _ => run_named_command(&view, cx, "view source"),
+        }
+        let source = format!("view-source:{original}");
+        assert_eq!(active_url(&view, cx).as_deref(), Some(source.as_str()));
+        assert!(bar_text(&view, cx).is_none());
+        assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), count + 1);
+        let calls = fake.take_calls();
+        assert!(calls.iter().any(|call| matches!(call, Call::Create(_, url) if url == &source)));
+        assert!(!calls.iter().any(|call| matches!(call, Call::Close(_) | Call::Navigate(..) | Call::Reload(_))));
+        assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::ViewSource, cx)));
+        cx.simulate_keystrokes("cmd-alt-u");
+        assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), count + 1);
+        cx.simulate_keystrokes("cmd-w");
+        cx.run_until_parked();
+        assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+    }
+}
+
+#[gpui::test]
+fn view_source_from_native_split_focus_preserves_the_original_group(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let original = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
+    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, alt: true, key: "u".into(), ..Default::default() }));
+    assert_eq!(active_url(&view, cx).as_deref(), Some("view-source:https://pane1.example"));
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        let split = w.browser.active_split().unwrap();
+        assert_eq!(split.id, original.id);
+        assert_eq!(split.panes, original.panes);
+        assert_eq!(split.active, original.active);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn internal_pages_do_not_offer_view_source(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-y");
+    let original = active_url(&view, cx);
+    assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::ViewSource, cx)));
+    cx.simulate_keystrokes("cmd-alt-u");
+    assert_eq!(active_url(&view, cx), original);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("view source");
+    assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::Action { command: crate::window::Command::ViewSource, .. }))));
 }
 
 fn dispatch_menu(cx: &mut VisualTestContext, menu: &str, label: &str) {

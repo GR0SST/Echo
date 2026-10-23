@@ -87,6 +87,7 @@ actions!(
         AddSplit,
         CloseSplitPane,
         ExpandCurrentSplit,
+        ViewSource,
         NextTab,
         PreviousTab,
         GoBack,
@@ -174,6 +175,7 @@ window_shortcuts! {
     "cmd-shift-g" => crate::find::PreviousMatch,
     "cmd-r" => Reload,
     "cmd-shift-r" => ForceReload,
+    "cmd-alt-u" => ViewSource,
     "cmd-." => StopLoading,
     "cmd-=" => ZoomIn,
     "cmd-+" => ZoomIn,
@@ -347,6 +349,7 @@ pub enum Command {
     SeparateSplit,
     SeparatePane,
     ExpandCurrentSplit,
+    ViewSource,
     FocusPane(usize),
     CyclePane(isize),
     MovePane(isize),
@@ -1013,6 +1016,7 @@ impl BrowserWindow {
                 (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
                 (Command::StopLoading, "Stop Loading", "stop loading|stop page", active.is_some()),
+                (Command::ViewSource, "View Source", "view source|page source|show source", self.current_source_url().is_some()),
                 (Command::ZoomIn, "Zoom In", "zoom in|increase zoom", active.is_some()),
                 (Command::ZoomOut, "Zoom Out", "zoom out|decrease zoom", active.is_some()),
                 (Command::ResetZoom, "Zoom to Actual Size", "zoom actual size|reset zoom|100%", active.is_some()),
@@ -1269,6 +1273,7 @@ impl BrowserWindow {
             Command::SeparateSplit => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
             Command::SeparatePane => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split_pane(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
             Command::ExpandCurrentSplit => self.expand_current_split(cx),
+            Command::ViewSource => self.view_source(cx),
             Command::FocusPane(index) => { self.browser.focus_split_pane(index, SystemTime::now()); }
             Command::CyclePane(delta) => { self.browser.cycle_split_pane(delta, SystemTime::now()); }
             Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.browser.move_split_pane(id, delta); } }
@@ -1415,6 +1420,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
+            .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
@@ -1427,6 +1433,23 @@ impl BrowserWindow {
     }
 
     // Window actions.
+
+    fn current_source_url(&self) -> Option<String> {
+        let url = &self.browser.active_tab()?.url;
+        let (scheme, _) = url.split_once(':')?;
+        ["http", "https", "file", "data"].iter().any(|allowed| scheme.eq_ignore_ascii_case(allowed))
+            .then(|| format!("view-source:{url}"))
+    }
+
+    fn view_source(&mut self, cx: &mut Context<Self>) {
+        let Some(url) = self.current_source_url() else { return; };
+        self.close_command_bar(cx);
+        self.close_find(cx);
+        let id = self.browser.new_tab(&url, SystemTime::now());
+        self.browser.set_title(id, url);
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        cx.notify();
+    }
 
     fn on_open_command_bar(&mut self, _: &OpenCommandBar, window: &mut Window, cx: &mut Context<Self>) {
         if !self.toggle_command_target(Target::NewTab, "", cx) {
@@ -2857,6 +2880,7 @@ impl Render for BrowserWindow {
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
+            .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))

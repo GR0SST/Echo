@@ -115,6 +115,10 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::action("Zoom In", window::ZoomIn),
                 MenuItem::action("Zoom Out", window::ZoomOut),
                 MenuItem::separator(),
+                MenuItem::Submenu(Menu {
+                    name: "Developer".into(),
+                    items: vec![MenuItem::action("View Source", window::ViewSource)],
+                }),
                 MenuItem::action("Enter/Exit Full Screen", ToggleFullscreen),
             ],
         },

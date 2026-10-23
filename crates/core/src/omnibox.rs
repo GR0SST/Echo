@@ -16,7 +16,7 @@ impl Resolved {
     }
 }
 
-const SCHEMES: &[&str] = &["http://", "https://", "file://", "about:", "chrome://", "browser://", "data:"];
+const SCHEMES: &[&str] = &["http://", "https://", "file://", "about:", "chrome://", "browser://", "data:", "view-source:"];
 
 /// Browser-owned GPUI pages must never be sent to the web engine.
 pub fn is_internal_url(url: &str) -> bool {
@@ -115,6 +115,7 @@ mod tests {
     fn explicit_schemes_are_kept() {
         assert_eq!(url("http://example.com"), "http://example.com");
         assert_eq!(url("about:blank"), "about:blank");
+        assert_eq!(url("view-source:https://example.com/?a=1#part"), "view-source:https://example.com/?a=1#part");
     }
 
     #[test]

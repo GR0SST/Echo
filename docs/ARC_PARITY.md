@@ -100,7 +100,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Separate Page from Split View / Expand Current Split | — | partial | Both actions are implemented. Expand Current Split is available from View and the Command Bar, preserves the group and loaded pages, and leaves other panes as 220 px strips. Expansion animation fidelity remains |
 | Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | done | Chromium zoom steps from 25% to 500%, reset to 100%; also in the Command Bar |
 | Cast | — | missing | — |
-| Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
+| Developer: View Source | ⌥⌘U | done | Opens a new Today tab using Chromium's source viewer, retaining the original page or Split View. View → Developer and Command Bar actions; disabled on internal/source pages. Native-page shortcut routing and CEF rendering verified |
+| Developer: Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
 | Developer: Allow JavaScript from Apple Events | — | missing | — |
 | Toggle Developer Mode (per site) | ⌃D | missing | — |
 | Enter/Exit Full Screen | ⌃⌘F | partial | View menu, page shortcuts and overlays target the main window; Enter/Exit commands work in GPUI tests. Final native behavior check awaits an unlocked desktop |
@@ -522,9 +523,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 49
-- **partial**: 31
-- **missing**: 215
+- **done**: 72
+- **partial**: 47
+- **missing**: 182
 
 ### Biggest gaps (by importance for parity)
 

@@ -542,6 +542,14 @@ wrap_display_handler! {
         ) {
             if frame.is_some_and(|frame| frame.is_main() == 1) {
                 let url = url.map(CefString::to_string).unwrap_or_default();
+                // CEF reports the underlying document URL for source views.
+                // Its visible entry retains the source-mode prefix, including
+                // after redirects and back/forward navigation.
+                let url = browser.as_ref().and_then(|browser| browser.host())
+                    .and_then(|host| host.visible_navigation_entry())
+                    .map(|entry| CefString::from(&entry.display_url()).to_string())
+                    .filter(|display| display.starts_with("view-source:"))
+                    .unwrap_or(url);
                 push(&self.events, browser, RawEvent::Url(url));
             }
         }
