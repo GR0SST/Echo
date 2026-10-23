@@ -89,6 +89,7 @@ struct View {
     frame: Bounds,
     /// The native view has not been positioned yet.
     needs_layout: bool,
+    rounded_top: bool,
 }
 
 // CEF is initialized once per process, including across closed/reopened windows.
@@ -314,6 +315,7 @@ impl Engine {
                 host,
                 frame,
                 needs_layout: true,
+                rounded_top: true,
             },
         );
         self.set_frame(id, frame);
@@ -334,6 +336,16 @@ impl Engine {
         if let Some(host) = view.browser.host() {
             host.was_resized();
         }
+    }
+
+    /// Split headers own the pane's top corners; the page below joins them squarely.
+    /// Restoring a standalone page rounds its top corners again without reloading.
+    pub fn set_top_corners_rounded(&mut self, id: ViewId, rounded: bool) {
+        let Some(view) = self.views.get_mut(&id) else { return; };
+        if view.rounded_top == rounded { return; }
+        view.rounded_top = rounded;
+        #[cfg(target_os = "macos")]
+        mac::set_top_corners_rounded(view.host, rounded);
     }
 
     pub fn frame(&self, id: ViewId) -> Option<Bounds> {

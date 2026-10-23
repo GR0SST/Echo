@@ -31,6 +31,10 @@ Observed directly:
   when only one page is left.
 - A populated split is one sidebar row containing separate segments for
   its pages, rather than a concatenated group title and favicon pair.
+- Each pane is a single rounded outer surface. Its top bar joins the web
+  content along a straight edge; the web page is not a separately rounded card
+  under a rectangular header. Confirmed against the user-provided comparison
+  screenshots on 2026-10-23.
 - Each page has a compact top bar: navigation controls, a centered address,
   Split View controls and a close control. There is no additional shared
   title strip above the pane headers.

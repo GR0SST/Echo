@@ -314,6 +314,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 |---|---|---|---|
 | Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Immediately shows an empty pane and the ordinary URL/search input centered inside it. Escape, outside dismissal and Cmd+W cancel without archiving the source; drafts are excluded from saved sessions. Existing tabs, history and new URLs are supported. Exact menu glyphs and full theme/animation fidelity remain |
 | Close a pane | ⌘W / ⌃⇧- | done | Closes only the focused pane from GPUI and native page focus; the other pages stay loaded. Sidebar group close still closes the entire item |
+| Split pane corner contour | — | done | Each pane has one rounded outer contour shared by its GPUI header and native CEF page. The header/page seam is square; only the page's bottom corners are rounded. Leaving split restores all page corners without reloading. The inter-pane gap exposes the window theme |
 | Split sidebar item | — | partial | Segmented row with independent pane focus targets and favicons; custom group names are retained. Exact Favorite-group treatment and remaining visual states need comparison |
 | Split from a Pinned tab or Favorite | — | done | Creates independent copies in Today and retains the original pin/Favorite, including its URL, placement and identity. Selecting an existing protected tab for a pane also copies it |
 | Create by dragging a tab to the middle of the window | drag | missing | — |

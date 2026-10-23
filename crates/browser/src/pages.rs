@@ -12,6 +12,7 @@ use engine::{Bounds, Engine, Event, ViewId};
 pub trait WebEngine {
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId>;
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
+    fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn set_visible(&mut self, view: ViewId, visible: bool);
     /// Keyboard focus to the page.
     fn focus_page(&mut self, view: ViewId);
@@ -55,6 +56,9 @@ impl WebEngine for Chromium {
     }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.engine.set_frame(view, bounds)
+    }
+    fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
+        self.engine.set_top_corners_rounded(view, rounded)
     }
     fn set_visible(&mut self, view: ViewId, visible: bool) {
         self.engine.set_visible(view, visible)
@@ -277,6 +281,7 @@ impl Pages {
                     self.pages.insert(tab, Page { view, url, state: PageState::default(), muted });
                 }
             }
+            self.engine.set_top_corners_rounded(self.pages[&tab].view, !self.split);
             if self.visible.insert(tab) { self.engine.set_visible(self.pages[&tab].view, true); }
         }
         if focused != self.shown {

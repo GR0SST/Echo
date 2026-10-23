@@ -195,6 +195,18 @@ pub fn create_clip_view(parent: *mut c_void, radius: f64) -> *mut c_void {
     }
 }
 
+/// The clip host is an unflipped NSView: minimum-Y corners are its bottom edge.
+/// Keep those rounded when the page joins a GPUI split header along its top edge.
+pub fn set_top_corners_rounded(view: *mut c_void, rounded: bool) {
+    unsafe {
+        let layer: *mut AnyObject = msg_send![view as *mut AnyObject, layer];
+        if !layer.is_null() {
+            let corners: usize = if rounded { 0b1111 } else { 0b0011 };
+            let _: () = msg_send![layer, setMaskedCorners: corners];
+        }
+    }
+}
+
 /// Makes `view` fill its superview and follow its size.
 pub fn fill_superview(view: *mut c_void) {
     const WIDTH_SIZABLE: usize = 1 << 1;

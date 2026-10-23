@@ -192,10 +192,13 @@ impl BrowserWindow {
                 let id = *id;
                 let key = id.get() as usize;
                 let active = self.browser.space().active_tab == Some(id);
-                let mut pane = div().id(("pane", key)).min_w_0().min_h_0().flex_basis(px(0.)).flex().flex_col().overflow_hidden();
+                let mut pane = div().id(("pane", key)).debug_selector(move || format!("split-pane-{key}"))
+                    .min_w_0().min_h_0().flex_basis(px(0.)).flex().flex_col()
+                    .rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).overflow_hidden().shadow_sm();
                 pane.style().flex_grow = Some(*weight);
                 Some(pane
                     .child(div().id(("pane-header", key)).debug_selector(move || format!("pane-header-{key}"))
+                        .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
                         .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
                         .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
@@ -215,7 +218,7 @@ impl BrowserWindow {
                         .child(div().id(("pane-close", key)).debug_selector(move || format!("pane-close-{key}")).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if this.split_draft.as_ref().is_some_and(|draft| draft.pane == id) { this.close_command_bar(cx); } else { this.close_split_pane(id, cx); } })).child("×")))
-                    .child(div().debug_selector(move || format!("pane-body-{key}")).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
+                    .child(div().debug_selector(move || format!("pane-body-{key}")).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
             }));
         div().size_full().flex().flex_col().child(panes).into_any_element()
     }

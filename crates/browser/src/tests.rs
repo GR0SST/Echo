@@ -34,6 +34,7 @@ fn open_with(
 enum Call {
     Create(u64, String),
     Visible(u64, bool),
+    TopCorners(u64, bool),
     FocusPage(u64),
     FocusUi,
     Navigate(u64, String),
@@ -56,6 +57,7 @@ struct FakeState {
     calls: Vec<Call>,
     /// Latest bounds given to each view.
     bounds: std::collections::HashMap<u64, Bounds>,
+    rounded_top: std::collections::HashMap<u64, bool>,
     next_view: u64,
     events: Vec<Event>,
     muted: std::collections::HashSet<u64>,
@@ -86,11 +88,18 @@ impl WebEngine for FakeEngine {
         state.next_view += 1;
         let id = state.next_view;
         state.bounds.insert(id, bounds);
+        state.rounded_top.insert(id, true);
         state.calls.push(Call::Create(id, url.to_string()));
         Some(ViewId::from_raw(id))
     }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.0.borrow_mut().bounds.insert(raw(view), bounds);
+    }
+    fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
+        let mut state = self.0.borrow_mut();
+        if state.rounded_top.insert(raw(view), rounded) != Some(rounded) {
+            state.calls.push(Call::TopCorners(raw(view), rounded));
+        }
     }
     fn set_visible(&mut self, view: ViewId, visible: bool) {
         self.call(Call::Visible(raw(view), visible));
@@ -4474,4 +4483,40 @@ fn empty_vertical_pane_search_stays_inside_the_pane(cx: &mut TestAppContext) {
     let pane_bounds = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
     assert!(search.bottom() <= pane_bounds.bottom());
     bar(&view, cx).simulate_keystrokes("escape");
+}
+
+#[gpui::test]
+fn split_headers_and_pages_share_one_outer_corner_contour_without_recreating_views(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    assert_eq!(fake.0.borrow().rounded_top[&1], true);
+    fake.take_calls();
+    cx.simulate_keystrokes("ctrl-shift-=");
+    assert!(fake.take_calls().contains(&Call::TopCorners(1, false)));
+    bar(&view, cx).simulate_keystrokes("escape");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::TopCorners(1, true)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+
+    cx.simulate_keystrokes("ctrl-shift-=");
+    bar(&view, cx).simulate_input("https://beside.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(fake.0.borrow().rounded_top.values().all(|rounded| !rounded));
+    let panes = view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.clone());
+    for pane in panes {
+        let frame = cx.debug_bounds(test_selector(format!("split-pane-{}", pane.get()))).unwrap();
+        let header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
+        let body = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
+        assert_eq!(frame.origin, header.origin);
+        assert_eq!(header.bottom(), body.origin.y);
+        assert_eq!(frame.bottom(), body.bottom());
+        assert_eq!(frame.size.width, header.size.width);
+        assert_eq!(frame.size.width, body.size.width);
+    }
+    run_named_command(&view, cx, "convert to vertical split");
+    assert!(fake.0.borrow().rounded_top.values().all(|rounded| !rounded));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-w");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::TopCorners(1, true)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
 }
