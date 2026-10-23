@@ -1,6 +1,8 @@
 # Chrome material foundation (integration proposal)
 
-Status: the shared module is registered in the browser crate. No renderer adopts
+Status: the shared color/material module is registered in the checkout; the
+bounded native configuration API described below is TMP-only and not applied.
+No renderer adopts
 a material palette yet; compilation, full tests and native verification remain
 with the parent integration pass. This does not close an Arc parity row. The Rust module contains
 no product palette defaults and makes no claim about Arc's exact opacity.
@@ -104,6 +106,104 @@ backing for that surface, not simply that Blurred was requested. Start with
 Opaque on unvalidated backends. The API intentionally has no cfg-based
 `HAS_BACKDROP` replacement pretending to be runtime confirmation.
 
+## Bounded native configuration proposal (TMP-only)
+
+`BackdropConfig` adds independently authored `EffectAppearance` (Inherited,
+Light, Dark), `EffectState` (FollowWindow, Active, Inactive), `EffectBlending`
+(BehindWindow, WithinWindow), emphasis, effect-view alpha and `EffectMaterial`.
+Materials are Hud, Menu, WindowBackground and explicit ReferenceLight/ReferenceDark
+looks. The latter two are deprecated AppKit looks exposed for reference matching,
+not an appearance-to-material policy. Shared Rust enums contain no AppKit raw
+values. There is no default config, palette, profile preference, blur radius,
+Intensity-to-alpha equation, or material mapping selected by appearance.
+
+`native::set_backdrop_configured` installs/reuses a bounded effect under GPUI,
+identified by the existing key. Every update reapplies every config field and
+geometry. Inherited sets native appearance to nil, clearing an earlier explicit
+Light/Dark override. A reused key does not allocate a replacement effect. None
+removes only that keyed effect; repeated removal reports Absent. Invalid alpha
+or geometry is rejected without mutating the existing effect. Failed installation
+or configuration returns Unavailable, and configuration failure removes the
+stale effect. Nil host/parent, failed effect allocation/init, a matching identifier
+on a non-effect view, missing attachment or missing clipping layer never report
+Installed. Tests use an extracted reconciliation host to cover update/reuse,
+removal/reopen, failed installation/configuration and nonmutating rejection.
+They do not establish AppKit rendering correctness.
+
+The compatibility `set_backdrop` wrapper retains exactly the existing Hud/Menu
+selection, dark appearance, Active state, BehindWindow blending, unemphasized
+SDK default and effect alpha 1. Existing authored panel fills are untouched.
+It now returns true only for Installed (false on removal, absence or failure).
+`HAS_BACKDROP` remains a legacy compile-time palette hint for callers outside
+this change; it is not runtime capability evidence. No caller adopts a new
+reference configuration in this patch. Pure GPUI tests return Unavailable
+without touching AppKit, whose backend is verified separately by the parent.
+
+`BackdropInstallation::Installed` means an attached/configured native vibrancy
+view, not proven rendered blur, a guaranteed requested blending mode, or a
+permission to mark a surface `Backdrop::Blurred`. The existing surface-level
+opaque fallback remains available for unsupported backends and reduced
+transparency. A future owning caller must remove its bounded effect when that
+fallback is selected. This proposal adds no OS preference reader or UI.
+Effect alpha belongs to the native effect alone: it never changes GPUI fill,
+text/icon alpha, a parent window, a native CEF website, wash or border opacity.
+Do not manufacture a second effect or layer ordering merely because Arc has
+one conditional two-frame path; configure such a caller only after inspection.
+
+### Exact Arc evidence and limits
+
+Evidence report read: `/tmp/echo-theme-material-reference-audit.md` (2026-10-23),
+Arc `/Applications/Arc.app` version 1.170.0, universal executable SHA-256
+`25af5f4eaaae5aca25021f2737e90cc4d41fdf195c4a5c4012ea31a1bba4b86a`.
+Addresses below are report-provided arm64 unslid virtual addresses, not file
+byte offsets or source lines. This preparation did not independently rerun
+binary analysis. SDK enum semantics were checked directly in the local
+`NSVisualEffectView.h` named by that report.
+
+- WindowTheme descriptor `0x103dfea1c` separates background, windowAppearance,
+  primaryColorPalette and semanticColorPalette. Background descriptors
+  `0x103dfeae0` / `0x103dfeea8` separate base/overlay colors, translucencyStyle,
+  modifiers and wheel. Modifier descriptors `0x103dfebb0` / `0x103dfef50`
+  separate noiseFactor, intensityFactor and overlay; no conversion is known.
+- Window background factory `0x1015405c8–0x101540608` creates NSVisualEffectView,
+  calls setState raw 0 at `0x1015405ec` (FollowsWindowActiveState) and
+  setEmphasized true at `0x1015405f8`. This differs from Echo's legacy Active
+  setting and GPUI's Selection/Active effect path.
+- Material callback `0x1015405bc` sets the material separately. Update
+  `0x10153fcc0` examines effectiveAppearance and configuration. Helpers
+  `0x100a13fb4` / `0x100a13fc4` load raw 2/1 from `0x1036b5d10` /
+  `0x1036b5d18` (SDK Dark/Light); a branch supplies raw 12 at
+  `0x10153ffb4`, `0x10153ffc4`, `0x101540098` (WindowBackground).
+  Configuration/payload interpretation is incomplete: this is not a proven
+  universal Light/Dark-to-material table.
+- Conditional second-frame creation: `0x101540158–0x1015401dc`. The value
+  loaded at `0x10153fda0` from configuration payload +0x100 reaches
+  setAlphaValue at `0x1015401ec–0x1015401f0`. Equal selected materials hide
+  that frame at `0x101540120–0x101540130`. This proves effect-frame alpha,
+  not Intensity == alpha or whole-sidebar opacity.
+- Popover configuration descriptor `0x103df1f38` independently stores material,
+  state, blendingMode, isEmphasized. Popover descriptor `0x103df1e7c` has
+  washLayerAlpha and separate content/border/translucency/wash views.
+  Update `0x100a2a1f0–0x100a2ace8` reads wash alpha through slot `0x10452fb10`
+  at `0x100a2a38c`, then builds colors separately from borders/content.
+  Neither specific menu caller configurations nor their alpha values are known.
+
+Local SDK maps Hud/Menu/WindowBackground to 13/5/12, explicit Light/Dark to
+1/2, state FollowWindow/Active/Inactive to 0/1/2, and blending
+BehindWindow/WithinWindow to 0/1. These raw values live only in the AppKit
+adapter. The SDK says materials may fall back to another blending mode;
+configured parameters do not prove resulting compositor pixels.
+
+The audit cites [Arc Space documentation](https://resources.arc.net/hc/en-us/articles/19228064149143-Spaces-Distinct-Browsing-Areas)
+for per-Space colors and application-wide Light/Dark/Automatic, and
+[Arc's guide](https://start.arc.net/paint-the-internet) for per-Space color or
+gradient. These URLs are retained exactly from the report; this preparation did
+not open them in a browser. Neither establishes profile-specific appearance,
+exact Library/Sidebar/menu material defaults, or an intensity/opacity formula.
+Legacy/experimental/Metal background implementations coexist in the binary;
+the user's active runtime path is unresolved. GPUI Selection material is an
+Echo capability, not Arc material evidence.
+
 ## Precise integration points after resize/Media work stabilizes
 
 1. Foundation registration is complete: `crates/browser/src/material.rs` is
@@ -143,18 +243,16 @@ Opaque on unvalidated backends. The API intentionally has no cfg-based
    `link_status.rs` must retain transparent empty regions. Do not globally
    set these full-size child windows to Blurred, or the entire web page can
    blur. Keep bounded effects where required. Never apply root `.opacity`.
-7. Keep the existing bounded AppKit shim only for panel-sized materials that
-   GPUI whole-window blur cannot express. `native.rs::mac::set_backdrop`
-   currently forces VibrantDark and sets appearance/material only on creation.
-   If integrating light mode, pass `Appearance` through that shared boundary
-   and update an existing effect view's appearance/material on changes too.
-   Remove effects when hidden and on reduced transparency. Its current bool
-   reports true on macOS even when a native view is missing; do not treat that
-   as verified capability. No additional native implementation is supplied.
+7. The bounded native configuration API has passed independent static review
+   and is applied. It preserves legacy wrappers and changes no renderer.
+   Later, a reference-configured caller can pass BackdropConfig through the
+   bounded API, keeping appearance/material/state independent. Validate reused
+   views on appearance and activation changes; do not adopt GPUI Selection or
+   any new Arc material mapping solely on the basis of this API preparation.
 
 ## Parent validation before shipping
 
-- `cargo test` after registration; the module includes authored-color/alpha preservation
+- `cargo test` after the parent applies the bounded configuration patch; the module includes authored-color/alpha preservation
   sweeps (including low contrast), unsupported/reduced-transparency fallbacks,
   nonmutating opt-in validation, and mid-luminance regression tests. No Cargo/build commands were run for this
   temporary preparation.
@@ -170,8 +268,27 @@ Opaque on unvalidated backends. The API intentionally has no cfg-based
 - Repeat sidebar resize, Library Media sizing and menu anchor/clipping flows;
   resizing must not leave stale or double-painted effects. Test window move,
   fullscreen, app activation, OS appearance and transparency preference changes.
+- Run the bounded reconciliation tests and macOS installation failure checks;
+  compare configured light/dark/inherited, active/inactive, emphasis and effect
+  alpha on an existing keyed view, and removal/reopen. Verify legacy HUD/Menu
+  visual presentation remains unchanged before configuring new callers.
 - Validate macOS and Windows actual blur; Wayland with/without blur protocol;
   X11/headless fallback. Do not claim platform visual parity from source alone.
 - Leave current theme/parity rows missing/partial until behavior and appearance
   are actually implemented and checked. Commit/push belongs to the parent
   only after its required green tests and app check.
+
+## Bounded API validation checkpoint — October 23, 2026
+
+The combined workspace passed all 794 tests. All four reconciliation lifecycle
+tests passed: reuse and inherited appearance,
+remove/reopen, failed installation/update cleanup, and invalid-request isolation.
+The macOS bundle compiled the actual AppKit shim. A rebuilt app opened and
+dismissed the Command Bar, HUD New menu and Menu-material tab context menu;
+composited screenshots were inspected for bounded placement and clipping.
+The app reached `CEF Complete` and exited normally after both native runs.
+
+These checks cover existing legacy callers and installation lifecycle. They do
+not establish calibrated Arc translucency or validate every configured
+light/dark/inherited transition, OS transparency setting or other platform.
+No renderer has adopted a new palette, alpha value or profile appearance policy.

@@ -1107,3 +1107,27 @@ Screenshots were inspected. The fixture retained UUID
 `66374c7b-45bb-411c-aebd-e5bb792519d6`, one load, and continued input afterward.
 The process exited normally after CEF Complete. Full tests passed 767 cases;
 external native deactivation and exact Arc floating-mode semantics remain open.
+
+
+### Theme material layering: compiled reference
+
+A bounded read-only audit of installed Arc 1.170.0's arm64 executable found
+`WindowTheme` separating window appearance, background and color palettes.
+Its background configuration independently stores base/overlay colors,
+translucency style, noise and intensity. No intensity-to-opacity formula was
+established.
+
+`WindowBackgroundTranslucencyViewAppKit` creates an NSVisualEffectView with
+FollowsWindowActiveState and emphasis enabled. Material selection is separate;
+compiled paths include Light, Dark and WindowBackground materials. A second
+effect frame takes a configurable alpha. This does not establish a universal
+material/alpha for Sidebar, Library or menus. Popover configuration separately
+stores material, state, blending mode, emphasis and wash-layer alpha.
+
+The executable hash was
+`25af5f4eaaae5aca25021f2737e90cc4d41fdf195c4a5c4012ea31a1bba4b86a`.
+Reproduction anchors (arm64 unslid addresses): effect factory
+`0x1015405c8–0x101540608`, update routine `0x10153fcc0`, configurable alpha
+`0x1015401ec–0x1015401f0`, popover update `0x100a2a1f0–0x100a2ace8`.
+These compiled facts support independently configurable effect layers, not a
+single global opacity multiplier or an adopted reference palette.

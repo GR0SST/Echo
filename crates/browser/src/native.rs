@@ -114,57 +114,121 @@ mod mac {
         }
     }
 
-    /// Places a rounded dark vibrancy view behind the GPUI content of
-    /// `view`'s window at `rect` (x, y, width, height; top-left origin),
-    /// creating it on first use. `None` removes it.
-    pub fn set_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, material: super::Material) {
-        use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-        let material: isize = match material { super::Material::Hud => 13, super::Material::Menu => 5 };
-        const BEHIND_WINDOW: isize = 0;
-        const ACTIVE: isize = 1;
+    // AppKit raw enum values are isolated here, never in shared theme logic.
+    fn effect_material(material: crate::material::EffectMaterial) -> isize {
+        use crate::material::EffectMaterial::*;
+        match material { Hud => 13, Menu => 5, WindowBackground => 12,
+            ReferenceLight => 1, ReferenceDark => 2 }
+    }
+
+    struct BoundedEffect {
+        view: *mut AnyObject,
+        parent: *mut AnyObject,
+        effect: *mut AnyObject,
+        identifier: String,
+    }
+
+    impl super::BackdropHost for BoundedEffect {
+        fn exists(&self) -> bool { !self.effect.is_null() }
+
+        fn install(&mut self) -> bool {
+            use objc2_foundation::NSString;
+            unsafe {
+                let allocated: *mut AnyObject = msg_send![objc2::class!(NSVisualEffectView), alloc];
+                if allocated.is_null() { return false; }
+                let effect: *mut AnyObject = msg_send![allocated, init];
+                if effect.is_null() { return false; }
+                let identifier = NSString::from_str(&self.identifier);
+                let _: () = msg_send![effect, setIdentifier: &*identifier];
+                let _: () = msg_send![self.parent, addSubview: effect, positioned: -1isize, relativeTo: self.view];
+                let parent: *mut AnyObject = msg_send![effect, superview];
+                let installed = parent == self.parent;
+                if installed { self.effect = effect; }
+                objc2::ffi::objc_release(effect as *mut _);
+                installed
+            }
+        }
+
+        fn update(&mut self, rect: [f64; 4], radius: f64, config: crate::material::BackdropConfig) -> bool {
+            use crate::material::{EffectAppearance, EffectBlending, EffectState};
+            use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+            unsafe {
+                if self.effect.is_null() { return false; }
+                let parent: *mut AnyObject = msg_send![self.effect, superview];
+                if parent != self.parent { return false; }
+                let nil: *mut AnyObject = std::ptr::null_mut();
+                let appearance = match config.appearance {
+                    EffectAppearance::Inherited => nil,
+                    explicit => {
+                        let name = NSString::from_str(match explicit {
+                            EffectAppearance::Light => "NSAppearanceNameVibrantLight",
+                            EffectAppearance::Dark => "NSAppearanceNameVibrantDark",
+                            EffectAppearance::Inherited => unreachable!(),
+                        });
+                        let value: *mut AnyObject = msg_send![objc2::class!(NSAppearance), appearanceNamed: &*name];
+                        if value.is_null() { return false; }
+                        value
+                    }
+                };
+                // Apply every parameter on reused views too. nil clears an old
+                // explicit override, allowing effective appearance inheritance.
+                let _: () = msg_send![self.effect, setAppearance: appearance];
+                let _: () = msg_send![self.effect, setMaterial: effect_material(config.material)];
+                let state: isize = match config.state { EffectState::FollowWindow => 0, EffectState::Active => 1, EffectState::Inactive => 2 };
+                let blending: isize = match config.blending { EffectBlending::BehindWindow => 0, EffectBlending::WithinWindow => 1 };
+                let _: () = msg_send![self.effect, setState: state];
+                let _: () = msg_send![self.effect, setBlendingMode: blending];
+                let _: () = msg_send![self.effect, setEmphasized: Bool::new(config.emphasized)];
+                let _: () = msg_send![self.effect, setAlphaValue: config.effect_alpha];
+                let _: () = msg_send![self.effect, setWantsLayer: Bool::YES];
+                let [x, y, width, height] = rect;
+                let bounds: NSRect = msg_send![self.parent, bounds];
+                let flipped: Bool = msg_send![self.parent, isFlipped];
+                let y = if flipped.as_bool() { y } else { bounds.size.height - y - height };
+                let _: () = msg_send![self.effect, setFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))];
+                let layer: *mut AnyObject = msg_send![self.effect, layer];
+                if layer.is_null() { return false; }
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
+                true
+            }
+        }
+
+        fn remove(&mut self) -> bool {
+            unsafe {
+                if self.effect.is_null() { return true; }
+                let _: () = msg_send![self.effect, removeFromSuperview];
+                // Removing may release the last owner; never dereference again.
+                self.effect = std::ptr::null_mut();
+                true
+            }
+        }
+    }
+
+    pub fn set_backdrop_configured(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig) -> crate::material::BackdropInstallation {
+        use crate::material::BackdropInstallation;
+        use objc2_foundation::NSString;
         let view = view as *mut AnyObject;
-        if view.is_null() { return; }
+        if view.is_null() { return BackdropInstallation::Unavailable; }
         unsafe {
-            let frame_view: *mut AnyObject = msg_send![view, superview];
-            if frame_view.is_null() { return; }
-            let name = format!("echo.backdrop.{key}");
-            let identifier = NSString::from_str(&name);
-            let subviews: *mut AnyObject = msg_send![frame_view, subviews];
+            let parent: *mut AnyObject = msg_send![view, superview];
+            if parent.is_null() { return BackdropInstallation::Unavailable; }
+            let identifier = format!("echo.backdrop.{key}");
+            let subviews: *mut AnyObject = msg_send![parent, subviews];
             let count: usize = msg_send![subviews, count];
-            let mut backdrop: *mut AnyObject = std::ptr::null_mut();
+            let mut effect = std::ptr::null_mut();
             for index in 0..count {
                 let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: index];
                 let id: *mut NSString = msg_send![subview, identifier];
-                if !id.is_null() && (*id).to_string() == name { backdrop = subview; break; }
+                if !id.is_null() && (*id).to_string() == identifier {
+                    let is_effect: Bool = msg_send![subview, isKindOfClass: objc2::class!(NSVisualEffectView)];
+                    if !is_effect.as_bool() { return BackdropInstallation::Unavailable; }
+                    effect = subview;
+                    break;
+                }
             }
-            let Some([x, y, width, height]) = rect else {
-                if !backdrop.is_null() { let _: () = msg_send![backdrop, removeFromSuperview]; }
-                return;
-            };
-            if backdrop.is_null() {
-                backdrop = msg_send![objc2::class!(NSVisualEffectView), alloc];
-                backdrop = msg_send![backdrop, init];
-                let _: () = msg_send![backdrop, setIdentifier: &*identifier];
-                let _: () = msg_send![backdrop, setMaterial: material];
-                let _: () = msg_send![backdrop, setBlendingMode: BEHIND_WINDOW];
-                let _: () = msg_send![backdrop, setState: ACTIVE];
-                let name = NSString::from_str("NSAppearanceNameVibrantDark");
-                let appearance: *mut AnyObject = msg_send![objc2::class!(NSAppearance), appearanceNamed: &*name];
-                let _: () = msg_send![backdrop, setAppearance: appearance];
-                let _: () = msg_send![backdrop, setWantsLayer: Bool::YES];
-                let below: isize = -1;
-                let _: () = msg_send![frame_view, addSubview: backdrop, positioned: below, relativeTo: view];
-                objc2::ffi::objc_release(backdrop as *mut _);
-            }
-            let bounds: NSRect = msg_send![frame_view, bounds];
-            let flipped: Bool = msg_send![frame_view, isFlipped];
-            let y = if flipped.as_bool() { y } else { bounds.size.height - y - height };
-            let _: () = msg_send![backdrop, setFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))];
-            let layer: *mut AnyObject = msg_send![backdrop, layer];
-            if !layer.is_null() {
-                let _: () = msg_send![layer, setCornerRadius: radius];
-                let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
-            }
+            let mut host = BoundedEffect { view, parent, effect, identifier };
+            super::reconcile_backdrop(&mut host, rect, radius, config)
         }
     }
 
@@ -327,23 +391,63 @@ pub fn traffic_light_frames(view: *mut c_void) -> Option<[[f32; 4]; 3]> {
     { let _ = view; None }
 }
 
-/// A blurred, translucent backdrop behind a floating panel, as macOS
-/// vibrancy. Returns whether the platform draws one; elsewhere panels stay
-/// opaque.
-/// Backdrop styles: the HUD panels' darker blur, or the system menu material.
+/// Legacy HUD and menu roles. Existing callers retain dark, always-active,
+/// behind-window effects; no authored tint or foreground values change.
 #[derive(Clone, Copy)]
 pub enum Material { Hud, Menu }
 
-/// `key` names the backdrop so one window can hold several (a menu and its
-/// submenu); `None` removes it.
-pub fn set_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, material: Material) -> bool {
-    #[cfg(target_os = "macos")]
-    { mac::set_backdrop(view, key, rect, radius, material); true }
-    #[cfg(not(target_os = "macos"))]
-    { let _ = (view, key, rect, radius, material); false }
+impl Material {
+    fn legacy_config(self) -> crate::material::BackdropConfig {
+        use crate::material::*;
+        BackdropConfig { appearance: EffectAppearance::Dark, state: EffectState::Active,
+            blending: EffectBlending::BehindWindow, emphasized: false, effect_alpha: 1.,
+            material: match self { Self::Hud => EffectMaterial::Hud, Self::Menu => EffectMaterial::Menu } }
+    }
 }
 
-/// Whether panels get a translucent native backdrop.
+/// Compatibility wrapper: true only when the named effect is installed and
+/// configured. Not proof of rendered blur. Removal/absence/failure returns false.
+pub fn set_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, material: Material) -> bool {
+    set_backdrop_configured(view, key, rect, radius, material.legacy_config()) == crate::material::BackdropInstallation::Installed
+}
+
+/// Bounded effect only; no window/content alpha or palette changes. Geometry
+/// uses top-left coordinates. None removes only the effect named by key.
+/// Installed means an attached/configured effect view, not verified blur output.
+pub(crate) fn set_backdrop_configured(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig) -> crate::material::BackdropInstallation {
+    #[cfg(all(target_os = "macos", not(test)))]
+    { mac::set_backdrop_configured(view, key, rect, radius, config) }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { let _ = (view, key, rect, radius, config); crate::material::BackdropInstallation::Unavailable }
+}
+
+// The reconciliation seam is also exercised with an in-memory host: native
+// setters must not accidentally be confined to the initial creation path.
+trait BackdropHost {
+    fn exists(&self) -> bool;
+    fn install(&mut self) -> bool;
+    fn update(&mut self, rect: [f64; 4], radius: f64, config: crate::material::BackdropConfig) -> bool;
+    fn remove(&mut self) -> bool;
+}
+
+fn reconcile_backdrop(host: &mut impl BackdropHost, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig) -> crate::material::BackdropInstallation {
+    use crate::material::BackdropInstallation::*;
+    let Some(rect) = rect else {
+        return if !host.exists() { Absent } else if host.remove() { Removed } else { Unavailable };
+    };
+    if !config.is_valid() || !radius.is_finite() || radius < 0. || rect.iter().any(|v| !v.is_finite()) || rect[2] <= 0. || rect[3] <= 0. {
+        return InvalidRequest;
+    }
+    if !host.exists() && !host.install() { return Unavailable; }
+    if !host.exists() { return Unavailable; }
+    if host.update(rect, radius, config) { Installed } else {
+        host.remove();
+        Unavailable
+    }
+}
+
+/// Legacy compile-time hint for existing palette callers. Not runtime effect
+/// installation status, compositor support, or evidence of rendered blur.
 pub const HAS_BACKDROP: bool = cfg!(target_os = "macos");
 
 /// Sends the window's view a move to where the pointer is now, so the
@@ -435,3 +539,97 @@ pub fn set_app_visibility(action: AppVisibility, cx: &gpui::App) {
 
 #[cfg(all(target_os = "macos", not(test)))]
 pub(crate) mod termination;
+
+#[cfg(test)]
+mod backdrop_lifecycle_tests {
+    use super::*;
+    use crate::material::*;
+
+    #[derive(Default)]
+    struct MemoryHost {
+        installed: bool,
+        creates: usize,
+        removes: usize,
+        fail_install: bool,
+        fail_update: bool,
+        applied: Vec<([f64; 4], f64, BackdropConfig)>,
+    }
+    impl BackdropHost for MemoryHost {
+        fn exists(&self) -> bool { self.installed }
+        fn install(&mut self) -> bool {
+            self.creates += 1;
+            self.installed = !self.fail_install;
+            self.installed
+        }
+        fn update(&mut self, rect: [f64; 4], radius: f64, config: BackdropConfig) -> bool {
+            self.applied.push((rect, radius, config));
+            !self.fail_update
+        }
+        fn remove(&mut self) -> bool {
+            self.removes += 1;
+            self.installed = false;
+            true
+        }
+    }
+
+    #[test]
+    fn reusing_a_key_applies_new_parameters_and_clears_explicit_appearance() {
+        let mut host = MemoryHost::default();
+        let rect = [5., 6., 120., 80.];
+        let legacy = Material::Hud.legacy_config();
+        assert_eq!(reconcile_backdrop(&mut host, Some(rect), 12., legacy), BackdropInstallation::Installed);
+        let reference = BackdropConfig { appearance: EffectAppearance::Light,
+            state: EffectState::FollowWindow, blending: EffectBlending::WithinWindow,
+            emphasized: true, effect_alpha: 0.37, material: EffectMaterial::WindowBackground };
+        assert_eq!(reconcile_backdrop(&mut host, Some(rect), 10., reference), BackdropInstallation::Installed);
+        let inherited = BackdropConfig { appearance: EffectAppearance::Inherited,
+            state: EffectState::Inactive, material: EffectMaterial::ReferenceDark, ..reference };
+        assert_eq!(reconcile_backdrop(&mut host, Some(rect), 10., inherited), BackdropInstallation::Installed);
+        assert_eq!(host.creates, 1);
+        assert_eq!(host.applied, vec![(rect, 12., legacy), (rect, 10., reference), (rect, 10., inherited)]);
+        assert_eq!(host.removes, 0);
+    }
+
+    #[test]
+    fn removal_is_idempotent_and_reopening_creates_a_fresh_effect() {
+        let mut host = MemoryHost::default();
+        let config = Material::Menu.legacy_config();
+        assert_eq!(reconcile_backdrop(&mut host, None, 10., config), BackdropInstallation::Absent);
+        let rect = Some([0., 0., 120., 80.]);
+        assert_eq!(reconcile_backdrop(&mut host, rect, 10., config), BackdropInstallation::Installed);
+        assert_eq!(reconcile_backdrop(&mut host, None, 10., config), BackdropInstallation::Removed);
+        assert_eq!(reconcile_backdrop(&mut host, None, 10., config), BackdropInstallation::Absent);
+        assert_eq!((host.creates, host.removes), (1, 1));
+        assert_eq!(reconcile_backdrop(&mut host, rect, 10., config), BackdropInstallation::Installed);
+        assert_eq!(host.creates, 2);
+    }
+
+    #[test]
+    fn failed_install_or_update_never_reports_installed_and_cleans_stale_effect() {
+        let rect = Some([0., 0., 120., 80.]);
+        let config = Material::Menu.legacy_config();
+        let mut host = MemoryHost { fail_install: true, ..MemoryHost::default() };
+        assert_eq!(reconcile_backdrop(&mut host, rect, 10., config), BackdropInstallation::Unavailable);
+        assert!(host.applied.is_empty());
+        host.fail_install = false;
+        assert_eq!(reconcile_backdrop(&mut host, rect, 10., config), BackdropInstallation::Installed);
+        host.fail_update = true;
+        assert_eq!(reconcile_backdrop(&mut host, rect, 10., config), BackdropInstallation::Unavailable);
+        assert!(!host.installed);
+        assert_eq!(host.removes, 1);
+    }
+
+    #[test]
+    fn invalid_request_does_not_replace_the_existing_authored_effect() {
+        let mut host = MemoryHost::default();
+        let config = Material::Hud.legacy_config();
+        let rect = Some([0., 0., 120., 80.]);
+        reconcile_backdrop(&mut host, rect, 10., config);
+        for alpha in [f64::NAN, -0.1, 1.1] {
+            let invalid = BackdropConfig { effect_alpha: alpha, ..config };
+            assert_eq!(reconcile_backdrop(&mut host, rect, 10., invalid), BackdropInstallation::InvalidRequest);
+        }
+        assert!(host.installed);
+        assert_eq!((host.creates, host.removes, host.applied.len()), (1, 0, 1));
+    }
+}

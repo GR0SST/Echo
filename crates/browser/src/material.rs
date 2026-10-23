@@ -38,6 +38,62 @@ impl Backdrop {
     }
 }
 
+/// Bounded native effect parameters, independent of foreground/tint colors.
+/// No automatic appearance-to-material mapping is implied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EffectAppearance {
+    Inherited,
+    Light,
+    Dark,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EffectState {
+    FollowWindow,
+    Active,
+    Inactive,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EffectBlending {
+    BehindWindow,
+    WithinWindow,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EffectMaterial {
+    Hud,
+    Menu,
+    WindowBackground,
+    /// Explicit reference-only looks; deprecated by AppKit. Not theme modes.
+    ReferenceLight,
+    ReferenceDark,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BackdropConfig {
+    pub appearance: EffectAppearance,
+    pub state: EffectState,
+    pub blending: EffectBlending,
+    pub emphasized: bool,
+    /// Alpha of this effect view alone, never a container or website alpha.
+    pub effect_alpha: f64,
+    pub material: EffectMaterial,
+}
+
+impl BackdropConfig {
+    pub(crate) fn is_valid(self) -> bool {
+        self.effect_alpha.is_finite() && (0. ..=1.).contains(&self.effect_alpha)
+    }
+}
+
+/// Installation says nothing about the compositor's actual blur output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackdropInstallation {
+    Installed,
+    Removed,
+    Absent,
+    Unavailable,
+    InvalidRequest,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Surface {
     Sidebar,
