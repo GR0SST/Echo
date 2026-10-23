@@ -1019,15 +1019,30 @@ unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
     }
 }
 
+/// Convert top-left script coordinates using the content bounds in the
+/// window's bottom-left coordinate system, including points outside its edges.
+fn top_left_window_point(bounds: NSRect, x: f64, y: f64) -> NSPoint {
+    NSPoint::new(bounds.origin.x + x, bounds.origin.y + bounds.size.height - y)
+}
+
+unsafe fn root_mouse_point(root: *mut AnyObject, x: f64, y: f64) -> NSPoint {
+    unsafe {
+        let content: *mut AnyObject = msg_send![root, contentView];
+        let bounds: NSRect = msg_send![content, bounds];
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        let bounds: NSRect = msg_send![content, convertRect: bounds, toView: nil];
+        top_left_window_point(bounds, x, y)
+    }
+}
+
 /// Script coordinates are relative to the browser, but real pointer events
 /// belong to the child window under that point (Command Bar, sidebar, Find).
 /// Restrict hit-testing to this browser's descendants, ignoring passive toasts.
 unsafe fn mouse_target(view: *mut AnyObject, x: f64, y: f64) -> (*mut AnyObject, NSPoint) {
     unsafe {
         let root = window_of(view);
-        let content: *mut AnyObject = msg_send![root, contentView];
-        let bounds: NSRect = msg_send![content, bounds];
-        let local = NSPoint::new(x, bounds.size.height - y);
+        if root.is_null() { return (root, NSPoint::new(0.0, 0.0)); }
+        let local = root_mouse_point(root, x, y);
         let screen: NSPoint = msg_send![root, convertPointToScreen: local];
         let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
         let ordered: *mut AnyObject = msg_send![app, orderedWindows];
@@ -1059,12 +1074,22 @@ unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64), hold
     const DRAGGED: usize = 6;
     const STEPS: usize = 10;
     unsafe {
-        let window = window_of(view);
+        // Resolve capture once: crossing CEF or another overlay must not
+        // change the destination window of dragged/up events.
+        let (window, start) = mouse_target(view, from.0, from.1);
+        if window.is_null() {
+            eprintln!("[automation] skipped drag: no native start window");
+            return;
+        }
         let number: isize = msg_send![window, windowNumber];
-        let content: *mut AnyObject = msg_send![window, contentView];
-        let bounds: NSRect = msg_send![content, bounds];
-        let height = bounds.size.height;
-        let at = move |t: f64| (from.0 + (to.0 - from.0) * t, height - (from.1 + (to.1 - from.1) * t));
+        let root = window_of(view);
+        let end = root_mouse_point(root, to.0, to.1);
+        let screen: NSPoint = msg_send![root, convertPointToScreen: end];
+        let end: NSPoint = msg_send![window, convertPointFromScreen: screen];
+        // Finish native conversion before posting down (which can begin
+        // AppKit tracking). Only scalars cross into the background thread.
+        let (from, to) = ((start.x, start.y), (end.x, end.y));
+        let at = move |t: f64| (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
         post_mouse_button(MOUSE_DOWN, at(0.0), number);
         std::thread::spawn(move || {
             for i in 1..=STEPS {
@@ -1196,6 +1221,31 @@ unsafe fn write_png(image: *mut c_void, path: &str) -> Result<(), String> {
         CFRelease(url);
         CGImageRelease(image);
         if ok { Ok(()) } else { Err("could not write PNG".into()) }
+    }
+}
+
+#[cfg(test)]
+mod mouse_coordinate_tests {
+    use super::*;
+    use objc2_foundation::NSSize;
+
+    #[test]
+    fn top_left_points_include_the_actual_content_origin_and_invert_y() {
+        let bounds = NSRect::new(NSPoint::new(12.5, 23.0), NSSize::new(800.0, 600.0));
+        let start = top_left_window_point(bounds, 40.0, 75.5);
+        let end = top_left_window_point(bounds, 240.0, 175.5);
+        assert_eq!((start.x, start.y), (52.5, 547.5));
+        assert_eq!((end.x, end.y), (252.5, 447.5));
+        assert_eq!((end.x - start.x, end.y - start.y), (200.0, -100.0));
+    }
+
+    #[test]
+    fn window_edge_drags_keep_coordinates_outside_content_bounds() {
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(800.0, 600.0));
+        let edge = top_left_window_point(bounds, 800.0, 600.0);
+        let outside = top_left_window_point(bounds, 825.0, -20.0);
+        assert_eq!((edge.x, edge.y), (800.0, 0.0));
+        assert_eq!((outside.x, outside.y), (825.0, 620.0));
     }
 }
 
