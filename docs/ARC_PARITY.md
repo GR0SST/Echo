@@ -165,6 +165,9 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 ## 2. Sidebar
 
+Folder storage follows Arc's [Folders guide](https://resources.arc.net/hc/en-us/articles/19228419623447-Folders-Stash-Similar-Tabs-Together):
+folder pages are Pinned and do not auto-archive.
+
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
 | Vertical sidebar with tabs | — | done | CEF site favicons are cached for unloaded/restored tabs, with letter fallback. Width can't be changed (?) |
@@ -178,7 +181,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
 | "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | done | Click Clear above Today; preserves Pinned and other Spaces |
 | "Tidy Tabs": AI grouping of Today by topic | — | missing | Arc Max feature, can wait |
-| Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | missing | — |
+| Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | partial | Core has an ordered nested Pinned tree, collapse/rename, moving pages or complete Split Views into folders, moving subtrees across Spaces, and cycle-safe session repair without losing pages. GPUI folder controls, drag/drop, previews, Turn into Space and multi-selection remain missing |
 | Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | missing | — |
 | Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | missing | — |
 | Haptic feedback when reordering tabs | — | missing | Option in Advanced |

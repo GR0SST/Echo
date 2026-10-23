@@ -157,6 +157,8 @@ impl Browser {
         if anchor == other || self.related_tabs(anchor).contains(&other) { return Err(SplitError::SameItem); }
         if self.split_for(other).is_some() { return Err(SplitError::AlreadyGrouped); }
         if self.split_for(anchor).is_some_and(|split| split.panes.len() >= MAX_SPLIT_PANES) { return Err(SplitError::LimitReached); }
+        self.repair_folders();
+        self.forget_pinned_item(other);
         let other_tab = self.take_tab(other, other_scope).ok_or(SplitError::UnknownTab)?;
         self.place_tab(scope, other_tab);
         let mut split = self.take_split(anchor).map(|(_, split)| split).unwrap_or_else(|| SplitView {
@@ -173,6 +175,7 @@ impl Browser {
         self.put_split(scope, split);
         if let Scope::Space(index, _) = scope { self.active_space = index; }
         self.activate_tab(other, now);
+        self.repair_folders();
         Ok(id)
     }
 
@@ -185,6 +188,7 @@ impl Browser {
     pub fn duplicate_item(&mut self, tab: TabId, now: SystemTime) -> Option<TabId> {
         let scope = self.tab_scope(tab)?;
         if scope == Scope::Favorites && self.favorite_count() >= crate::favorites::MAX_FAVORITES { return None; }
+        let source_item = self.pinned_item(tab);
         let source = self.split_for(tab).cloned();
         let ids = self.related_tabs(tab);
         let originals: Vec<_> = ids.iter().map(|id| self.all_tabs().find(|tab| tab.id == *id).cloned()).collect::<Option<_>>()?;
@@ -214,6 +218,7 @@ impl Browser {
             if section == Section::Pinned { self.spaces[index].pinned_collapsed = false; }
         }
         self.activate_tab(active, now);
+        if matches!(scope, Scope::Space(_, Section::Pinned)) { self.insert_pinned_copy(source_item, self.pinned_item(active)); }
         Some(active)
     }
 
@@ -271,6 +276,7 @@ impl Browser {
         if scope == Scope::Favorites { self.unfavorite_split(tab); return; }
         let Scope::Space(index, section) = scope else { return; };
         let active = self.spaces[index].active_tab;
+        self.forget_pinned_item(tab);
         let Some((_, split)) = self.take_split(tab) else { return; };
         let target = Scope::Space(index, if section == Section::Pinned { Section::Today } else { Section::Pinned });
         let pages: Vec<_> = split.panes.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
@@ -278,6 +284,7 @@ impl Browser {
         self.arrange_split_tabs(target, &split);
         self.put_split(target, split);
         self.spaces[index].active_tab = active;
+        self.repair_folders();
     }
 
     pub(crate) fn move_split(&mut self, tab: TabId, destination: crate::SpaceId, section: Section) -> bool {
@@ -285,22 +292,26 @@ impl Browser {
         let Some(scope) = self.tab_scope(tab) else { return false; };
         let target = Scope::Space(index, section);
         if scope == target { return false; }
+        self.forget_pinned_item(tab);
         let Some((_, split)) = self.take_split(tab) else { return false; };
         let pages: Vec<_> = split.panes.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
         for page in pages { self.place_tab(target, page); }
         self.arrange_split_tabs(target, &split);
         self.put_split(target, split);
+        self.repair_folders();
         true
     }
 
     pub(crate) fn favorite_split(&mut self, tab: TabId) -> bool {
         if self.is_favorite(tab) || self.favorite_count() >= crate::favorites::MAX_FAVORITES { return false; }
+        self.forget_pinned_item(tab);
         let Some((scope, split)) = self.take_split(tab) else { return false; };
         let pages: Vec<_> = split.panes.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
         for page in pages { self.place_tab(Scope::Favorites, page); }
         self.arrange_split_tabs(Scope::Favorites, &split);
         self.space_mut().active_tab = Some(split.active);
         self.put_split(Scope::Favorites, split);
+        self.repair_folders();
         true
     }
 
@@ -318,16 +329,25 @@ impl Browser {
 
     /// Breaking apart a Favorite must not overflow the profile's dock limit.
     pub fn separate_split(&mut self, tab: TabId) -> bool {
-        let Some(split) = self.split_for(tab) else { return false; };
+        let Some(split) = self.split_for(tab).cloned() else { return false; };
         if self.is_favorite(tab) && self.favorite_count() + split.panes.len() - 1 > crate::favorites::MAX_FAVORITES { return false; }
-        self.take_split(tab).is_some()
+        self.take_split(tab);
+        self.replace_pinned_item(crate::folders::PinnedItem::Split(split.id), &split.panes.iter().copied().map(crate::folders::PinnedItem::Tab).collect::<Vec<_>>());
+        self.repair_folders();
+        true
     }
 
     pub fn separate_split_pane(&mut self, tab: TabId) -> bool {
         if self.is_favorite(tab) && self.favorite_count() >= crate::favorites::MAX_FAVORITES { return false; }
         let Some((scope, mut split)) = self.take_split(tab) else { return false; };
+        let original = split.clone();
         remove_pane(&mut split, tab);
+        let replacement = if split.panes.len() == 1 { original.panes.iter().copied().map(crate::folders::PinnedItem::Tab).collect() }
+            else if original.panes.first() == Some(&tab) { vec![crate::folders::PinnedItem::Tab(tab), crate::folders::PinnedItem::Split(split.id)] }
+            else { vec![crate::folders::PinnedItem::Split(split.id), crate::folders::PinnedItem::Tab(tab)] };
         if split.panes.len() > 1 { self.put_split(scope, split); }
+        self.replace_pinned_item(crate::folders::PinnedItem::Split(original.id), &replacement);
+        self.repair_folders();
         true
     }
 
@@ -342,6 +362,8 @@ impl Browser {
         self.archive.push(ArchivedTab { tab: page, space, archived_at: now, reason: ArchiveReason::Manual, split: None });
         for index in selected { self.spaces[index].active_tab = Some(split.active); }
         if split.panes.len() > 1 { self.put_split(scope, split); }
+        else { self.replace_pinned_item(crate::folders::PinnedItem::Split(split.id), &[crate::folders::PinnedItem::Tab(split.panes[0])]); }
+        self.repair_folders();
         true
     }
 
@@ -388,6 +410,7 @@ impl Browser {
         self.spaces[index].active_tab = Some(saved.view.active);
         self.put_split(target, saved.view);
         self.repair_splits();
+        self.repair_folders();
         anchor
     }
 

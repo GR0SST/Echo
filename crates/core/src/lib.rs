@@ -15,6 +15,7 @@ pub mod splits;
 pub mod bulk_archive;
 pub mod preferences;
 pub mod icons;
+pub mod folders;
 
 fn default_enabled() -> bool { true }
 pub mod session;
@@ -86,6 +87,10 @@ pub struct Space {
     #[serde(default)]
     pub custom_icon: Option<String>,
     pub pinned: Vec<Tab>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_items: Vec<folders::PinnedItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<folders::Folder>,
     #[serde(default)]
     pub pinned_collapsed: bool,
     pub today: Vec<Tab>,
@@ -208,8 +213,9 @@ impl Browser {
             .max()
             .unwrap_or(0);
         self.next_id = self.next_id.max(max_id + 1);
-        self.next_id = self.next_id.max(self.split_max_id() + 1);
+        self.next_id = self.next_id.max(self.split_max_id() + 1).max(self.folder_max_id().saturating_add(1));
         self.repair_splits();
+        self.repair_folders();
     }
 
     fn next_id(&mut self) -> u64 {
@@ -241,6 +247,8 @@ impl Browser {
             show_header: true,
             custom_icon: None,
             pinned: Vec::new(),
+            pinned_items: Vec::new(),
+            folders: Vec::new(),
             pinned_collapsed: false,
             today: Vec::new(),
             active_tab: None,
@@ -443,6 +451,7 @@ impl Browser {
             self.unfavorite_tab(id);
             return;
         }
+        self.forget_pinned_item(id);
         let space = self.space_mut();
         match space.find(id) {
             Some((Section::Pinned, i)) => {
@@ -459,6 +468,7 @@ impl Browser {
             }
             None => {}
         }
+        self.repair_folders();
     }
 
     /// Moves an existing tab without cloning it. Source focus moves to a neighbor;
@@ -478,10 +488,12 @@ impl Browser {
                     self.spaces[target].today.insert(0, tab);
                 }
             }
+            self.repair_folders();
             return true;
         }
         let Some((source, old_section, index)) = self.spaces.iter().enumerate().find_map(|(index, space)| space.find(id).map(|(section, tab)| (index, section, tab))) else { return false; };
         if source == target && old_section == section { return false; }
+        self.forget_pinned_item(id);
         let source_space = &mut self.spaces[source];
         let mut tab = source_space.section_mut(old_section).remove(index);
         if source_space.active_tab == Some(id) { source_space.active_tab = neighbor(source_space, old_section, index); }
@@ -500,6 +512,7 @@ impl Browser {
                 self.spaces[target].today.insert(0, tab);
             }
         }
+        self.repair_folders();
         true
     }
 

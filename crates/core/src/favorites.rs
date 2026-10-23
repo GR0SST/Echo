@@ -16,6 +16,7 @@ impl Browser {
         let Some((space, section, index)) = self.spaces.iter().enumerate().find_map(|(i, space)| {
             space.find(id).map(|(section, index)| (i, section, index))
         }) else { return false; };
+        self.forget_pinned_item(id);
         let source = &mut self.spaces[space];
         let mut tab = source.section_mut(section).remove(index);
         if source.active_tab == Some(id) { source.active_tab = neighbor(source, section, index); }
@@ -25,6 +26,7 @@ impl Browser {
         }
         self.favorites.push(tab);
         self.space_mut().active_tab = Some(id);
+        self.repair_folders();
         true
     }
 
