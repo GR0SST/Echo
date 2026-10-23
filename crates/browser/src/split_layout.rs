@@ -7,6 +7,20 @@ pub(crate) const GAP: f64 = 8.;
 pub(crate) const TITLE_HEIGHT: f64 = 0.;
 pub(crate) const HEADER_HEIGHT: f64 = 32.;
 
+/// Arc's expanded split leaves the other panes visible as 220 px strips.
+/// Small windows fall back to equal shares rather than collapsing a page.
+pub(crate) fn expanded_weights(extent: f64, count: usize, active: usize) -> Vec<f32> {
+    if count == 0 || active >= count { return Vec::new(); }
+    let available = (extent - GAP * count.saturating_sub(1) as f64).max(0.);
+    if !available.is_finite() || available <= 220. * count as f64 {
+        return vec![1. / count as f32; count];
+    }
+    let strip = (220. / available) as f32;
+    let mut weights = vec![strip; count];
+    weights[active] = 1. - strip * (count - 1) as f32;
+    weights
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PaneBounds {
     pub frame: Bounds,

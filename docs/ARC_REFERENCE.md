@@ -59,6 +59,27 @@ Remaining pixel and menu-state differences are tracked as partial in
 `ARC_PARITY.md`; this record does not claim that every menu or the complete
 browser now matches Arc visually.
 
+### Expand Current Split — 2026-10-23
+
+Inspected View → Expand Current Split in a separate Blank Window in the
+installed Arc. The active pane grows while the other pane remains visible
+as an approximately 220 logical px strip. The reference display uses 3840 ×
+2160 logical pixels at 1x. Repeating the command retains the expanded layout;
+it does not separate the pages or toggle back to equal widths. The menu
+continues to say Expand Current Split. The pane menu itself does not expose
+this action.
+
+Our View menu and Command Bar now resize the existing split in either axis.
+Other panes receive 220 px each, including their headers; windows too small
+for this use equal shares. Existing page views, group identity, pane order
+and focus survive. Session saves retain the new weights. Regression tests
+cover menu and Command Bar activation, both axes, small four-pane windows,
+and a standalone-page no-op. A native CEF run at 1200 × 800 confirmed widths
+of 220/724 px and vertical page heights of 188/524 px below 32 px headers.
+The screenshots were inspected with the window on screen. Expansion
+animation remains a parity follow-up; this implementation changes the
+weights immediately.
+
 ## Space header and Pinned reveal — 2026-10-23
 
 Reference: the user's Arc sidebar screenshot and explicit interaction brief.

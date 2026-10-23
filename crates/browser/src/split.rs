@@ -31,6 +31,32 @@ impl SplitDraft {
 }
 
 impl BrowserWindow {
+    pub(crate) fn expand_current_split(&mut self, cx: &mut Context<Self>) {
+        if self.split_draft.is_some() { return; }
+        let Some(split) = self.browser.active_split() else { return; };
+        let split_id = split.id;
+        let pane = split.active;
+        let main = self.main_window;
+        let browser = cx.entity().downgrade();
+        // Command Bar actions may run in a child window. Read the main
+        // viewport after its event handler has released the window borrow.
+        cx.defer(move |cx| {
+            let Ok(size) = main.update(cx, |_, window, _| window.viewport_size()) else { return; };
+            let _ = browser.update(cx, |this, cx| {
+                let Some(split) = this.browser.active_split().filter(|split| split.id == split_id && split.active == pane) else { return; };
+                let index = split.panes.iter().position(|id| *id == pane).unwrap();
+                let extent = if split.axis == Axis::Horizontal {
+                    f64::from(f32::from(size.width)) - f64::from(crate::window::SIDEBAR_WIDTH * this.sidebar_amount()
+                        + crate::pages::CONTENT_INSET * (2. - this.sidebar_amount()))
+                } else { f64::from(f32::from(size.height)) - f64::from(2. * crate::pages::CONTENT_INSET) };
+                let weights = crate::split_layout::expanded_weights(extent, split.panes.len(), index);
+                this.browser.set_split_weights(pane, &weights);
+                if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); }
+                cx.notify();
+            });
+        });
+    }
+
     pub(crate) fn duplicate_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         self.close_command_bar(cx);
         self.close_tab_menu(cx);
@@ -127,6 +153,7 @@ impl BrowserWindow {
             (Command::SplitAxis(Axis::Vertical), "Convert to Vertical Split", "convert to vertical split|vertical split", horizontal),
             (Command::SeparateSplit, "Separate All Tabs", "separate all tabs|separate split view", split.is_some()),
             (Command::SeparatePane, "Separate Tab", "separate tab|separate pane", split.is_some()),
+            (Command::ExpandCurrentSplit, "Expand Current Split", "expand current split|expand pane", split.is_some() && self.split_draft.is_none()),
             (Command::MovePane(-1), if horizontal { "Move Pane Left" } else { "Move Pane Up" }, if horizontal { "move pane left" } else { "move pane up" }, split.is_some()),
             (Command::MovePane(1), if horizontal { "Move Pane Right" } else { "Move Pane Down" }, if horizontal { "move pane right" } else { "move pane down" }, split.is_some()),
             (Command::CyclePane(1), "Focus Next Pane", "focus next pane|next pane", split.is_some()),

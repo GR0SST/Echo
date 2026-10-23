@@ -99,6 +99,7 @@ pub(crate) fn build() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Add Split View…", window::AddSplit),
                 MenuItem::action("Close Pane", window::CloseSplitPane),
+                MenuItem::action("Expand Current Split", window::ExpandCurrentSplit),
                 MenuItem::separator(),
                 MenuItem::action("Show/Hide Sidebar", window::ToggleSidebar),
                 MenuItem::action(

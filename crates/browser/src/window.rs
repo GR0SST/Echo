@@ -22,7 +22,7 @@ use gpui::{
 use crate::pages::{Pages, WebEngine, CONTENT_CORNER_RADIUS, CONTENT_INSET, WINDOW_CORNER_RADIUS};
 use crate::text_input::{self, TextInput};
 
-const SIDEBAR_WIDTH: f32 = 240.0;
+pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
 /// Sidebar metrics measured from the reference at 1x.
 const SIDEBAR_INSET: f32 = 7.0;
 const SIDEBAR_TOOLBAR_HEIGHT: f32 = 47.0;
@@ -86,6 +86,7 @@ actions!(
         CloseTab,
         AddSplit,
         CloseSplitPane,
+        ExpandCurrentSplit,
         NextTab,
         PreviousTab,
         GoBack,
@@ -345,6 +346,7 @@ pub enum Command {
     SplitAxis(browser_core::splits::Axis),
     SeparateSplit,
     SeparatePane,
+    ExpandCurrentSplit,
     FocusPane(usize),
     CyclePane(isize),
     MovePane(isize),
@@ -1266,6 +1268,7 @@ impl BrowserWindow {
             Command::SplitAxis(axis) => { if let Some(id) = self.browser.space().active_tab { self.browser.set_split_axis(id, axis); } }
             Command::SeparateSplit => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
             Command::SeparatePane => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split_pane(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
+            Command::ExpandCurrentSplit => self.expand_current_split(cx),
             Command::FocusPane(index) => { self.browser.focus_split_pane(index, SystemTime::now()); }
             Command::CyclePane(delta) => { self.browser.cycle_split_pane(delta, SystemTime::now()); }
             Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.browser.move_split_pane(id, delta); } }
@@ -1411,6 +1414,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
+            .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
@@ -1556,7 +1560,7 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    fn sidebar_amount(&self) -> f32 {
+    pub(crate) fn sidebar_amount(&self) -> f32 {
         self.sidebar_reveal.as_ref().filter(|reveal| reveal.collapsed == !self.sidebar_visible)
             .map_or(if self.sidebar_visible { 1. } else { 0. }, |reveal| reveal.amount)
     }
@@ -2855,6 +2859,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
+            .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))

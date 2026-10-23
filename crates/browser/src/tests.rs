@@ -2366,6 +2366,69 @@ fn split_commands_move_focus_order_and_separate_without_navigation(cx: &mut Test
 }
 
 #[gpui::test]
+fn expanding_a_split_from_the_menu_and_command_bar_keeps_panes_loaded(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    let original = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
+    fake.take_calls();
+    dispatch_menu(cx, "View", "Expand Current Split");
+    view.read_with(cx, |w, _| {
+        let split = w.browser.active_split().unwrap();
+        let active = split.panes.iter().position(|id| *id == split.active).unwrap();
+        assert!(split.weights.iter().enumerate().all(|(index, weight)| index == active || *weight < split.weights[active]));
+    });
+    for vertical in [false, true] {
+        if vertical { run_named_command(&view, cx, "convert to vertical split"); }
+        click(cx, "pane-header-2");
+        run_named_command(&view, cx, "expand current split");
+        let surfaces = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+        let active = surfaces.iter().find(|(id, _)| id.get() == 2).unwrap().1;
+        for (_, bounds) in surfaces.iter().filter(|(id, _)| id.get() != 2) {
+            let (large, small) = if vertical { (active.height, bounds.height) } else { (active.width, bounds.width) };
+            assert!(large >= small, "active pane should expand: {surfaces:?}");
+            assert!((small - if vertical { 220. - crate::split_layout::HEADER_HEIGHT } else { 220. }).abs() < 1.);
+        }
+        view.read_with(cx, |w, _| {
+            let split = w.browser.active_split().unwrap();
+            assert_eq!(split.id, original.id);
+            assert_eq!(split.panes, original.panes);
+            assert_eq!(split.active.get(), 2);
+            let restored = browser_core::session::from_json(&w.session_json()).unwrap();
+            assert_eq!(restored.active_split().unwrap().weights, split.weights);
+        });
+    }
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn expand_current_split_does_nothing_to_a_standalone_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    dispatch_menu(cx, "View", "Expand Current Split");
+    assert_eq!(active_url(&view, cx), original);
+    assert!(fake.take_calls().is_empty());
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("expand current split");
+    assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::Action { command: crate::window::Command::ExpandCurrentSplit, .. }))));
+}
+
+#[gpui::test]
+fn expanding_four_panes_in_a_small_window_keeps_every_page_visible(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 4);
+    cx.simulate_resize(gpui::size(gpui::px(800.), gpui::px(480.)));
+    cx.run_until_parked();
+    fake.take_calls();
+    dispatch_menu(cx, "View", "Expand Current Split");
+    let surfaces = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+    assert_eq!(surfaces.len(), 4);
+    for (_, bounds) in &surfaces {
+        assert!(bounds.width > 1. && bounds.height > 1.);
+        assert!((bounds.width - surfaces[0].1.width).abs() < 1.);
+    }
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Visible(_, false))));
+}
+
+#[gpui::test]
 fn command_search_and_archive_search_preserve_group_name_and_match_secondary_urls(cx: &mut TestAppContext) {
     let (view, cx, _) = open_split_pages(cx, 2);
     run_named_command(&view, cx, "rename tab");

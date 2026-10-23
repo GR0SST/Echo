@@ -97,7 +97,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Clear Cookies and Refresh / Clear Cache and Refresh | — | missing | — |
 | Add Split View | ⌃⇧= | partial | Picker, direction and four-pane limit implemented; fresh native visual review remains |
 | Close this Split Pane | ⌃⇧- | done | Menu, Command Bar, pane header and engine shortcut |
-| Separate Page from Split View / Expand Current Split | — | partial | Separate Page implemented; Expand Current Split remains |
+| Separate Page from Split View / Expand Current Split | — | partial | Both actions are implemented. Expand Current Split is available from View and the Command Bar, preserves the group and loaded pages, and leaves other panes as 220 px strips. Expansion animation fidelity remains |
 | Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | done | Chromium zoom steps from 25% to 500%, reset to 100%; also in the Command Bar |
 | Cast | — | missing | — |
 | Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
@@ -320,7 +320,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 | Split from a Pinned tab or Favorite | — | done | Creates independent copies in Today and retains the original pin/Favorite, including its URL, placement and identity. Selecting an existing protected tab for a pane also copies it |
 | Create by dragging a tab to the middle of the window | drag | missing | — |
 | Horizontal/vertical layout, Move Left/Right/Up/Down | — | done | Command Bar actions preserve loaded page views |
-| Separate Page / Separate All Tabs / Expand Current Split | — | partial | Separate Page and Separate All Tabs are implemented; expanding a pane is missing |
+| Separate Page / Separate All Tabs / Expand Current Split | — | partial | All three actions work. Expand Current Split preserves pane identities and focus in both axes, keeps other panes visible, fits small windows and persists sizes. GPUI and native CEF checks passed; expansion animation fidelity remains |
 | Focus pane N / next / previous | (?) | done | Command Bar actions and clickable GPUI pane headers |
 | Split View title ("Split view title text field placeholder") | — | done | Shared sidebar item title; rename/reset and archive search preserve it |
 | Share Split View (link) | — | missing | Arc service |
