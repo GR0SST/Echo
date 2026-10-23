@@ -51,7 +51,7 @@ for y in range(N):
 icon = Image.new('RGBA', (N, N), (0, 0, 0, 0))
 icon.paste(bg, (0, 0), mask)
 # Soft glow under the mark, then the mark itself.
-size = int((N - 2 * inset) * 0.76)
+size = int((N - 2 * inset) * 0.84)
 m = sq.resize((size, size), Image.LANCZOS)
 glow = Image.new('RGBA', (N, N), (0, 0, 0, 0))
 off = ((N - size) // 2, (N - size) // 2)
