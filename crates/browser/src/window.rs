@@ -291,7 +291,8 @@ pub enum Suggestion {
     SaveSpace { name: String },
     SaveTabName { name: String },
     ArchiveAfter { label: String, seconds: Option<u64> },
-    ArchivedTab { id: TabId, title: String, detail: String },
+    ArchivedTab { id: TabId, title: String, detail: String, date: String },
+    MoreArchive { remaining: usize },
     ConfirmClearArchive,
 }
 
@@ -369,6 +370,9 @@ pub struct CommandBar {
     pub input: Entity<TextInput>,
     pub target: Target,
     pub selected: usize,
+    pub(crate) archive_reason: Option<browser_core::ArchiveReason>,
+    pub(crate) archive_limit: usize,
+    pub(crate) rows_scroll: gpui::ScrollHandle,
     /// The bar is drawn in its own transparent window above the browser
     /// window, since pages are native views that cover anything drawn below.
     pub overlay: Option<WindowHandle<Overlay>>,
@@ -408,12 +412,12 @@ impl Overlay {
 }
 
 impl Render for Overlay {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = self.kind;
         self.browser
             .update(cx, |browser, cx| {
                 let content = match kind {
-                    OverlayKind::CommandBar => browser.render_command_bar_overlay(cx),
+                    OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast => browser.render_toast(),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
@@ -692,6 +696,8 @@ impl BrowserWindow {
         let changed = cx.subscribe(&input, |this, _, _: &text_input::Changed, cx| {
             if let Some(bar) = &mut this.command_bar {
                 bar.selected = 0;
+                bar.rows_scroll.set_offset(point(px(0.), px(0.)));
+                bar.archive_limit = 8;
             }
             cx.notify();
         });
@@ -699,6 +705,9 @@ impl BrowserWindow {
             input: input.clone(),
             target,
             selected: 0,
+            archive_reason: None,
+            archive_limit: 8,
+            rows_scroll: gpui::ScrollHandle::new(),
             overlay: None,
             _changed: changed,
         });
@@ -960,6 +969,7 @@ impl BrowserWindow {
         if let Some(bar) = &mut self.command_bar {
             if count > 0 {
                 bar.selected = (bar.selected as isize + delta).rem_euclid(count) as usize;
+                bar.rows_scroll.scroll_to_item(bar.selected);
                 cx.notify();
             }
         }
@@ -1034,6 +1044,11 @@ impl BrowserWindow {
                     self.settle_pager(cx);
                     self.show_toast(format!("Tab restored to {}", self.browser.space().name), cx);
                 }
+            }
+            Suggestion::MoreArchive { .. } => {
+                if let Some(bar) = &mut self.command_bar { bar.archive_limit = bar.archive_limit.saturating_add(8); }
+                cx.notify();
+                return;
             }
             Suggestion::ConfirmClearArchive => {
                 self.browser.archive.clear();
@@ -2001,21 +2016,29 @@ impl BrowserWindow {
             .into_any_element()
     }
 
-    fn render_command_bar_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_command_bar_overlay(&self, height: f32, cx: &mut Context<Self>) -> AnyElement {
         match &self.command_bar {
-            Some(bar) => self.render_command_bar(bar, cx).into_any_element(),
+            Some(bar) => self.render_command_bar(bar, height, cx).into_any_element(),
             None => div().into_any_element(),
         }
     }
 
-    fn render_command_bar(&self, bar: &CommandBar, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_command_bar(&self, bar: &CommandBar, height: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent();
+        let top = 140.0_f32.min(height * 0.2);
+        let archive = matches!(bar.target, Target::Archive(_));
+        let rows_height = (height - top - if archive { 150. } else { 90. } - 16.).max(40.);
+        let mut previous_date = None;
         let rows: Vec<_> = self
             .suggestions(cx)
             .into_iter()
             .enumerate()
             .map(|(index, suggestion)| {
                 let selected = index == bar.selected;
+                let date = match &suggestion {
+                    Suggestion::ArchivedTab { date, .. } if previous_date.as_ref() != Some(date) => { previous_date = Some(date.clone()); Some(date.clone()) }
+                    _ => None,
+                };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
                 let (icon, label, detail): (&str, String, String) = match suggestion {
@@ -2033,15 +2056,16 @@ impl BrowserWindow {
                     Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
                     Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
                     Suggestion::ArchivedTab { title, detail, .. } => ("↩", title, detail),
+                    Suggestion::MoreArchive { remaining } => ("↓", "Show More".into(), format!("{remaining} more archived {}", if remaining == 1 { "tab" } else { "tabs" })),
                     Suggestion::ConfirmClearArchive => ("×", "Clear Archive".into(), "Permanently delete".into()),
                 };
-                div()
+                let row = div()
                     .id(("suggestion", index))
                     .debug_selector(move || format!("suggestion-{index}"))
                     .flex()
                     .items_center()
                     .gap_3()
-                    .h(px(40.0))
+                    .h(px(40.0)).flex_none()
                     .px_3()
                     .mx_2()
                     .rounded_lg()
@@ -2088,8 +2112,10 @@ impl BrowserWindow {
                                 bar.selected = bar.selected.min(count.saturating_sub(1));
                             }
                             cx.notify();
-                        })).child("×")))
-                    .into_any_element()
+                        })).child("×")));
+                div().flex().flex_col().flex_none()
+                    .children(date.map(|date| div().debug_selector(move || format!("archive-date-{index}")).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 0., 0.5)).child(date)))
+                    .child(row).into_any_element()
             })
             .collect();
         let has_rows = !rows.is_empty();
@@ -2104,7 +2130,7 @@ impl BrowserWindow {
             .flex()
             .flex_col()
             .items_center()
-            .pt(px(140.0))
+            .pt(px(top))
             .bg(hsla(0.0, 0.0, 0.0, 0.15))
             .on_click(cx.listener(|this, _, _, cx| this.close_command_bar(cx)))
             .child(
@@ -2154,7 +2180,8 @@ impl BrowserWindow {
                     .when(has_rows, |this| {
                         this.child(div().h(px(1.0)).mb_2().bg(hsla(0.0, 0.0, 0.0, 0.08)))
                             .text_sm()
-                            .children(rows)
+                            .child(div().id("command-suggestions").debug_selector(|| "command-suggestions".into())
+                                .flex().flex_col().max_h(px(rows_height)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
                     }),
             )
     }

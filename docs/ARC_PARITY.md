@@ -285,7 +285,7 @@ in code, so some were reconstructed from translator comments (?).
 | Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
 | Separate "Archive Little Arcs after:" interval | missing | — |
 | ⌘W and × send the tab to the archive | done | — |
-| Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | partial | Command Bar archive browser searches title/URL, filters all/current Space, shows reason and relative age (8 results at a time). Library layout, calendar groups, reason filters and Little Arc remain missing |
+| Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | partial | Command Bar archive browser searches titles/URLs (including Split View panes), combines Space and reason filters, groups by local calendar day (Today/Yesterday/date), and loads older entries with Show More. Keyboard navigation and a bounded scrolling list are implemented. Dedicated Library layout and Little Arc remain missing |
 | Restore ("Tab restored to …. Click to view."), Delete, Clear Archive | done | Restore a selected entry and activate its original Space with a toast; delete an entry with ×; clear all with confirmation |
 | "Auto archived %d tabs" toast and the "We cleaned up!" banner | missing | — |
 
@@ -521,9 +521,9 @@ rows without a status aren't counted.
    Travel) for remaining menu items, history, search suggestions and Site
    Search with Tab. Basic actions, Space switching and tabs from all Spaces
    are implemented.
-2. **Archive.** Search, Space filters, restore/delete/clear and interval
-   selection work in the Command Bar. Needs the dedicated Library page,
-   calendar groups, reason filters and Little Arc entries.
+2. **Archive.** Search, Space/reason filters, local date groups, older entries,
+   restore/delete/clear and interval selection work in the Command Bar.
+   Needs the dedicated Library page and Little Arc entries.
 3. **Sessions.** Back/forward history of tabs isn't saved.
 4. **Favorites, folders, drag and drop and sidebar context menus.**
 5. **Split View** (⌃⇧=, dragging to the middle).

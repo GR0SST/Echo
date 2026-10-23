@@ -2662,3 +2662,80 @@ fn reveal_tab_from_a_floating_sidebar_closes_the_overlay_and_restores_the_docked
     assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn archive_reason_filters_preserve_the_query_and_combine_with_space_filters(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-w cmd-w");
+    view.update(cx, |w, _| { w.browser.archive[0].reason = browser_core::ArchiveReason::Automatic; });
+    open_archive(&view, cx);
+    click(&mut bar(&view, cx), "archive-reason-automatic");
+    assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).as_slice(), [Suggestion::ArchivedTab { title, .. }] if title == "Chromium")));
+    bar(&view, cx).simulate_input("chromium");
+    click(&mut bar(&view, cx), "archive-reason-manual");
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("chromium"));
+    click(&mut bar(&view, cx), "archive-reason-all");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 1);
+    bar(&view, cx).simulate_keystrokes("cmd-a backspace");
+    click(&mut bar(&view, cx), "archive-reason-manual");
+    click(&mut bar(&view, cx), "archive-this-space");
+    assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).as_slice(), [Suggestion::ArchivedTab { title, .. }] if title == "GPUI")));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.gpui.rs"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+}
+
+#[gpui::test]
+fn archive_date_headings_do_not_change_keyboard_restore_indices(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-w cmd-w");
+    view.update(cx, |w, _| {
+        use chrono::{Local, TimeZone};
+        let yesterday = Local::now().date_naive().pred_opt().unwrap().and_hms_opt(12, 0, 0).unwrap();
+        w.browser.archive[0].archived_at = Local.from_local_datetime(&yesterday).single().unwrap().into();
+    });
+    open_archive(&view, cx);
+    let mut overlay = bar(&view, cx);
+    assert!(overlay.debug_bounds("archive-date-0").is_some());
+    assert!(overlay.debug_bounds("archive-date-1").is_some());
+    view.read_with(cx, |w, cx| {
+        let rows = w.suggestions(cx);
+        assert!(matches!(&rows[0], Suggestion::ArchivedTab { date, .. } if date == "Today"));
+        assert!(matches!(&rows[1], Suggestion::ArchivedTab { date, .. } if date == "Yesterday"));
+    });
+    overlay.simulate_keystrokes("down enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
+}
+
+#[gpui::test]
+fn archive_show_more_reaches_older_entries_and_scrolls_inside_a_short_window(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, _| {
+        let now = std::time::SystemTime::now();
+        for index in 0..20 {
+            let id = w.browser.new_tab(format!("https://archived{index}.example"), now);
+            w.browser.close_tab(id, now);
+        }
+    });
+    cx.simulate_resize(gpui::size(gpui::px(800.), gpui::px(480.)));
+    open_archive(&view, cx);
+    assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).last(), Some(Suggestion::MoreArchive { remaining: 12 }))));
+    let mut overlay = bar(&view, cx);
+    for _ in 0..8 { overlay.simulate_keystrokes("down"); }
+    overlay.simulate_keystrokes("enter");
+    assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).last(), Some(Suggestion::MoreArchive { remaining: 4 }))));
+    for _ in 0..8 { overlay.simulate_keystrokes("down"); }
+    overlay.simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 20);
+    for _ in 0..3 { overlay.simulate_keystrokes("down"); }
+    overlay.run_until_parked();
+    let last = overlay.debug_bounds("suggestion-19").unwrap();
+    let list = overlay.debug_bounds("command-suggestions").unwrap();
+    assert!(last.origin.y >= list.origin.y && last.bottom() <= list.bottom());
+    let panel = overlay.debug_bounds("command-bar").unwrap();
+    let size = overlay.update(|window, _| window.bounds().size);
+    assert!(panel.bottom() <= size.height);
+    overlay.simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://archived0.example"));
+}
