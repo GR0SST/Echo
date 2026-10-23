@@ -1,6 +1,9 @@
 # Parity with Arc
 
 Comparison with Arc for macOS version 1.169.0 (`/Applications/Arc.app`).
+The inventory baseline remains 1.169.0. On 2026-10-23 the installed app
+updated to 1.170.0 (build 89123); later reference checks record that version
+explicitly. This update does not automatically revalidate earlier observations.
 Our code: `crates/core`, `crates/browser`, `crates/engine` as of this
 document's date.
 

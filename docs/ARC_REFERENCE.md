@@ -654,3 +654,24 @@ Console rather than closing DevTools. These were checked through the native
 accessibility tree. Exact selected-element overlay and repeated inspect-mode
 state still need visual confirmation. User input interrupted reference cleanup;
 the uniquely named temporary Space is tracked for later removal.
+
+
+## Installed reference version and hidden sidebar shortcut (2026-10-23)
+
+The installed Arc `Info.plist` now reports version **1.170.0, build 89123**.
+The parity inventory was assembled from 1.169.0; the previous observations keep
+their original version scope. No automatic behavioral equivalence is assumed.
+
+Static inspection of the current `Base.lproj/MainMenu.nib` distinguishes:
+
+- Hidden View action **Reveal Current Tab**, Control+Space: `focusSidebar:`.
+  The nib permits the shortcut while hidden.
+- Tabs action **Reveal Tab in Sidebar**, no shortcut: `revealCurrentTabInSidebar:`.
+
+The different selectors do not prove equivalent keyboard focus or reveal
+behavior. Echo already implements the second action (expanding ancestors and
+scrolling to the active item/split anchor), but Control+Space must not be wired
+as an alias until native checks establish the first action's behavior, including
+hidden sidebar, page input, Favorites, Split View and empty-window contexts.
+This was a bundle-only audit; no native behavior was observed for the hidden
+action.
