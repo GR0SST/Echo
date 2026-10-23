@@ -6,7 +6,8 @@
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
 //! Commands: `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
-//! `click <x> <y>` or `doubleclick <x> <y>` (logical px from the window's top-left),
+//! `click <x> <y>` or `doubleclick <x> <y>` (logical px from the browser's top-left;
+//! clicks and moves hit its child overlays when present),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
 
@@ -427,11 +428,9 @@ unsafe fn post_key(view: *mut AnyObject, spec: &str) {
 /// tracking loops (window buttons, resizing) then wait for it.
 unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64, hold: Option<Duration>) {
     unsafe {
-        let window = window_of(view);
+        let (window, location) = mouse_target(view, x, y);
         let number: isize = msg_send![window, windowNumber];
-        let content: *mut AnyObject = msg_send![window, contentView];
-        let bounds: NSRect = msg_send![content, bounds];
-        let location = (x, bounds.size.height - y);
+        let location = (location.x, location.y);
         post_mouse_button(MOUSE_DOWN, location, number);
         match hold {
             None => post_mouse_button(MOUSE_UP, location, number),
@@ -448,11 +447,9 @@ unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64, hold: Option<Duration
 unsafe fn post_double_click(view: *mut AnyObject, x: f64, y: f64) {
     unsafe {
         post_click(view, x, y, None);
-        let window = window_of(view);
+        let (window, location) = mouse_target(view, x, y);
         let number: isize = msg_send![window, windowNumber];
-        let content: *mut AnyObject = msg_send![window, contentView];
-        let bounds: NSRect = msg_send![content, bounds];
-        let location = (x, bounds.size.height - y);
+        let location = (location.x, location.y);
         post_mouse_button_count(MOUSE_DOWN, location, number, 2);
         post_mouse_button_count(MOUSE_UP, location, number, 2);
     }
@@ -544,15 +541,14 @@ const MOUSE_MOVED: usize = 5;
 /// A mouse event at window point (x, y), top-left origin.
 unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
     unsafe {
-        let window = window_of(view);
+        let (window, location) = mouse_target(view, x, y);
         let number: isize = msg_send![window, windowNumber];
         let content: *mut AnyObject = msg_send![window, contentView];
-        let bounds: NSRect = msg_send![content, bounds];
         let nil: *mut AnyObject = std::ptr::null_mut();
         let event: *mut AnyObject = msg_send![
             AnyClass::get(c"NSEvent").unwrap(),
             mouseEventWithType: kind,
-            location: NSPoint::new(x, bounds.size.height - y),
+            location: location,
             modifierFlags: 0usize,
             timestamp: 0.0f64,
             windowNumber: number,
@@ -564,8 +560,42 @@ unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
         // Queued mouse moves only reach the first responder (often the page);
         // real ones also reach tracking-area owners like this view.
         if !event.is_null() {
-            let _: () = msg_send![view, mouseMoved: event];
+            let _: () = msg_send![content, mouseMoved: event];
         }
+    }
+}
+
+/// Script coordinates are relative to the browser, but real pointer events
+/// belong to the child window under that point (Command Bar, sidebar, Find).
+/// Restrict hit-testing to this browser's descendants, ignoring passive toasts.
+unsafe fn mouse_target(view: *mut AnyObject, x: f64, y: f64) -> (*mut AnyObject, NSPoint) {
+    unsafe {
+        let root = window_of(view);
+        let content: *mut AnyObject = msg_send![root, contentView];
+        let bounds: NSRect = msg_send![content, bounds];
+        let local = NSPoint::new(x, bounds.size.height - y);
+        let screen: NSPoint = msg_send![root, convertPointToScreen: local];
+        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+        let ordered: *mut AnyObject = msg_send![app, orderedWindows];
+        let count: usize = msg_send![ordered, count];
+        for index in 0..count {
+            let candidate: *mut AnyObject = msg_send![ordered, objectAtIndex: index];
+            let mut parent: *mut AnyObject = msg_send![candidate, parentWindow];
+            while !parent.is_null() && parent != root {
+                parent = msg_send![parent, parentWindow];
+            }
+            if parent != root { continue; }
+            let visible: Bool = msg_send![candidate, isVisible];
+            let ignores: Bool = msg_send![candidate, ignoresMouseEvents];
+            let frame: NSRect = msg_send![candidate, frame];
+            if visible.as_bool() && !ignores.as_bool()
+                && screen.x >= frame.origin.x && screen.x < frame.origin.x + frame.size.width
+                && screen.y >= frame.origin.y && screen.y < frame.origin.y + frame.size.height {
+                let point: NSPoint = msg_send![candidate, convertPointFromScreen: screen];
+                return (candidate, point);
+            }
+        }
+        (root, local)
     }
 }
 
