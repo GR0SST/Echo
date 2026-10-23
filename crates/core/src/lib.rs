@@ -386,6 +386,17 @@ impl Browser {
         false
     }
 
+    /// Resets every pinned page in the current Space, leaving Today untouched.
+    /// The returned pages should be unloaded to reset their navigation state too.
+    pub fn reset_space(&mut self) -> Vec<TabId> {
+        self.space_mut().pinned.iter_mut().filter_map(|tab| {
+            let url = tab.pinned_url.clone()?;
+            tab.title = url.clone();
+            tab.url = url;
+            Some(tab.id)
+        }).collect()
+    }
+
     /// Changes the original pinned URL without navigating the current page.
     pub fn replace_pinned_url(&mut self, id: TabId) -> bool {
         for space in &mut self.spaces {
@@ -727,6 +738,28 @@ mod tests {
         let unpinned = browser.new_tab("https://today", t0());
         assert!(!browser.reset_pinned_tab(unpinned));
         assert!(!browser.replace_pinned_url(unpinned));
+    }
+
+
+    #[test]
+    fn resetting_a_space_preserves_today_focus_and_other_spaces() {
+        let mut browser = Browser::new();
+        let pinned = browser.new_tab("https://pinned", t0());
+        browser.toggle_pin(pinned);
+        browser.navigate(pinned, "https://pinned/elsewhere");
+        let today = browser.new_tab("https://today", t0());
+        browser.add_space("Work", 200.0);
+        browser.switch_space(1);
+        let other = browser.new_tab("https://other", t0());
+        browser.toggle_pin(other);
+        browser.navigate(other, "https://other/elsewhere");
+        browser.switch_space(0);
+        assert_eq!(browser.reset_space(), vec![pinned]);
+        assert_eq!(browser.space().pinned[0].url, "https://pinned");
+        assert_eq!(browser.active_tab().unwrap().id, today);
+        assert_eq!(browser.active_tab().unwrap().url, "https://today");
+        assert_eq!(browser.spaces[1].pinned[0].url, "https://other/elsewhere");
+        assert!(browser.archive.is_empty());
     }
 
 }

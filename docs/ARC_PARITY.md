@@ -4,7 +4,7 @@ Comparison with Arc for macOS version 1.169.0 (`/Applications/Arc.app`).
 Our code: `crates/core`, `crates/browser`, `crates/engine` as of this
 document's date.
 
-**Where the data comes from.** Arc was never launched. Everything comes from
+**Where the data comes from.** Arc was never launched. The initial inventory comes from
 the bundle's files: the main menu in `Base.lproj/MainMenu.nib` (items,
 shortcuts, Command Bar synonyms), the AppleScript dictionary `Arc.sdef`,
 interface strings and translator comments in the binary
@@ -14,6 +14,9 @@ interface strings and translator comments in the binary
 resource bundles. **(?)** marks an item that was inferred indirectly, e.g.
 a shortcut that isn't in the nib and is assigned in code, or a string whose
 exact place in the UI is unknown.
+
+Command Bar behavior is also cross-checked against [Arc's public action
+reference](https://start.arc.net/command-bar-actions).
 
 Easels are left out of the comparison by the owner's decision. Notes (Arc's
 documents) are mentioned once.
@@ -133,7 +136,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Switch to Split View 1–4 / next / previous | (?) | missing | — |
 | Reveal Tab in Sidebar | — | missing | — |
 | Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
-| Reset all tabs in this Space | — | missing | — |
+| Reset all tabs in this Space | — | done | Command Bar → Reset Space returns all Pinned tabs to their original URLs and unloads their pages; Today and other Spaces are preserved |
 | Reset Tab to Original URL (pinned) | hidden | done | Command Bar → Reset Tab to Original URL navigates modified pinned tabs back to their original page |
 
 ### Archive (that's the menu's name)
@@ -495,9 +498,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 47
+- **done**: 48
 - **partial**: 24
-- **missing**: 224
+- **missing**: 223
 
 ### Biggest gaps (by importance for parity)
 

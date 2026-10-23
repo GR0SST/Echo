@@ -1321,3 +1321,35 @@ fn replace_pinned_url_changes_the_page_used_after_closing(cx: &mut TestAppContex
     cx.simulate_keystrokes("cmd-w");
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.url == "https://example.com/replacement" && tab.pinned_url.as_deref() == Some("https://example.com/replacement"))));
 }
+
+#[gpui::test]
+fn reset_space_discards_pinned_pages_and_reopens_the_active_original(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original_id = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("cmd-d cmd-l");
+    bar(&view, cx).simulate_input("https://example.com/elsewhere");
+    bar(&view, cx).simulate_keystrokes("enter");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("reset space");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), original_id);
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(1)));
+    assert!(calls.contains(&Call::Create(2, "https://www.chromium.org".into())));
+    assert_eq!(today_urls(&view, cx).len(), 2);
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+}
+
+#[gpui::test]
+fn exact_command_names_outrank_longer_actions_with_shared_words(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    for (query, expected) in [("pin tab", "Pin Tab"), ("archive tab", "Archive Tab"), ("archive tabs after", "Archive Tabs After…"), ("archive", "View Archive"), ("copy url", "Copy URL"), ("copy url as markdown", "Copy URL as Markdown"), ("reset space", "Reset Space")] {
+        bar(&view, cx).simulate_keystrokes("cmd-a");
+        bar(&view, cx).simulate_input(query);
+        let label = view.read_with(cx, |w, cx| match w.suggestions(cx).first() { Some(Suggestion::Action { label, .. }) => label.clone(), _ => String::new() });
+        assert_eq!(label, expected, "query: {query}");
+    }
+}

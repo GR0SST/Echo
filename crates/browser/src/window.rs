@@ -283,6 +283,7 @@ pub enum Command {
     ViewArchive,
     RequestClearArchive,
     ResetPinnedTab,
+    ResetSpace,
     ReplacePinnedUrl,
     CopyUrl,
     CopyUrlAsMarkdown,
@@ -305,11 +306,18 @@ pub enum Command {
     FocusSpace(SpaceId),
 }
 
-fn matches_command(query: &str, names: &str) -> bool {
-    names.split('|').any(|name| {
-        let name = name.to_lowercase();
-        query.split_whitespace().all(|word| name.split_whitespace().any(|part| part.starts_with(word)))
-    })
+/// Exact command names win over abbreviated prefixes of longer actions.
+fn command_match_score(query: &str, names: &str) -> Option<usize> {
+    let words: Vec<_> = query.split_whitespace().collect();
+    names.split('|').filter_map(|name| {
+        let name = name.trim().trim_end_matches('…').to_lowercase();
+        if name == query { return Some(0); }
+        let parts: Vec<_> = name.split_whitespace().collect();
+        if !words.is_empty() && words.len() <= parts.len()
+            && words.iter().zip(&parts).all(|(word, part)| part.starts_with(word)) {
+            Some(1 + parts.len() - words.len())
+        } else { None }
+    }).min()
 }
 
 pub struct CommandBar {
@@ -718,9 +726,10 @@ impl BrowserWindow {
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::ResetSpace, "Reset Space", "reset space|reset all pinned tabs|reset all tabs in space", self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some())),
                 (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
-                (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs", true),
+                (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
@@ -728,7 +737,7 @@ impl BrowserWindow {
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
-                (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar" } else { "toggle sidebar|show sidebar" }, true),
+                (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar|sidebar" } else { "toggle sidebar|show sidebar|sidebar" }, true),
                 (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some()),
                 (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned.is_empty()),
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
@@ -745,19 +754,22 @@ impl BrowserWindow {
                 (Command::NextTab, "Next Tab", "next tab", active.is_some()),
                 (Command::PreviousTab, "Previous Tab", "previous tab", active.is_some()),
             ];
-            suggestions.extend(commands.into_iter()
-                .filter(|(_, label, names, available)| *available && (matches_command(&query, label) || matches_command(&query, names)))
-                .map(|(command, label, _, _)| Suggestion::Action { command, label: label.into() }));
+            let mut matches: Vec<_> = commands.into_iter().filter_map(|(command, label, names, available)| {
+                if !available { return None; }
+                let score = command_match_score(&query, label).into_iter().chain(command_match_score(&query, names)).min()?;
+                Some((score, Suggestion::Action { command, label: label.into() }))
+            }).collect();
             for space in &self.browser.spaces {
                 let names = format!("focus on {}|switch to {}|{}", space.name, space.name, space.name);
-                if matches_command(&query, &names) {
-                    suggestions.push(Suggestion::Action {
+                if let Some(score) = command_match_score(&query, &names) {
+                    matches.push((score, Suggestion::Action {
                         command: Command::FocusSpace(space.id),
                         label: format!("Focus on {}", space.name),
-                    });
+                    }));
                 }
             }
-            suggestions.truncate(5);
+            matches.sort_by_key(|(score, _)| *score);
+            suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
         suggestions.extend(omnibox::resolve(text).map(Suggestion::Load));
         if bar.target == Target::NewTab {
@@ -850,6 +862,14 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::ResetSpace => {
+                let tabs = self.browser.reset_space();
+                if let Some(pages) = &self.pages {
+                    let mut pages = pages.borrow_mut();
+                    for tab in &tabs { pages.discard(*tab); }
+                }
+                self.show_toast(format!("Reset {} pinned {}", tabs.len(), if tabs.len() == 1 { "tab" } else { "tabs" }), cx);
+            }
             Command::ResetPinnedTab => {
                 if let Some(id) = self.browser.space().active_tab {
                     if self.browser.reset_pinned_tab(id) { self.show_toast("Tab reset to its pinned URL".into(), cx); }
