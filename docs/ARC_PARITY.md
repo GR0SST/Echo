@@ -52,7 +52,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Tab… (opens the Command Bar) | ⌘T | done | — |
-| New Window | ⌘N | missing | We have a single window |
+| New Window | ⌘N | missing | Core window selections now project the shared profile without copying editable tab ownership. The GPUI action, single profile/session owner and shared live-page hosting are not wired yet |
 | Blank Window | ⌃⌘N | missing | — |
 | New Incognito Window | ⇧⌘N | partial | File menu, shortcut and Command Bar open independent private tab lists. CEF cookies and localStorage are shared only among live private windows, isolated from regular browsing and discarded after the last private window closes. Private visits and sessions are not saved; closed tabs can be restored in memory. Verified against installed Arc and bundled Echo. Private menu/action availability and remaining visual states still need parity work |
 | New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
@@ -69,6 +69,12 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Capture Full Page / Capture in Portrait Mode | — | missing | — |
 | Save Page As | ⇧⌘S | missing | — |
 | Print | ⌘P | missing | — |
+
+Normal-window behavior was checked in the installed Arc with disposable local
+pages: New Window starts with no selected page and an open Command Bar, but
+shares Today, Pinned, Favorites and Spaces. Selecting the same tab in another
+window retains DOM input state; navigation updates the page in both windows.
+Echo must share that live page identity, in addition to the sidebar model.
 
 ### Edit
 

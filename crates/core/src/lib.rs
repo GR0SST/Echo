@@ -17,6 +17,7 @@ pub mod preferences;
 pub mod icons;
 pub mod folders;
 pub mod undo;
+pub mod windows;
 
 fn default_enabled() -> bool { true }
 pub mod session;
