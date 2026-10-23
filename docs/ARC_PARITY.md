@@ -132,8 +132,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | partial | Duplicate Current Tab and Rename Current Tab are implemented; folder actions remain missing |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
 | Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
-| Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | missing | — |
-| Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | partial | Favorites, then Pinned and Today; Split Views count as one item. The "Include Favorites in ordering" option remains missing |
+| Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | done | Same grouped sidebar order as Next/Previous Tab; intercepted inside CEF pages |
+| Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | done | Favorites (optional), Pinned, Today; Split Views count as one item. Include/Exclude Favorites in Ordering is persistent and available in the Command Bar and Tabs menu |
 | Switch to Split View 1–4 / next / previous | (?) | done | Command Bar actions |
 | Reveal Tab in Sidebar | — | done | Command Bar and Tabs menu show the sidebar, unfold Pinned and scroll to the active item; Split View pane focus and loaded pages are preserved |
 | Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
@@ -189,7 +189,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
 | Camera/microphone indicator on a tab | — | missing | — |
 | Split View item in the sidebar (tab group) | — | done | One item for 2–4 pages; shared title, Favorites, pinning, archive and last focused pane |
-| Space header (name), Show/Hide Space Header | — | partial | The name is shown but can't be hidden |
+| Space header (name), Show/Hide Space Header | — | done | Visibility persists per Space; Command Bar and Spaces menu |
 | Spaces dock at the bottom (Space icons) | click | partial | We show colored dots; Arc shows Space icons or emoji |
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + creates a Space. The multi-action menu remains missing |
 | "Springy" click animation on sidebar items | — | missing | — |

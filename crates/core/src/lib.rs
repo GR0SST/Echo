@@ -13,6 +13,9 @@ pub mod favicons;
 pub mod audio;
 pub mod splits;
 pub mod bulk_archive;
+pub mod preferences;
+
+fn default_enabled() -> bool { true }
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
@@ -75,6 +78,8 @@ pub struct Space {
     pub name: String,
     /// Accent hue in degrees, 0..360.
     pub hue: f32,
+    #[serde(default = "default_enabled")]
+    pub show_header: bool,
     pub pinned: Vec<Tab>,
     #[serde(default)]
     pub pinned_collapsed: bool,
@@ -141,6 +146,8 @@ pub enum Closed {
 pub struct Browser {
     pub spaces: Vec<Space>,
     pub active_space: usize,
+    #[serde(default = "default_enabled")]
+    pub include_favorites_in_ordering: bool,
     pub archive: Vec<ArchivedTab>,
     #[serde(default)]
     pub history: Vec<history::HistoryEntry>,
@@ -167,6 +174,7 @@ impl Browser {
         let mut browser = Self {
             spaces: Vec::new(),
             active_space: 0,
+            include_favorites_in_ordering: true,
             archive: Vec::new(),
             history: Vec::new(),
             favorites: Vec::new(),
@@ -225,6 +233,7 @@ impl Browser {
             id,
             name: name.into(),
             hue,
+            show_header: true,
             pinned: Vec::new(),
             pinned_collapsed: false,
             today: Vec::new(),
@@ -406,10 +415,10 @@ impl Browser {
         self.archive.len() != before
     }
 
-    /// Focuses the `n`th sidebar item (0-based, Favorites, Pinned, Today), or the
+    /// Focuses the `n`th sidebar item (0-based, optional Favorites, Pinned, Today), or the
     /// last one for `None`. Like Arc's ⌘1…⌘8 and ⌘9.
     pub fn activate_item(&mut self, n: Option<usize>, now: SystemTime) {
-        let ids: Vec<TabId> = self.favorites.iter().chain(self.space().tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.favorites.iter().filter(|_| self.include_favorites_in_ordering).chain(self.space().tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
         let id = match n {
             Some(n) => ids.get(n),
             None => ids.last(),

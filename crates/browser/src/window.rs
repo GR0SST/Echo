@@ -83,6 +83,8 @@ actions!(
         MuteAllTabs,
         UnmuteAllTabs,
         TogglePinnedSection,
+        ToggleSpaceHeader,
+        ToggleFavoritesOrdering,
         RevealTab,
         ToggleSidebar,
         NextSpace,
@@ -139,6 +141,8 @@ window_shortcuts! {
     "ctrl-shift-tab" => PreviousTab,
     "cmd-alt-down" => NextTab,
     "cmd-alt-up" => PreviousTab,
+    "ctrl-cmd-right" => NextTab,
+    "ctrl-cmd-left" => PreviousTab,
     "cmd-[" => GoBack,
     "cmd-]" => GoForward,
     "cmd-f" => crate::find::FindPage,
@@ -322,6 +326,8 @@ pub enum Command {
     ReplacePinnedUrl,
     CopyUrl,
     CopyUrlAsMarkdown,
+    ToggleSpaceHeader,
+    ToggleFavoritesOrdering,
     RevealTab,
     ToggleSidebar,
     TogglePin,
@@ -867,6 +873,8 @@ impl BrowserWindow {
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
+                (Command::ToggleSpaceHeader, if self.browser.space().show_header { "Hide Space Header" } else { "Show Space Header" }, if self.browser.space().show_header { "hide space header|toggle space header" } else { "show space header|toggle space header" }, true),
+                (Command::ToggleFavoritesOrdering, if self.browser.include_favorites_in_ordering { "Exclude Favorites from Ordering" } else { "Include Favorites in Ordering" }, if self.browser.include_favorites_in_ordering { "exclude favorites from ordering|exclude favorites in ordering" } else { "include favorites in ordering" }, true),
                 (Command::RevealTab, "Reveal Tab in Sidebar", "reveal tab in sidebar|reveal tab|show tab in sidebar", active.is_some()),
                 (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar|sidebar" } else { "toggle sidebar|show sidebar|sidebar" }, true),
                 (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some() && !favorite),
@@ -1133,6 +1141,8 @@ impl BrowserWindow {
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.edit_space_name(None, cx),
             Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
+            Command::ToggleSpaceHeader => { self.browser.set_space_header(self.browser.space().id, !self.browser.space().show_header); }
+            Command::ToggleFavoritesOrdering => { self.browser.include_favorites_in_ordering = !self.browser.include_favorites_in_ordering; }
             Command::RevealTab => self.reveal_active_tab(cx),
             Command::ToggleSidebar => self.toggle_sidebar(cx),
             Command::TogglePin => {
@@ -1206,6 +1216,8 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &ToggleSpaceHeader, _, cx| this.run_command(Command::ToggleSpaceHeader, cx)))
+            .on_action(cx.listener(|this, _: &ToggleFavoritesOrdering, _, cx| this.run_command(Command::ToggleFavoritesOrdering, cx)))
             .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
@@ -1775,15 +1787,15 @@ impl BrowserWindow {
             .h_full()
             .px_2()
             .gap_1()
-            .child(
-                div()
+            .when(space.show_header, |this| this.child(
+                div().debug_selector(move || format!("space-header-{index}"))
                     .px_2()
                     .pb_1()
                     .text_xs()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .child(space.name.clone()),
-            )
+            ))
             .when(!space.pinned.is_empty(), |this| {
                 this.child(div()
                     .id(("pinned-section", index))
@@ -2248,6 +2260,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &ToggleSpaceHeader, _, cx| this.run_command(Command::ToggleSpaceHeader, cx)))
+            .on_action(cx.listener(|this, _: &ToggleFavoritesOrdering, _, cx| this.run_command(Command::ToggleFavoritesOrdering, cx)))
             .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(Self::on_toggle_pin))

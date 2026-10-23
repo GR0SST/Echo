@@ -2739,3 +2739,64 @@ fn archive_show_more_reaches_older_entries_and_scrolls_inside_a_short_window(cx:
     overlay.simulate_keystrokes("enter");
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://archived0.example"));
 }
+
+#[gpui::test]
+fn space_header_visibility_changes_only_the_current_space_and_survives_sessions(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    let before = cx.debug_bounds("pinned-section").unwrap().origin.y;
+    fake.take_calls();
+    run_named_command(&view, cx, "hide space header");
+    let after = cx.debug_bounds("pinned-section").unwrap().origin.y;
+    assert!(after < before);
+    assert_eq!(active_url(&view, cx), active);
+    view.read_with(cx, |w, _| {
+        assert!(!w.browser.space().show_header);
+        assert!(w.browser.spaces[1].show_header);
+        let saved = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert!(!saved.space().show_header);
+    });
+    dispatch_menu(cx, "Spaces", "Show/Hide Space Header");
+    assert!(view.read_with(cx, |w, _| w.browser.space().show_header));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn numbered_sidebar_shortcuts_can_exclude_and_include_favorites(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 8);
+    run_named_command(&view, cx, "exclude favorites from ordering");
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 4);
+    cx.simulate_keystrokes("cmd-9");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 6);
+    view.read_with(cx, |w, _| {
+        let saved = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert!(!saved.include_favorites_in_ordering);
+    });
+    dispatch_menu(cx, "Tabs", "Include/Exclude Favorites in Ordering");
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 8);
+}
+
+#[gpui::test]
+fn hidden_cycle_shortcuts_work_from_ui_and_native_page_focus_and_keep_split_groups_together(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let split_page = active_url(&view, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://next.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("ctrl-cmd-left");
+    assert_eq!(active_url(&view, cx), split_page);
+    cx.simulate_keystrokes("ctrl-cmd-right");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://next.example"));
+    let shortcut = |key: &str| Shortcut { ctrl: true, cmd: true, key: key.into(), ..Default::default() };
+    assert!(crate::window::page_shortcuts().contains(&shortcut("left")));
+    assert!(crate::window::page_shortcuts().contains(&shortcut("right")));
+    fake.send(cx, Event::Shortcut(shortcut("left")));
+    assert_eq!(active_url(&view, cx), split_page);
+    fake.send(cx, Event::Shortcut(shortcut("right")));
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://next.example"));
+}
