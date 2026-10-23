@@ -75,6 +75,7 @@ pub fn demo_browser() -> Browser {
         let id = browser.new_tab(url, now);
         browser.set_title(id, title);
     }
+    browser.clear_sidebar_history();
     browser
 }
 

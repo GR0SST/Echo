@@ -16,6 +16,7 @@ pub mod bulk_archive;
 pub mod preferences;
 pub mod icons;
 pub mod folders;
+pub mod undo;
 
 fn default_enabled() -> bool { true }
 pub mod session;
@@ -170,6 +171,8 @@ pub struct Browser {
     pub favorite_splits: Vec<splits::SplitView>,
     /// `None` disables auto-archiving.
     pub archive_after: Option<Duration>,
+    #[serde(skip)]
+    sidebar_history: undo::SidebarHistory,
     next_id: u64,
 }
 
@@ -191,6 +194,7 @@ impl Browser {
             favicon_cache: Vec::new(),
             favorite_splits: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
+            sidebar_history: undo::SidebarHistory::default(),
             next_id: 1,
         };
         browser.add_space("Personal", 250.0);
@@ -457,6 +461,16 @@ impl Browser {
     /// Moves a tab between Pinned and Today. Newly pinned tabs go to the
     /// bottom of Pinned; unpinned tabs go to the top of Today.
     pub fn toggle_pin(&mut self, id: TabId) {
+        let before = undo::PinState::capture(self, id);
+        self.toggle_pin_unrecorded(id);
+        if let Some(before) = before {
+            if let Some(after) = undo::PinState::capture(self, id) {
+                self.sidebar_history.record_pin(before, after);
+            }
+        }
+    }
+
+    fn toggle_pin_unrecorded(&mut self, id: TabId) {
         if self.split_for(id).is_some() { self.toggle_split_pin(id); return; }
         if self.is_favorite(id) {
             self.unfavorite_tab(id);

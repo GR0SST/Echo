@@ -10,6 +10,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use cef::*;
+mod editing;
+pub use editing::subprocess_app;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -50,6 +52,7 @@ pub enum Event {
     TitleChanged { view: ViewId, title: String },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     Focused { view: ViewId },
+    EditFocusChanged { view: ViewId, editable: bool },
     FindResult { view: ViewId, count: i32, active: i32, final_update: bool },
     UrlChanged { view: ViewId, url: String },
     /// Link target under the pointer; an empty value clears the status.
@@ -72,6 +75,7 @@ enum RawEvent {
     Title(String),
     Favicon(String, Vec<u8>),
     Focused,
+    EditFocus(bool),
     Find(i32, i32, bool),
     Url(String),
     Status(String),
@@ -229,6 +233,7 @@ impl Engine {
                     RawEvent::Title(title) => Event::TitleChanged { view, title },
                     RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
                     RawEvent::Focused => Event::Focused { view },
+                    RawEvent::EditFocus(editable) => Event::EditFocusChanged { view, editable },
                     RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
                     RawEvent::Url(url) => Event::UrlChanged { view, url },
                     RawEvent::Status(text) => Event::StatusChanged { view, text },
@@ -482,6 +487,13 @@ wrap_client! {
     }
 
     impl Client {
+        fn on_process_message_received(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
+            let Some(message) = message.filter(|message| source_process == ProcessId::RENDERER && CefString::from(&message.name()).to_string() == editing::EDIT_FOCUS_MESSAGE) else { return 0; };
+            let Some(arguments) = message.argument_list() else { return 0; };
+            if arguments.size() != 1 || arguments.get_type(0) != ValueType::BOOL { return 0; }
+            push(&self.events, browser, RawEvent::EditFocus(arguments.bool(0) != 0));
+            1
+        }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone()))
         }
@@ -686,6 +698,15 @@ fn shortcut_for(event: &KeyEvent) -> Shortcut {
     }
 }
 
+fn intercepted_shortcut(event: &KeyEvent, shortcuts: &[Shortcut]) -> Option<Shortcut> {
+    if event.type_ != KeyEventType::RAWKEYDOWN { return None; }
+    let shortcut = shortcut_for(event);
+    // Chromium owns text editing shortcuts. Only a non-editable page
+    // delegates Undo/Redo to the browser's sidebar history.
+    if shortcut.key == "z" && event.focus_on_editable_field != 0 { return None; }
+    shortcuts.contains(&shortcut).then_some(shortcut)
+}
+
 wrap_keyboard_handler! {
     struct EngineKeyboardHandler {
         events: EventQueue,
@@ -703,12 +724,9 @@ wrap_keyboard_handler! {
             let Some(event) = event else {
                 return 0;
             };
-            if event.type_ != KeyEventType::RAWKEYDOWN {
-                return 0;
-            }
-            let shortcut = shortcut_for(event);
-            if !self.shortcuts.contains(&shortcut) {
-                return 0;
+            let Some(shortcut) = intercepted_shortcut(event, &self.shortcuts) else { return 0; };
+            if shortcut.key == "z" {
+                if let Some(browser) = browser.as_ref() { self.events.lock().unwrap().push((browser.identifier(), RawEvent::EditFocus(false))); }
             }
             push(&self.events, browser, RawEvent::Shortcut(shortcut));
             1
@@ -752,6 +770,29 @@ fn next_zoom_factor(current: f64, direction: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editable_web_fields_own_undo_redo_while_browser_shortcuts_still_work() {
+        let undo = Shortcut { cmd: true, key: "z".into(), ..Default::default() };
+        let redo = Shortcut { shift: true, ..undo.clone() };
+        let pin = Shortcut { key: "d".into(), ..undo.clone() };
+        let shortcuts = [undo.clone(), redo.clone(), pin.clone()];
+        let mut event = KeyEvent { type_: KeyEventType::RAWKEYDOWN, windows_key_code: b'Z'.into(), unmodified_character: b'z'.into(), modifiers: sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0, ..Default::default() };
+        assert_eq!(intercepted_shortcut(&event, &shortcuts), Some(undo));
+        event.focus_on_editable_field = 1;
+        assert_eq!(intercepted_shortcut(&event, &shortcuts), None);
+        event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0;
+        assert_eq!(intercepted_shortcut(&event, &shortcuts), None);
+        event.focus_on_editable_field = 0;
+        assert_eq!(intercepted_shortcut(&event, &shortcuts), Some(redo));
+        event.focus_on_editable_field = 1;
+        event.modifiers &= !sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0;
+        event.windows_key_code = b'D'.into();
+        event.unmodified_character = b'd'.into();
+        assert_eq!(intercepted_shortcut(&event, &shortcuts), Some(pin));
+        event.type_ = KeyEventType::KEYUP;
+        assert_eq!(intercepted_shortcut(&event, &shortcuts), None);
+    }
 
     #[test]
     fn zoom_steps_handle_rounding_custom_levels_limits_and_reset() {

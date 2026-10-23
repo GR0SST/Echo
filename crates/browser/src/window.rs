@@ -150,6 +150,8 @@ macro_rules! window_shortcuts {
 }
 
 window_shortcuts! {
+    "cmd-z" => crate::text_input::Undo,
+    "cmd-shift-z" => crate::text_input::Redo,
     "cmd-t" => OpenCommandBar,
     "cmd-y" => crate::history::ViewHistory,
     "cmd-m" => crate::menus::Minimize,
@@ -736,6 +738,7 @@ impl BrowserWindow {
                     }
                 }
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
+                Event::EditFocusChanged { .. } => {},
                 Event::OpenInNewTab { url, .. } => {
                     let id = self.browser.new_tab(url.clone(), SystemTime::now());
                     self.browser.set_title(id, display_url(&url));
@@ -774,6 +777,16 @@ impl BrowserWindow {
     fn with_active_page(&self, f: impl FnOnce(&mut Pages, TabId)) {
         if let (Some(pages), Some(tab)) = (&self.pages, self.browser.space().active_tab) {
             f(&mut pages.borrow_mut(), tab);
+        }
+    }
+
+    fn edit_undo(&mut self, redo: bool, cx: &mut Context<Self>) {
+        let editable = self.browser.active_tab().is_some_and(|tab|
+            self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
+        if !editable && if redo { self.browser.redo_sidebar() } else { self.browser.undo_sidebar() } {
+            cx.notify();
+        } else {
+            self.with_active_page(|pages, tab| if redo { pages.redo(tab) } else { pages.undo(tab) });
         }
     }
 
@@ -2916,9 +2929,9 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
-            .when(self.tab_rename.is_none() && self.pages.is_some() && self.browser.active_tab().is_some_and(|tab| !browser_core::omnibox::is_internal_url(&tab.url)), |this| this
-                .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, _| this.with_active_page(|pages, tab| pages.undo(tab))))
-                .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, _| this.with_active_page(|pages, tab| pages.redo(tab)))))
+            .when(self.tab_rename.is_none(), |this| this
+                .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))
+                .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))

@@ -5415,3 +5415,50 @@ fn sidebar_context_menus_follow_the_reference_layout(cx: &mut TestAppContext) {
     menu.simulate_keystrokes("escape");
     assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
 }
+
+#[gpui::test]
+fn sidebar_pin_undo_and_redo_work_from_shortcuts_and_edit_menu_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = view.read_with(cx, |w, _| w.browser.space().today.iter().map(|tab| tab.id).collect::<Vec<_>>());
+    let tab = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-d cmd-z");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().today.iter().map(|tab| tab.id).collect::<Vec<_>>()), original);
+    dispatch_menu(cx, "Edit", "Redo");
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|entry| entry.id == tab)));
+    dispatch_menu(cx, "Edit", "Undo");
+    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, shift: true, key: "z".into(), ..Default::default() }));
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|entry| entry.id == tab)));
+    assert!(fake.take_calls().iter().all(|call| !matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Undo(..) | Call::Redo(..))));
+}
+
+#[gpui::test]
+fn web_edit_focus_keeps_page_undo_independent_of_sidebar_history(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-d");
+    fake.send(cx, Event::EditFocusChanged { view: page(1), editable: true });
+    fake.take_calls();
+    dispatch_menu(cx, "Edit", "Undo");
+    dispatch_menu(cx, "Edit", "Redo");
+    assert_eq!(fake.take_calls(), vec![Call::Undo(1), Call::Redo(1)]);
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.id.get() == 8)));
+    fake.send(cx, Event::EditFocusChanged { view: page(1), editable: false });
+    dispatch_menu(cx, "Edit", "Undo");
+    assert!(view.read_with(cx, |w, _| w.browser.space().today.iter().any(|tab| tab.id.get() == 8)));
+}
+
+#[gpui::test]
+fn command_bar_undo_does_not_consume_sidebar_history(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-d cmd-t");
+    let mut input = bar(&view, cx);
+    input.simulate_input("q");
+    input.simulate_keystrokes("cmd-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    input.simulate_keystrokes("cmd-z escape");
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.id.get() == 8)));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-z");
+    assert!(view.read_with(cx, |w, _| w.browser.space().today.iter().any(|tab| tab.id.get() == 8)));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Undo(..))));
+}

@@ -109,6 +109,7 @@ pub struct PageState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub status: String,
+    pub editable: bool,
 }
 
 struct Page {
@@ -400,6 +401,9 @@ impl Pages {
     /// Records what the engine reported so it is not re-sent by `sync`.
     pub fn record(&mut self, event: &Event) {
         match event {
+            Event::EditFocusChanged { view, editable } => {
+                if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
+            }
             Event::Focused { view } => {
                 if let Some(tab) = self.tab_for(*view).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); }
             }

@@ -74,7 +74,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI text fields support per-input undo/redo, restoring text, caret and selection. Paste/cut and committed IME input are single edits; new edits clear redo, no-op deletion preserves it, and retargeting clears field history. Edit menu actions use the focused field or the active CEF page's focused frame. Undo of sidebar operations and Peek remains missing |
+| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI text fields restore text, caret and selection, including paste/cut and committed IME input. Pin/unpin has a separate transient history for tabs and Split Views, restoring order and folder placement while retaining later page changes. Native DOM edit focus keeps web editor Undo/Redo in the focused frame; non-editable pages use sidebar history through shortcuts and Edit menus. Archive/close, other sidebar actions, Peek and action-specific command suggestions remain unfinished |
 | Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in `TextInput`; Edit menu includes OS editing selectors for native page responders. Page editing through CEF still needs an unlocked visual check |
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |

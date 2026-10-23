@@ -287,3 +287,50 @@ This check also exposed an automation error: modified key events had been
 addressed to the main window while its Command Bar child owned focus. The
 driver now targets the key window only when it belongs to this browser, and
 can invoke enabled native menu items directly for end-to-end routing checks.
+
+### Sidebar Undo: pinning and archiving
+
+Inspected the installed Arc through native accessibility menus in a separate
+normal New Window, using a disposable Example Domain tab. Blank Window disables
+Pin Tab and closes when its last Today tab is archived, so it cannot establish
+normal sidebar behavior. In the normal window, Tabs → Pin Tab moved the test
+item above New Tab. Edit → Undo returned it below New Tab at its previous
+position; Edit → Redo pinned it again. Undoing Archive Tab restored the same
+page at its previous Today position and selected it. Redo removed it again.
+The Edit menu labels remained plain Undo and Redo during these checks. The
+restored page and sidebar were also inspected in a native screenshot. The
+disposable window was closed after redoing the archive; existing tabs were
+not archived or edited. No system cursor movement or clipboard was used.
+
+Echo's transient sidebar journal now records pin/unpin, including Split View
+items, folder placement and the core model's Favorite-to-Today operation.
+Undo restores identities, positions and pin metadata without restoring a
+Browser snapshot: later navigation, page titles, new tabs, split geometry,
+folder labels and unrelated selection changes remain intact. Invalidated
+entries cannot resurrect archived tabs or break a changed split. A new pin
+operation clears redo; initial profile seeding and restored sessions have no
+undo history. The journal retains at most 100 entries.
+
+CEF reports native DOM edit focus, including contenteditable and subframes,
+through renderer-to-browser IPC. Editable page shortcuts remain in Chromium;
+non-editable pages route Undo/Redo to sidebar history. Edit menu actions use
+the focused web editor when one is active. GPUI inputs retain their own undo
+stacks and cannot consume sidebar entries. Archive/close, other sidebar actions,
+Peek and action-specific command suggestions are still unfinished.
+
+Native verification passed for pin Undo/Redo through both keyboard shortcuts
+and the real Edit menu. With the test tab pinned, Edit → Undo restored an
+input's `Original` text without unpinning the tab. After Tab moved focus to a
+button, ⌘Z moved the same page to Today; ⇧⌘Z and Edit → Redo pinned it again.
+The edited field value remained intact across placement changes. Three
+screenshots and the model dumps were inspected.
+
+A local HTTP fixture repeated this with an autofocus input inside an iframe:
+⌘Z and Edit → Undo restored `FrameOriginal` while the tab remained pinned;
+after moving focus to the frame's button, ⌘Z unpinned the tab. All three
+result screenshots were inspected. This run did not use the pointer or
+clipboard; the local fixture shut down normally afterward. The preceding
+data-URL `srcdoc` attempts stayed blank with loading=true and did not accept
+composed text, so they are not counted as edit-focus verification. That load
+failure remains to investigate separately. All 356 workspace tests passed
+(259 browser, 95 core, 2 engine).
