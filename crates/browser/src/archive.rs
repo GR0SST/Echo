@@ -14,7 +14,7 @@ fn date_label(day: NaiveDate, today: NaiveDate) -> String {
 impl BrowserWindow {
     pub(crate) fn archive_relative(&mut self, id: TabId, relative: browser_core::bulk_archive::Relative, cx: &mut Context<Self>) {
         let removed: Vec<_> = self.browser.tabs_to_archive(id, relative).into_iter().flat_map(|id| self.browser.related_tabs(id)).collect();
-        let count = self.browser.archive_relative(id, relative, SystemTime::now());
+        let count = self.edit_browser(|browser| browser.archive_relative(id, relative, SystemTime::now()));
         if let Some(pages) = &self.pages {
             let mut pages = pages.borrow_mut();
             for id in removed { pages.discard(id); }
@@ -110,7 +110,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn delete_archive_entry(&mut self, id: TabId, cx: &mut Context<Self>) {
-        self.browser.delete_archived(id);
+        self.edit_browser(|browser| browser.delete_archived(id));
         let count = self.suggestions(cx).len();
         if let Some(bar) = &mut self.command_bar {
             bar.selected = bar.selected.min(count.saturating_sub(1));

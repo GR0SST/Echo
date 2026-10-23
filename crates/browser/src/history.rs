@@ -88,10 +88,10 @@ impl BrowserWindow {
             .map(|tab| tab.id);
         let now = SystemTime::now();
         if let Some(id) = existing {
-            self.browser.activate_tab(id, now);
+            self.edit_browser(|browser| browser.activate_tab(id, now));
         } else {
-            let id = self.browser.new_tab(HISTORY_URL, now);
-            self.browser.set_title(id, "History");
+            let id = self.edit_browser(|browser| browser.new_tab(HISTORY_URL, now));
+            self.edit_browser(|browser| browser.set_title(id, "History"));
         }
         self.history_page.confirm_clear = false;
         self.focus_history_search(window, cx);
@@ -134,8 +134,8 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let id = self.browser.new_tab(url, SystemTime::now());
-        self.browser.set_title(id, title);
+        let id = self.edit_browser(|browser| browser.new_tab(url, SystemTime::now()));
+        self.edit_browser(|browser| browser.set_title(id, title));
         self.focus(window);
         cx.notify();
     }
@@ -210,7 +210,7 @@ impl BrowserWindow {
                             .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.browser.delete_history_entry(&remove);
+                                this.edit_browser(|browser| browser.delete_history_entry(&remove));
                                 cx.notify();
                             }))
                             .child(crate::icons::control(crate::icons::Icon::Close)),
@@ -321,7 +321,7 @@ impl BrowserWindow {
                                 .bg(hsla(0.0, 0.65, 0.45, 1.0))
                                 .text_color(gpui::white())
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.browser.history.clear();
+                                    this.edit_browser(|browser| browser.history.clear());
                                     this.history_page.confirm_clear = false;
                                     this.history_page
                                         .input

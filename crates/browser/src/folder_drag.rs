@@ -58,7 +58,7 @@ impl BrowserWindow {
                 .focus
                 .filter(|id| self.browser.folder_tabs(drag.id).contains(id))
             {
-                self.browser.activate_tab(focus, SystemTime::now());
+                self.edit_browser(|browser| browser.activate_tab(focus, SystemTime::now()));
                 cx.notify();
             }
         }

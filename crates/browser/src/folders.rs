@@ -67,7 +67,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         match target {
-            Target::RenameFolder(id) => self.browser.rename_folder(id, name),
+            Target::RenameFolder(id) => self.edit_browser(|browser| browser.rename_folder(id, name)),
             Target::NewFolder { space, parent, tab } => {
                 if tab.is_some_and(|id| !self.browser.all_tabs().any(|tab| tab.id == id)) {
                     self.show_toast("Tab is no longer open".into(), cx);
@@ -77,12 +77,12 @@ impl BrowserWindow {
                 let was_active = tab.is_some_and(|tab| {
                     active.is_some_and(|active| self.browser.related_tabs(tab).contains(&active))
                 });
-                let Some(folder) = self.browser.create_folder(space, parent, name) else {
+                let Some(folder) = self.edit_browser(|browser| browser.create_folder(space, parent, name)) else {
                     self.show_toast("Cannot create a folder here".into(), cx);
                     return false;
                 };
                 if let Some(tab) = tab {
-                    self.browser.move_item_to_folder(tab, folder);
+                    self.edit_browser(|browser| browser.move_item_to_folder(tab, folder));
                 }
                 if let Some(index) = self
                     .browser
@@ -94,7 +94,7 @@ impl BrowserWindow {
                 }
                 if was_active {
                     if let Some(active) = active {
-                        self.browser.activate_tab(active, SystemTime::now());
+                        self.edit_browser(|browser| browser.activate_tab(active, SystemTime::now()));
                     }
                 }
                 self.scroll_to_pinned_item(PinnedItem::Folder(folder), cx);
@@ -189,10 +189,10 @@ impl BrowserWindow {
         };
         let changed = match target {
             Target::MoveToFolder(tab) => match parent {
-                Some(parent) => self.browser.move_item_to_folder(tab, parent),
-                None => self.browser.move_item_to_pinned_root(tab, space),
+                Some(parent) => self.edit_browser(|browser| browser.move_item_to_folder(tab, parent)),
+                None => self.edit_browser(|browser| browser.move_item_to_pinned_root(tab, space)),
             },
-            Target::MoveFolder(id) => self.browser.move_folder(id, space, parent),
+            Target::MoveFolder(id) => self.edit_browser(|browser| browser.move_folder(id, space, parent)),
             _ => false,
         };
         if !changed {
@@ -208,9 +208,9 @@ impl BrowserWindow {
             self.switch_space(index, cx);
         }
         if let Some(active) = active.filter(|id| moved.contains(id)) {
-            self.browser.activate_tab(active, SystemTime::now());
+            self.edit_browser(|browser| browser.activate_tab(active, SystemTime::now()));
         } else if let Target::MoveToFolder(tab) = target {
-            self.browser.activate_sidebar_item(tab, SystemTime::now());
+            self.edit_browser(|browser| browser.activate_sidebar_item(tab, SystemTime::now()));
         }
         let item = match target {
             Target::MoveFolder(id) => PinnedItem::Folder(id),
@@ -242,10 +242,10 @@ impl BrowserWindow {
                 .iter()
                 .find(|folder| folder.items.contains(&PinnedItem::Folder(id)))
                 .map(|folder| folder.id);
-            self.browser.set_folder_collapsed(id, false);
+            self.edit_browser(|browser| browser.set_folder_collapsed(id, false));
             current = parent;
         }
-        self.browser.spaces[self.browser.active_space].pinned_collapsed = false;
+        self.edit_browser(|browser| browser.spaces[browser.active_space].pinned_collapsed = false);
         self.scroll_to_pinned_item(PinnedItem::Folder(id), cx);
     }
 
@@ -287,16 +287,14 @@ impl BrowserWindow {
     ) {
         match command {
             MenuCommand::FolderIntoSpace => {
-                if self
-                    .browser
-                    .folder_into_space(id, SystemTime::now())
+                if self.edit_browser(|browser| browser.folder_into_space(id, SystemTime::now()))
                     .is_some()
                 {
                     self.switch_space(self.browser.active_space, cx);
                 }
             }
             MenuCommand::FolderDuplicate => {
-                if let Some(copy) = self.browser.duplicate_folder(id, SystemTime::now()) {
+                if let Some(copy) = self.edit_browser(|browser| browser.duplicate_folder(id, SystemTime::now())) {
                     self.scroll_to_pinned_item(PinnedItem::Folder(copy), cx);
                 }
             }
@@ -322,11 +320,11 @@ impl BrowserWindow {
             }
             MenuCommand::FolderCollapse => {
                 if let Some(collapsed) = self.browser.folder(id).map(|folder| !folder.collapsed) {
-                    self.browser.set_folder_collapsed(id, collapsed);
+                    self.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed));
                 }
             }
             MenuCommand::FolderDelete => {
-                self.browser.delete_empty_folder(id);
+                self.edit_browser(|browser| browser.delete_empty_folder(id));
             }
             MenuCommand::FolderCopy | MenuCommand::FolderCopyMarkdown => {
                 let markdown = matches!(command, MenuCommand::FolderCopyMarkdown);
@@ -371,7 +369,7 @@ impl BrowserWindow {
                         .group(group.clone()).flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
                         .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(|this| this.bg(hsla(0., 0., 1., 0.35)))
-                        .on_click(cx.listener(move |this, _, _, cx| { if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.browser.set_folder_collapsed(id, collapsed); } cx.notify(); }))
+                        .on_click(cx.listener(move |this, _, _, cx| { if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed)); } cx.notify(); }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_folder_menu(id, event.position, window, cx); }))
                         .on_drag(crate::folder_drag::FolderDrag::new(folder, focus), |drag, _, _, cx| cx.new(|_| drag.clone()))
                         .can_drop(move |value, _, cx| {

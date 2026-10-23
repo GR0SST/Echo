@@ -232,6 +232,21 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_standalone_tab_returns_to_the_neighbors_remembered_split_pane() {
+        let mut profile = Browser::new();
+        let left = profile.new_tab("https://left", NOW);
+        let right = profile.new_tab("https://right", NOW);
+        profile.add_split(left, right, Placement::Right, NOW).unwrap();
+        profile.activate_tab(right, NOW);
+        let mut window = profile.window_selection();
+        let source = profile.edit_in_window(&mut window, |profile| profile.new_tab("view-source:https://right", NOW));
+        profile.edit_in_window(&mut window, |profile| { profile.close_tab(source, NOW); });
+        let projected = profile.window_projection(&window);
+        assert_eq!(projected.active_tab().unwrap().id, right);
+        assert_eq!(projected.active_split().unwrap().active, right);
+    }
+
+    #[test]
     fn favorites_can_be_selected_independently_in_different_windows_and_spaces() {
         let mut profile = Browser::new();
         let favorite = profile.new_tab("https://favorite", NOW);

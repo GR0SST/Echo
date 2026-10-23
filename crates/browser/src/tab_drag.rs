@@ -46,7 +46,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         let tab = drag.id;
-        if !self.browser.move_tab_relative(tab, target, after) {
+        if !self.edit_browser(|browser| browser.move_tab_relative(tab, target, after)) {
             return;
         }
         if let Some(index) = self.browser.spaces.iter().position(|space| {
@@ -92,7 +92,7 @@ impl BrowserWindow {
         if !self.browser.is_favorite(tab) {
             self.drop_tab_in_favorites(drag, cx);
         }
-        if self.browser.is_favorite(tab) && self.browser.move_favorite(tab, destination) {
+        if self.browser.is_favorite(tab) && self.edit_browser(|browser| browser.move_favorite(tab, destination)) {
             cx.notify();
         }
     }
@@ -106,8 +106,8 @@ impl BrowserWindow {
     ) {
         let tab = drag.id;
         let changed = match section {
-            Section::Pinned => self.browser.move_item_to_pinned_root(tab, space),
-            Section::Today => self.browser.move_tab(tab, space, section),
+            Section::Pinned => self.edit_browser(|browser| browser.move_item_to_pinned_root(tab, space)),
+            Section::Today => self.edit_browser(|browser| browser.move_tab(tab, space, section)),
         };
         if !changed {
             return;
@@ -129,7 +129,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn drop_tab_in_favorites(&mut self, drag: &TabDrag, cx: &mut Context<Self>) {
-        if self.browser.favorite_tab(drag.id) {
+        if self.edit_browser(|browser| browser.favorite_tab(drag.id)) {
             self.activate_dragged_tab(drag);
             cx.notify();
         }
@@ -137,10 +137,9 @@ impl BrowserWindow {
 
     fn activate_dragged_tab(&mut self, drag: &TabDrag) {
         if self.browser.related_tabs(drag.id).contains(&drag.focus) {
-            self.browser.activate_tab(drag.focus, SystemTime::now());
+            self.edit_browser(|browser| browser.activate_tab(drag.focus, SystemTime::now()));
         } else {
-            self.browser
-                .activate_sidebar_item(drag.id, SystemTime::now());
+            self.edit_browser(|browser| browser.activate_sidebar_item(drag.id, SystemTime::now()));
         }
     }
 

@@ -497,12 +497,12 @@ impl Browser {
         count
     }
 
-    pub(crate) fn archive_split_idle(&mut self, now: SystemTime) -> usize {
+    pub(crate) fn archive_split_idle(&mut self, now: SystemTime, protected: &[TabId]) -> usize {
         let Some(limit) = self.archive_after else { return 0; };
         let items: Vec<_> = self.spaces.iter().enumerate().flat_map(|(index, space)| {
             space.today.iter().filter(|tab| !self.is_split_secondary(tab.id)).filter(|tab| {
                 let panes = self.related_tabs(tab.id);
-                !space.active_tab.is_some_and(|id| panes.contains(&id)) && panes.iter().all(|id| {
+                !space.active_tab.is_some_and(|id| panes.contains(&id)) && !panes.iter().any(|id| protected.contains(id)) && panes.iter().all(|id| {
                     self.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| now.duration_since(tab.last_active).unwrap_or_default() >= limit)
                 })
             }).map(move |tab| (index, tab.id))

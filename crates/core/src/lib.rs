@@ -650,7 +650,12 @@ impl Browser {
     /// Favorites, Pinned tabs and each Space's focused tab are never archived.
     /// Returns the number of archived tabs.
     pub fn archive_idle(&mut self, now: SystemTime) -> usize {
-        if self.spaces.iter().any(|space| !space.splits.is_empty()) { return self.archive_split_idle(now); }
+        self.archive_idle_except(now, &[])
+    }
+
+    /// The profile owner also protects selections from its other windows.
+    pub fn archive_idle_except(&mut self, now: SystemTime, protected: &[TabId]) -> usize {
+        if self.spaces.iter().any(|space| !space.splits.is_empty()) { return self.archive_split_idle(now, protected); }
         let Some(limit) = self.archive_after else {
             return 0;
         };
@@ -659,6 +664,7 @@ impl Browser {
             let active = space.active_tab;
             let (idle, keep): (Vec<_>, Vec<_>) = space.today.drain(..).partition(|t| {
                 Some(t.id) != active
+                    && !protected.contains(&t.id)
                     && now.duration_since(t.last_active).unwrap_or_default() >= limit
             });
             space.today = keep;
@@ -685,6 +691,7 @@ fn neighbor(space: &Space, section: Section, i: usize) -> Option<TabId> {
         .or_else(|| i.checked_sub(1).and_then(|j| tabs.get(j)))
         .map(|t| t.id)
         .or_else(|| space.tabs().next().map(|t| t.id))
+        .map(|id| space.splits.iter().find(|split| split.panes.contains(&id)).map_or(id, |split| split.active))
 }
 
 #[cfg(test)]

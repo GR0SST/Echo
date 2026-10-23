@@ -432,37 +432,37 @@ impl BrowserWindow {
                     self.begin_split(id, placement, cx);
                 }
             }
-            Command::Axis(axis) => { self.browser.set_split_axis(id, axis); }
-            Command::SeparateAll => { if !self.browser.separate_split(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } }
+            Command::Axis(axis) => { self.edit_browser(|browser| browser.set_split_axis(id, axis)); }
+            Command::SeparateAll => { if !self.edit_browser(|browser| browser.separate_split(id)) { self.show_toast("You can have up to 12 Favorites".into(), cx); } }
             Command::SeparatePane => {
-                if self.browser.separate_split_pane(id) { self.browser.activate_tab(id, std::time::SystemTime::now()); }
+                if self.edit_browser(|browser| browser.separate_split_pane(id)) { self.edit_browser(|browser| browser.activate_tab(id, std::time::SystemTime::now())); }
                 else { self.show_toast("You can have up to 12 Favorites".into(), cx); }
             }
-            Command::Move(delta) => { self.browser.move_split_pane(id, delta); }
-            Command::ResetName => { self.browser.reset_tab_name(id); }
+            Command::Move(delta) => { self.edit_browser(|browser| browser.move_split_pane(id, delta)); }
+            Command::ResetName => { self.edit_browser(|browser| browser.reset_tab_name(id)); }
             Command::ClosePane => self.close_split_pane(id, cx),
             Command::Icon => self.open_command_bar(Target::Icon(crate::icons::IconTarget::Tab(id)), &self.browser.item_icon(id).unwrap_or_default().to_string(), window, cx),
-            Command::ResetCustomization => { self.browser.reset_item_customization(id); }
+            Command::ResetCustomization => { self.edit_browser(|browser| browser.reset_item_customization(id)); }
             Command::ArchiveRelative(relative) => self.archive_relative(id, relative, cx),
             Command::Duplicate => self.duplicate_tab(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),
             Command::CopyMarkdown => self.copy_tab_url(id, true, cx),
-            Command::Pin => self.browser.toggle_pin(id),
+            Command::Pin => self.edit_browser(|browser| browser.toggle_pin(id)),
             Command::Favorite => {
                 let active = self.browser.space().active_tab;
-                if self.browser.is_favorite(id) { self.browser.unfavorite_tab(id); }
-                else if !self.browser.favorite_tab(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); }
-                self.browser.spaces[self.browser.active_space].active_tab = active;
+                if self.browser.is_favorite(id) { self.edit_browser(|browser| browser.unfavorite_tab(id)); }
+                else if !self.edit_browser(|browser| browser.favorite_tab(id)) { self.show_toast("You can have up to 12 Favorites".into(), cx); }
+                self.edit_browser(|browser| browser.spaces[browser.active_space].active_tab = active);
             }
             Command::Rename => {
                 self.open_tab_rename(id, window, cx);
             }
             Command::Reset => {
-                if self.browser.reset_pinned_tab(id) {
+                if self.edit_browser(|browser| browser.reset_pinned_tab(id)) {
                     if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); for id in self.browser.related_tabs(id) { pages.discard(id); } }
                 }
             }
-            Command::Replace => { self.browser.replace_pinned_url(id); }
+            Command::Replace => { self.edit_browser(|browser| browser.replace_pinned_url(id)); }
             Command::Mute => {
                 let ids = if pane_menu { vec![id] } else { self.browser.related_tabs(id) };
                 let muted = !ids.iter().all(|id| self.browser.all_tabs().any(|tab| tab.id == *id && tab.muted));

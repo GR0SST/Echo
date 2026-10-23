@@ -42,9 +42,7 @@ const COMMAND_BAR_RADIUS: f32 = 12.0;
 const MAX_TAB_SUGGESTIONS: usize = 6;
 const MAX_HISTORY_SUGGESTIONS: usize = 4;
 const MAX_COMMAND_SUGGESTIONS: usize = 12;
-const ARCHIVE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
-const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(1);
 const ARCHIVE_OPTIONS: &[(&str, Option<u64>)] = &[
     ("Never", None), ("1 hour", Some(3600)), ("6 hours", Some(21600)),
     ("12 hours", Some(43200)), ("24 hours", Some(86400)),
@@ -521,7 +519,8 @@ pub struct FloatingSidebar {
 struct SidebarScrolls { pinned: gpui::ScrollHandle, today: gpui::ScrollHandle, pending: Rc<Cell<Option<(Section, usize)>>> }
 
 pub struct BrowserWindow {
-    pub browser: Browser,
+    pub browser: browser_core::windows::WindowProjection,
+    pub(crate) profile: crate::profile::ProfileBinding,
     pub sidebar_visible: bool,
     sidebar_reveal: Option<PinnedReveal>,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
@@ -567,16 +566,43 @@ pub struct BrowserWindow {
     mouse_tracking: Rc<RefCell<MouseTracking>>,
     pub pager: Pager,
     pub(crate) focus_handle: FocusHandle,
-    _save_on_quit: Option<Subscription>,
 }
 
 impl BrowserWindow {
+    pub(crate) fn reset_profile_pager(&mut self, index: usize) {
+        self.pager.settle = None;
+        self.pager.drag = None;
+        self.pager.position = index as f32;
+    }
+
+    pub(crate) fn receive_profile_projection(&mut self, projection: browser_core::windows::WindowProjection) {
+        if self.browser.active_space != projection.active_space || self.browser.space().id != projection.space().id {
+            self.reset_profile_pager(projection.active_space);
+        }
+        self.browser = projection;
+    }
+
     pub fn new(
         browser: Browser,
         engine: Option<Box<dyn WebEngine>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let profile = crate::profile::ProfileHandle::new(browser, cx);
+        let selection = profile.selection();
+        Self::with_profile(profile, Some(selection), engine, window, cx)
+    }
+
+    pub(crate) fn with_profile(
+        profile: crate::profile::ProfileHandle,
+        selection: Option<browser_core::windows::WindowSelection>,
+        engine: Option<Box<dyn WebEngine>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let selection = selection.unwrap_or_else(|| profile.new_window_selection());
+        let browser = profile.projection(&selection);
+        let profile = crate::profile::ProfileBinding::new(profile, selection, cx);
         let pages = engine.map(|engine| Rc::new(RefCell::new(Pages::new(engine))));
         if let Some(pages) = pages.clone() {
             let pump = pages.borrow().pump_fn();
@@ -602,21 +628,10 @@ impl BrowserWindow {
             .detach();
         }
 
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(ARCHIVE_CHECK_INTERVAL).await;
-            let alive = this.update(cx, |this, cx| {
-                if this.browser.archive_idle(SystemTime::now()) > 0 {
-                    cx.notify();
-                }
-            });
-            if alive.is_err() {
-                break;
-            }
-        })
-        .detach();
-
         let position = browser.active_space as f32;
         cx.on_release(|this, cx| {
+            this.cancel_split_draft();
+            this.profile.flush(cx);
             this.remove_child_windows(cx);
         }).detach();
         Self {
@@ -625,6 +640,7 @@ impl BrowserWindow {
                 ..Default::default()
             },
             browser,
+            profile,
             sidebar_visible: true,
             sidebar_reveal: None,
             sidebar_scrolls: HashMap::new(),
@@ -661,43 +677,13 @@ impl BrowserWindow {
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
             focus_handle: cx.focus_handle(),
-            _save_on_quit: None,
         }
     }
 
     /// Keeps the session saved at `path`: shortly after every change and
     /// when the app quits.
     pub fn save_session_to(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        if self.browser.is_private() { return; }
-        // Empty, so the first launch's content is saved too.
-        let saved = Rc::new(RefCell::new(String::new()));
-        let save = {
-            let saved = saved.clone();
-            move |this: &BrowserWindow| {
-                let json = this.session_json();
-                if *saved.borrow() == json {
-                    return;
-                }
-                match browser_core::session::save(&path, &json) {
-                    Ok(()) => *saved.borrow_mut() = json,
-                    Err(error) => eprintln!("Cannot save the session to {}: {error}", path.display()),
-                }
-            }
-        };
-        let on_release = save.clone();
-        cx.on_release(move |this, _| on_release(this)).detach();
-        let on_quit = save.clone();
-        self._save_on_quit = Some(cx.on_app_quit(move |this, _| {
-            on_quit(this);
-            async {}
-        }));
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(SESSION_SAVE_INTERVAL).await;
-            if this.update(cx, |this, _| save(this)).is_err() {
-                break;
-            }
-        })
-        .detach();
+        self.profile.save_session_to(path, cx);
     }
 
     /// Closing a window keeps its tabs in the session, unlike Archive Tab.
@@ -743,7 +729,7 @@ impl BrowserWindow {
                     if let Some(tab) = tab {
                         let active = self.browser.space().active_tab;
                         if active.is_some_and(|id| self.browser.related_tabs(id).contains(&tab)) {
-                            self.browser.activate_tab(tab, SystemTime::now());
+                            self.edit_browser(|browser| browser.activate_tab(tab, SystemTime::now()));
                             if active != Some(tab) { self.close_find(cx); }
                         }
                     }
@@ -751,28 +737,28 @@ impl BrowserWindow {
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
                         if !title.is_empty() {
-                            self.browser.set_title(tab, title.clone());
+                            self.edit_browser(|browser| browser.set_title(tab, title.clone()));
                             let url = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| entry.url.clone());
-                            if let Some(url) = url { self.browser.update_history_title(&url, &title); }
+                            if let Some(url) = url { self.edit_browser(|browser| browser.update_history_title(&url, &title)); }
                         }
                     }
                 }
                 Event::Favicon { view, page_url, png } => {
-                    if pages.borrow().tab_for(view).is_some() { self.browser.cache_favicon(&page_url, png); }
+                    if pages.borrow().tab_for(view).is_some() { self.edit_browser(|browser| browser.cache_favicon(&page_url, png)); }
                 }
                 Event::UrlChanged { view, url } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
-                        self.browser.set_url(tab, url.clone());
-                        self.browser.record_visit(&url, SystemTime::now());
+                        self.edit_browser(|browser| browser.set_url(tab, url.clone()));
+                        self.edit_browser(|browser| browser.record_visit(&url, SystemTime::now()));
                         let title = self.browser.all_tabs().find(|entry| entry.id == tab).and_then(|entry| entry.page_title.clone());
-                        if let Some(title) = title { self.browser.update_history_title(&url, &title); }
+                        if let Some(title) = title { self.edit_browser(|browser| browser.update_history_title(&url, &title)); }
                     }
                 }
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
                 Event::EditFocusChanged { .. } => {},
                 Event::OpenInNewTab { url, .. } => {
-                    let id = self.browser.new_tab(url.clone(), SystemTime::now());
-                    self.browser.set_title(id, display_url(&url));
+                    let id = self.edit_browser(|browser| browser.new_tab(url.clone(), SystemTime::now()));
+                    self.edit_browser(|browser| browser.set_title(id, display_url(&url)));
                 }
                 Event::Shortcut(shortcut) => {
                     // Actions update this view, so dispatch after this update ends.
@@ -793,7 +779,7 @@ impl BrowserWindow {
                 Event::LoadingChanged { view, loading: false, .. } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
                         let entry = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| (entry.url.clone(), entry.page_title.clone()));
-                        if let Some((url, Some(title))) = entry { self.browser.update_history_title(&url, &title); }
+                        if let Some((url, Some(title))) = entry { self.edit_browser(|browser| browser.update_history_title(&url, &title)); }
                     }
                 }
                 Event::LoadingChanged { .. } => {}
@@ -814,7 +800,7 @@ impl BrowserWindow {
     fn edit_undo(&mut self, redo: bool, cx: &mut Context<Self>) {
         let editable = self.browser.active_tab().is_some_and(|tab|
             self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
-        if !editable && if redo { self.browser.redo_sidebar(SystemTime::now()) } else { self.browser.undo_sidebar(SystemTime::now()) } {
+        if !editable && if redo { self.edit_browser(|browser| browser.redo_sidebar(SystemTime::now())) } else { self.edit_browser(|browser| browser.undo_sidebar(SystemTime::now())) } {
             self.settle_pager(cx);
             cx.notify();
         } else {
@@ -1226,47 +1212,47 @@ impl BrowserWindow {
                         if omnibox::is_internal_url(resolved.url()) { return; }
                         let Some(draft) = self.split_draft.take() else { return; };
                         let id = draft.pane;
-                        self.browser.navigate(id, resolved.url());
+                        self.edit_browser(|browser| browser.navigate(id, resolved.url()));
                         id
                     }
-                    Target::NewTab => self.browser.new_tab(resolved.url(), now),
+                    Target::NewTab => self.edit_browser(|browser| browser.new_tab(resolved.url(), now)),
                     Target::Tab(id) => {
-                        self.browser.navigate(id, resolved.url());
+                        self.edit_browser(|browser| browser.navigate(id, resolved.url()));
                         id
                     }
                     Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::NewFolder { .. } | Target::RenameFolder(_) | Target::MoveToFolder(_) | Target::MoveFolder(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
-                self.browser.set_title(id, title);
+                self.edit_browser(|browser| browser.set_title(id, title));
             }
             Suggestion::History { title, url } => {
                 let id = match target {
-                    Target::NewTab => self.browser.new_tab(&url, now),
-                    Target::Tab(id) => { self.browser.navigate(id, &url); id }
+                    Target::NewTab => self.edit_browser(|browser| browser.new_tab(&url, now)),
+                    Target::Tab(id) => { self.edit_browser(|browser| browser.navigate(id, &url)); id }
                     Target::Split { .. } => {
                         let Some(draft) = self.split_draft.take() else { return; };
-                        self.browser.navigate(draft.pane, &url);
+                        self.edit_browser(|browser| browser.navigate(draft.pane, &url));
                         draft.pane
                     }
                     _ => return,
                 };
-                self.browser.set_title(id, title);
+                self.edit_browser(|browser| browser.set_title(id, title));
             }
             Suggestion::SplitTab { id, .. } => {
                 if let Target::Split { anchor, placement } = target {
                     let Some(draft) = self.split_draft.take() else { return; };
                     let id = if self.browser.is_favorite(id) || self.browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == id)) {
-                        self.browser.copy_item_to_today(id, now).expect("existing suggested tab")
+                        self.edit_browser(|browser| browser.copy_item_to_today(id, now)).expect("existing suggested tab")
                     } else { id };
-                    self.browser.discard_split_draft(draft.pane, None, now);
-                    self.browser.add_split(anchor, id, placement, now).expect("validated suggested pane");
+                    self.edit_browser(|browser| browser.discard_split_draft(draft.pane, None, now));
+                    self.edit_browser(|browser| browser.add_split(anchor, id, placement, now)).expect("validated suggested pane");
                 } else { return; }
             }
             Suggestion::SwitchToTab { id, .. } => {
                 if self.browser.is_favorite(id) {
-                    self.browser.activate_tab(id, now);
+                    self.edit_browser(|browser| browser.activate_tab(id, now));
                 } else if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)) {
-                    self.browser.switch_space(index);
-                    self.browser.activate_tab(id, now);
+                    self.edit_browser(|browser| browser.switch_space(index));
+                    self.edit_browser(|browser| browser.activate_tab(id, now));
                     self.settle_pager(cx);
                 }
             }
@@ -1275,7 +1261,7 @@ impl BrowserWindow {
                 if self.command_bar.as_ref().is_some_and(|bar| bar.target != target) { return; }
             }
             Suggestion::ArchivedTab { id, .. } => {
-                if self.browser.restore_archived(id, now).is_some() {
+                if self.edit_browser(|browser| browser.restore_archived(id, now)).is_some() {
                     self.settle_pager(cx);
                     self.show_toast(format!("Tab restored to {}", self.browser.space().name), cx);
                 }
@@ -1286,11 +1272,11 @@ impl BrowserWindow {
                 return;
             }
             Suggestion::ConfirmClearArchive => {
-                self.browser.archive.clear();
+                self.edit_browser(|browser| browser.archive.clear());
                 self.show_toast("Archive cleared".into(), cx);
             }
             Suggestion::ArchiveAfter { seconds, .. } => {
-                self.browser.archive_after = seconds.map(Duration::from_secs);
+                self.edit_browser(|browser| browser.archive_after = seconds.map(Duration::from_secs));
             }
             Suggestion::SaveFolderName { name } => {
                 if !self.save_folder_name(target, &name, cx) { return; }
@@ -1300,22 +1286,22 @@ impl BrowserWindow {
             }
             Suggestion::SaveIcon { icon } => {
                 match target {
-                    Target::Icon(crate::icons::IconTarget::Folder(id)) => { self.browser.set_folder_icon(id, icon.as_deref()); }
-                    Target::Icon(crate::icons::IconTarget::Tab(id)) => { self.browser.set_item_icon(id, icon.as_deref()); }
-                    Target::Icon(crate::icons::IconTarget::Space(id)) => { self.browser.set_space_icon(id, icon.as_deref()); }
+                    Target::Icon(crate::icons::IconTarget::Folder(id)) => { self.edit_browser(|browser| browser.set_folder_icon(id, icon.as_deref())); }
+                    Target::Icon(crate::icons::IconTarget::Tab(id)) => { self.edit_browser(|browser| browser.set_item_icon(id, icon.as_deref())); }
+                    Target::Icon(crate::icons::IconTarget::Space(id)) => { self.edit_browser(|browser| browser.set_space_icon(id, icon.as_deref())); }
                     _ => return,
                 }
             }
             Suggestion::SaveTabName { name } => {
-                if let Target::RenameTab(id) = target { self.browser.rename_tab(id, &name); }
+                if let Target::RenameTab(id) = target { self.edit_browser(|browser| browser.rename_tab(id, &name)); }
             }
             Suggestion::SaveSpace { name } => match target {
                 Target::NewSpace => {
                     let hue = (self.browser.space().hue + 137.5).rem_euclid(360.0);
-                    self.browser.add_space(name, hue);
+                    self.edit_browser(|browser| browser.add_space(name, hue));
                     self.switch_space(self.browser.spaces.len() - 1, cx);
                 }
-                Target::RenameSpace(id) => { self.browser.rename_space(id, &name); }
+                Target::RenameSpace(id) => { self.edit_browser(|browser| browser.rename_space(id, &name)); }
                 _ => return,
             },
         }
@@ -1332,20 +1318,20 @@ impl BrowserWindow {
                 }
             }
             Command::MoveToFolder => { if let Some(id) = self.browser.space().active_tab { self.edit_folder_destination(Target::MoveToFolder(id), cx); } }
-            Command::CollapseAllFolders => { self.browser.set_all_folders_collapsed(self.browser.space().id, true); }
-            Command::ExpandAllFolders => { self.browser.set_all_folders_collapsed(self.browser.space().id, false); }
+            Command::CollapseAllFolders => { self.edit_browser(|browser| browser.set_all_folders_collapsed(browser.space().id, true)); }
+            Command::ExpandAllFolders => { self.edit_browser(|browser| browser.set_all_folders_collapsed(browser.space().id, false)); }
             Command::RenameFolder(id) => self.edit_folder_name(id, cx),
             Command::ExpandFolder(id) => self.expand_folder(id, cx),
             Command::AddSplit(placement) => self.edit_split(placement, cx),
             Command::CloseSplitPane => { if let Some(id) = self.browser.space().active_tab { self.close_split_pane(id, cx); } }
-            Command::SplitAxis(axis) => { if let Some(id) = self.browser.space().active_tab { self.browser.set_split_axis(id, axis); } }
-            Command::SeparateSplit => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
-            Command::SeparatePane => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split_pane(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
+            Command::SplitAxis(axis) => { if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.set_split_axis(id, axis)); } }
+            Command::SeparateSplit => { if let Some(id) = self.browser.space().active_tab { if !self.edit_browser(|browser| browser.separate_split(id)) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
+            Command::SeparatePane => { if let Some(id) = self.browser.space().active_tab { if !self.edit_browser(|browser| browser.separate_split_pane(id)) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
             Command::ExpandCurrentSplit => self.expand_current_split(cx),
             Command::ViewSource => self.view_source(cx),
-            Command::FocusPane(index) => { self.browser.focus_split_pane(index, SystemTime::now()); }
-            Command::CyclePane(delta) => { self.browser.cycle_split_pane(delta, SystemTime::now()); }
-            Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.browser.move_split_pane(id, delta); } }
+            Command::FocusPane(index) => { self.edit_browser(|browser| browser.focus_split_pane(index, SystemTime::now())); }
+            Command::CyclePane(delta) => { self.edit_browser(|browser| browser.cycle_split_pane(delta, SystemTime::now())); }
+            Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.move_split_pane(id, delta)); } }
             Command::DuplicateTab => { if let Some(id) = self.browser.space().active_tab { self.duplicate_tab(id, cx); } }
             Command::RenameTab => {
                 if let Some(tab) = self.browser.active_tab() {
@@ -1360,12 +1346,12 @@ impl BrowserWindow {
             }
             Command::CustomizeTabIcon => { if let Some(id) = self.browser.space().active_tab { self.edit_icon(crate::icons::IconTarget::Tab(id), cx); } }
             Command::CustomizeSpaceIcon => self.edit_icon(crate::icons::IconTarget::Space(self.browser.space().id), cx),
-            Command::ResetNameAndIcon => { if let Some(id) = self.browser.space().active_tab { self.browser.reset_item_customization(id); } }
+            Command::ResetNameAndIcon => { if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.reset_item_customization(id)); } }
             Command::ResetTabName => {
-                if let Some(id) = self.browser.space().active_tab { self.browser.reset_tab_name(id); }
+                if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.reset_tab_name(id)); }
             }
             Command::ResetSpace => {
-                let tabs = self.browser.reset_space();
+                let tabs = self.edit_browser(|browser| browser.reset_space());
                 if let Some(pages) = &self.pages {
                     let mut pages = pages.borrow_mut();
                     for tab in &tabs { pages.discard(*tab); }
@@ -1374,12 +1360,12 @@ impl BrowserWindow {
             }
             Command::ResetPinnedTab => {
                 if let Some(id) = self.browser.space().active_tab {
-                    if self.browser.reset_pinned_tab(id) { self.show_toast("Tab reset to its pinned URL".into(), cx); }
+                    if self.edit_browser(|browser| browser.reset_pinned_tab(id)) { self.show_toast("Tab reset to its pinned URL".into(), cx); }
                 }
             }
             Command::ReplacePinnedUrl => {
                 if let Some(id) = self.browser.space().active_tab {
-                    if self.browser.replace_pinned_url(id) { self.show_toast("Pinned URL updated".into(), cx); }
+                    if self.edit_browser(|browser| browser.replace_pinned_url(id)) { self.show_toast("Pinned URL updated".into(), cx); }
                 }
             }
             Command::ViewHistory => self.history_from_command(cx),
@@ -1404,17 +1390,17 @@ impl BrowserWindow {
                 cx.defer(crate::open_incognito_window);
             }
             Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
-            Command::ToggleSpaceHeader => { self.browser.set_space_header(self.browser.space().id, !self.browser.space().show_header); }
-            Command::ToggleFavoritesOrdering => { self.browser.include_favorites_in_ordering = !self.browser.include_favorites_in_ordering; }
+            Command::ToggleSpaceHeader => { self.edit_browser(|browser| browser.set_space_header(browser.space().id, !browser.space().show_header)); }
+            Command::ToggleFavoritesOrdering => { self.edit_browser(|browser| browser.include_favorites_in_ordering = !browser.include_favorites_in_ordering); }
             Command::RevealTab => self.reveal_active_tab(cx),
             Command::ToggleSidebar => self.toggle_sidebar(cx),
             Command::TogglePin => {
-                if let Some(id) = self.browser.space().active_tab { self.browser.toggle_pin(id); }
+                if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.toggle_pin(id)); }
             }
             Command::ToggleFavorite => {
                 if let Some(id) = self.browser.space().active_tab {
-                    if self.browser.is_favorite(id) { self.browser.unfavorite_tab(id); }
-                    else if !self.browser.favorite_tab(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); }
+                    if self.browser.is_favorite(id) { self.edit_browser(|browser| browser.unfavorite_tab(id)); }
+                    else if !self.edit_browser(|browser| browser.favorite_tab(id)) { self.show_toast("You can have up to 12 Favorites".into(), cx); }
                 }
             }
             Command::ToggleMute => {
@@ -1425,9 +1411,9 @@ impl BrowserWindow {
             Command::TogglePinnedSection => self.toggle_pinned_section(self.browser.active_space, cx),
             Command::CloseTab => self.close_focused_tab(cx),
             Command::ArchiveRelative(relative) => { if let Some(id) = self.browser.space().active_tab { self.archive_relative(id, relative, cx); } }
-            Command::ClearToday => { self.browser.clear_today(SystemTime::now()); }
+            Command::ClearToday => { self.edit_browser(|browser| browser.clear_today(SystemTime::now())); }
             Command::RestoreTab => {
-                if self.browser.restore_last_archived(SystemTime::now()).is_some() { self.settle_pager(cx); }
+                if self.edit_browser(|browser| browser.restore_last_archived(SystemTime::now())).is_some() { self.settle_pager(cx); }
             }
             Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
             Command::ForceReload => self.with_active_page(|pages, tab| pages.force_reload(tab)),
@@ -1445,10 +1431,10 @@ impl BrowserWindow {
             Command::PreviousTab => self.cycle_tab(-1, cx),
             Command::MoveTab { space, section } => {
                 if let Some(id) = self.browser.space().active_tab {
-                    if self.browser.move_tab(id, space, section) {
+                    if self.edit_browser(|browser| browser.move_tab(id, space, section)) {
                         if let Some(index) = self.browser.spaces.iter().position(|candidate| candidate.id == space) {
                             self.switch_space(index, cx);
-                            self.browser.activate_tab(id, SystemTime::now());
+                            self.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
                             self.show_toast(format!("Moved tab to {}", self.browser.space().name), cx);
                         }
                     }
@@ -1520,8 +1506,8 @@ impl BrowserWindow {
         let Some(url) = self.current_source_url() else { return; };
         self.close_command_bar(cx);
         self.close_find(cx);
-        let id = self.browser.new_tab(&url, SystemTime::now());
-        self.browser.set_title(id, url);
+        let id = self.edit_browser(|browser| browser.new_tab(&url, SystemTime::now()));
+        self.edit_browser(|browser| browser.set_title(id, url));
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
         cx.notify();
     }
@@ -1558,7 +1544,7 @@ impl BrowserWindow {
     pub(crate) fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         self.finish_tab_rename(true, cx);
         let related = self.browser.related_tabs(id);
-        if self.browser.close_tab(id, SystemTime::now()).is_some() {
+        if self.edit_browser(|browser| browser.close_tab(id, SystemTime::now())).is_some() {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 for id in related { pages.discard(id); }
@@ -1581,14 +1567,16 @@ impl BrowserWindow {
     }
 
     fn toggle_pinned_section(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(space) = self.browser.spaces.get_mut(index) else { return; };
+        let Some(space) = self.browser.spaces.get(index) else { return; };
         let id = space.id;
         let was_collapsed = space.pinned_collapsed;
         let from = self.pinned_reveals.remove(&id)
             .filter(|reveal| reveal.collapsed == was_collapsed)
             .map_or(if was_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
         let collapsed = !was_collapsed;
-        space.pinned_collapsed = collapsed;
+        self.edit_browser(|browser| {
+            if let Some(space) = browser.spaces.iter_mut().find(|space| space.id == id) { space.pinned_collapsed = collapsed; }
+        });
         let to = if collapsed { 0. } else { 1. };
         if !crate::native::prefers_reduced_motion() {
             let started = cx.background_executor().now();
@@ -1609,7 +1597,7 @@ impl BrowserWindow {
 
     fn on_toggle_pin(&mut self, _: &TogglePin, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.browser.space().active_tab {
-            self.browser.toggle_pin(id);
+            self.edit_browser(|browser| browser.toggle_pin(id));
             cx.notify();
         }
     }
@@ -1648,7 +1636,7 @@ impl BrowserWindow {
         self.close_command_bar(cx);
         if !self.sidebar_visible { self.toggle_sidebar(cx); }
         self.close_floating_sidebar(cx);
-        for folder in self.browser.folder_ancestors(active) { self.browser.set_folder_collapsed(folder, false); }
+        for folder in self.browser.folder_ancestors(active) { self.edit_browser(|browser| browser.set_folder_collapsed(folder, false)); }
         let anchor = self.browser.item_anchor(active);
         let space = self.browser.space();
         let section = if space.pinned.iter().any(|tab| tab.id == anchor) { Some(Section::Pinned) }
@@ -1659,7 +1647,7 @@ impl BrowserWindow {
                 else { tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor) };
             let scrolls = self.sidebar_scrolls.entry(space.id).or_default();
             if let Some(index) = index { scrolls.pending.set(Some((section, index))); }
-            if section == Section::Pinned { self.browser.spaces[self.browser.active_space].pinned_collapsed = false; }
+            if section == Section::Pinned { self.edit_browser(|browser| browser.spaces[browser.active_space].pinned_collapsed = false); }
         }
         self.settle_pager(cx);
         cx.notify();
@@ -1902,19 +1890,19 @@ impl BrowserWindow {
     }
 
     fn cycle_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
-        self.browser.cycle_tab(delta, SystemTime::now());
+        self.edit_browser(|browser| browser.cycle_tab(delta, SystemTime::now()));
         cx.notify();
     }
 
     pub(crate) fn switch_space(&mut self, index: usize, cx: &mut Context<Self>) {
         self.finish_tab_rename(true, cx);
-        self.browser.switch_space(index);
+        self.edit_browser(|browser| browser.switch_space(index));
         self.settle_pager(cx);
         cx.notify();
     }
 
     fn reorder_space(&mut self, id: SpaceId, destination: usize, cx: &mut Context<Self>) {
-        if self.browser.move_space(id, destination) {
+        if self.edit_browser(|browser| browser.move_space(id, destination)) {
             // The selected Space is the same object at a new index. A pager
             // animation here would briefly display a different Space's tabs.
             self.pager.settle = None;
@@ -2011,7 +1999,7 @@ impl BrowserWindow {
                 this.open_tab_menu(id, event.position, window, cx);
             }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                this.browser.activate_sidebar_item(id, SystemTime::now());
+                this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
                     this.open_tab_rename(id, window, cx);
                 }
@@ -2073,7 +2061,7 @@ impl BrowserWindow {
             }))
             // No tooltip: the page view covers the sidebar's popups.
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                this.browser.activate_sidebar_item(id, SystemTime::now());
+                this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
                     let title = this.browser.item_title(id);
                     this.open_command_bar(Target::RenameTab(id), &title, window, cx);
@@ -2490,8 +2478,8 @@ impl BrowserWindow {
                     .child(div().id(("clear-today", index)).when(current, |this| this.debug_selector(|| "clear-today".into()))
                         .flex().items_center().gap(px(2.)).hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.browser.switch_space(index);
-                            this.browser.clear_today(SystemTime::now());
+                            this.edit_browser(|browser| browser.switch_space(index));
+                            this.edit_browser(|browser| browser.clear_today(SystemTime::now()));
                             this.settle_pager(cx);
                             cx.notify();
                         }))
@@ -2846,7 +2834,7 @@ impl BrowserWindow {
                         .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.browser.delete_history_entry(&url);
+                            this.edit_browser(|browser| browser.delete_history_entry(&url));
                             let count = this.suggestions(cx).len();
                             if let Some(bar) = &mut this.command_bar {
                                 bar.selected = bar.selected.min(count.saturating_sub(1));
@@ -3043,15 +3031,15 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &PreviousSpace, _, cx| this.cycle_space(-1, cx)))
             .on_action(cx.listener(|this, action: &SwitchToSpace, _, cx| this.switch_space(action.0, cx)))
             .on_action(cx.listener(|this, action: &GoToItem, _, cx| {
-                this.browser.activate_item(action.0, SystemTime::now());
+                this.edit_browser(|browser| browser.activate_item(action.0, SystemTime::now()));
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ClearToday, _, cx| {
-                this.browser.clear_today(SystemTime::now());
+                this.edit_browser(|browser| browser.clear_today(SystemTime::now()));
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &RestoreTab, _, cx| {
-                if this.browser.restore_last_archived(SystemTime::now()).is_some() {
+                if this.edit_browser(|browser| browser.restore_last_archived(SystemTime::now())).is_some() {
                     this.settle_pager(cx);
                 }
                 cx.notify();

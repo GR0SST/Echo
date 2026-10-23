@@ -77,8 +77,8 @@ impl BrowserWindow {
         let Some(editor) = self.tab_rename.take() else { return; };
         if save {
             let name = editor.input.read(cx).text().trim();
-            if name.is_empty() { self.browser.reset_tab_name(editor.tab); }
-            else { self.browser.rename_tab(editor.tab, name); }
+            if name.is_empty() { self.edit_browser(|browser| browser.reset_tab_name(editor.tab)); }
+            else { self.edit_browser(|browser| browser.rename_tab(editor.tab, name)); }
         }
         cx.notify();
     }

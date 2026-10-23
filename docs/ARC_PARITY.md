@@ -52,7 +52,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Tab… (opens the Command Bar) | ⌘T | done | — |
-| New Window | ⌘N | missing | Core window selections now project the shared profile without copying editable tab ownership. The GPUI action, single profile/session owner and shared live-page hosting are not wired yet |
+| New Window | ⌘N | missing | GPUI now uses a single editable profile/session owner with read-only window projections. Two-window tests cover shared edits, independent selection, Space reordering and saving after the original window closes. The menu/shortcut action and shared live-page hosting are not wired yet |
 | Blank Window | ⌃⌘N | missing | — |
 | New Incognito Window | ⇧⌘N | partial | File menu, shortcut and Command Bar open independent private tab lists. CEF cookies and localStorage are shared only among live private windows, isolated from regular browsing and discarded after the last private window closes. Private visits and sessions are not saved; closed tabs can be restored in memory. Verified against installed Arc and bundled Echo. Private menu/action availability and remaining visual states still need parity work |
 | New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
@@ -294,7 +294,7 @@ in code, so some were reconstructed from translator comments (?).
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Auto-archiving idle Today tabs, 12 hours by default | done | A once-a-minute timer in `window.rs`, logic in `core::archive_idle` |
+| Auto-archiving idle Today tabs, 12 hours by default | done | One once-a-minute timer per profile in `profile.rs`; `core::archive_idle_except` protects selected tabs and complete split groups from every bound window |
 | Intervals: Never, 1 hour (?), 6 hours, 12 hours, 24 hours, 7 days, 30 days | done | Command Bar → Archive Tabs After… opens a searchable picker; current interval first, persisted in the session |
 | Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
 | Separate "Archive Little Arcs after:" interval | missing | — |
@@ -486,7 +486,7 @@ are implemented for copied links; the remaining notifications follow below.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Saving the session between launches (Spaces, tabs, archive) | done | `session.json` in the profile folder; demo data only on the first launch. URLs are saved, back/forward history isn't |
+| Saving the session between launches (Spaces, tabs, archive) | done | One profile owner writes `session.json`, including after the original window closes. Uncommitted split drafts from all bound windows are excluded. Demo data only on first launch; URLs are saved, back/forward history isn't |
 | "When opening Arc, restore windows from previous session" | missing | — |
 | Arc Sync: syncing the sidebar (Spaces, Pinned, folders) between devices with end-to-end encryption and a recovery phrase | missing | — |
 | Synced settings (`SyncedPreferences`) | missing | — |

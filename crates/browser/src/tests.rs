@@ -30,6 +30,158 @@ fn open_with(
     (view, cx)
 }
 
+fn another_profile_window(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> (Entity<BrowserWindow>, VisualTestContext) {
+    let profile = view.read_with(cx, |view, _| view.profile.handle.clone());
+    let handle = cx.cx.update(|cx| {
+        use gpui::AppContext;
+        cx.open_window(gpui::WindowOptions::default(), |window, cx| cx.new(|cx| {
+            let view = BrowserWindow::with_profile(profile, None, None, window, cx);
+            view.focus(window);
+            view
+        })).unwrap()
+    });
+    let view = handle.root(&mut cx.cx).unwrap();
+    let visual = VisualTestContext::from_window(handle.into(), &cx.cx);
+    visual.run_until_parked();
+    (view, visual)
+}
+
+#[gpui::test]
+fn shared_profile_windows_show_the_same_tabs_with_independent_selection(cx: &mut TestAppContext) {
+    let (a, visual_a) = open(cx);
+    visual_a.simulate_keystrokes("cmd-t");
+    bar(&a, visual_a).simulate_input("https://first.example/window-a");
+    bar(&a, visual_a).simulate_keystrokes("enter");
+    let first = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_profile_window(&a, visual_a);
+    assert!(b.read_with(&visual_b, |view, _| view.browser.spaces.iter().all(|space| space.active_tab.is_none())));
+    visual_b.simulate_keystrokes("cmd-t");
+    bar(&b, &mut visual_b).simulate_input("https://second.example/window-b");
+    bar(&b, &mut visual_b).simulate_keystrokes("enter");
+    let second = b.read_with(&visual_b, |view, _| view.browser.active_tab().unwrap().id);
+    assert_ne!(first, second);
+    a.read_with(visual_a, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().id, first);
+        assert!(view.browser.all_tabs().any(|tab| tab.id == second));
+    });
+    visual_b.simulate_keystrokes("cmd-d");
+    a.read_with(visual_a, |view, _| {
+        assert!(view.browser.space().pinned.iter().any(|tab| tab.id == second));
+        assert_eq!(view.browser.active_tab().unwrap().id, first);
+    });
+    visual_b.simulate_keystrokes("cmd-l");
+    bar(&b, &mut visual_b).simulate_input("https://second.example/changed");
+    bar(&b, &mut visual_b).simulate_keystrokes("enter");
+    assert!(a.read_with(visual_a, |view, _| view.browser.all_tabs().any(|tab| tab.id == second && tab.url == "https://second.example/changed")));
+}
+
+#[gpui::test]
+fn shared_profile_space_reordering_preserves_each_windows_visible_space(cx: &mut TestAppContext) {
+    let (a, visual_a) = open(cx);
+    let (b, mut visual_b) = another_profile_window(&a, visual_a);
+    visual_b.simulate_keystrokes("ctrl-2");
+    visual_b.executor().advance_clock(Duration::from_secs(1));
+    visual_b.run_until_parked();
+    let work = b.read_with(&visual_b, |view, _| view.browser.space().id);
+    a.update(visual_a, |view, _| view.edit_browser(|browser| browser.move_space(work, 0)));
+    visual_a.run_until_parked();
+    a.read_with(visual_a, |view, _| {
+        assert_eq!(view.browser.space().name, "Personal");
+        assert_eq!(view.pager.position, 1.);
+    });
+    b.read_with(&visual_b, |view, _| {
+        assert_eq!(view.browser.space().name, "Work");
+        assert_eq!(view.pager.position, 0.);
+    });
+}
+
+#[gpui::test]
+fn shared_profile_edits_do_not_overwrite_other_edits_waiting_for_notification(cx: &mut TestAppContext) {
+    let (a, visual_a) = open(cx);
+    let (b, visual_b) = another_profile_window(&a, visual_a);
+    let before = a.read_with(visual_a, |view, _| view.browser.all_tabs().count());
+    let (first, second) = visual_a.cx.update(|cx| {
+        let first = a.update(cx, |view, _| view.edit_browser(|browser| browser.new_tab("https://first.example", std::time::SystemTime::now())));
+        let second = b.update(cx, |view, _| view.edit_browser(|browser| browser.new_tab("https://second.example", std::time::SystemTime::now())));
+        (first, second)
+    });
+    visual_a.run_until_parked();
+    assert_ne!(first, second);
+    for (view, selected) in [(&a, first), (&b, second)] {
+        view.read_with(&visual_b, |view, _| {
+            assert_eq!(view.browser.all_tabs().count(), before + 2);
+            assert_eq!(view.browser.active_tab().unwrap().id, selected);
+        });
+    }
+}
+
+#[gpui::test]
+fn shared_profile_keeps_one_session_writer_after_the_first_window_closes(cx: &mut TestAppContext) {
+    let path = std::env::temp_dir().join(format!("echo-shared-profile-{}.json", std::process::id()));
+    let competing = path.with_extension("competing.json");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&competing);
+    let (a, visual_a) = open(cx);
+    let (b, visual_b) = another_profile_window(&a, visual_a);
+    a.update(visual_a, |view, cx| view.save_session_to(path.clone(), cx));
+    b.update(visual_a, |view, cx| view.save_session_to(competing.clone(), cx));
+    b.update(visual_a, |view, _| view.edit_browser(|browser| browser.new_tab("https://second.example/before-close", std::time::SystemTime::now())));
+    visual_a.update(|window, _| window.remove_window());
+    drop(a);
+    visual_a.cx.update(|_| {});
+    assert!(browser_core::session::load(&path).unwrap().unwrap().all_tabs().any(|tab| tab.url == "https://second.example/before-close"));
+    b.update(visual_a, |view, _| view.edit_browser(|browser| browser.new_tab("https://second.example/after-close", std::time::SystemTime::now())));
+    visual_b.executor().advance_clock(Duration::from_secs(2));
+    visual_b.run_until_parked();
+    assert!(browser_core::session::load(&path).unwrap().unwrap().all_tabs().any(|tab| tab.url == "https://second.example/after-close"));
+    assert!(!competing.exists());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn shared_profile_session_excludes_another_windows_uncommitted_split_draft(cx: &mut TestAppContext) {
+    let (a, visual_a) = open(cx);
+    visual_a.simulate_keystrokes("ctrl-shift-=");
+    assert!(a.read_with(visual_a, |view, _| view.split_draft.is_some()));
+    let (b, mut visual_b) = another_profile_window(&a, visual_a);
+    visual_b.simulate_keystrokes("cmd-t");
+    bar(&b, &mut visual_b).simulate_input("https://second.example/committed");
+    bar(&b, &mut visual_b).simulate_keystrokes("enter");
+    b.read_with(&visual_b, |view, _| {
+        let restored = browser_core::session::from_json(&view.session_json()).unwrap();
+        assert!(!restored.all_tabs().any(|tab| tab.url == crate::split::EMPTY_PANE_URL));
+        assert!(restored.all_tabs().any(|tab| tab.url == "https://second.example/committed"));
+        assert_eq!(restored.active_tab().unwrap().url, "https://second.example/committed");
+    });
+    bar(&a, visual_a).simulate_keystrokes("escape");
+    assert!(b.read_with(&visual_b, |view, _| view.browser.active_tab().is_some_and(|tab| tab.url == "https://second.example/committed")));
+}
+
+#[gpui::test]
+fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut TestAppContext) {
+    let (a, visual_a) = open(cx);
+    let first = a.read_with(visual_a, |view, _| view.browser.space().today[0].id);
+    let (b, visual_b) = another_profile_window(&a, visual_a);
+    let second = b.update(visual_a, |view, _| view.edit_browser(|browser| {
+        let left = browser.new_tab("https://second.example/left", std::time::SystemTime::UNIX_EPOCH);
+        let right = browser.new_tab("https://second.example/right", std::time::SystemTime::UNIX_EPOCH);
+        browser.add_split(left, right, browser_core::splits::Placement::Right, std::time::SystemTime::UNIX_EPOCH).unwrap();
+        right
+    }));
+    let (empty, _) = another_profile_window(&a, visual_a);
+    empty.update(visual_a, |view, _| view.edit_browser(|browser| browser.archive_after = Some(Duration::ZERO)));
+    visual_b.executor().advance_clock(Duration::from_secs(61));
+    visual_b.run_until_parked();
+    for view in [&a, &b] {
+        view.read_with(&visual_b, |view, _| {
+            assert!(view.browser.all_tabs().any(|tab| tab.id == first));
+            assert!(view.browser.all_tabs().any(|tab| tab.id == second));
+            assert!(!view.browser.archive.is_empty());
+            assert_eq!(view.browser.split_for(second).unwrap().panes.len(), 2);
+        });
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
     Create(u64, String),
@@ -1346,7 +1498,7 @@ fn auto_archive_picker_changes_interval_and_escape_keeps_setting(cx: &mut TestAp
 #[gpui::test]
 fn auto_archive_picker_preserves_a_custom_saved_interval_on_enter(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
-    view.update(cx, |w, _| w.browser.archive_after = Some(Duration::from_secs(12345)));
+    view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = Some(Duration::from_secs(12345))));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("archive tabs after");
     bar(&view, cx).simulate_keystrokes("enter enter");
@@ -2637,7 +2789,7 @@ fn cef_pane_focus_updates_shortcut_targets_without_refocusing_or_reloading(cx: &
 fn switching_split_orientation_keeps_existing_views_and_navigation_state(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 2);
     fake.take_calls();
-    view.update(cx, |w, cx| { let id = w.browser.active_tab().unwrap().id; w.browser.set_split_axis(id, browser_core::splits::Axis::Vertical); cx.notify(); });
+    view.update(cx, |w, cx| { let id = w.browser.active_tab().unwrap().id; w.edit_browser(|browser| browser.set_split_axis(id, browser_core::splits::Axis::Vertical)); cx.notify(); });
     cx.run_until_parked();
     let frames = fake.0.borrow().bounds.clone();
     assert_eq!(frames[&1].x, frames[&2].x);
@@ -3266,7 +3418,7 @@ fn reveal_tab_from_a_floating_sidebar_closes_the_overlay_and_restores_the_docked
 fn archive_reason_filters_preserve_the_query_and_combine_with_space_filters(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-w cmd-w");
-    view.update(cx, |w, _| { w.browser.archive[0].reason = browser_core::ArchiveReason::Automatic; });
+    view.update(cx, |w, _| { w.edit_browser(|browser| browser.archive[0].reason = browser_core::ArchiveReason::Automatic); });
     open_archive(&view, cx);
     click(&mut bar(&view, cx), "archive-reason-automatic");
     assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).as_slice(), [Suggestion::ArchivedTab { title, .. }] if title == "Chromium")));
@@ -3292,7 +3444,7 @@ fn archive_date_headings_do_not_change_keyboard_restore_indices(cx: &mut TestApp
     view.update(cx, |w, _| {
         use chrono::{Local, TimeZone};
         let yesterday = Local::now().date_naive().pred_opt().unwrap().and_hms_opt(12, 0, 0).unwrap();
-        w.browser.archive[0].archived_at = Local.from_local_datetime(&yesterday).single().unwrap().into();
+        w.edit_browser(|browser| browser.archive[0].archived_at = Local.from_local_datetime(&yesterday).single().unwrap().into());
     });
     open_archive(&view, cx);
     let mut overlay = bar(&view, cx);
@@ -3313,8 +3465,8 @@ fn archive_show_more_reaches_older_entries_and_scrolls_inside_a_short_window(cx:
     view.update(cx, |w, _| {
         let now = std::time::SystemTime::now();
         for index in 0..20 {
-            let id = w.browser.new_tab(format!("https://archived{index}.example"), now);
-            w.browser.close_tab(id, now);
+            let id = w.edit_browser(|browser| browser.new_tab(format!("https://archived{index}.example"), now));
+            w.edit_browser(|browser| browser.close_tab(id, now));
         }
     });
     cx.simulate_resize(gpui::size(gpui::px(800.), gpui::px(480.)));
@@ -3588,9 +3740,9 @@ fn collapsing_a_folder_keeps_its_active_split_visible_and_reveal_unfolds_its_anc
 fn moving_a_split_to_a_closed_folder_in_another_space_keeps_its_engine_pages(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let destination = view.update(cx, |w, _| {
-        let space = w.browser.add_space("Work", 100.);
-        let folder = w.browser.create_folder(space, None, "Saved").unwrap();
-        w.browser.set_folder_collapsed(folder, true);
+        let space = w.edit_browser(|browser| browser.add_space("Work", 100.));
+        let folder = w.edit_browser(|browser| browser.create_folder(space, None, "Saved")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(folder, true));
         folder
     });
     fake.take_calls();
@@ -3820,11 +3972,11 @@ fn turning_an_empty_folder_into_a_space_leaves_other_tabs_and_their_engine_views
 fn pin_to_a_named_nested_folder_in_another_space_preserves_the_active_split_and_closed_folders(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let destination = view.update(cx, |w, _| {
-        let work = w.browser.add_space("Work", 100.);
-        let root = w.browser.create_folder(work, None, "Saved").unwrap();
-        let nested = w.browser.create_folder(work, Some(root), "Reference").unwrap();
-        w.browser.set_folder_collapsed(root, true);
-        w.browser.set_folder_collapsed(nested, true);
+        let work = w.edit_browser(|browser| browser.add_space("Work", 100.));
+        let root = w.edit_browser(|browser| browser.create_folder(work, None, "Saved")).unwrap();
+        let nested = w.edit_browser(|browser| browser.create_folder(work, Some(root), "Reference")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(root, true));
+        w.edit_browser(|browser| browser.set_folder_collapsed(nested, true));
         nested
     });
     fake.take_calls();
@@ -3869,10 +4021,10 @@ fn pin_to_new_folder_edits_a_name_then_pins_the_current_page_without_reloading(c
 fn named_folder_commands_disambiguate_duplicate_names_by_space_and_skip_the_current_parent(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let destination = view.update(cx, |w, cx| {
-        let work = w.browser.add_space("Work", 100.);
-        let folder = w.browser.create_folder(work, None, "Research").unwrap();
+        let work = w.edit_browser(|browser| browser.add_space("Work", 100.));
+        let folder = w.edit_browser(|browser| browser.create_folder(work, None, "Research")).unwrap();
         let outside = w.browser.space().today[0].id;
-        w.browser.activate_tab(outside, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.activate_tab(outside, std::time::SystemTime::now()));
         cx.notify();
         folder
     });
@@ -4039,7 +4191,7 @@ fn dragging_the_active_space_reorders_the_dock_without_switching_pages_or_animat
 #[gpui::test]
 fn dragging_an_inactive_space_keeps_the_focused_split_and_all_its_page_views(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
-    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); w.browser.add_space("Research", 200.); cx.notify(); });
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.add_space("Work", 100.)); w.edit_browser(|browser| browser.add_space("Research", 200.)); cx.notify(); });
     cx.run_until_parked();
     let original = active_url(&view, cx);
     fake.take_calls();
@@ -4077,7 +4229,7 @@ fn dropping_a_space_outside_the_dock_cancels_and_leaves_click_navigation_working
 #[gpui::test]
 fn dragging_a_today_tab_into_a_closed_folder_pins_it_and_reuses_the_other_loaded_pages(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
-    view.update(cx, |w, cx| { let folder = w.browser.space().folders[1].id; w.browser.set_folder_collapsed(folder, true); cx.notify(); });
+    view.update(cx, |w, cx| { let folder = w.browser.space().folders[1].id; w.edit_browser(|browser| browser.set_folder_collapsed(folder, true)); cx.notify(); });
     cx.run_until_parked();
     fake.take_calls();
     drag_between(cx, "tab-7", "folder-3");
@@ -4105,8 +4257,8 @@ fn dragging_a_today_tab_into_a_closed_folder_pins_it_and_reuses_the_other_loaded
 fn dragging_a_split_into_another_closed_folder_moves_the_complete_item_without_reloading(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let folder = view.update(cx, |w, cx| {
-        let folder = w.browser.create_folder(w.browser.space().id, None, "Saved").unwrap();
-        w.browser.set_folder_collapsed(folder, true);
+        let folder = w.edit_browser(|browser| browser.create_folder(browser.space().id, None, "Saved")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(folder, true));
         cx.notify();
         folder
     });
@@ -4133,8 +4285,8 @@ fn dragging_a_favorite_into_a_folder_preserves_the_loaded_page_and_original_url(
     let original = active_url(&view, cx);
     run_named_command(&view, cx, "favorite tab");
     let folder = view.update(cx, |w, cx| {
-        let folder = w.browser.create_folder(w.browser.space().id, None, "Saved").unwrap();
-        w.browser.set_folder_collapsed(folder, true);
+        let folder = w.edit_browser(|browser| browser.create_folder(browser.space().id, None, "Saved")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(folder, true));
         cx.notify();
         folder
     });
@@ -4171,8 +4323,8 @@ fn cancelling_an_inactive_tab_drag_does_not_activate_or_load_it(cx: &mut TestApp
 fn dragging_a_folder_with_the_focused_split_moves_its_subtree_without_recreating_pages(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let destination = view.update(cx, |w, cx| {
-        let folder = w.browser.create_folder(w.browser.space().id, None, "Saved").unwrap();
-        w.browser.set_folder_collapsed(folder, true);
+        let folder = w.edit_browser(|browser| browser.create_folder(browser.space().id, None, "Saved")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(folder, true));
         cx.notify();
         folder
     });
@@ -4212,9 +4364,9 @@ fn folder_drags_onto_self_or_descendants_are_rejected_without_toggling_disclosur
 fn dragging_an_empty_inactive_folder_preserves_the_active_item_and_the_destination_stays_closed(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let (empty, destination) = view.update(cx, |w, cx| {
-        let empty = w.browser.create_folder(w.browser.space().id, None, "Empty").unwrap();
-        let destination = w.browser.create_folder(w.browser.space().id, None, "Destination").unwrap();
-        w.browser.set_folder_collapsed(destination, true);
+        let empty = w.edit_browser(|browser| browser.create_folder(browser.space().id, None, "Empty")).unwrap();
+        let destination = w.edit_browser(|browser| browser.create_folder(browser.space().id, None, "Destination")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(destination, true));
         cx.notify();
         (empty, destination)
     });
@@ -4308,8 +4460,8 @@ fn dragging_into_the_favorites_dock_and_back_to_today_reuses_the_live_page(cx: &
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         let pin = w.browser.space().pinned[0].id;
-        w.browser.favorite_tab(pin);
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.favorite_tab(pin));
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4338,10 +4490,10 @@ fn a_full_favorites_dock_rejects_a_drop_without_moving_or_loading_the_tab(cx: &m
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         for index in 0..browser_core::favorites::MAX_FAVORITES {
-            let id = w.browser.new_tab(format!("https://favorite{index}.example"), std::time::SystemTime::now());
-            assert!(w.browser.favorite_tab(id));
+            let id = w.edit_browser(|browser| browser.new_tab(format!("https://favorite{index}.example"), std::time::SystemTime::now()));
+            assert!(w.edit_browser(|browser| browser.favorite_tab(id)));
         }
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4361,8 +4513,8 @@ fn dropping_a_split_into_a_scrolled_today_list_reveals_its_new_first_row_and_kee
     let (view, cx, fake) = open_folder_pages(cx);
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
-        for index in 0..40 { w.browser.new_tab(format!("https://long{index}.example"), std::time::SystemTime::now()); }
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        for index in 0..40 { w.edit_browser(|browser| browser.new_tab(format!("https://long{index}.example"), std::time::SystemTime::now())); }
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4390,8 +4542,8 @@ fn reordering_favorite_icons_preserves_the_current_page_for_both_inactive_and_ac
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         let pins: Vec<_> = w.browser.space().pinned.iter().map(|tab| tab.id).collect();
-        for tab in pins { w.browser.favorite_tab(tab); }
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        for tab in pins { w.edit_browser(|browser| browser.favorite_tab(tab)); }
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4418,8 +4570,8 @@ fn reordering_a_favorite_split_keeps_pane_focus_and_numbered_navigation_uses_the
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         let other = w.browser.space().today[0].id;
-        w.browser.favorite_tab(other);
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.favorite_tab(other));
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4448,8 +4600,8 @@ fn dropping_a_new_favorite_on_an_icon_inserts_it_at_that_position_without_copyin
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         let pin = w.browser.space().pinned[0].id;
-        w.browser.favorite_tab(pin);
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.favorite_tab(pin));
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4473,10 +4625,10 @@ fn a_full_favorites_dock_still_allows_existing_items_to_be_reordered(cx: &mut Te
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         for index in 0..browser_core::favorites::MAX_FAVORITES {
-            let id = w.browser.new_tab(format!("https://favorite{index}.example"), std::time::SystemTime::now());
-            w.browser.favorite_tab(id);
+            let id = w.edit_browser(|browser| browser.new_tab(format!("https://favorite{index}.example"), std::time::SystemTime::now()));
+            w.edit_browser(|browser| browser.favorite_tab(id));
         }
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4510,9 +4662,9 @@ fn dragging_a_split_after_a_folder_sibling_and_before_today_keeps_both_panes_and
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
         let folder = w.browser.space().folders[1].id;
-        let other = w.browser.new_tab("https://sibling.example", std::time::SystemTime::now());
-        w.browser.move_item_to_folder(other, folder);
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        let other = w.edit_browser(|browser| browser.new_tab("https://sibling.example", std::time::SystemTime::now()));
+        w.edit_browser(|browser| browser.move_item_to_folder(other, folder));
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4542,7 +4694,7 @@ fn dragging_a_split_after_a_folder_sibling_and_before_today_keeps_both_panes_and
 #[gpui::test]
 fn dragging_before_a_closed_folder_peek_item_pins_in_that_folder_and_preserves_its_split(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
-    view.update(cx, |w, cx| { let folder = w.browser.space().folders[1].id; w.browser.set_folder_collapsed(folder, true); cx.notify(); });
+    view.update(cx, |w, cx| { let folder = w.browser.space().folders[1].id; w.edit_browser(|browser| browser.set_folder_collapsed(folder, true)); cx.notify(); });
     cx.run_until_parked();
     fake.take_calls();
     drag_to_row_edge(cx, "tab-7", "tab-4", false);
@@ -4618,7 +4770,7 @@ fn dropping_a_today_tab_on_a_space_icon_preserves_its_section_and_live_page(cx: 
 #[gpui::test]
 fn dropping_a_pinned_split_on_a_space_icon_moves_all_panes_without_recreating_them(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
-    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.add_space("Work", 100.)); cx.notify(); });
     cx.run_until_parked();
     let split = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
     fake.take_calls();
@@ -4637,12 +4789,12 @@ fn dropping_a_pinned_split_on_a_space_icon_moves_all_panes_without_recreating_th
 
 fn add_drag_destination(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
     view.update(cx, |w, cx| {
-        let work = w.browser.add_space("Work", 100.);
-        let folder = w.browser.create_folder(work, None, "Saved").unwrap();
-        w.browser.set_folder_collapsed(folder, true);
-        w.browser.switch_space(1);
-        w.browser.new_tab("https://work.example", std::time::SystemTime::now());
-        w.browser.switch_space(0);
+        let work = w.edit_browser(|browser| browser.add_space("Work", 100.));
+        let folder = w.edit_browser(|browser| browser.create_folder(work, None, "Saved")).unwrap();
+        w.edit_browser(|browser| browser.set_folder_collapsed(folder, true));
+        w.edit_browser(|browser| browser.switch_space(1));
+        w.edit_browser(|browser| browser.new_tab("https://work.example", std::time::SystemTime::now()));
+        w.edit_browser(|browser| browser.switch_space(0));
         cx.notify();
     });
     cx.run_until_parked();
@@ -4683,7 +4835,7 @@ fn hovering_a_space_during_drag_waits_then_opens_it_and_accepts_a_split_in_its_c
 #[gpui::test]
 fn leaving_a_space_icon_before_its_drag_hover_delay_cancels_navigation_and_loading(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
-    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.add_space("Work", 100.)); cx.notify(); });
     cx.run_until_parked();
     let original = active_url(&view, cx);
     fake.take_calls();
@@ -4706,7 +4858,7 @@ fn leaving_a_space_icon_before_its_drag_hover_delay_cancels_navigation_and_loadi
 #[gpui::test]
 fn dropping_a_folder_on_another_space_moves_the_complete_focused_subtree(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
-    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.add_space("Work", 100.)); cx.notify(); });
     cx.run_until_parked();
     fake.take_calls();
     drag_between(cx, "folder-2", "space-1");
@@ -4725,7 +4877,7 @@ fn dropping_a_folder_on_another_space_moves_the_complete_focused_subtree(cx: &mu
 fn hovering_with_an_empty_folder_then_nesting_it_preserves_the_destinations_current_page(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     add_drag_destination(&view, cx);
-    view.update(cx, |w, cx| { w.browser.create_folder(w.browser.space().id, None, "Empty"); cx.notify(); });
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.create_folder(browser.space().id, None, "Empty")); cx.notify(); });
     cx.run_until_parked();
     fake.take_calls();
     let dock = cx.debug_bounds("space-1").unwrap().center();
@@ -4757,7 +4909,7 @@ fn hovering_with_an_empty_folder_then_nesting_it_preserves_the_destinations_curr
 fn dragging_a_favorite_split_to_a_space_icon_turns_it_into_local_pins_without_losing_focus(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     run_named_command(&view, cx, "favorite tab");
-    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.add_space("Work", 100.)); cx.notify(); });
     cx.run_until_parked();
     fake.take_calls();
     drag_between(cx, "favorite-4", "space-1");
@@ -4800,12 +4952,12 @@ fn a_shared_favorite_drag_keeps_its_source_pane_when_hovering_another_spaces_pan
     let (view, cx, fake) = open_folder_pages(cx);
     run_named_command(&view, cx, "favorite tab");
     view.update(cx, |w, cx| {
-        w.browser.add_space("Work", 100.);
+        w.edit_browser(|browser| browser.add_space("Work", 100.));
         let panes = w.browser.favorite_splits[0].panes.clone();
-        w.browser.switch_space(1);
-        w.browser.activate_tab(panes[0], std::time::SystemTime::now());
-        w.browser.switch_space(0);
-        w.browser.activate_tab(panes[1], std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.switch_space(1));
+        w.edit_browser(|browser| browser.activate_tab(panes[0], std::time::SystemTime::now()));
+        w.edit_browser(|browser| browser.switch_space(0));
+        w.edit_browser(|browser| browser.activate_tab(panes[1], std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();
@@ -5022,7 +5174,7 @@ fn closing_the_window_saves_changes_before_the_periodic_save(cx: &mut TestAppCon
     let (view, visual) = open(cx);
     view.update(visual, |view, cx| {
         view.save_session_to(path.clone(), cx);
-        view.browser.new_tab("https://example.com/just-before-close", std::time::SystemTime::now());
+        view.edit_browser(|browser| browser.new_tab("https://example.com/just-before-close", std::time::SystemTime::now()));
     });
     visual.update(|window, _| window.remove_window());
     drop(view);
@@ -5115,7 +5267,7 @@ fn pending_split_is_excluded_from_sessions_and_cancel_restores_axis_weights_and_
     let (view, cx, _) = open_split_pages(cx, 3);
     view.update(cx, |w, _| {
         let active = w.browser.space().active_tab.unwrap();
-        w.browser.set_split_weights(active, &[0.2, 0.3, 0.5]);
+        w.edit_browser(|browser| browser.set_split_weights(active, &[0.2, 0.3, 0.5]));
     });
     let original = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
     run_named_command(&view, cx, "add bottom split");
@@ -5257,7 +5409,7 @@ fn dropping_on_a_collapsed_space_name_reveals_the_moved_pin(cx: &mut TestAppCont
 fn space_header_matches_reference_control_positions_and_more_does_not_toggle_pins(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     view.update(cx, |w, cx| {
-        w.browser.set_space_icon(w.browser.space().id, Some("🍕"));
+        w.edit_browser(|browser| browser.set_space_icon(browser.space().id, Some("🍕")));
         cx.notify();
     });
     cx.run_until_parked();
@@ -5359,7 +5511,7 @@ fn split_sidebar_segments_fill_the_row_and_long_titles_stay_inside(cx: &mut Test
     let (view, cx, fake) = open_split_pages(cx, 2);
     view.update(cx, |w, cx| {
         let ids = w.browser.active_split().unwrap().panes.clone();
-        for id in ids { w.browser.set_title(id, "A very long page title that should truncate inside its own split segment"); }
+        for id in ids { w.edit_browser(|browser| browser.set_title(id, "A very long page title that should truncate inside its own split segment")); }
         cx.notify();
     });
     cx.run_until_parked();
@@ -5411,7 +5563,7 @@ fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext)
     let (view, cx, fake) = open_pages(cx);
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://www.youtube.com/watch?v=1".into() });
     view.update(cx, |w, cx| {
-        for tab in w.browser.space().pinned.iter().map(|tab| tab.id).collect::<Vec<_>>() { w.browser.favorite_tab(tab); }
+        for tab in w.browser.space().pinned.iter().map(|tab| tab.id).collect::<Vec<_>>() { w.edit_browser(|browser| browser.favorite_tab(tab)); }
         cx.notify();
     });
     cx.run_until_parked();
@@ -5672,8 +5824,8 @@ fn clear_today_keeps_the_focused_split_and_undo_restores_background_items(cx: &m
     let (view, cx, fake) = open_split_pages(cx, 2);
     view.update(cx, |w, cx| {
         let active = w.browser.space().active_tab.unwrap();
-        w.browser.new_tab("https://background.example", std::time::SystemTime::now());
-        w.browser.activate_tab(active, std::time::SystemTime::now());
+        w.edit_browser(|browser| browser.new_tab("https://background.example", std::time::SystemTime::now()));
+        w.edit_browser(|browser| browser.activate_tab(active, std::time::SystemTime::now()));
         cx.notify();
     });
     cx.run_until_parked();

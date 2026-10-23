@@ -6,23 +6,29 @@ use std::time::SystemTime;
 
 pub(crate) const EMPTY_PANE_URL: &str = "browser://newtab";
 
+#[derive(Clone)]
 pub(crate) struct SplitDraft {
     pub pane: TabId,
     pub anchor: TabId,
     copied: bool,
     original: Option<browser_core::splits::SplitView>,
-    previous_space: usize,
+    previous_space: browser_core::SpaceId,
     previous_active: Option<TabId>,
 }
 
 impl SplitDraft {
-    fn rollback(&self, browser: &mut Browser) {
+    pub(crate) fn owns_selection(&self, browser: &Browser) -> bool {
+        browser.space().active_tab.is_some_and(|tab| tab == self.pane
+            || (self.copied && browser.related_tabs(self.anchor).contains(&tab)))
+    }
+
+    pub(crate) fn rollback(&self, browser: &mut Browser) {
         browser.discard_split_draft(self.pane, self.copied.then_some(self.anchor), SystemTime::now());
         if let Some(original) = &self.original {
             browser.set_split_axis(original.anchor, original.axis);
             browser.set_split_weights(original.anchor, &original.weights);
         }
-        browser.switch_space(self.previous_space);
+        if let Some(index) = browser.spaces.iter().position(|space| space.id == self.previous_space) { browser.switch_space(index); }
         if let Some(active) = self.previous_active { browser.activate_tab(active, SystemTime::now()); }
     }
 }
@@ -47,7 +53,7 @@ impl BrowserWindow {
                         + crate::pages::CONTENT_INSET * (2. - this.sidebar_amount()))
                 } else { f64::from(f32::from(size.height)) - f64::from(2. * crate::pages::CONTENT_INSET) };
                 let weights = crate::split_layout::expanded_weights(extent, split.panes.len(), index);
-                this.browser.set_split_weights(pane, &weights);
+                this.edit_browser(|browser| browser.set_split_weights(pane, &weights));
                 if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); }
                 cx.notify();
             });
@@ -58,7 +64,7 @@ impl BrowserWindow {
         self.close_command_bar(cx);
         self.close_tab_menu(cx);
         self.close_find(cx);
-        if self.browser.duplicate_item(id, SystemTime::now()).is_none() {
+        if self.edit_browser(|browser| browser.duplicate_item(id, SystemTime::now())).is_none() {
             self.show_toast("You can have up to 12 Favorites".into(), cx);
         }
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
@@ -104,14 +110,14 @@ impl BrowserWindow {
         }
         self.cancel_split_draft();
         let now = SystemTime::now();
-        let previous_space = self.browser.active_space;
+        let previous_space = self.browser.space().id;
         let previous_active = self.browser.space().active_tab;
         let copied = self.browser.is_favorite(source) || self.browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == source));
         let original = (!copied).then(|| self.browser.split_for(source).cloned()).flatten();
-        let anchor = if copied { self.browser.copy_item_to_today(source, now).expect("existing split source") } else { source };
-        let pane = self.browser.new_tab(EMPTY_PANE_URL, now);
-        self.browser.set_title(pane, "New Tab");
-        self.browser.add_split(anchor, pane, placement, now).expect("validated split source");
+        let anchor = if copied { self.edit_browser(|browser| browser.copy_item_to_today(source, now)).expect("existing split source") } else { source };
+        let pane = self.edit_browser(|browser| browser.new_tab(EMPTY_PANE_URL, now));
+        self.edit_browser(|browser| browser.set_title(pane, "New Tab"));
+        self.edit_browser(|browser| browser.add_split(anchor, pane, placement, now)).expect("validated split source");
         self.split_draft = Some(SplitDraft { pane, anchor, copied, original, previous_space, previous_active });
         if let Some(bar) = &mut self.command_bar {
             bar.target = Target::Split { anchor, placement };
@@ -123,15 +129,12 @@ impl BrowserWindow {
     }
 
     pub(crate) fn cancel_split_draft(&mut self) {
-        if let Some(draft) = self.split_draft.take() { draft.rollback(&mut self.browser); }
+        if let Some(draft) = self.split_draft.take() { self.edit_browser(|browser| draft.rollback(browser)); }
     }
 
+    #[cfg(test)]
     pub(crate) fn session_json(&self) -> String {
-        if let Some(draft) = &self.split_draft {
-            let mut browser = self.browser.clone();
-            draft.rollback(&mut browser);
-            browser_core::session::to_json(&browser)
-        } else { browser_core::session::to_json(&self.browser) }
+        self.profile.session_json(&self.split_draft)
     }
 
     pub(crate) fn split_commands(&self) -> Vec<(Command, &'static str, &'static str, bool)> {
@@ -167,7 +170,7 @@ impl BrowserWindow {
             self.close_command_bar(cx);
             return;
         }
-        if self.browser.close_split_pane(id, SystemTime::now()) {
+        if self.edit_browser(|browser| browser.close_split_pane(id, SystemTime::now())) {
             self.close_find(cx);
             if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); pages.discard(id); pages.sync(&self.browser, true); }
             cx.notify();
@@ -197,7 +200,7 @@ impl BrowserWindow {
                     .hover(|style| style.bg(hsla(0., 0., 1., 0.45)))
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                         cx.stop_propagation();
-                        this.browser.activate_tab(id, SystemTime::now());
+                        this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
                         if event.click_count() == 2 { this.open_command_bar(Target::RenameTab(id), &this.browser.item_title(id), window, cx); }
                         cx.notify();
                     }))
@@ -232,7 +235,7 @@ impl BrowserWindow {
                         .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
                         .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
-                        .on_click(cx.listener(move |this, _, _, cx| { this.browser.activate_tab(id, SystemTime::now()); if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); } cx.notify(); }))
+                        .on_click(cx.listener(move |this, _, _, cx| { this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); } cx.notify(); }))
                         .child(div().id(("pane-back", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Back))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_back(id); } })))
                         .child(div().id(("pane-forward", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Forward))
@@ -241,7 +244,7 @@ impl BrowserWindow {
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().reload(id); } })))
                         .child(div().id(("pane-address", key)).debug_selector(move || format!("pane-address-{key}"))
                             .flex_1().min_w_0().text_center().truncate().child(if tab.url == EMPTY_PANE_URL { "Search or Enter URL…".into() } else { crate::window::display_url(&tab.url) })
-                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.browser.activate_tab(id, SystemTime::now()); let url = this.browser.active_tab().unwrap().url.clone(); this.open_command_bar(Target::Tab(id), &url, window, cx); })))
+                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); let url = this.browser.active_tab().unwrap().url.clone(); this.open_command_bar(Target::Tab(id), &url, window, cx); })))
                         .child(div().id(("pane-menu", key)).debug_selector(move || format!("pane-menu-{key}")).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child(crate::icons::control(crate::icons::Icon::Split)))

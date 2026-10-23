@@ -24,6 +24,7 @@ mod inline_rename;
 mod link_status;
 mod status_url;
 mod private;
+mod profile;
 pub mod pages;
 pub mod text_input;
 pub mod window;
