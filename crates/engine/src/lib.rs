@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use cef::*;
 mod devtools;
+mod downloads;
 mod editing;
 mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
