@@ -298,7 +298,7 @@ in code, so some were reconstructed from translator comments (?).
 | Feature | Status | What's missing |
 |---|---|---|
 | Auto-archiving idle Today tabs, 12 hours by default | done | One once-a-minute timer per profile in `profile.rs`; `core::archive_idle_except` protects selected tabs and complete split groups from every bound window |
-| Auto Archive interval choices | partial | Command Bar → Archive Tabs After… persists a searchable choice. Exact release choices and native settings presentation remain unverified: the bundle contains Never and 1 hour, but official documentation says Auto Archive cannot be disabled. Compiled strings alone do not establish public availability |
+| Auto Archive interval choices | partial | The four observed release choices appear in fixed order: 12 hours (default), 24 hours, 7 days, 30 days. Bundled Echo verifies selecting and persisting 7 days; unsupported legacy durations remain stored but are not offered. Native settings control and per-profile propagation remain missing |
 | Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
 | Separate "Archive Little Arcs after:" interval | missing | — |
 | ⌘W and × send the tab to the archive | done | — |

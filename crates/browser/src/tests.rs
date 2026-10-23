@@ -1526,32 +1526,43 @@ fn find_command_opens_a_small_panel_with_input_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn auto_archive_picker_offers_intervals_and_persists_never(cx: &mut TestAppContext) {
+fn auto_archive_picker_keeps_four_intervals_in_fixed_order_with_current_third(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
+    let current = Some(Duration::from_secs(7 * 86400));
+    view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = current));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("archive tabs after");
     bar(&view, cx).simulate_keystrokes("enter");
     assert!(bar_input_focused(&view, cx));
     let options = view.read_with(cx, |w, cx| w.suggestions(cx));
-    assert_eq!(options.len(), 7);
-    assert!(matches!(&options[0], Suggestion::ArchiveAfter { seconds: Some(43200), .. }));
-    bar(&view, cx).simulate_input("Never");
-    bar(&view, cx).simulate_keystrokes("enter");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), None);
+    assert_eq!(options, vec![
+        Suggestion::ArchiveAfter { label: "12 hours (default)".into(), seconds: Some(43200) },
+        Suggestion::ArchiveAfter { label: "24 hours".into(), seconds: Some(86400) },
+        Suggestion::ArchiveAfter { label: "7 days".into(), seconds: Some(604800) },
+        Suggestion::ArchiveAfter { label: "30 days".into(), seconds: Some(2592000) },
+    ]);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), current);
+    bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(bar_text(&view, cx), None);
-    let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
-    assert_eq!(restored.archive_after, None);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), current);
 }
 
 #[gpui::test]
-fn auto_archive_picker_changes_interval_and_escape_keeps_setting(cx: &mut TestAppContext) {
+fn auto_archive_picker_filters_valid_choice_and_persists_interval(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
+    view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = None));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("auto archive settings");
     bar(&view, cx).simulate_keystrokes("enter");
-    bar(&view, cx).simulate_input("7 days");
+    bar(&view, cx).simulate_input("  7 DAYS  ");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx)), vec![
+        Suggestion::ArchiveAfter { label: "7 days".into(), seconds: Some(604800) },
+    ]);
     click(&mut bar(&view, cx), "suggestion-0");
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(7 * 86400)));
+    assert_eq!(bar_text(&view, cx), None);
+    let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
+    assert_eq!(restored.archive_after, Some(Duration::from_secs(7 * 86400)));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("archive tabs after");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -1561,13 +1572,32 @@ fn auto_archive_picker_changes_interval_and_escape_keeps_setting(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn auto_archive_picker_preserves_a_custom_saved_interval_on_enter(cx: &mut TestAppContext) {
+fn auto_archive_picker_cancel_and_unsupported_queries_preserve_legacy_intervals(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
-    view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = Some(Duration::from_secs(12345))));
-    cx.simulate_keystrokes("cmd-t");
-    bar(&view, cx).simulate_input("archive tabs after");
-    bar(&view, cx).simulate_keystrokes("enter enter");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(12345)));
+    for saved in [None, Some(Duration::from_secs(12345)), Some(Duration::from_secs(3600)), Some(Duration::from_secs(21600))] {
+        view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = saved));
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input("archive tabs after");
+        bar(&view, cx).simulate_keystrokes("enter");
+        let options = view.read_with(cx, |w, cx| w.suggestions(cx));
+        assert_eq!(options.len(), 4);
+        assert!(options.iter().all(|option| matches!(option,
+            Suggestion::ArchiveAfter { seconds: Some(43200 | 86400 | 604800 | 2592000), .. }
+        )));
+        assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), saved);
+        for query in ["Never", "1 hour", "6 hours", "Current interval", "12345"] {
+            bar(&view, cx).simulate_keystrokes("cmd-a");
+            bar(&view, cx).simulate_input(query);
+            assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
+            bar(&view, cx).simulate_keystrokes("enter");
+            assert_eq!(bar_text(&view, cx).as_deref(), Some(query));
+            assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), saved);
+        }
+        bar(&view, cx).simulate_keystrokes("cmd-a backspace escape");
+        assert_eq!(bar_text(&view, cx), None);
+        let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
+        assert_eq!(restored.archive_after, saved);
+    }
 }
 
 #[gpui::test]

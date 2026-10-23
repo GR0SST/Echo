@@ -44,8 +44,7 @@ const MAX_HISTORY_SUGGESTIONS: usize = 4;
 const MAX_COMMAND_SUGGESTIONS: usize = 12;
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 const ARCHIVE_OPTIONS: &[(&str, Option<u64>)] = &[
-    ("Never", None), ("1 hour", Some(3600)), ("6 hours", Some(21600)),
-    ("12 hours", Some(43200)), ("24 hours", Some(86400)),
+    ("12 hours (default)", Some(43200)), ("24 hours", Some(86400)),
     ("7 days", Some(604800)), ("30 days", Some(2592000)),
 ];
 /// Fraction of the sidebar width a swipe must travel to change space.
@@ -1153,15 +1152,10 @@ impl BrowserWindow {
         }
         if bar.target == Target::ArchiveInterval {
             let query = text.trim().to_lowercase();
-            let current = self.browser.archive_after.map(|duration| duration.as_secs());
-            let mut options: Vec<_> = ARCHIVE_OPTIONS.iter().filter(|(label, _)| label.to_lowercase().contains(&query)).collect();
-            // Enter on the empty picker preserves the current setting.
-            options.sort_by_key(|(_, seconds)| *seconds != current);
-            let mut suggestions: Vec<_> = options.into_iter().map(|(label, seconds)| Suggestion::ArchiveAfter { label: (*label).into(), seconds: *seconds }).collect();
-            if query.is_empty() && !ARCHIVE_OPTIONS.iter().any(|(_, seconds)| *seconds == current) {
-                suggestions.insert(0, Suggestion::ArchiveAfter { label: "Current interval".into(), seconds: current });
-            }
-            return suggestions;
+            return ARCHIVE_OPTIONS.iter()
+                .filter(|(label, _)| label.to_lowercase().contains(&query))
+                .map(|(label, seconds)| Suggestion::ArchiveAfter { label: (*label).into(), seconds: *seconds })
+                .collect();
         }
         if matches!(bar.target, Target::NewFolder { .. } | Target::RenameFolder(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveFolderName { name: text.trim().to_string() }] };

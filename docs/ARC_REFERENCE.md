@@ -752,3 +752,39 @@ of the normal session writer after its windows close, persistent-sidebar
 restrictions, split/draft behavior and final-removal cleanup. Named profile
 selection, global Archive, relaunch behavior and exact remaining visual details
 are not claimed complete.
+
+## Profile settings and release interval menu (2026-10-23)
+
+Native Arc 1.170.0 Settings → Profiles shows a left profile list with per-profile
+Space counts, plus Add and Remove controls. The selected Default profile's
+Remove control is disabled with “The Default Profile cannot be deleted.”
+The right side includes search engine, search suggestions, Archive tabs after,
+new document app, download location, and data/settings links. No setting value
+was changed.
+
+The expanded Archive tabs after menu contains exactly these choices in order:
+**12 hours (default), 24 hours, 7 days, 30 days**. The existing 7-day selection
+was checked in the third position. Never, 1 hour and 6 hours were absent.
+Both the accessibility menu and its screenshot were inspected. This supersedes
+the earlier bundle-only uncertainty for public choices; Profile propagation
+and Little Arc intervals remain unverified.
+
+Add opens a creation sheet with an initially focused name field, placeholder
+“Personal”, Cancel and disabled Next. A nonempty test name enables Next. The
+second step asks which Spaces should use the Profile, displays Space cards
+with all toggles initially off, and has Back and disabled Create Profile.
+It warns that assigned Spaces start fresh and authentication/passwords/extensions
+must be set up again. The first step says Profiles are not synced between
+computers. Screenshots of both steps were inspected; Back retained the test
+name. Creation was cancelled before applying anything, and Settings was closed.
+No profile was created, reassigned or deleted. Validation beyond nonempty text,
+successful creation, assignment consequences and switching/deletion dialogs
+remain unverified.
+
+Bundled Echo's existing Command Bar interval picker now offers only those four
+public choices in fixed order. A guarded native run selected 7 days, reopened
+the picker with Current on the third row, and confirmed that entering Never
+offered no action and left the saved 7-day duration unchanged. Stack screenshots
+were inspected. The full workspace still passed 526 tests; legacy None/custom
+values are preserved on cancellation or unmatched input. This verifies the
+choice correction, not parity of the still-missing native settings control.
