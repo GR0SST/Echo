@@ -114,6 +114,13 @@ impl<T> Browsers<T> {
             record.requested = true;
         }
     }
+    fn submit_ready<R>(&mut self, blocked: &HashSet<i32>, mut snapshot: impl FnMut(&T) -> R) -> Vec<R> {
+        self.0.iter_mut().filter_map(|(id, record)| {
+            if !record.requested || record.submitted || blocked.contains(id) { return None; }
+            record.submitted = true;
+            Some(snapshot(&record.lease))
+        }).collect()
+    }
     fn close(&mut self, id: i32) -> Option<T> {
         self.0.remove(&id).map(|record| record.lease)
     }
@@ -383,20 +390,14 @@ impl Lifecycle {
                 Callback::Closed(_) => {}
             }
         }
-        let closes: Vec<_> = {
-            let mut browsers = self.browsers.borrow_mut();
-            browsers
-                .0
-                .values_mut()
-                .filter_map(|record| {
-                    if !record.requested || record.submitted {
-                        return None;
-                    }
-                    record.submitted = true;
-                    Some(record.lease.browser.clone())
-                })
-                .collect()
-        };
+        // Snapshot download metadata BEFORE borrowing the native ownership
+        // ledger. An asynchronously posted Cancel must run while its browser
+        // association still exists, otherwise CEF can suppress its final update.
+        let blocked = if self.phase.get() != ShutdownPhase::Running {
+            crate::downloads::shutdown_blocked_closes()
+        } else { HashSet::new() };
+        let closes = self.browsers.borrow_mut().submit_ready(&blocked,
+            |lease| lease.browser.clone());
         for browser in closes {
             crate::downloads::before_native_close(browser.identifier());
             if browser.is_valid() == 0 {
@@ -719,6 +720,19 @@ mod tests {
         state.phase.set(ShutdownPhase::Complete);
         state.begin();
         assert_eq!(state.phase.get(), ShutdownPhase::Complete);
+    }
+
+    #[test]
+    fn queued_close_is_submitted_once_only_after_terminal_barrier_releases() {
+        let mut browsers = Browsers::default();
+        browsers.insert(11, "waiting");browsers.insert(12, "unrelated");
+        browsers.request(11);browsers.request(12);
+        assert_eq!(browsers.submit_ready(&HashSet::from([11]), |lease| *lease), ["unrelated"]);
+        assert!(!browsers.0[&11].submitted);
+        assert!(browsers.0[&11].requested);
+        assert!(browsers.submit_ready(&HashSet::from([11]), |lease| *lease).is_empty());
+        assert_eq!(browsers.submit_ready(&HashSet::new(), |lease| *lease), ["waiting"]);
+        assert!(browsers.submit_ready(&HashSet::new(), |lease| *lease).is_empty());
     }
 
     #[test]

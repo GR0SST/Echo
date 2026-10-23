@@ -441,6 +441,17 @@ impl<B, C: Clone> Ledger<B, C> {
         Ok(std::mem::take(&mut self.ready))
     }
 
+    /// Keep the association alive while an authorized active writer awaits a
+    /// genuine terminal callback. A Cancel command/closing flag is not an ack.
+    /// No native handle is cloned, released or invoked by this metadata query.
+    fn shutdown_blocked_closes(&mut self) -> HashSet<i32> {
+        if !self.inbox.closed.get() { return HashSet::new(); }
+        self.collect_shutdown_copies();
+        self.entries.values().filter(|entry| !entry.terminal
+            && entry.snapshot.info.phase == DownloadPhase::InProgress
+            && matches!(entry.snapshot.destination, DownloadDestination::Resolved(_)))
+            .map(|entry| entry.key.native_browser).collect()
+    }
     fn native_handles_released(&self) -> bool {
         self.entries.values().all(|entry| entry.before.is_none() && entry.control.is_none())
             && self.inbox.queue.lock().unwrap().is_empty()
@@ -1421,6 +1432,11 @@ pub(crate) fn native_closed(native: i32) {
         work.execute();
     }
 }
+pub(crate) fn shutdown_blocked_closes() -> HashSet<i32> {
+    current_runtime().map_or_else(HashSet::new, |runtime| {
+        runtime.downloads.borrow_mut().downloads.0.shutdown_blocked_closes()
+    })
+}
 pub(crate) fn shutdown_runtime() {
     if let Some(runtime) = current_runtime() {
         runtime.lifecycle.collect_closed();
@@ -1613,6 +1629,47 @@ mod tests {
     }
     fn destination() -> PathBuf {
         std::env::temp_dir().join("echo-download-foundation.bin")
+    }
+
+    #[test]
+    fn active_shutdown_close_waits_for_real_terminal_not_cancel_command() {
+        let (mut ledger, key, origin) = fixture();
+        before(&ledger, key, origin);
+        update(&ledger, key, origin, DownloadPhase::InProgress, 9);
+        ledger.collect();
+        let item = token(&ledger, key);
+        ledger.resolve(item, destination()).unwrap();
+        assert!(ledger.take_shutdown_events().is_err()); // Running cannot use shutdown drain.
+        let _cancel_effects = ledger.shutdown();
+        assert!(ledger.entries[&item].snapshot.cancel_requested);
+        assert!(!ledger.entries[&item].terminal);
+        assert_eq!(ledger.shutdown_blocked_closes(), HashSet::from([key.native_browser]));
+        // Neither an unknown identity nor an interrupted observation is a
+        // terminal acknowledgement of this authorized active writer.
+        let wrong = Key { native_download: key.native_download + 1, ..key };
+        ledger.inbox.copy_shutdown_terminal(wrong, origin, info(DownloadPhase::Canceled, 9));
+        ledger.inbox.copy_shutdown_terminal(key, origin, info(DownloadPhase::Interrupted, 9));
+        assert!(ledger.shutdown_blocked_closes().contains(&key.native_browser));
+        ledger.inbox.copy_shutdown_terminal(key, origin, info(DownloadPhase::Canceled, 9));
+        assert!(ledger.shutdown_blocked_closes().is_empty());
+        let copied = ledger.take_shutdown_events().unwrap();
+        assert_eq!(copied.iter().filter(|event| matches!(event,
+            DownloadEvent::Updated(snapshot) if snapshot.info.phase == DownloadPhase::Canceled)).count(), 1);
+        assert!(ledger.take_shutdown_events().unwrap().is_empty());
+    }
+
+    #[test]
+    fn genuine_complete_releases_shutdown_close_gate_without_inventing_cancel() {
+        let (mut ledger, key, origin) = fixture();
+        before(&ledger, key, origin);
+        update(&ledger, key, origin, DownloadPhase::InProgress, 9);
+        ledger.collect();let item = token(&ledger, key);
+        ledger.resolve(item, destination()).unwrap();
+        let _effects = ledger.shutdown();
+        assert!(ledger.shutdown_blocked_closes().contains(&key.native_browser));
+        ledger.inbox.copy_shutdown_terminal(key, origin, info(DownloadPhase::Complete, 10));
+        assert!(ledger.shutdown_blocked_closes().is_empty());
+        assert_eq!(ledger.entries[&item].snapshot.info.phase, DownloadPhase::Complete);
     }
 
     #[test]
