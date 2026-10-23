@@ -169,7 +169,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 |---|---|---|---|
 | Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
 | Minimize Window / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar target the main window. Bundled macOS checks verified minimization from page, Command Bar, Find and the Minimize Window command, plus restored document/input and History/DevTools responder retention. Popup teardown cancels deferred activation that would undo minimization. Native Zoom/Bring All ordering and remaining platforms still need verification |
-| View Library | ⇧⌘L | partial | Dock Home and the far-left sidebar page open Library with its six-section rail. Spaces is interactive; the menu/shortcut route and remaining sections are incomplete |
+| View Library | ⇧⌘L | partial | Dock Home, the far-left sidebar page, Window → View Library, ⇧⌘L (including CEF focus), and Command Bar → Open Library open the existing Library route. Reopening retains its selected section. Spaces is interactive; remaining sections and full behavioral/visual parity are incomplete |
 | View Downloads | ⇧⌘J | missing | — |
 | View Media / View Boosts | — | missing | — |
 | Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | missing | Relevant for us: "Essential Keyboard Shortcuts" (cheat sheet window) and "Restore Data" |
@@ -558,7 +558,7 @@ rows without a status aren't counted.
    deletion UI, credentials, extensions and profile settings.
 9. **Settings window**, including the shortcut editor with the "Arc or
    website" priority.
-10. **Shortcuts.** Missing ⇧⌘L.
+10. **Shortcuts.** Finish the remaining menu actions and shortcut customization/website-priority behavior.
 11. **Basic browser features:** downloads,
     DevTools, print, loading indicator, new and incognito windows.
 12. **Media controls and PiP, toasts with Undo, onboarding and import.**

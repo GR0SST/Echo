@@ -85,6 +85,7 @@ actions!(
         CloseSplitPane,
         ExpandCurrentSplit,
         ViewSource,
+        ViewLibrary,
         DeveloperTools,
         InspectElements,
         JavaScriptConsole,
@@ -158,6 +159,7 @@ window_shortcuts! {
     "cmd-m" => crate::menus::Minimize,
     "ctrl-cmd-f" => crate::menus::ToggleFullscreen,
     "cmd-l" => EditCurrentUrl,
+    "cmd-shift-l" => ViewLibrary,
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
@@ -386,6 +388,7 @@ pub enum Command {
     ArchiveSettings,
     ViewArchive,
     ViewHistory,
+    OpenLibrary,
     RequestClearArchive,
     ResetPinnedTab,
     ResetSpace,
@@ -1353,6 +1356,7 @@ impl BrowserWindow {
                 (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
                 (Command::ViewHistory, "View History", "view history|open history|browsing history", true),
+                (Command::OpenLibrary, "Open Library", "open library|view library|library", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
@@ -1685,6 +1689,7 @@ impl BrowserWindow {
                 }
             }
             Command::ViewHistory => self.history_from_command(cx),
+            Command::OpenLibrary => self.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx),
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
@@ -1810,6 +1815,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
                 .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))
@@ -3536,6 +3542,7 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
                 .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))

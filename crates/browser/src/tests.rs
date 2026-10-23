@@ -7125,3 +7125,6 @@ fn quit_retires_every_pool_even_while_stale_layout_closures_hold_pages() {
     assert!(shared.independent_with_shared_storage(std::ptr::null_mut()).is_none());
     for pages in &stale { assert!(pages.borrow_mut().open_inspector_probe().is_err()); }
 }
+
+#[path = "library_route_tests.rs"]
+mod library_route_tests;

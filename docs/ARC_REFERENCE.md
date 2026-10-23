@@ -1152,3 +1152,26 @@ no Space was deleted or reassigned. Detailed fixture/ownership evidence is in
 cancel-before-native-close capability must therefore not be adopted as normal
 browser parity; normal downloads need an independently verified continuing
 lifetime before that route is enabled.
+
+### Library entry routes: installed menu and Echo acceptance, 2026-10-23
+
+Installed Arc 1.170.0 MainMenu.nib places View Library (⇧⌘L) in Window after
+Zoom/separator and before the other Library destinations/Bring All to Front.
+Its metadata includes `arcTypeTravelID=openLibrary`,
+`arcKeyBindingID=viewLibrary` and `toggleLibrary:`; the selector name alone is
+not evidence of toggle/back semantics. Official sources also list Command-T →
+Open Library:
+https://resources.arc.net/hc/en-us/articles/19230634389911-Library-A-home-for-your-downloads-archived-tabs-easels-and-more
+and https://start.arc.net/command-bar-actions. These source URLs were not
+independently browser-opened during this change.
+
+Echo's rebuilt bundle was checked with real native input from a loaded local
+CEF fixture: ⇧⌘L, Window → View Library, Command-T → Open Library, and ⇧⌘L
+from Find all reached the existing in-window Library. Returning via its Spaces
+card restored input to the same document. The fixture recorded one load and
+one UUID (`e75b1295-6825-4df9-adc5-ccab235f436c`) while retaining all four
+post-return typing markers. Reopening Library while Spaces was selected kept
+that section. Screenshots were inspected; no Space was deleted or reassigned.
+The combined 803-test workspace run passed, and independent route review found
+no material issue. This verifies these entry routes and document retention; it
+does not establish full Library parity or private/Blank native availability.
