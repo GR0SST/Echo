@@ -107,7 +107,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | done | Chromium zoom steps from 25% to 500%, reset to 100%; also in the Command Bar |
 | Cast | — | missing | — |
 | Developer: View Source | ⌥⌘U | done | Opens a new Today tab using Chromium's source viewer, retaining the original page or Split View. View → Developer and Command Bar actions; disabled on internal/source pages. Native-page shortcut routing and CEF rendering verified |
-| Developer: Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
+| Developer: Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘I, ⌥⌘C, ⌥⌘J, — | partial | Menus, page/frontend shortcuts (including F12) and Command Bar route to the focused live pane. The original CEF frontend is embedded in a GPUI-owned right dock through an authenticated local protocol bridge. Bundled macOS checks cover live DOM/styles, Console evaluation, Network requests, element picking, repeated toggles, document/input retention and closing the inspected Split pane after frontend focus. Other dock positions, resizing and remembered dimensions, complete host services and remaining platform/private native checks are unfinished |
 | Developer: Allow JavaScript from Apple Events | — | missing | — |
 | Toggle Developer Mode (per site) | ⌃D | missing | — |
 | Enter/Exit Full Screen | ⌃⌘F | partial | View menu, page shortcuts and overlays target the main window; Enter/Exit commands work in GPUI tests. macOS bundle entry/exit verified with guarded input, native fullscreen state and inspected screenshots; native toolbar buttons stay under AppKit control. Other platforms and exact Arc transition presentation remain unverified |
@@ -433,7 +433,7 @@ rows marked partial expose the setting from the Command Bar instead.
 | Dragging the window by the top of the page (option) | missing | — |
 | Pointer lock: "Your cursor is hidden. Press 'esc'…" toast | missing | — |
 | Page full screen: "To exit full screen, press …" toast | missing | — |
-| Developer mode for a site, DevTools | missing | — |
+| Developer mode for a site, DevTools | partial | Focused live-page DevTools commands are implemented through the original embedded CEF frontend; see View → Developer above. Per-site Developer Mode is still missing |
 | Chrome extensions (icons, "Open pinned extensions picker") | missing | — |
 | Built-in ad and tracker blocker | missing | — |
 | Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | missing | — |

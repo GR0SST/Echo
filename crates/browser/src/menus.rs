@@ -129,7 +129,13 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::Submenu(Menu {
                     name: "Developer".into(),
-                    items: vec![MenuItem::action("View Source", window::ViewSource)],
+                    items: vec![
+                        MenuItem::action("View Source", window::ViewSource),
+                        MenuItem::action("Developer Tools", window::DeveloperTools),
+                        MenuItem::action("Inspect Elements", window::InspectElements),
+                        MenuItem::action("JavaScript Console", window::JavaScriptConsole),
+                        MenuItem::action("Network Inspector", window::NetworkInspector),
+                    ],
                 }),
                 MenuItem::action("Enter/Exit Full Screen", ToggleFullscreen),
             ],

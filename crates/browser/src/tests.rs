@@ -204,6 +204,9 @@ enum Call {
     Reload(u64),
     Close(u64),
     Snapshot(u64, u64),
+    InspectorOpen(u64, usize, Bounds, engine::InspectorPanel, bool),
+    InspectorFocus(engine::InspectorId),
+    InspectorClose(engine::InspectorId),
 }
 
 /// Records what the window asks of the engine; `events` are returned by
@@ -221,6 +224,12 @@ struct FakeState {
     reject_move: bool,
     reject_snapshot: bool,
     capture_supported: bool,
+    inspector_supported: bool,
+    inspector_accept: bool,
+    next_inspector: u64,
+    inspector: Option<engine::InspectorStatus>,
+    inspector_events: Vec<engine::InspectorEvent>,
+    inspector_bounds: Option<Bounds>,
     reject_create: bool,
     snapshots: Vec<engine::PageSnapshot>,
 }
@@ -245,6 +254,35 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn supports_inspector(&self) -> bool { self.0.borrow().inspector_supported }
+    fn open_inspector(&mut self, view: ViewId, parent: *mut std::ffi::c_void, bounds: Bounds, panel: engine::InspectorPanel, inspect: bool) -> Result<engine::InspectorId, String> {
+        self.call(Call::InspectorOpen(raw(view), parent as usize, bounds, panel, inspect));
+        let mut state = self.0.borrow_mut();
+        if !state.inspector_accept { return Err("Recording engine rejected inspector creation".into()); }
+        let id = match &state.inspector {
+            Some(status) if status.inspected == view => status.id,
+            _ => { state.next_inspector += 1; engine::InspectorId::from_raw(state.next_inspector) }
+        };
+        state.inspector = Some(engine::InspectorStatus {
+            id, inspected: view, generation: state.next_inspector, panel,
+            selected_panel: Some(panel), phase: engine::InspectorPhase::FrontendReady,
+            url: engine::INSPECTOR_FRONTEND_URL.into(),
+        });
+        state.inspector_bounds = Some(bounds);
+        Ok(id)
+    }
+
+    fn inspector_status(&self, id: engine::InspectorId) -> Option<engine::InspectorStatus> {
+        self.0.borrow().inspector.clone().filter(|status| status.id == id)
+    }
+    fn focus_inspector(&mut self, id: engine::InspectorId) { self.call(Call::InspectorFocus(id)); }
+    fn set_inspector_frame(&mut self, _id: engine::InspectorId, bounds: Bounds) { self.0.borrow_mut().inspector_bounds = Some(bounds); }
+    fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { std::mem::take(&mut self.0.borrow_mut().inspector_events) }
+    fn close_inspector(&mut self, id: engine::InspectorId) {
+        self.call(Call::InspectorClose(id));
+        let mut state = self.0.borrow_mut();
+        if state.inspector.as_ref().is_some_and(|status| status.id == id) { state.inspector = None; state.inspector_bounds = None; }
+    }
     fn supports_snapshots(&self) -> bool { self.0.borrow().capture_supported }
     fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
         self.call(Call::Snapshot(raw(view), request));
@@ -6329,3 +6367,455 @@ fn a_late_initial_renderer_does_not_take_the_open_command_bars_native_focus(cx: 
 
 #[path = "page_handoff_tests.rs"]
 mod page_handoff_tests;
+
+fn enable_recording_inspector(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, fake: &FakeEngine) {
+    fake.0.borrow_mut().inspector_supported = true;
+    view.update(cx, |view, cx| {
+        view.pages.as_ref().unwrap().borrow_mut().set_parent(1usize as *mut _);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+}
+
+#[gpui::test]
+fn devtools_menu_shortcuts_and_command_bar_share_live_page_actions(cx: &mut TestAppContext) {
+    use engine::InspectorPanel::{Elements, Console, Network};
+    let (view, cx, fake) = open_pages(cx);
+    enable_recording_inspector(&view, cx, &fake);
+    let (tab, count) = view.read_with(cx, |view, _| {
+        let tab = view.browser.active_tab().unwrap().id;
+        (tab, view.browser.all_tabs().count())
+    });
+    for (label, shortcut, panel, inspect) in [
+        ("Developer Tools", Some("cmd-alt-i"), Elements, false),
+        ("Inspect Elements", Some("cmd-alt-c"), Elements, true),
+        ("JavaScript Console", Some("cmd-alt-j"), Console, false),
+        ("Network Inspector", None, Network, false),
+    ] {
+        for route in 0..3 {
+            fake.take_calls();
+            match route {
+                0 => dispatch_menu(cx, "View", label),
+                1 if shortcut.is_some() => { cx.simulate_keystrokes(shortcut.unwrap()); cx.run_until_parked(); }
+                _ => run_named_command(&view, cx, label),
+            }
+            let calls = fake.take_calls();
+            let opens: Vec<_> = calls.iter().filter(|call| matches!(call, Call::InspectorOpen(..))).collect();
+            assert!(matches!(opens.as_slice(), [Call::InspectorOpen(id, 1, bounds, selected, mode)]
+                if view.read_with(cx, |view, _| view.pages.as_ref().unwrap().borrow().tab_for(ViewId::from_raw(*id))) == Some(tab) && *selected == panel && *mode == inspect && bounds.width > 0. && bounds.height > 0.), "{label}, route {route}: {calls:?}");
+            assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(_) | Call::Close(_))), "{calls:?}");
+            assert!(bar_text(&view, cx).is_none());
+            assert_eq!(view.read_with(cx, |view, _| (view.browser.active_tab().unwrap().id, view.browser.all_tabs().count())), (tab, count));
+        }
+    }
+    cx.simulate_keystrokes("f12");
+    cx.run_until_parked();
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(_, 1, _, Elements, false))));
+    for shortcut in ["cmd-alt-i", "f12", "cmd-alt-c", "cmd-alt-j"] {
+        assert_eq!(crate::window::WINDOW_SHORTCUTS.iter().filter(|entry| **entry == shortcut).count(), 1);
+    }
+}
+
+#[gpui::test]
+fn devtools_requires_supported_engine_native_parent_and_live_internal_free_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    assert!(!view.read_with(cx, |view, _| view.devtools_available()));
+    fake.0.borrow_mut().inspector_supported = true;
+    assert!(!view.read_with(cx, |view, _| view.devtools_available()));
+    enable_recording_inspector(&view, cx, &fake);
+    assert!(view.read_with(cx, |view, _| view.devtools_available()));
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| browser.navigate(browser.active_tab().unwrap().id, "browser://history"));
+        view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::DeveloperTools, cx)));
+    assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::InspectElements, cx)));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-alt-i cmd-alt-c cmd-alt-j f12");
+    cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(..))));
+    cx.simulate_keystrokes("cmd-t");
+    assert!(!view.read_with(cx, |view, cx| view.suggestions(cx).iter().any(|row| matches!(row, Suggestion::Action { command: crate::window::Command::DevTools(_), .. }))));
+}
+
+#[gpui::test]
+fn devtools_targets_focused_split_pane_not_anchor_and_rejects_wrong_host(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    enable_recording_inspector(&view, cx, &fake);
+    for index in [0, 1] {
+        view.update(cx, |view, cx| {
+            view.edit_browser(|browser| browser.focus_split_pane(index, std::time::SystemTime::now()));
+            view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let focused = view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id);
+        fake.take_calls();
+        cx.simulate_keystrokes("cmd-alt-j");
+        cx.run_until_parked();
+        assert!(fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(id, 1, _, engine::InspectorPanel::Console, false) if view.read_with(cx, |view, _| view.pages.as_ref().unwrap().borrow().tab_for(ViewId::from_raw(*id))) == Some(focused))));
+    }
+    let (_, mut other) = another_live_profile_window(&view, cx);
+    other.run_until_parked();
+    assert!(!view.read_with(cx, |view, _| view.devtools_available()));
+    fake.take_calls();
+    view.update(cx, |view, cx| view.run_devtools(crate::devtools::Command::Console, cx));
+    cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(..))));
+}
+
+#[test]
+fn developer_menu_preserves_observed_arc_order_without_visible_f12_duplicate() {
+    let view = crate::menus::build().into_iter().find(|menu| menu.name.as_ref() == "View").unwrap();
+    let developer = view.items.into_iter().find_map(|item| match item {
+        gpui::MenuItem::Submenu(menu) if menu.name.as_ref() == "Developer" => Some(menu),
+        _ => None,
+    }).unwrap();
+    let labels: Vec<_> = developer.items.into_iter().filter_map(|item| match item {
+        gpui::MenuItem::Action { name, .. } => Some(name.to_string()),
+        _ => None,
+    }).collect();
+    assert_eq!(labels, ["View Source", "Developer Tools", "Inspect Elements", "JavaScript Console", "Network Inspector"]);
+}
+
+fn accept_recording_inspector(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, fake: &FakeEngine) {
+    fake.0.borrow_mut().inspector_accept = true;
+    enable_recording_inspector(view, cx, fake);
+}
+
+fn inspector_status(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Option<engine::InspectorStatus> {
+    view.read_with(cx, |view, _| view.pages.as_ref().unwrap().borrow().devtools_status())
+}
+
+fn inspector_event(fake: &FakeEngine, cx: &mut VisualTestContext, event: engine::InspectorEvent) {
+    match event {
+        event @ (engine::InspectorEvent::Focused { .. } | engine::InspectorEvent::Shortcut { .. }) => fake.0.borrow_mut().events.push(Event::InspectorInput(event)),
+        event => fake.0.borrow_mut().inspector_events.push(event),
+    }
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn devtools_switches_observed_panels_repeats_inspect_and_closes_only_frontend(cx: &mut TestAppContext) {
+    use engine::InspectorPanel::{Elements, Console, Network};
+    let (view, cx, fake) = open_pages(cx);
+    accept_recording_inspector(&view, cx, &fake);
+    let original_url = active_url(&view, cx);
+    let count = view.read_with(cx, |view, _| view.browser.all_tabs().count());
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let initial = inspector_status(&view, cx).unwrap();
+    assert_eq!(initial.selected_panel, Some(Elements));
+    cx.simulate_keystrokes("cmd-alt-j");
+    cx.run_until_parked();
+    let console = inspector_status(&view, cx).unwrap();
+    assert_eq!((console.id, console.selected_panel), (initial.id, Some(Console)));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-alt-j");
+    cx.run_until_parked();
+    assert!(inspector_status(&view, cx).is_none());
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::InspectorClose(initial.id)));
+    assert!(calls.contains(&Call::FocusPage(raw(initial.inspected))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(_) | Call::Navigate(..) | Call::Reload(_))));
+    run_named_command(&view, cx, "Network Inspector");
+    let network = inspector_status(&view, cx).unwrap();
+    assert_eq!(network.selected_panel, Some(Network));
+    run_named_command(&view, cx, "Network Inspector");
+    assert!(inspector_status(&view, cx).is_none());
+    cx.simulate_keystrokes("cmd-alt-c");
+    cx.run_until_parked();
+    let inspect = inspector_status(&view, cx).unwrap();
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-alt-c");
+    cx.run_until_parked();
+    assert_eq!(inspector_status(&view, cx).unwrap().id, inspect.id);
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(_, _, _, Elements, true))));
+    cx.simulate_keystrokes("cmd-alt-j cmd-alt-i");
+    cx.run_until_parked();
+    assert!(inspector_status(&view, cx).is_none());
+    cx.simulate_keystrokes("f12");
+    cx.run_until_parked();
+    let reopened = inspector_status(&view, cx).unwrap();
+    assert_eq!(reopened.selected_panel, Some(Elements));
+    fake.take_calls();
+    inspector_event(&fake, cx, engine::InspectorEvent::CloseRequested { inspector: reopened.id });
+    assert!(inspector_status(&view, cx).is_none());
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::FocusPage(raw(initial.inspected))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(_) | Call::Navigate(..) | Call::Reload(_))));
+    assert_eq!(active_url(&view, cx), original_url);
+    assert_eq!(view.read_with(cx, |view, _| view.browser.all_tabs().count()), count);
+}
+
+#[gpui::test]
+fn devtools_native_frames_and_mouse_holes_exclude_gpui_divider(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    accept_recording_inspector(&view, cx, &fake);
+    let (tab, layout) = view.read_with(cx, |view, _| (view.browser.active_tab().unwrap().id, view.pages.as_ref().unwrap().borrow().surface_layout()));
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let status = inspector_status(&view, cx).unwrap();
+    let original = layout.iter().find(|(id, _)| *id == tab).unwrap().1;
+    let (page, divider, frontend) = crate::devtools::frames(original).unwrap();
+    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], page);
+    assert_eq!(fake.0.borrow().inspector_bounds, Some(frontend));
+    view.read_with(cx, |view, _| {
+        let pages = view.pages.as_ref().unwrap().borrow();
+        let actual = pages.surface_layout();
+        assert_eq!(actual.iter().find(|(id, _)| *id == tab).unwrap().1, page);
+        for (other, bounds) in layout.iter().filter(|(id, _)| *id != tab) {
+            assert_eq!(actual.iter().find(|(id, _)| id == other).unwrap().1, *bounds);
+        }
+        let holes = pages.surface_bounds();
+        assert_eq!(holes.len(), 3);
+        assert!(holes.contains(&page) && holes.contains(&frontend));
+        let x = divider.x + divider.width / 2.;
+        let y = divider.y + divider.height / 2.;
+        assert!(!holes.iter().any(|hole| x >= hole.x && x < hole.x + hole.width && y >= hole.y && y < hole.y + hole.height));
+        assert_eq!(pages.devtools_divider(), Some(divider));
+    });
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(_) | Call::Close(_))));
+}
+
+#[gpui::test]
+fn devtools_frontend_shortcuts_validate_owner_and_preserve_command_bar_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    accept_recording_inspector(&view, cx, &fake);
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let inspector = inspector_status(&view, cx).unwrap().id;
+    let shortcut = |key: &str, alt| engine::Shortcut { cmd: true, alt, key: key.into(), ..Default::default() };
+    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut { inspector: engine::InspectorId::from_raw(999), shortcut: shortcut("j", true) });
+    assert_eq!(inspector_status(&view, cx).unwrap().selected_panel, Some(engine::InspectorPanel::Elements));
+    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut { inspector, shortcut: shortcut("j", true) });
+    assert_eq!(inspector_status(&view, cx).unwrap().selected_panel, Some(engine::InspectorPanel::Console));
+    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut { inspector, shortcut: shortcut("t", false) });
+    assert!(bar_text(&view, cx).is_some());
+    fake.take_calls();
+    inspector_event(&fake, cx, engine::InspectorEvent::FocusRequested { inspector });
+    inspector_event(&fake, cx, engine::InspectorEvent::CloseRequested { inspector });
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_) | Call::InspectorFocus(_))), "{calls:?}");
+    assert!(bar_text(&view, cx).is_some());
+    bar(&view, cx).simulate_input("overlay still owns input");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("overlay still owns input"));
+    assert!(inspector_status(&view, cx).is_none());
+}
+
+#[gpui::test]
+fn devtools_uses_the_private_windows_current_page_engine(cx: &mut TestAppContext) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new_private();
+    browser.new_tab("https://private.example/document", std::time::SystemTime::now());
+    let (view, visual) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    visual.run_until_parked();
+    accept_recording_inspector(&view, visual, &fake);
+
+    let focused = view.read_with(visual, |view, _| {
+        assert!(view.browser.is_private());
+        view.browser.active_tab().unwrap().id
+    });
+    visual.simulate_keystrokes("cmd-alt-j");
+    visual.run_until_parked();
+    let page = inspector_status(&view, visual).unwrap().inspected;
+    assert_eq!(view.read_with(visual, |view, _| view.pages.as_ref().unwrap().borrow().tab_for(page)), Some(focused));
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(id, 1, _, engine::InspectorPanel::Console, false) if *id == raw(page))));
+    view.read_with(visual, |view, _| {
+        assert!(view.browser.history.is_empty());
+        assert_eq!(view.browser.all_tabs().count(), 1);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/document");
+    });
+}
+
+#[gpui::test]
+fn focusing_a_split_inspector_selects_its_pane_without_focusing_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    accept_recording_inspector(&view, cx, &fake);
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| browser.focus_split_pane(0, std::time::SystemTime::now()));
+        view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let inspector = inspector_status(&view, cx).unwrap();
+    let (a, b) = view.read_with(cx, |view, _| {
+        let panes = &view.browser.active_split().unwrap().panes;
+        (panes[0], panes[1])
+    });
+    let b_view = ViewId::from_raw(*fake.0.borrow().bounds.keys().find(|id| **id != raw(inspector.inspected)).unwrap());
+    fake.send(cx, Event::Focused { view: b_view });
+    assert_eq!(view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id), b);
+    inspector_event(&fake, cx, engine::InspectorEvent::Focused { inspector: engine::InspectorId::from_raw(999) });
+    assert_eq!(view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id), b);
+    fake.take_calls();
+    inspector_event(&fake, cx, engine::InspectorEvent::Focused { inspector: inspector.id });
+    assert_eq!(view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id), a);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))), "Frontend focus must not bounce to a page");
+    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut {
+        inspector: inspector.id,
+        shortcut: Shortcut { cmd: true, alt: true, key: "j".into(), ..Default::default() },
+    });
+    assert_eq!(inspector_status(&view, cx).unwrap().inspected, inspector.inspected);
+    assert_eq!(inspector_status(&view, cx).unwrap().selected_panel, Some(engine::InspectorPanel::Console));
+    dispatch_menu(cx, "View", "Network Inspector");
+    assert_eq!(inspector_status(&view, cx).unwrap().inspected, inspector.inspected);
+    assert_eq!(inspector_status(&view, cx).unwrap().selected_panel, Some(engine::InspectorPanel::Network));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))), "Panel commands must retain frontend keyboard focus");
+    fake.send(cx, Event::Focused { view: b_view });
+    assert_eq!(view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id), b);
+    fake.take_calls();
+    // Focus and shortcut can arrive in the same pump. Model selection must be
+    // repaired before the deferred Cmd+W action executes.
+    fake.0.borrow_mut().events.extend([
+        Event::Focused { view: b_view },
+        Event::InspectorInput(engine::InspectorEvent::Focused { inspector: inspector.id }),
+        Event::InspectorInput(engine::InspectorEvent::Shortcut {
+            inspector: inspector.id,
+            shortcut: Shortcut { cmd: true, key: "w".into(), ..Default::default() },
+        }),
+    ]);
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(!view.browser.all_tabs().any(|tab| tab.id == a));
+        assert!(view.browser.all_tabs().any(|tab| tab.id == b));
+        assert_eq!(view.browser.active_tab().unwrap().id, b);
+    });
+    assert!(inspector_status(&view, cx).is_none());
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(raw(inspector.inspected))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Close(id) if *id == raw(b_view))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Reload(_) | Call::Navigate(..))));
+}
+
+fn assert_same_drain_split_focus_order(cx: &mut TestAppContext, frontend_last: bool) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    accept_recording_inspector(&view, cx, &fake);
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| browser.focus_split_pane(0, std::time::SystemTime::now()));
+        view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let inspector = inspector_status(&view, cx).unwrap();
+    let (a, b) = view.read_with(cx, |view, _| {
+        let panes = &view.browser.active_split().unwrap().panes;
+        (panes[0], panes[1])
+    });
+    let b_view = ViewId::from_raw(*fake.0.borrow().bounds.keys().find(|id| **id != raw(inspector.inspected)).unwrap());
+    let page_focus = Event::Focused { view: b_view };
+    let frontend_focus = Event::InspectorInput(engine::InspectorEvent::Focused { inspector: inspector.id });
+    let close = Shortcut { cmd: true, key: "w".into(), ..Default::default() };
+    let batch = if frontend_last {
+        vec![page_focus, frontend_focus, Event::InspectorInput(engine::InspectorEvent::Shortcut { inspector: inspector.id, shortcut: close })]
+    } else {
+        vec![frontend_focus, page_focus, Event::Shortcut(close)]
+    };
+    fake.take_calls();
+    // Both focus callbacks and Cmd+W enter one queue before a single drain.
+    fake.0.borrow_mut().events.extend(batch);
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    let (closed, remaining, closed_view) = if frontend_last { (a, b, inspector.inspected) } else { (b, a, b_view) };
+    view.read_with(cx, |view, _| {
+        assert!(!view.browser.all_tabs().any(|tab| tab.id == closed));
+        assert!(view.browser.all_tabs().any(|tab| tab.id == remaining));
+        assert_eq!(view.browser.active_tab().unwrap().id, remaining);
+    });
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(raw(closed_view))), "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Reload(_) | Call::Navigate(..))), "{calls:?}");
+}
+
+#[gpui::test]
+fn same_drain_page_then_frontend_focus_makes_cmd_w_close_inspected_pane(cx: &mut TestAppContext) {
+    assert_same_drain_split_focus_order(cx, true);
+}
+
+#[gpui::test]
+fn same_drain_frontend_then_page_focus_makes_cmd_w_close_page_pane(cx: &mut TestAppContext) {
+    assert_same_drain_split_focus_order(cx, false);
+}
+
+fn assert_focus_after_shortcut_keeps_original_target(cx: &mut TestAppContext, frontend_shortcut: bool, console: bool) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    accept_recording_inspector(&view, cx, &fake);
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| browser.focus_split_pane(0, std::time::SystemTime::now()));
+        view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let inspector = inspector_status(&view, cx).unwrap();
+    let (a, b) = view.read_with(cx, |view, _| {
+        let panes = &view.browser.active_split().unwrap().panes;
+        (panes[0], panes[1])
+    });
+    let b_view = ViewId::from_raw(*fake.0.borrow().bounds.keys().find(|id| **id != raw(inspector.inspected)).unwrap());
+    let focus_a = if frontend_shortcut {
+        Event::InspectorInput(engine::InspectorEvent::Focused { inspector: inspector.id })
+    } else {
+        Event::Focused { view: inspector.inspected }
+    };
+    let shortcut = Shortcut { cmd: true, alt: console, key: if console { "j" } else { "w" }.into(), ..Default::default() };
+    let action = if frontend_shortcut {
+        Event::InspectorInput(engine::InspectorEvent::Shortcut { inspector: inspector.id, shortcut })
+    } else {
+        Event::Shortcut(shortcut)
+    };
+    fake.take_calls();
+    fake.0.borrow_mut().events.extend([focus_a, action, Event::Focused { view: b_view }]);
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().id, b);
+        assert!(view.browser.all_tabs().any(|tab| tab.id == b));
+        assert_eq!(view.browser.all_tabs().any(|tab| tab.id == a), console);
+    });
+    let calls = fake.take_calls();
+    if console {
+        let status = inspector_status(&view, cx).unwrap();
+        assert_eq!(status.inspected, inspector.inspected);
+        assert_eq!(status.selected_panel, Some(engine::InspectorPanel::Console));
+        assert!(!calls.iter().any(|call| matches!(call, Call::InspectorOpen(id, _, _, _, _) if *id == raw(b_view))), "{calls:?}");
+    } else {
+        assert!(calls.contains(&Call::Close(raw(inspector.inspected))), "{calls:?}");
+        assert!(!calls.contains(&Call::Close(raw(b_view))), "{calls:?}");
+    }
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Reload(_) | Call::Navigate(..))), "{calls:?}");
+}
+
+#[gpui::test]
+fn same_drain_frontend_cmd_w_precedes_later_page_focus(cx: &mut TestAppContext) {
+    assert_focus_after_shortcut_keeps_original_target(cx, true, false);
+}
+
+#[gpui::test]
+fn same_drain_page_cmd_w_precedes_later_page_focus(cx: &mut TestAppContext) {
+    assert_focus_after_shortcut_keeps_original_target(cx, false, false);
+}
+
+#[gpui::test]
+fn same_drain_deferred_console_action_precedes_later_page_focus(cx: &mut TestAppContext) {
+    assert_focus_after_shortcut_keeps_original_target(cx, true, true);
+}

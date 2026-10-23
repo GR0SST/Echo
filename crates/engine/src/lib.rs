@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use cef::*;
 mod devtools;
 mod editing;
+mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
 mod snapshot;
@@ -73,6 +74,9 @@ pub enum Event {
     OpenInNewTab { opener: ViewId, url: String },
     /// A browser shortcut pressed while the page had focus; the page did not get it.
     Shortcut(Shortcut),
+    /// Native frontend input in the same chronological stream as page input.
+    /// The browser validates inspector ownership; this is never tab metadata.
+    InspectorInput(InspectorEvent),
 }
 
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
@@ -123,6 +127,7 @@ struct Runtime {
 
 pub struct Engine {
     client: Client,
+    shortcuts: Shortcuts,
     events: EventQueue,
     views: HashMap<ViewId, View>,
     by_browser_id: HashMap<i32, ViewId>,
@@ -201,8 +206,10 @@ impl Engine {
         })?;
 
         let events = EventQueue::default();
+        let shortcuts = Arc::new(shortcuts);
         Ok(Self {
-            client: EngineClient::new(events.clone(), Arc::new(shortcuts)),
+            client: EngineClient::new(events.clone(), shortcuts.clone(), None),
+            shortcuts,
             events,
             views: HashMap::new(),
             by_browser_id: HashMap::new(),
@@ -259,10 +266,23 @@ impl Engine {
     }
 
     pub fn take_events(&mut self) -> Vec<Event> {
+        self.drain_events(false)
+    }
+
+    /// Browser input must retain CEF callback order across page and frontend
+    /// focus. The diagnostic drain above keeps its separate inspector queue.
+    pub fn take_browser_events(&mut self) -> Vec<Event> {
+        self.drain_events(true)
+    }
+
+    fn drain_events(&mut self, ordered_input: bool) -> Vec<Event> {
         let raw = std::mem::take(&mut *self.events.lock().unwrap());
         raw.into_iter()
             .filter_map(|(browser_id, event)| {
                 let view = *self.by_browser_id.get(&browser_id)?;
+                if ordered_input {
+                    if let Some(input) = browser_input(view, self.views.get(&view)?.role, &event) { return Some(input); }
+                }
                 if let ViewRole::Inspector(inspector) = self.views.get(&view)?.role {
                     let browser = &self.views.get(&view)?.browser;
                     match event {
@@ -272,7 +292,7 @@ impl Engine {
                             self.inspectors.loading(inspector, url, loading);
                         }
                         RawEvent::LoadError(url, code, text) => self.inspectors.load_failed(inspector, url, code, text),
-                        _ => {}
+                        event => { if let Some(event) = inspector_input(inspector, &event) { self.inspectors.ready.push(event); } }
                     }
                     return None;
                 }
@@ -326,12 +346,20 @@ impl Engine {
             ..Default::default()
         }
         .set_as_child(page_parent as _, &bounds);
+        let mut extra = None;
+        let mut client = self.client.clone();
+        if let ViewRole::Inspector(id) = role {
+            let dictionary = dictionary_value_create()?;
+            dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
+            extra = Some(dictionary);
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())));
+        }
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
-            Some(&mut self.client.clone()),
+            Some(&mut client),
             Some(&CefString::from(url)),
             Some(&BrowserSettings::default()),
-            None,
+            extra.as_mut(),
             context.as_mut(),
         );
         let Some(browser) = browser else {
@@ -525,14 +553,11 @@ impl Engine {
         self.snapshots.take()
     }
 
-    /// Opens ONLY a bundled-frontend loading probe in an Alloy child content
-    /// view. The original frontend's host adapter is not installed yet; use
-    /// inspector events to determine whether native bundled assets even load.
-    /// This is not a user-facing DevTools implementation.
-    ///
-    /// Repeated opens coalesce and update the requested panel. The panel is
-    /// recorded for the future host adapter; it is not claimed to be displayed.
-    /// No ShowDevTools, remote debugging port or global-context fallback is used.
+    /// Opens the original bundled frontend with an authenticated renderer host
+    /// in an ordinary Alloy child. The historical probe name is retained for
+    /// native integrations. Repeated opens coalesce and request the new panel.
+    /// FrontendReady requires a verified protocol roundtrip and frontend boot.
+    /// No ShowDevTools, remote port or global-context fallback is used.
     pub fn open_inspector_probe(&mut self, inspected: ViewId, ui_view: *mut c_void, frame: Bounds, panel: InspectorPanel) -> Result<InspectorId, String> {
         let page = self.views.get(&inspected).filter(|view| view.role == ViewRole::Page)
             .ok_or("Unknown inspected page")?;
@@ -541,7 +566,7 @@ impl Engine {
         // Obtain the inspected browser's ACTUAL context, not this engine's
         // default. Missing context fails closed, including private sessions.
         let context = host.request_context().ok_or("Inspected request context is unavailable")?;
-        if let Some(id) = self.inspectors.existing(inspected, panel) { return Ok(id); }
+        if let Some(id) = self.inspectors.existing(inspected, panel) { self.show_inspector_panel(id, panel); return Ok(id); }
         let id = self.inspectors.allocate().ok_or("Inspector generation exhausted")?;
         let mut observer = devtools::InspectorObserver::new(self.inspectors.queue.clone(), id);
         let registration = host.add_dev_tools_message_observer(Some(&mut observer))
@@ -577,9 +602,8 @@ impl Engine {
         if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_visible(session.frontend, visible); }
     }
 
-    /// Trusted native probe API. This does not accept renderer IPC. Before a
-    /// renderer bridge is added it must authenticate frontend role, main frame,
-    /// exact internal URL and generation; ordinary pages must never call this.
+    /// Trusted native diagnostic API, correlated separately from the renderer
+    /// connection. Its replies only appear as InspectorEvent::Protocol.
     pub fn send_inspector_probe_message(&mut self, inspector: InspectorId, message: &str) -> bool {
         let Some(session) = self.inspectors.sessions.get(&inspector) else { return false; };
         let Some(host) = self.views.get(&session.status.inspected).and_then(|view| view.browser.host()) else { return false; };
@@ -591,9 +615,67 @@ impl Engine {
         true
     }
 
-    /// Call take_events first to process load callbacks, then drain this queue.
+    /// Call take_events or take_browser_events first to process load callbacks, then drain this queue.
     /// Opening/FrontendLoaded do not assert that frontend JS or the host booted.
-    pub fn take_inspector_events(&mut self) -> Vec<InspectorEvent> { self.inspectors.take() }
+    pub fn take_inspector_events(&mut self) -> Vec<InspectorEvent> {
+        let events = self.inspectors.take();
+        let actions = std::mem::take(&mut self.inspectors.actions);
+        for (id, epoch, action) in actions {
+            let Some(session) = self.inspectors.sessions.get_mut(&id) else { continue; };
+            if session.bridge.epoch != epoch { continue; }
+            match action {
+                devtools::BridgeAction::Submit(message) => {
+                    if !session.bridge.active { continue; }
+                    let Some(host) = self.views.get(&session.status.inspected).and_then(|v| v.browser.host()) else { continue; };
+                    if let Some((wire, bytes)) = session.renderer_protocol.submit(&self.message_ids, &message) {
+                        if host.send_dev_tools_message(Some(&bytes)) == 0 {
+                            session.renderer_protocol.pending.remove(&wire);
+                            self.inspectors.queue.lock().unwrap().push((id, devtools::Backend::Detached));
+                        }
+                    } else { self.inspectors.queue.lock().unwrap().push((id, devtools::Backend::Detached)); }
+                }
+                devtools::BridgeAction::Deliver(kind, payload) => {
+                    if !session.bridge.active && kind != "revoke" { continue; }
+                    if kind == "panel" && session.status.selected_panel != Some(session.status.panel) {
+                        session.status.selected_panel = None;
+                    }
+                    if let Some(frame) = self.views.get(&session.frontend).and_then(|v| v.browser.main_frame()).filter(|f| devtools::expected_frontend(&CefString::from(&f.url()).to_string())) {
+                        let identifier = CefString::from(&frame.identifier()).to_string();
+                        if let Some(mut message) = devtools::bridge_message(id.0, epoch, kind, &payload, &identifier) { frame.send_process_message(ProcessId::RENDERER, Some(&mut message)); }
+                    }
+                }
+            }
+        }
+        events
+    }
+
+    /// Focus the frontend content browser without exposing its private ViewId.
+    pub fn focus_inspector(&mut self, id: InspectorId) -> bool {
+        let Some(frontend) = self.inspectors.sessions.get(&id).filter(|s| s.status.phase != InspectorPhase::Detached).map(|s| s.frontend) else { return false; };
+        self.focus(frontend);
+        true
+    }
+
+    /// Apply an original frontend panel API after its authenticated bootstrap.
+    pub fn show_inspector_panel(&mut self, id: InspectorId, panel: InspectorPanel) -> bool {
+        let Some(session) = self.inspectors.sessions.get_mut(&id) else { return false; };
+        session.status.panel = panel;
+        if session.bridge.is_ready() {
+            self.inspectors.actions.push((id, session.bridge.epoch, devtools::BridgeAction::Deliver("panel", devtools::panel_name(panel).into())));
+        }
+        true
+    }
+
+    /// One-shot toggle via the original frontend. Before readiness, calls
+    /// coalesce by parity and execute once after the verified handshake.
+    /// Release/detach/close discard pending intent. True means accepted.
+    pub fn toggle_inspector_element_mode(&mut self, id: InspectorId) -> bool {
+        let Some(session) = self.inspectors.sessions.get_mut(&id).filter(|s| !matches!(s.status.phase, InspectorPhase::Detached | InspectorPhase::LoadFailed)) else { return false; };
+        if session.bridge.toggle_inspect() {
+            self.inspectors.actions.push((id, session.bridge.epoch, devtools::BridgeAction::Deliver("inspect", String::new())));
+        }
+        true
+    }
 
     /// Drops the observer and closes only the frontend. The inspected document
     /// remains alive and is neither navigated nor reloaded.
@@ -628,6 +710,25 @@ impl Drop for Engine {
 // This is the only conversion from CEF callbacks into tab-facing events.
 // Keep role filtering here as well as in take_events so a future callback cannot
 // accidentally publish frontend metadata, popups, focus or shortcuts as tabs.
+fn browser_input(view: ViewId, role: ViewRole, event: &RawEvent) -> Option<Event> {
+    match role {
+        ViewRole::Inspector(inspector) => inspector_input(inspector, event).map(Event::InspectorInput),
+        ViewRole::Page => match event {
+            RawEvent::Focused => Some(Event::Focused { view }),
+            RawEvent::Shortcut(shortcut) => Some(Event::Shortcut(shortcut.clone())),
+            _ => None,
+        },
+    }
+}
+
+fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<InspectorEvent> {
+    match event {
+        RawEvent::Focused => Some(InspectorEvent::Focused { inspector }),
+        RawEvent::Shortcut(shortcut) => Some(InspectorEvent::Shortcut { inspector, shortcut: shortcut.clone() }),
+        _ => None,
+    }
+}
+
 fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     if role != ViewRole::Page { return None; }
     if let RawEvent::Shortcut(shortcut) = event {
@@ -665,15 +766,22 @@ wrap_client! {
     struct EngineClient {
         events: EventQueue,
         shortcuts: Shortcuts,
+        inspector: Option<(InspectorId, devtools::Queue)>,
     }
 
     impl Client {
-        fn on_process_message_received(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
+        fn on_process_message_received(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
+            if let Some((id, queue)) = &self.inspector {
+                return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
+            }
             let Some(message) = message.filter(|message| source_process == ProcessId::RENDERER && CefString::from(&message.name()).to_string() == editing::EDIT_FOCUS_MESSAGE) else { return 0; };
             let Some(arguments) = message.argument_list() else { return 0; };
             if arguments.size() != 1 || arguments.get_type(0) != ValueType::BOOL { return 0; }
             push(&self.events, browser, RawEvent::EditFocus(arguments.bool(0) != 0));
             1
+        }
+        fn request_handler(&self) -> Option<RequestHandler> {
+            self.inspector.as_ref().map(|(id, queue)| devtools::InspectorRequestHandler::new(*id, queue.clone()))
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone()))
@@ -865,6 +973,7 @@ const VKEY_LEFT: i32 = 0x25;
 const VKEY_UP: i32 = 0x26;
 const VKEY_RIGHT: i32 = 0x27;
 const VKEY_DOWN: i32 = 0x28;
+const VKEY_F12: i32 = 0x7b;
 
 fn shortcut_for(event: &KeyEvent) -> Shortcut {
     let flags = event.modifiers;
@@ -875,6 +984,7 @@ fn shortcut_for(event: &KeyEvent) -> Shortcut {
         VKEY_UP => "up".to_string(),
         VKEY_RIGHT => "right".to_string(),
         VKEY_DOWN => "down".to_string(),
+        VKEY_F12 => "f12".to_string(),
         _ => char::from_u32(u32::from(event.unmodified_character))
             .map(|c| c.to_lowercase().to_string())
             .unwrap_or_default(),
@@ -977,6 +1087,28 @@ mod tests {
     }
 
     #[test]
+    fn inspector_shortcuts_and_focus_route_separately_from_tab_metadata() {
+        let inspector = InspectorId(7);
+        for key in ["i", "j", "c", "t", "w", "f12"] {
+            let shortcut = Shortcut { key: key.into(), ..Default::default() };
+            assert_eq!(inspector_input(inspector, &RawEvent::Shortcut(shortcut.clone())), Some(InspectorEvent::Shortcut { inspector, shortcut: shortcut.clone() }));
+            assert_eq!(page_event(ViewId::from_raw(1), ViewRole::Inspector(inspector), RawEvent::Shortcut(shortcut)), None);
+        }
+        assert_eq!(inspector_input(inspector, &RawEvent::Focused), Some(InspectorEvent::Focused { inspector }));
+        for metadata in [RawEvent::Title("private frontend title".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()), RawEvent::EditFocus(true), RawEvent::Loading(false, false, false)] { assert_eq!(inspector_input(inspector, &metadata), None); }
+    }
+
+    #[test]
+    fn cef_function_key_without_a_character_maps_to_f12_on_every_platform() {
+        let shortcut = Shortcut { key: "f12".into(), ..Default::default() };
+        let event = KeyEvent { type_: KeyEventType::RAWKEYDOWN, windows_key_code: 0x7b, unmodified_character: 0, ..Default::default() };
+        assert_eq!(shortcut_for(&event), shortcut);
+        assert_eq!(intercepted_shortcut(&event, &[shortcut.clone()]), Some(shortcut.clone()));
+        assert_eq!(inspector_input(InspectorId(1), &RawEvent::Shortcut(shortcut.clone())), Some(InspectorEvent::Shortcut { inspector: InspectorId(1), shortcut: shortcut.clone() }));
+        assert_eq!(page_event(ViewId::from_raw(1), ViewRole::Page, RawEvent::Shortcut(shortcut.clone())), Some(Event::Shortcut(shortcut)));
+    }
+
+    #[test]
     fn editable_web_fields_own_undo_redo_while_browser_shortcuts_still_work() {
         let undo = Shortcut { cmd: true, key: "z".into(), ..Default::default() };
         let redo = Shortcut { shift: true, ..undo.clone() };
@@ -1009,5 +1141,37 @@ mod tests {
         assert_eq!(next_zoom_factor(5.0, 1), 5.0);
         assert_eq!(next_zoom_factor(0.25, -1), 0.25);
         assert_eq!(next_zoom_factor(2.5, 0), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod ordered_input_tests {
+    use super::*;
+
+    #[test]
+    fn browser_drain_keeps_both_focus_orders_and_shortcuts_in_one_stream() {
+        let page = ViewId::from_raw(1);
+        let frontend = ViewId::from_raw(2);
+        let inspector = InspectorId::from_raw(3);
+        let shortcut = Shortcut { cmd: true, key: "w".into(), ..Default::default() };
+        for frontend_last in [false, true] {
+            let page_focus = (page, ViewRole::Page, RawEvent::Focused);
+            let frontend_focus = (frontend, ViewRole::Inspector(inspector), RawEvent::Focused);
+            let callbacks = if frontend_last {
+                vec![page_focus, frontend_focus, (frontend, ViewRole::Inspector(inspector), RawEvent::Shortcut(shortcut.clone()))]
+            } else {
+                vec![frontend_focus, page_focus, (page, ViewRole::Page, RawEvent::Shortcut(shortcut.clone()))]
+            };
+            let events: Vec<_> = callbacks.into_iter().filter_map(|(view, role, event)| browser_input(view, role, &event)).collect();
+            let page_focus = Event::Focused { view: page };
+            let frontend_focus = Event::InspectorInput(InspectorEvent::Focused { inspector });
+            let expected = if frontend_last {
+                vec![page_focus, frontend_focus, Event::InspectorInput(InspectorEvent::Shortcut { inspector, shortcut: shortcut.clone() })]
+            } else {
+                vec![frontend_focus, page_focus, Event::Shortcut(shortcut.clone())]
+            };
+            assert_eq!(events, expected);
+        }
+        assert!(browser_input(frontend, ViewRole::Inspector(inspector), &RawEvent::Title("DevTools".into())).is_none());
     }
 }

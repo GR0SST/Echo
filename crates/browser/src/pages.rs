@@ -9,9 +9,19 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use browser_core::{Browser, TabId};
 use engine::{Bounds, Engine, Event, ViewId};
 
+#[path = "devtools.rs"]
+pub(crate) mod devtools;
+
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    /// Product commands stay disabled until the renderer host bridge is ready.
+    fn supports_inspector(&self) -> bool { false }
+    /// Reuse this page's frontend, selecting the requested panel. `inspect`
+    /// requests element selection; it must never close the frontend.
+    fn open_inspector(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds, _panel: engine::InspectorPanel, _inspect: bool) -> Result<engine::InspectorId, String> { Err("Inspector bridge is unavailable".into()) }
+    fn focus_inspector(&mut self, _id: engine::InspectorId) {}
+
     fn open_inspector_probe(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> Result<engine::InspectorId, String> { Err("Inspector probe is unsupported".into()) }
     fn inspector_status(&self, _id: engine::InspectorId) -> Option<engine::InspectorStatus> { None }
     fn set_inspector_frame(&mut self, _id: engine::InspectorId, _bounds: Bounds) {}
@@ -52,6 +62,8 @@ pub trait WebEngine {
     /// Runs engine work. Takes no `self`: the engine may dispatch native UI
     /// events from inside it, which re-enter the window and its pages.
     fn pump_fn(&self) -> fn();
+    /// Preserve native page/frontend input order in this stream. Frontend focus
+    /// and shortcuts use Event::InspectorInput, not the diagnostic event drain.
     fn take_events(&mut self) -> Vec<Event>;
 }
 
@@ -69,6 +81,15 @@ pub const CONTENT_INSET: f32 = 8.0;
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
 impl WebEngine for Chromium {
+    fn supports_inspector(&self) -> bool { true }
+    fn open_inspector(&mut self, view: ViewId, parent: *mut c_void, bounds: Bounds, panel: engine::InspectorPanel, inspect: bool) -> Result<engine::InspectorId, String> {
+        let id = self.engine.open_inspector_probe(view, parent, bounds, panel)?;
+        // The engine accepts and coalesces inspect toggles before FrontendReady.
+        if inspect && !self.engine.toggle_inspector_element_mode(id) { self.engine.close_inspector(id); return Err("Inspector did not accept element selection".into()); }
+        Ok(id)
+    }
+    fn focus_inspector(&mut self, id: engine::InspectorId) { self.engine.focus_inspector(id); }
+
     fn open_inspector_probe(&mut self, view: ViewId, parent: *mut c_void, bounds: Bounds) -> Result<engine::InspectorId, String> {
         self.engine.open_inspector_probe(view, parent, bounds, engine::InspectorPanel::Elements)
     }
@@ -136,7 +157,7 @@ impl WebEngine for Chromium {
         Engine::pump
     }
     fn take_events(&mut self) -> Vec<Event> {
-        self.engine.take_events()
+        self.engine.take_browser_events()
     }
 }
 
@@ -198,6 +219,8 @@ struct InspectorProbe {
 
 struct PageStore {
     inspector_probe: Option<InspectorProbe>,
+    devtools: Option<devtools::Dock>,
+    devtools_restore: HashSet<u64>,
     next_inspector_eval: u64,
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
@@ -218,6 +241,7 @@ pub struct Pages {
     parent: *mut c_void,
     page_focus: bool,
     page_has_focus: bool,
+    devtools_focused: bool,
     preserve_ui_focus: bool,
     wanted: Vec<PageIntent>,
     wanted_focus: Option<TabId>,
@@ -232,12 +256,13 @@ pub struct Pages {
 impl Pages {
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
         Self {
-            store: Rc::new(RefCell::new(PageStore { inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+            store: Rc::new(RefCell::new(PageStore { devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
                 events: Vec::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             host: 1,
             parent: std::ptr::null_mut(),
             page_focus: true,
             page_has_focus: false,
+            devtools_focused: false,
             preserve_ui_focus: false,
             wanted: Vec::new(),
             wanted_focus: None,
@@ -257,7 +282,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
+        Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0 }
     }
 
@@ -286,6 +311,7 @@ impl Pages {
     /// parked, hidden, in another surviving host until selected there.
     pub fn release_host(&mut self) {
         let mut store = self.store.borrow_mut();
+        if store.devtools.is_some_and(|dock| dock.host == self.host) { store.close_devtools(); }
         if store.inspector_probe.is_some_and(|probe| probe.host == self.host) { store.close_inspector_probe(); }
         if store.hosts.remove(&self.host).is_none() { return; }
         store.layouts.remove(&self.host);
@@ -500,10 +526,11 @@ impl Pages {
         }
         // Creating a native browser may take the responder even when the
         // intended active pane has not changed. Reassert it after all creates.
-        if active && self.page_focus && !self.preserve_ui_focus && (focused != self.shown || created || !self.page_has_focus) {
+        if active && self.page_focus && (!self.devtools_focused || focused != self.shown) && !self.preserve_ui_focus && (focused != self.shown || created || !self.page_has_focus) {
             if let Some((tab, view)) = focused.and_then(|id| pages.get(&id).filter(|page| page.owner == self.host).map(|page| (id, page.view))) {
                 engine.focus_page(view);
                 self.shown = Some(tab);
+                self.devtools_focused = false;
                 self.page_focus = true;
                 self.page_has_focus = true;
             } else if self.shown.take().is_some() || created {
@@ -523,6 +550,8 @@ impl Pages {
             store.mirror_revision = store.mirror_revision.wrapping_add(1);
         }
         store.layout_inspector_probe();
+        let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus);
+        if closed { self.devtools_focused = false; self.page_has_focus = focused; }
         self.seen_revision = store.mirror_revision;
     }
 
@@ -533,11 +562,24 @@ impl Pages {
     }
 
     pub fn surface_bounds(&self) -> Vec<Bounds> {
-        self.surface_layout().into_iter().map(|(_, bounds)| bounds).collect()
+        let mut surfaces: Vec<_> = self.surface_layout().into_iter().map(|(_, bounds)| bounds).collect();
+        let store = self.store.borrow();
+        if let Some(dock) = store.devtools.filter(|dock| dock.host == self.host) {
+            if let Some((_, _, frontend)) = store.layouts.get(&self.host).and_then(|layout| layout.get(&dock.tab)).copied().and_then(devtools::frames) {
+                surfaces.push(frontend);
+            }
+        }
+        surfaces
     }
 
     pub fn surface_layout(&self) -> Vec<(TabId, Bounds)> {
-        self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| (intent.tab, frame.page)).collect()
+        self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| {
+            let store = self.store.borrow();
+            let bounds = if store.devtools.is_some_and(|dock| dock.host == self.host && dock.tab == intent.tab) {
+                store.pages.get(&intent.tab).map_or(frame.page, |page| page.frame)
+            } else { frame.page };
+            (intent.tab, bounds)
+        }).collect()
     }
 
     /// Frozen owner-viewport images, positioned in this host's logical layout.
@@ -564,16 +606,18 @@ impl Pages {
     /// An overlay owns its own native responder; remember its intent without
     /// pulling focus back into the underlying root window.
     pub fn request_ui_focus(&mut self) {
+        self.devtools_focused = false;
         self.page_focus = false;
         self.page_has_focus = false;
     }
 
     /// Records explicit navigation/selection intent without changing the native
     /// responder before layout or an asynchronous handoff is ready.
-    pub fn request_page_focus(&mut self) { self.page_focus = true; self.page_has_focus = false; }
+    pub fn request_page_focus(&mut self) { self.devtools_focused = false; self.page_focus = true; self.page_has_focus = false; }
 
     /// Gives keyboard focus back to the page on screen.
     pub fn focus_shown(&mut self) {
+        self.devtools_focused = false;
         self.page_focus = true;
         if let Some((tab, view)) = self.wanted_focus.and_then(|tab| self.view(tab).map(|view| (tab, view))) {
             self.store.borrow_mut().engine.focus_page(view);
@@ -681,6 +725,7 @@ impl Pages {
         let page = store.pages.get(&tab).filter(|page| page.owner == self.host && page.visible)
             .ok_or("Focused page is not owned by this host")?;
         if store.active_host != self.host { return Err("Inspector host is inactive".into()); }
+        if store.devtools.is_some() { return Err("Product inspector is already open".into()); }
         let view = page.view;
         let parent = store.hosts.get(&page.owner).copied().filter(|parent| !parent.is_null())
             .ok_or("Focused page has no native GPUI parent")?;
@@ -758,14 +803,17 @@ impl Pages {
         let fresh = store.engine.take_events();
         // take_events processes inspector load callbacks first. This runs after
         // the regular pump, with no borrow retained across pumping or awaiting.
-        for event in store.engine.take_inspector_events() { eprintln!("[inspector-event] {event:?}"); }
+        store.handle_devtools_events(self.host, self.page_focus);
         store.layout_inspector_probe();
+        let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus);
+        if closed { self.devtools_focused = false; self.page_has_focus = focused; }
         store.events.extend(fresh);
         let queued = std::mem::take(&mut store.events);
         let mut delivered = Vec::new();
         for event in queued {
             let owner = match &event {
                 Event::Shortcut(_) => Some(store.active_host),
+                Event::InspectorInput(input) => store.inspector_input_owner(input).map(|dock| dock.host),
                 Event::OpenInNewTab { opener, .. } => store.pages.values().find(|page| page.view == *opener).map(|page| page.owner),
                 Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
                 | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
@@ -787,7 +835,7 @@ impl Pages {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
             }
             Event::Focused { view } => {
-                if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); self.page_focus = true; self.page_has_focus = true; }
+                if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); self.devtools_focused = false; self.page_focus = true; self.page_has_focus = true; }
             }
             Event::UrlChanged { view, url } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
@@ -815,7 +863,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
+            Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }
@@ -881,6 +929,7 @@ impl PageStore {
     fn prepare_handoff(&mut self, tab: TabId, target: u64) -> bool {
         // The temporary dock belongs to its original GPUI parent. Restore the
         // full viewport before snapshotting or transferring the inspected view.
+        if self.devtools.is_some_and(|dock| dock.tab == tab && dock.host != target) { self.close_devtools(); }
         if self.inspector_probe.is_some_and(|probe| probe.tab == tab && probe.host != target) { self.close_inspector_probe(); }
         let Some(page) = self.pages.get(&tab) else { return true; };
         if page.owner == target || !self.engine.supports_snapshots() { return true; }

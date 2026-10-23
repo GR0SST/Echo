@@ -86,6 +86,10 @@ actions!(
         CloseSplitPane,
         ExpandCurrentSplit,
         ViewSource,
+        DeveloperTools,
+        InspectElements,
+        JavaScriptConsole,
+        NetworkInspector,
         NextTab,
         PreviousTab,
         GoBack,
@@ -179,6 +183,10 @@ window_shortcuts! {
     "cmd-r" => Reload,
     "cmd-shift-r" => ForceReload,
     "cmd-alt-u" => ViewSource,
+    "cmd-alt-i" => DeveloperTools,
+    "f12" => DeveloperTools,
+    "cmd-alt-c" => InspectElements,
+    "cmd-alt-j" => JavaScriptConsole,
     "cmd-." => StopLoading,
     "cmd-=" => ZoomIn,
     "cmd-+" => ZoomIn,
@@ -354,6 +362,7 @@ pub enum Command {
     SeparatePane,
     ExpandCurrentSplit,
     ViewSource,
+    DevTools(crate::devtools::Command),
     FocusPane(usize),
     CyclePane(isize),
     MovePane(isize),
@@ -563,6 +572,9 @@ pub struct BrowserWindow {
     new_menu_toggled_at: Option<Instant>,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
+    /// Native callbacks waiting behind a browser shortcut's GPUI dispatch.
+    pending_engine_events: std::collections::VecDeque<Event>,
+    engine_shortcut_pending: bool,
     pub floating_sidebar: Option<FloatingSidebar>,
     pub(crate) main_window: AnyWindowHandle,
     pub(crate) native_view: Option<*mut c_void>,
@@ -701,6 +713,8 @@ impl BrowserWindow {
             link_status_generation: 0,
             history_page: crate::history::HistoryPage::new(cx),
             pages,
+            pending_engine_events: Default::default(),
+            engine_shortcut_pending: false,
             floating_sidebar: None,
             tab_menu: None,
             site_controls: None,
@@ -755,10 +769,16 @@ impl BrowserWindow {
     }
 
     pub fn apply_events(&mut self, events: Vec<Event>, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_engine_events.extend(events);
+        if !self.engine_shortcut_pending { self.drain_engine_events(window, cx); }
+    }
+
+    fn drain_engine_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pages) = self.pages.clone() else {
+            self.pending_engine_events.clear();
             return;
         };
-        for event in events {
+        while let Some(event) = self.pending_engine_events.pop_front() {
             if matches!(&event, Event::Focused { .. }) && (self.command_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
@@ -799,12 +819,24 @@ impl BrowserWindow {
                     let id = self.edit_browser(|browser| browser.new_tab(url.clone(), SystemTime::now()));
                     self.edit_profile(|browser| browser.set_title(id, display_url(&url)));
                 }
+                Event::InspectorInput(input) => {
+                    let input = pages.borrow_mut().record_inspector_input(&input);
+                    match input {
+                        Some(crate::devtools::Input::Focus(tab)) => {
+                            if self.browser.active_tab().is_some_and(|active| self.browser.related_tabs(active.id).contains(&tab)) {
+                                self.edit_browser(|browser| browser.activate_tab(tab, SystemTime::now()));
+                            }
+                        }
+                        Some(crate::devtools::Input::Shortcut(shortcut)) => {
+                            self.defer_engine_shortcut(shortcut, window, cx);
+                            break;
+                        }
+                        None => {}
+                    }
+                }
                 Event::Shortcut(shortcut) => {
-                    // Actions update this view, so dispatch after this update ends.
-                    let keystroke = keystroke_for(shortcut);
-                    window.defer(cx, move |window, cx| {
-                        window.dispatch_keystroke(keystroke, cx);
-                    });
+                    self.defer_engine_shortcut(shortcut, window, cx);
+                    break;
                 }
                 Event::FindResult { view, count, active, final_update } => {
                     if let Some(bar) = &mut self.find_bar {
@@ -828,6 +860,25 @@ impl BrowserWindow {
         // persisted intent after engine events even when the window is occluded.
         pages.borrow_mut().sync_audio(&self.browser);
         cx.notify();
+    }
+
+    fn defer_engine_shortcut(&mut self, shortcut: engine::Shortcut, window: &mut Window, cx: &mut Context<Self>) {
+        self.engine_shortcut_pending = true;
+        let browser = cx.entity().downgrade();
+        let keystroke = keystroke_for(shortcut);
+        // Release this entity before GPUI dispatches its action. Later native
+        // callbacks stay queued, including callbacks from another engine pump.
+        window.defer(cx, move |window, cx| {
+            window.dispatch_keystroke(keystroke, cx);
+            // Actions may defer their own work (for example restoring an overlay
+            // before opening DevTools). Enqueue continuation after those effects.
+            window.defer(cx, move |window, cx| {
+                let _ = browser.update(cx, |this, cx| {
+                    this.engine_shortcut_pending = false;
+                    this.drain_engine_events(window, cx);
+                });
+            });
+        });
     }
 
     fn with_active_page(&self, f: impl FnOnce(&mut Pages, TabId)) {
@@ -1115,6 +1166,10 @@ impl BrowserWindow {
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
                 (Command::StopLoading, "Stop Loading", "stop loading|stop page", active.is_some()),
                 (Command::ViewSource, "View Source", "view source|page source|show source", self.current_source_url().is_some()),
+                (Command::DevTools(crate::devtools::Command::Toggle), "Developer Tools", "developer tools|devtools", self.devtools_available()),
+                (Command::DevTools(crate::devtools::Command::Elements), "Inspect Elements", "inspect elements|element inspector", self.devtools_available()),
+                (Command::DevTools(crate::devtools::Command::Console), "JavaScript Console", "javascript console|console", self.devtools_available()),
+                (Command::DevTools(crate::devtools::Command::Network), "Network Inspector", "network inspector|network", self.devtools_available()),
                 (Command::ZoomIn, "Zoom In", "zoom in|increase zoom", active.is_some()),
                 (Command::ZoomOut, "Zoom Out", "zoom out|decrease zoom", active.is_some()),
                 (Command::ResetZoom, "Zoom to Actual Size", "zoom actual size|reset zoom|100%", active.is_some()),
@@ -1370,6 +1425,7 @@ impl BrowserWindow {
             Command::SeparatePane => { if let Some(id) = self.browser.space().active_tab { if !self.edit_browser(|browser| browser.separate_split_pane(id)) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
             Command::ExpandCurrentSplit => self.expand_current_split(cx),
             Command::ViewSource => self.view_source(cx),
+            Command::DevTools(command) => self.run_devtools(command, cx),
             Command::FocusPane(index) => { self.edit_browser(|browser| browser.focus_split_pane(index, SystemTime::now())); }
             Command::CyclePane(delta) => { self.edit_browser(|browser| browser.cycle_split_pane(delta, SystemTime::now())); }
             Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.move_split_pane(id, delta)); } }
@@ -1525,6 +1581,11 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
+            .when(self.devtools_available(), |this| this
+                .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))
+                .on_action(cx.listener(|this, _: &InspectElements, _, cx| this.run_devtools(crate::devtools::Command::Elements, cx)))
+                .on_action(cx.listener(|this, _: &JavaScriptConsole, _, cx| this.run_devtools(crate::devtools::Command::Console, cx)))
+                .on_action(cx.listener(|this, _: &NetworkInspector, _, cx| this.run_devtools(crate::devtools::Command::Network, cx))))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
@@ -2721,6 +2782,7 @@ impl BrowserWindow {
                             )
                     }))
                     .children(self.pages.clone().map(|pages| {
+                        let divider_pages = pages.clone();
                         // Reports the card's bounds so the native page view can sit on it.
                         canvas(
                             move |bounds, _, cx| {
@@ -2754,7 +2816,14 @@ impl BrowserWindow {
                                     });
                                 }
                             },
-                            |_, _, _, _| {},
+                            move |_, _, window, _| {
+                                if let Some(divider) = divider_pages.borrow().devtools_divider() {
+                                    window.paint_quad(gpui::fill(Bounds::new(
+                                        point(px(divider.x as f32), px(divider.y as f32)),
+                                        size(px(divider.width as f32), px(divider.height as f32)),
+                                    ), hsla(0., 0., 0.5, 0.3)));
+                                }
+                            },
                         )
                         .absolute()
                         .top_0()
@@ -3073,6 +3142,11 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
+            .when(self.devtools_available(), |this| this
+                .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))
+                .on_action(cx.listener(|this, _: &InspectElements, _, cx| this.run_devtools(crate::devtools::Command::Elements, cx)))
+                .on_action(cx.listener(|this, _: &JavaScriptConsole, _, cx| this.run_devtools(crate::devtools::Command::Console, cx)))
+                .on_action(cx.listener(|this, _: &NetworkInspector, _, cx| this.run_devtools(crate::devtools::Command::Network, cx))))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))

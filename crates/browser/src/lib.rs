@@ -28,6 +28,7 @@ mod status_url;
 mod private;
 mod profile;
 pub mod pages;
+pub(crate) use pages::devtools;
 pub mod text_input;
 pub mod window;
 
