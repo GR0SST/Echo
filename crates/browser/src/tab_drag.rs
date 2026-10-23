@@ -191,7 +191,7 @@ impl Render for TabDrag {
         let icon = if let Some(icon) = &self.icon {
             crate::icons::glyph(icon)
         } else if self.split {
-            crate::icons::glyph("▥")
+            crate::icons::control(crate::icons::Icon::Split)
         } else if let Some(bytes) = &self.favicon {
             gpui::img(Arc::new(gpui::Image::from_bytes(
                 gpui::ImageFormat::Png,
@@ -201,7 +201,7 @@ impl Render for TabDrag {
             .flex_none()
             .into_any_element()
         } else {
-            crate::icons::glyph("↗")
+            crate::icons::control(crate::icons::Icon::External)
         };
         div()
             .flex()

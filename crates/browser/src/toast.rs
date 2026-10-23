@@ -130,7 +130,7 @@ impl BrowserWindow {
             .bg(hsla(0.0, 0.0, 0.12, 0.96))
             .text_color(gpui::white())
             .text_sm()
-            .child("✓")
+            .child(crate::icons::control(crate::icons::Icon::Check))
             .child(toast.message.clone())
             .into_any_element()
     }

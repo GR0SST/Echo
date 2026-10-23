@@ -213,7 +213,7 @@ impl BrowserWindow {
                                 this.browser.delete_history_entry(&remove);
                                 cx.notify();
                             }))
-                            .child("×"),
+                            .child(crate::icons::control(crate::icons::Icon::Close)),
                     )
                     .into_any_element()
             })

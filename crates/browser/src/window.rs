@@ -498,6 +498,7 @@ pub struct BrowserWindow {
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
+    pub(crate) hovered_split_row: Option<TabId>,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -575,6 +576,7 @@ impl BrowserWindow {
             tab_drop_edges: RefCell::new(HashMap::new()),
             space_drag_hover: None,
             split_draft: None,
+            hovered_split_row: None,
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -1801,6 +1803,7 @@ impl BrowserWindow {
     ) -> impl IntoElement {
         let id = tab.id;
         let key = id.get() as usize;
+        let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
@@ -1825,6 +1828,12 @@ impl BrowserWindow {
             .gap_2()
             .h(px(34.0))
             .px_2()
+            .when(segmented, |this| this.relative().px_1().gap_0()
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered { this.hovered_split_row = Some(id); }
+                    else if this.hovered_split_row == Some(id) { this.hovered_split_row = None; }
+                    cx.notify();
+                })))
             .rounded_lg()
             .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
             .when(!active, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3))))
@@ -1846,6 +1855,7 @@ impl BrowserWindow {
                 div()
                     .id(("close", key))
                     .debug_selector(|| format!("close-{key}"))
+                    .when(segmented, |this| this.absolute().right(px(4.)).top(px(8.)))
                     .flex_none()
                     .px_1()
                     .rounded_sm()
@@ -1858,10 +1868,10 @@ impl BrowserWindow {
                         cx.stop_propagation();
                         this.close_tab(id, cx);
                     }))
-                    .child(match section {
-                        Section::Pinned => "−",
-                        Section::Today => "×",
-                    }),
+                    .child(crate::icons::control(match section {
+                        Section::Pinned => crate::icons::Icon::Minus,
+                        Section::Today => crate::icons::Icon::Close,
+                    })),
             )
     }
 
@@ -1907,7 +1917,7 @@ impl BrowserWindow {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.close_tab(id, cx);
-                })).child("−"))
+                })).child(crate::icons::control(crate::icons::Icon::Minus)))
     }
 
     fn render_mute_control(&self, tab: &Tab, favorite: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1922,7 +1932,7 @@ impl BrowserWindow {
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 this.set_tab_muted(id, false, cx);
-            })).child("🔇")
+            })).child(crate::icons::control(crate::icons::Icon::Mute))
     }
 
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
@@ -1950,10 +1960,13 @@ impl BrowserWindow {
             .collect();
         let offset = -self.pager.position * SIDEBAR_WIDTH;
         let browser = cx.entity().downgrade();
+        let state = self.browser.space().active_tab.and_then(|id| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(id))).unwrap_or_default();
 
+        let loading = state.loading;
         div()
             .id("sidebar")
             .debug_selector(|| "sidebar".into())
+            .relative()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .flex()
             .flex_col()
@@ -1964,6 +1977,26 @@ impl BrowserWindow {
             .pb_2()
             .gap_1()
             .text_color(hsla(0.0, 0.0, 0.1, 1.0))
+            .child(div().absolute().top_0().left(px(78.)).right(px(8.)).h(px(38.)).flex().items_center().gap_1()
+                .child(div().id("toggle-sidebar").debug_selector(|| "toggle-sidebar".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
+                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
+                    .child(crate::icons::control(crate::icons::Icon::Sidebar)))
+                .child(div().flex_1())
+                .child(div().id("go-back").debug_selector(|| "go-back".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
+                    .text_color(hsla(0., 0., 0., if state.can_go_back { 0.65 } else { 0.25 }))
+                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                    .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_back(tab)); }))
+                    .child(crate::icons::control(crate::icons::Icon::Back)))
+                .child(div().id("go-forward").debug_selector(|| "go-forward".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
+                    .text_color(hsla(0., 0., 0., if state.can_go_forward { 0.65 } else { 0.25 }))
+                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                    .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_forward(tab)); }))
+                    .child(crate::icons::control(crate::icons::Icon::Forward)))
+                .child(div().id("reload-page").debug_selector(|| "reload-page".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
+                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                    .on_click(cx.listener(move |this, _, _, _| { this.with_active_page(|pages, tab| { if loading { pages.stop_loading(tab); } else { pages.reload(tab); } }); }))
+                    .child(crate::icons::control(if state.loading { crate::icons::Icon::Close } else { crate::icons::Icon::Reload }))))
             .child(
                 div().px_2().child(
                     div()
@@ -2148,7 +2181,7 @@ impl BrowserWindow {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_command_bar(&OpenCommandBar, window, cx)
                     }))
-                    .child("+  New Tab"),
+                    .child(crate::icons::control(crate::icons::Icon::Plus)).child("New Tab"),
             )
             .child(
                 self.sidebar_list(space.id, Section::Today, cx)
@@ -2205,7 +2238,7 @@ impl BrowserWindow {
                 .text_color(hsla(0.0, 0.0, 0.0, 0.55))
                 .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
                 .on_click(cx.listener(|this, _, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
-                .child("+"))
+                .child(crate::icons::control(crate::icons::Icon::Plus)))
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2385,26 +2418,26 @@ impl BrowserWindow {
                 };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
-                let (icon, label, detail): (&str, String, String) = match suggestion {
+                let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
                     Suggestion::Load(Resolved::Search { query, .. }) => {
-                        ("⌕", query, "Google Search".into())
+                        (crate::icons::Icon::Search, query, "Google Search".into())
                     }
-                    Suggestion::Load(Resolved::Url(url)) => ("↗", display_url(&url), "Open".into()),
-                    Suggestion::SplitTab { title, space, .. } => ("⇥", title, space),
-                    Suggestion::History { title, url } => ("◷", title, format!("History · {}", display_url(&url))),
+                    Suggestion::Load(Resolved::Url(url)) => (crate::icons::Icon::External, display_url(&url), "Open".into()),
+                    Suggestion::SplitTab { title, space, .. } => (crate::icons::Icon::Enter, title, space),
+                    Suggestion::History { title, url } => (crate::icons::Icon::History, title, format!("History · {}", display_url(&url))),
                     Suggestion::SwitchToTab { title, space, .. } => {
-                        ("⇥", title, format!("Switch to Tab · {space}"))
+                        (crate::icons::Icon::Enter, title, format!("Switch to Tab · {space}"))
                     }
-                    Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
-                    Suggestion::SaveFolderName { name } => ("▸", name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
-                    Suggestion::FolderDestination { label, .. } => ("▸", label, "Move".into()),
-                    Suggestion::SaveIcon { icon } => ("↵", icon.unwrap_or_else(|| "Reset Icon".into()), match bar.target { Target::Icon(crate::icons::IconTarget::Space(_)) => "Space Icon".into(), Target::Icon(crate::icons::IconTarget::Folder(_)) => "Folder Icon".into(), _ => "Tab Icon".into() }),
-                    Suggestion::SaveTabName { name } => ("↵", name, "Rename Tab".into()),
-                    Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
-                    Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
-                    Suggestion::ArchivedTab { title, detail, .. } => ("↩", title, detail),
-                    Suggestion::MoreArchive { remaining } => ("↓", "Show More".into(), format!("{remaining} more archived {}", if remaining == 1 { "tab" } else { "tabs" })),
-                    Suggestion::ConfirmClearArchive => ("×", "Clear Archive".into(), "Permanently delete".into()),
+                    Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, "Action".into()),
+                    Suggestion::SaveFolderName { name } => (crate::icons::Icon::Folder, name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
+                    Suggestion::FolderDestination { label, .. } => (crate::icons::Icon::Folder, label, "Move".into()),
+                    Suggestion::SaveIcon { icon } => (crate::icons::Icon::Enter, icon.unwrap_or_else(|| "Reset Icon".into()), match bar.target { Target::Icon(crate::icons::IconTarget::Space(_)) => "Space Icon".into(), Target::Icon(crate::icons::IconTarget::Folder(_)) => "Folder Icon".into(), _ => "Tab Icon".into() }),
+                    Suggestion::SaveTabName { name } => (crate::icons::Icon::Enter, name, "Rename Tab".into()),
+                    Suggestion::SaveSpace { name } => (crate::icons::Icon::Plus, name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
+                    Suggestion::ArchiveAfter { label, seconds } => (crate::icons::Icon::History, label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
+                    Suggestion::ArchivedTab { title, detail, .. } => (crate::icons::Icon::Restore, title, detail),
+                    Suggestion::MoreArchive { remaining } => (crate::icons::Icon::Down, "Show More".into(), format!("{remaining} more archived {}", if remaining == 1 { "tab" } else { "tabs" })),
+                    Suggestion::ConfirmClearArchive => (crate::icons::Icon::Close, "Clear Archive".into(), "Permanently delete".into()),
                 };
                 let row = div()
                     .id(("suggestion", index))
@@ -2419,7 +2452,7 @@ impl BrowserWindow {
                     .when(selected, |this| this.bg(hsla(accent, 0.6, 0.5, 1.0)).text_color(gpui::white()))
                     .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.05))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
-                    .child(div().w(px(16.0)).flex_none().child(icon))
+                    .child(crate::icons::control(icon))
                     .child(
                         div()
                             .flex_1()
@@ -2446,7 +2479,7 @@ impl BrowserWindow {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_archive_entry(id, cx);
-                        })).child("×")))
+                        })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when_some(history_url, |this, url| this.child(div()
                         .id(("delete-suggestion", index))
                         .debug_selector(move || format!("delete-suggestion-{index}"))
@@ -2459,7 +2492,7 @@ impl BrowserWindow {
                                 bar.selected = bar.selected.min(count.saturating_sub(1));
                             }
                             cx.notify();
-                        })).child("×")));
+                        })).child(crate::icons::control(crate::icons::Icon::Close))));
                 div().flex().flex_col().flex_none()
                     .children(date.map(|date| div().debug_selector(move || format!("archive-date-{index}")).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 0., 0.5)).child(date)))
                     .child(row).into_any_element()

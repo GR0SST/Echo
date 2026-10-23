@@ -98,3 +98,22 @@ Online discussion confirms deliberate hover timing, but does not document
 Arc's dismissal distance or animation implementation:
 https://www.reddit.com/r/ArcBrowser/comments/17ewxo7/
 The supplied reference takes precedence over inferred online behavior.
+
+## Sidebar icons and Split View row width — 2026-10-23
+
+Reference: the user's full Arc sidebar screenshot and the confirmed Split
+View clipping screenshot. Existing interface controls use a shared 18 px
+vector grid with a 1.5 px stroke (the semibold disclosure uses 1.8 px),
+inheriting control color. Default folders are monochrome outlines, with the
+disclosure replacing the icon on hover. Selected user emoji and website
+favicons remain unchanged. These are independently drawn generic controls;
+Arc branding and bundled artwork are not included.
+
+The sidebar's top row exposes sidebar toggle, back, forward and reload/stop.
+Back/forward reflect engine navigation state; reload changes to stop during
+loading. Split pane headers use the same navigation icon set.
+
+Unnamed Split View rows give each segment an equal share of the full row.
+The group close button is overlaid on hover, so no empty trailing gutter is
+reserved. Only the last segment's text inset changes for that button; its
+outer bounds remain fixed. Long page names truncate within their segment.

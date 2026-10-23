@@ -4649,3 +4649,74 @@ fn floating_sidebar_keeps_a_pointer_buffer_without_covering_the_page(cx: &mut Te
     cx.run_until_parked();
     assert!(floating(&view, cx).is_none(), "beyond the buffer it closes");
 }
+
+
+#[gpui::test]
+fn sidebar_toolbar_routes_navigation_and_switches_reload_to_stop(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    click(cx, "go-back");
+    click(cx, "go-forward");
+    click(cx, "reload-page");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Back(1)));
+    assert!(calls.contains(&Call::Forward(1)));
+    assert!(calls.contains(&Call::Reload(1)));
+    fake.send(cx, Event::LoadingChanged { view: page(1), loading: true, can_go_back: true, can_go_forward: false });
+    click(cx, "reload-page");
+    assert!(fake.take_calls().contains(&Call::StopLoading(1)));
+    click(cx, "toggle-sidebar");
+    assert!(!view.read_with(cx, |w, _| w.sidebar_visible));
+}
+
+#[gpui::test]
+fn split_sidebar_segments_fill_the_row_and_long_titles_stay_inside(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    view.update(cx, |w, cx| {
+        let ids = w.browser.active_split().unwrap().panes.clone();
+        for id in ids { w.browser.set_title(id, "A very long page title that should truncate inside its own split segment"); }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    move_mouse(cx, 400., 400.);
+    let row = cx.debug_bounds("tab-2").unwrap();
+    let contents = cx.debug_bounds("sidebar-split-2").unwrap();
+    let first = cx.debug_bounds("sidebar-pane-2").unwrap();
+    let last = cx.debug_bounds("sidebar-pane-3").unwrap();
+    assert_eq!(contents.origin.x, row.origin.x + gpui::px(4.));
+    assert_eq!(contents.right(), row.right() - gpui::px(4.));
+    assert_eq!(first.size.width, last.size.width);
+    assert_eq!(first.origin.x, contents.origin.x);
+    assert_eq!(last.right(), contents.right());
+    move_mouse(cx, f32::from(row.center().x), f32::from(row.center().y));
+    assert_eq!(cx.debug_bounds("sidebar-pane-3").unwrap(), last, "hover close must not shrink a segment");
+    let close = cx.debug_bounds("close-2").unwrap();
+    assert!(close.origin.x >= last.origin.x && close.right() <= last.right());
+    let title = cx.debug_bounds("sidebar-pane-title-3").unwrap();
+    assert!(title.right() <= close.origin.x, "the hover close must not cover the title");
+    fake.take_calls();
+    click(cx, "sidebar-pane-3");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane1.example"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    click(cx, "close-2");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+}
+
+#[gpui::test]
+fn folder_hover_replaces_its_icon_without_shifting_the_title(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_folder_pages(cx);
+    let folder = view.read_with(cx, |w, _| w.browser.space().folders[0].id);
+    let key = folder.get();
+    move_mouse(cx, 400., 400.);
+    let name = cx.debug_bounds(test_selector(format!("folder-name-{key}"))).unwrap();
+    let icon = cx.debug_bounds(test_selector(format!("folder-icon-{key}"))).unwrap();
+    let row = cx.debug_bounds(test_selector(format!("folder-{key}"))).unwrap();
+    assert_eq!(icon.origin.x, row.origin.x + gpui::px(8.));
+    assert_eq!(name.origin.x, icon.right() + gpui::px(8.));
+    move_mouse(cx, f32::from(row.center().x), f32::from(row.center().y));
+    assert_eq!(cx.debug_bounds(test_selector(format!("folder-chevron-{key}"))).unwrap(), icon);
+    assert_eq!(cx.debug_bounds(test_selector(format!("folder-name-{key}"))).unwrap(), name);
+    let was_collapsed = view.read_with(cx, |w, _| w.browser.folder(folder).unwrap().collapsed);
+    click(cx, test_selector(format!("folder-menu-{key}")));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.folder(folder).unwrap().collapsed), was_collapsed);
+}

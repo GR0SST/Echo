@@ -226,7 +226,7 @@ impl BrowserWindow {
                     .rounded_md()
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
                     .on_click(cx.listener(|this, _, _, cx| this.find_next(false, cx)))
-                    .child("↑"),
+                    .child(crate::icons::control(crate::icons::Icon::Up)),
             )
             .child(
                 div()
@@ -236,7 +236,7 @@ impl BrowserWindow {
                     .rounded_md()
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
                     .on_click(cx.listener(|this, _, _, cx| this.find_next(true, cx)))
-                    .child("↓"),
+                    .child(crate::icons::control(crate::icons::Icon::Down)),
             )
             .child(
                 div()
@@ -246,7 +246,7 @@ impl BrowserWindow {
                     .rounded_md()
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
                     .on_click(cx.listener(|this, _, _, cx| this.close_find(cx)))
-                    .child("×"),
+                    .child(crate::icons::control(crate::icons::Icon::Close)),
             )
             .into_any_element()
     }

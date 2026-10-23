@@ -79,7 +79,7 @@ impl Render for FolderDrag {
             .bg(hsla(0., 0., 0.98, 0.96))
             .text_color(hsla(0., 0., 0.1, 1.))
             .text_sm()
-            .child(crate::icons::glyph(self.icon.as_deref().unwrap_or("📁")))
+            .child(crate::icons::folder(self.icon.as_deref()))
             .child(div().min_w_0().truncate().child(self.name.clone()))
     }
 }

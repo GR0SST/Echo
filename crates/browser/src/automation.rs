@@ -9,6 +9,7 @@
 //! `compose <text>` (native IME/emoji text insertion into the focused responder),
 //! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
+//! `pointer <x> <y>` (also moves the physical pointer for native hover checks),
 //! `drag <x1> <y1> <x2> <y2> [hold_ms]` (hold at the destination before releasing),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
@@ -652,6 +653,21 @@ unsafe fn warp_pointer(view: *mut AnyObject, x: f64, y: f64) {
     }
 }
 
+unsafe fn toolkit_view(view: *mut AnyObject) -> Option<*mut AnyObject> {
+    unsafe {
+        let class = AnyClass::get(c"GPUIView")?;
+        let toolkit: Bool = msg_send![view, isKindOfClass: class];
+        if toolkit.as_bool() { return Some(view); }
+        let children: *mut AnyObject = msg_send![view, subviews];
+        let count: usize = msg_send![children, count];
+        for index in 0..count {
+            let child: *mut AnyObject = msg_send![children, objectAtIndex: index];
+            if let Some(view) = toolkit_view(child) { return Some(view); }
+        }
+        None
+    }
+}
+
 /// A mouse event at window point (x, y), top-left origin.
 unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
     unsafe {
@@ -674,7 +690,10 @@ unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
         // Queued mouse moves only reach the first responder (often the page);
         // real ones also reach tracking-area owners like this view.
         if !event.is_null() {
-            let _: () = msg_send![content, mouseMoved: event];
+            // CEF embedding wraps GPUIView in an NSView. NSView's default
+            // mouseMoved implementation does not forward to that child.
+            let target = toolkit_view(content).unwrap_or(content);
+            let _: () = msg_send![target, mouseMoved: event];
         }
     }
 }
