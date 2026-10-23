@@ -25,6 +25,11 @@ reference](https://start.arc.net/command-bar-actions) and [release notes](https:
 Easels are left out of the comparison by the owner's decision. Notes (Arc's
 documents) are mentioned once.
 
+Echo is local-only by the owner's decision (2026-10-23). Browser accounts,
+unified browser login, cross-device sync, recovery phrases, and their settings
+and notifications are excluded from this plan. Local profiles, website logins,
+and session persistence remain in scope.
+
 Statuses: **done**, **partial**, **missing**.
 
 ---
@@ -47,7 +52,6 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Check for Updates… | — | missing | Auto-update |
 | Privacy Policy | — | missing | — |
 | Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
-| Sign Out | — | missing | No account |
 | Quit | ⌘Q | done | No "Warn before quitting" confirmation |
 
 ### File
@@ -378,8 +382,9 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 ## 13. Settings (Preferences, ⌘,)
 
-Tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account (sync),
-Icon. There is also an internal Staff tab. We have no settings window;
+Reference tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account,
+Icon. Echo excludes Account and sync. There is also an internal Staff tab.
+We have no settings window;
 rows marked partial expose the setting from the Command Bar instead.
 
 | Tab → option | Status |
@@ -397,7 +402,6 @@ rows marked partial expose the setting from the Command Bar instead.
 | Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | missing |
 | Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | missing (AI, lower priority) |
 | Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture when leaving a tab with video, dragging the window by the top of the page, Shared Quotes, Show full URL when Toolbar is enabled, restoring windows on launch, Haptic feedback when reordering, Play Arc sound effects | missing |
-| Account → Arc Sync (E2E), Recovery Card and recovery phrase, changing name, email and password, Delete Account, deleting sync data, legacy iCloud Sync | missing |
 | Icon → alternative app icons (unlocked by referrals) | missing (we don't copy assets) |
 
 ## 14. Library (⇧⌘L)
@@ -468,7 +472,6 @@ are implemented for copied links; the remaining notifications follow below.
 | Translation: Translated to %@ / back to %@ / error | missing |
 | Updates: update pending / failed / in progress | missing |
 | Battery Saver Mode Activated/Deactivated | missing |
-| Sync errors (password change, outdated device etc.) | missing |
 | Shortcut tips ("Copy links faster by pressing…", "… to easily show and hide your Sidebar!", Site Search) | missing |
 | Screenshot Copied to Clipboard, Capture in Progress… | missing |
 
@@ -476,7 +479,6 @@ are implemented for copied links; the remaining notifications follow below.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Signing in and signing up for an Arc account | missing | Out of parity (Arc service). Our equivalent is a local profile |
 | Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | missing | — |
 | Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | missing | — |
 | Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | — |
@@ -485,14 +487,12 @@ are implemented for copied links; the remaining notifications follow below.
 | Empty state: "Open your first tab. Click New Tab or press ⌘T…" | partial | We show a "No tab open / Press ⌘T to open a new tab" placeholder |
 | Default browser prompts ("Try Arc as default for one week" etc.) | missing | — |
 
-## 20. Sync
+## 20. Local sessions and persistence
 
 | Feature | Status | What's missing |
 |---|---|---|
 | Saving the session between launches (Spaces, tabs, archive) | done | One profile owner writes `session.json`, including after the original window closes. Uncommitted split drafts from all bound windows are excluded. Demo data only on first launch; URLs are saved, back/forward history isn't |
 | "When opening Arc, restore windows from previous session" | missing | — |
-| Arc Sync: syncing the sidebar (Spaces, Pinned, folders) between devices with end-to-end encryption and a recovery phrase | missing | — |
-| Synced settings (`SyncedPreferences`) | missing | — |
 | Cookies persist between launches | done | `persist_session_cookies` in the engine |
 
 ## 21. Gestures and feel
@@ -532,9 +532,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 72
-- **partial**: 53
-- **missing**: 176
+- **done**: 71
+- **partial**: 57
+- **missing**: 167
 
 ### Biggest gaps (by importance for parity)
 

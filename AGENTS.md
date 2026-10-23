@@ -30,7 +30,10 @@ Anything beyond that (our own features, departures from Arc) comes after.
 - Key Arc features we must have: vertical sidebar with tabs, Spaces and
   profiles, Pinned and Favorites tabs, tab auto-archiving, Split View,
   Little Arc, Command Bar, Peek, Boosts, Easels, Library, Air Traffic
-  Control, Picture-in-Picture, Space themes and colors, sync.
+  Control, Picture-in-Picture, Space themes and colors.
+- Echo is local-only: no Echo account, unified browser login, or cross-device
+  synchronization. These Arc services are outside the parity scope. Local
+  profiles, sessions, browsing data, and website logins remain in scope.
 - The full list of differences from Arc (built from the Arc 1.169.0 bundle)
   is `docs/ARC_PARITY.md`, with statuses done / partial / missing. Take tasks
   from there and update the row's status in the same change that closes it.

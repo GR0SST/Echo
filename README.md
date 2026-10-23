@@ -4,6 +4,10 @@ The Browser Company is shutting down the Arc browser on December 22, 2026.
 This project is a cross-platform browser that recreates Arc one to one:
 its features, behavior and feel.
 
+Echo is local-only. There is no Echo account, unified browser login, or
+cross-device sync. Profiles and browsing data stay on the device; signing
+in to websites works normally.
+
 **Deadline: December 22, 2026.** Until then the only goal is parity with Arc.
 New features of our own come after that.
 
