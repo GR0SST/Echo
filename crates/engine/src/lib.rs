@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use cef::*;
 mod devtools;
 mod downloads;
+pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod editing;
 mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
@@ -136,6 +137,7 @@ struct Runtime {
     persistent: storage::PersistentContexts<RequestContext>,
     private: std::cell::RefCell<std::rc::Weak<RequestContext>>,
     readiness: storage::ContextReadiness<RequestContext>,
+    downloads: std::cell::RefCell<downloads::RuntimeDownloads<RequestContext>>,
     lifecycle: shutdown::Lifecycle,
     #[cfg(target_os = "macos")]
     _library: library_loader::LibraryLoader,
@@ -320,6 +322,7 @@ impl Engine {
                 persistent: storage::PersistentContexts::default(),
                 private: std::cell::RefCell::new(std::rc::Weak::new()),
                 readiness: storage::ContextReadiness::default(),
+                downloads: std::cell::RefCell::new(downloads::RuntimeDownloads::default()),
                 #[cfg(target_os = "macos")]
                 _library: library,
             });
@@ -344,7 +347,7 @@ impl Engine {
         runtime.lifecycle.require_running().expect("Cannot fork an engine during shutdown");
         let events = EventQueue::default();
         Self {
-            client: EngineClient::new(events.clone(), shortcuts.clone(), None, runtime.lifecycle.queue.clone()),
+            client: EngineClient::new(events.clone(), shortcuts.clone(), None, runtime.lifecycle.queue.clone(), None, None),
             shortcuts,
             events,
             views: HashMap::new(),
@@ -524,7 +527,7 @@ impl Engine {
         corner_radius: f64,
     ) -> Option<ViewId> {
         let context = self.context.clone();
-        self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context)
+        self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context, None)
     }
 
     /// Creates a page with explicitly selected storage in THIS engine's view,
@@ -536,18 +539,38 @@ impl Engine {
     /// Check `StorageContext::is_ready` first; pending contexts require returning
     /// to the event loop and retrying on a later frame, not logging a failure.
     pub fn create_view_in_context(
+        &mut self, context: &StorageContext, ui_view: *mut c_void, url: &str,
+        frame: Bounds, corner_radius: f64,
+    ) -> Result<ViewId, String> {
+        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, None)
+    }
+
+    /// Explicit engine-only opt-in. Owner is the captured originating local
+    /// profile, including Blank's retained source. The capability acknowledges
+    /// cancel-before-native-close teardown; observe Arc before browser adoption.
+    /// Privacy/storage/browser identities are derived from the actual engine
+    /// context and immutable registration, never from current window selection.
+    pub fn create_view_in_context_with_download_owner(
+        &mut self, context: &StorageContext, owner: DownloadOwner,
+        ui_view: *mut c_void, url: &str, frame: Bounds, corner_radius: f64,
+    ) -> Result<ViewId, String> {
+        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, Some(owner))
+    }
+
+    fn create_view_in_context_impl(
         &mut self,
         context: &StorageContext,
         ui_view: *mut c_void,
         url: &str,
         frame: Bounds,
         corner_radius: f64,
+        owner: Option<DownloadOwner>,
     ) -> Result<ViewId, String> {
         self.check_storage_context(context)?;
         if !context.is_ready() {
             return Err("Chromium storage context is still initializing; retry on a later frame".into());
         }
-        let id = self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context.context.clone())
+        let id = self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context.context.clone(), owner)
             .ok_or_else(|| "Cannot create Chromium page in the selected storage context".to_string())?;
         let same_context = self.views.get(&id).and_then(|view| view.browser.host())
             .and_then(|host| host.request_context())
@@ -562,6 +585,7 @@ impl Engine {
     fn create_content_view(
         &mut self, ui_view: *mut c_void, url: &str, frame: Bounds,
         corner_radius: f64, role: ViewRole, context: std::rc::Rc<RequestContext>,
+        download_owner: Option<DownloadOwner>,
     ) -> Option<ViewId> {
         if self._runtime.lifecycle.require_running().is_err() || ui_view.is_null() { return None; }
         // CreateBrowserSync rejects an uninitialized BrowserContext. Do not
@@ -605,7 +629,26 @@ impl Engine {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone());
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None);
+        }
+        let prepared_downloads = if role == ViewRole::Page {
+            if let Some(owner) = download_owner {
+                let private = CefString::from(&context.cache_path()).to_string().is_empty();
+                let prepared = runtime.downloads.borrow_mut().prepare(context.clone(), owner, private);
+                match prepared {
+                    Ok(prepared) => Some(prepared),
+                    Err(_) => {
+                        #[cfg(target_os = "macos")]
+                        mac::release_clip_view(page_parent);
+                        return None;
+                    }
+                }
+            } else { None }
+        } else { None };
+        if let Some(prepared) = &prepared_downloads {
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None,
+                runtime.lifecycle.queue.clone(), Some(prepared.registration.handler()),
+                Some(prepared.registration.gate()));
         }
         let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
@@ -617,10 +660,26 @@ impl Engine {
             Some(&mut native_context),
         );
         let Some(browser) = browser else {
+            if let Some(prepared) = &prepared_downloads {
+                runtime.downloads.borrow_mut().creation_failed(&prepared.registration);
+            }
             #[cfg(target_os = "macos")]
             mac::release_clip_view(page_parent);
             return None;
         };
+        let download_binding_ok = if let Some(prepared) = &prepared_downloads {
+            let actual_context_matches = browser.host().and_then(|host| host.request_context())
+                .is_some_and(|actual| actual.is_same(Some(&mut context.as_ref().clone())) != 0);
+            let bound = actual_context_matches && {
+                let mut downloads = runtime.downloads.borrow_mut();
+                downloads.bind(&prepared.registration, browser.identifier()).is_ok()
+            };
+            if bound { true }
+            else {
+                runtime.downloads.borrow_mut().creation_failed(&prepared.registration);
+                false
+            }
+        } else { true };
         let page_view = browser
             .host()
             .map_or(std::ptr::null_mut(), |host| host.window_handle() as *mut c_void);
@@ -652,6 +711,10 @@ impl Engine {
             },
         );
         drop(creation);
+        if !download_binding_ok {
+            self.close(id);
+            return None;
+        }
         self.set_frame(id, frame);
         Some(id)
     }
@@ -837,7 +900,7 @@ impl Engine {
         let mut observer = devtools::InspectorObserver::new(self.inspectors.queue.clone(), id);
         let registration = host.add_dev_tools_message_observer(Some(&mut observer))
             .ok_or("Cannot register local DevTools observer")?;
-        let frontend = self.create_content_view(ui_view, INSPECTOR_FRONTEND_URL, frame, 0.0, ViewRole::Inspector(id), context.clone())
+        let frontend = self.create_content_view(ui_view, INSPECTOR_FRONTEND_URL, frame, 0.0, ViewRole::Inspector(id), context.clone(), None)
             .ok_or("Cannot create Alloy inspector content view")?;
         let is_alloy = self.views.get(&frontend).and_then(|view| view.browser.host())
             .is_some_and(|host| host.runtime_style() == RuntimeStyle::ALLOY);
@@ -1032,6 +1095,8 @@ wrap_client! {
         shortcuts: Shortcuts,
         inspector: Option<(InspectorId, devtools::Queue)>,
         lifecycle: shutdown::Queue,
+        downloads: Option<DownloadHandler>,
+        download_gate: Option<downloads::DownloadGate>,
     }
 
     impl Client {
@@ -1047,6 +1112,9 @@ wrap_client! {
         }
         fn request_handler(&self) -> Option<RequestHandler> {
             self.inspector.as_ref().map(|(id, queue)| devtools::InspectorRequestHandler::new(*id, queue.clone()))
+        }
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(self.downloads.clone().unwrap_or_else(downloads::denied_handler))
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone()))
@@ -1068,7 +1136,7 @@ wrap_client! {
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(EngineLifeSpanHandler::new(self.events.clone(), self.lifecycle.clone()))
+            Some(EngineLifeSpanHandler::new(self.events.clone(), self.lifecycle.clone(), self.download_gate.clone()))
         }
     }
 }
@@ -1198,6 +1266,7 @@ wrap_life_span_handler! {
     struct EngineLifeSpanHandler {
         events: EventQueue,
         lifecycle: shutdown::Queue,
+        download_gate: Option<downloads::DownloadGate>,
     }
 
     impl LifeSpanHandler {
@@ -1232,6 +1301,7 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
+            if let Some(gate) = &self.download_gate { gate.seal(); }
             if let Some(browser) = browser {
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
             }

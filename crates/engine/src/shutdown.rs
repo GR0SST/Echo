@@ -50,6 +50,25 @@ pub(crate) fn enqueue(queue: &Queue, callback: Callback) {
     queue.lock().unwrap().push(callback);
 }
 
+/// Remove only Closed and same-owner stale creation/destruction notifications.
+/// Preserve unrelated callback order. No native release runs under this lock.
+fn take_closed_callbacks(queue: &Queue) -> Vec<i32> {
+    let mut queue = queue.lock().unwrap();
+    let mut closed = Vec::new();
+    let mut seen = HashSet::new();
+    for callback in queue.iter() {
+        if let Callback::Closed(id) = callback {
+            if seen.insert(*id) { closed.push(*id); }
+        }
+    }
+    queue.retain(|callback| match callback {
+        Callback::Closed(_) => false,
+        Callback::Created(id) | Callback::DestroyChild(id, _) => !seen.contains(id),
+        _ => true,
+    });
+    closed
+}
+
 pub(crate) struct BrowserLease {
     pub browser: Browser,
     // The exact Rc registry lease, also for private contexts and inspectors.
@@ -172,6 +191,9 @@ impl Lifecycle {
         self.creating.set(self.creating.get() + 1);
         CreationGuard(&self.creating)
     }
+    pub(crate) fn download_dispatch_allowed(&self) -> bool {
+        self.creating.get() == 0 && !self.pumping.get() && !self.polling.get()
+    }
     fn begin(&self) {
         if self.phase.get() == ShutdownPhase::Running {
             self.phase.set(ShutdownPhase::WaitingForOwners);
@@ -228,7 +250,35 @@ impl Lifecycle {
         self.phase.set(ShutdownPhase::Failed);
     }
 
+    fn collect_closed_with(&self, mut release: impl FnMut(i32)) {
+        if self.creating.get() != 0 { return; }
+        loop {
+            let closed = take_closed_callbacks(&self.queue);
+            if closed.is_empty() { return; }
+            for id in closed {
+                self.unknown_browsers.borrow_mut().remove(&id);
+                let lease = self.browsers.borrow_mut().close(id);
+                release(id);
+                drop(lease); // Never release native/context leases under a borrow.
+            }
+        }
+    }
+
+    pub(crate) fn collect_closed(&self) {
+        self.collect_closed_with(crate::downloads::native_closed);
+    }
+
+    pub(crate) fn after_closed_with<R>(&self, release: impl FnMut(i32), work: impl FnOnce() -> R) -> R {
+        self.collect_closed_with(release);
+        work()
+    }
+
+    pub(crate) fn after_closed<R>(&self, work: impl FnOnce() -> R) -> R {
+        self.after_closed_with(crate::downloads::native_closed, work)
+    }
+
     fn collect(&self) {
+        self.collect_closed();
         if self.creating.get() != 0 {
             return;
         }
@@ -248,6 +298,7 @@ impl Lifecycle {
             if let Callback::Closed(id) = callback {
                 self.unknown_browsers.borrow_mut().remove(id);
                 let lease = self.browsers.borrow_mut().close(*id);
+                crate::downloads::native_closed(*id);
                 drop(lease); // Native releases can re-enter: never under RefCell borrow.
             }
         }
@@ -310,6 +361,7 @@ impl Lifecycle {
                 .collect()
         };
         for browser in closes {
+            crate::downloads::before_native_close(browser.identifier());
             if browser.is_valid() == 0 {
                 continue;
             }
@@ -337,7 +389,7 @@ pub(crate) fn check_start_thread() -> Result<(), String> {
     }
     Ok(())
 }
-fn check_thread() -> Result<(), String> {
+pub(crate) fn check_thread() -> Result<(), String> {
     if INIT_THREAD
         .get()
         .is_some_and(|thread| *thread != std::thread::current().id())
@@ -377,6 +429,7 @@ pub(crate) fn pump_once() {
     }
     let _guard = Guard(&lifecycle.pumping);
     do_message_loop_work();
+    lifecycle.after_closed(crate::downloads::poll_runtime);
     lifecycle.collect();
 }
 
@@ -389,6 +442,7 @@ impl Engine {
         CLOSING.store(true, Ordering::SeqCst);
         if let Some(runtime) = runtime() {
             runtime.lifecycle.begin();
+            runtime.downloads.borrow_mut().seal();
         }
         Self::shutdown_status()
     }
@@ -457,6 +511,9 @@ impl Engine {
             phase,
             ShutdownPhase::Running | ShutdownPhase::Complete | ShutdownPhase::ShuttingDown
         ) {
+            // Release download handles/exact context leases before browser-close
+            // and owner/context/flush barriers; this task owns no window borrows.
+            lifecycle.after_closed(crate::downloads::shutdown_runtime);
             lifecycle.collect();
             if lifecycle.start_closing(Rc::strong_count(&runtime).saturating_sub(2)) {
                 let ids = lifecycle.browsers.borrow().ids();
@@ -714,5 +771,26 @@ mod tests {
         assert!(weak.upgrade().is_none());
         enqueue(&late_callback, Callback::Flushed(0));
         assert_eq!(late_callback.lock().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod download_dispatch_tests {
+    use super::Lifecycle;
+
+    #[test]
+    fn public_download_dispatch_rejects_nested_creation_pumping_and_shutdown_polling() {
+        let lifecycle = Lifecycle::default();
+        assert!(lifecycle.download_dispatch_allowed());
+        let creation = lifecycle.creating();
+        assert!(!lifecycle.download_dispatch_allowed());
+        drop(creation);
+        lifecycle.pumping.set(true);
+        assert!(!lifecycle.download_dispatch_allowed());
+        lifecycle.pumping.set(false);
+        lifecycle.polling.set(true);
+        assert!(!lifecycle.download_dispatch_allowed());
+        lifecycle.polling.set(false);
+        assert!(lifecycle.download_dispatch_allowed());
     }
 }

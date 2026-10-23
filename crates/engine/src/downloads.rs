@@ -179,6 +179,24 @@ impl<B, C> Incoming<B, C> {
     }
 }
 
+/// UI-thread callbacks may be released across threads. Admission and native
+/// liveness are separate: teardown closes admission before canceling a LIVE
+/// owner; OnBeforeClose closes native liveness before queuing Closed.
+#[derive(Clone)]
+struct NativeCallback<T> {
+    value: T,
+    alive: Arc<Gate>,
+}
+impl<T> NativeCallback<T> {
+    fn when_alive(&self, run: impl FnOnce(&T)) {
+        if self.alive.get() {
+            run(&self.value);
+        }
+    }
+}
+type NativeBefore = NativeCallback<BeforeDownloadCallback>;
+type NativeControl = NativeCallback<DownloadItemCallback>;
+
 struct Gate(AtomicBool);
 
 impl Gate {
@@ -614,7 +632,7 @@ impl<B, C> Drop for Ledger<B, C> {
 /// a requested cancel is not a fabricated terminal status.
 #[must_use = "execute effects outside application/engine borrows, or explicitly drop them"]
 pub struct DownloadEffects(
-    Vec<Effect<BeforeDownloadCallback, DownloadItemCallback>>,
+    Vec<Effect<NativeBefore, NativeControl>>,
     PhantomData<Rc<()>>,
 );
 
@@ -628,12 +646,17 @@ impl DownloadEffects {
     pub fn execute(self) {
         for effect in self.0 {
             match effect {
-                Effect::Continue(callback, path) => {
-                    callback.cont(Some(&CefString::from(path.as_str())), 0)
+                Effect::Continue(callback, path) => callback
+                    .when_alive(|callback| callback.cont(Some(&CefString::from(path.as_str())), 0)),
+                Effect::Control(callback, DownloadControl::Cancel) => {
+                    callback.when_alive(|callback| callback.cancel())
                 }
-                Effect::Control(callback, DownloadControl::Cancel) => callback.cancel(),
-                Effect::Control(callback, DownloadControl::Pause) => callback.pause(),
-                Effect::Control(callback, DownloadControl::Resume) => callback.resume(),
+                Effect::Control(callback, DownloadControl::Pause) => {
+                    callback.when_alive(|callback| callback.pause())
+                }
+                Effect::Control(callback, DownloadControl::Resume) => {
+                    callback.when_alive(|callback| callback.resume())
+                }
                 Effect::ReleaseBefore(callback) => drop(callback),
                 Effect::ReleaseControl(callback) => drop(callback),
             }
@@ -644,7 +667,7 @@ impl DownloadEffects {
 /// Engine-owned main-thread ledger, independent of views and tab retirement.
 /// It intentionally has no Serialize implementation, including for private data.
 #[derive(Default)]
-pub struct Downloads(Ledger<BeforeDownloadCallback, DownloadItemCallback>);
+pub struct Downloads(Ledger<NativeBefore, NativeControl>);
 
 impl Downloads {
     pub fn register_browser(
@@ -660,6 +683,7 @@ impl Downloads {
             origin,
             accepting,
             allow_downloads,
+            native_alive: Arc::new(Gate::new(true)),
             inbox: self.0.inbox.clone(),
         })
     }
@@ -713,6 +737,7 @@ impl Downloads {
 
 /// Engine-internal native handler registration, retained until native browser
 /// closure. It retains only ingress, never a Runtime/context/page lease.
+#[derive(Clone)]
 pub struct DownloadRegistration {
     ledger: u64,
     _main_thread: PhantomData<Rc<()>>,
@@ -720,7 +745,8 @@ pub struct DownloadRegistration {
     origin: DownloadProvenance,
     accepting: Arc<Gate>,
     allow_downloads: bool,
-    inbox: Arc<Inbox<BeforeDownloadCallback, DownloadItemCallback>>,
+    native_alive: Arc<Gate>,
+    inbox: Arc<Inbox<NativeBefore, NativeControl>>,
 }
 
 impl DownloadRegistration {
@@ -731,6 +757,7 @@ impl DownloadRegistration {
             self.origin,
             self.accepting.clone(),
             self.allow_downloads,
+            self.native_alive.clone(),
             self.inbox.clone(),
         )
     }
@@ -788,35 +815,41 @@ wrap_download_handler! {
         origin: DownloadProvenance,
         accepting: Arc<Gate>,
         allow_downloads: bool,
-        inbox: Arc<Inbox<BeforeDownloadCallback, DownloadItemCallback>>,
+        native_alive: Arc<Gate>,
+        inbox: Arc<Inbox<NativeBefore, NativeControl>>,
     }
     impl DownloadHandler {
         fn can_download(&self, _browser: Option<&mut Browser>, _url: Option<&CefString>, _request_method: Option<&CefString>) -> i32 {
             // Rust's generated default is 0, unlike the C++ header's true.
-            i32::from(admission_allowed(self.allow_downloads, self.accepting.get(), self.inbox.closed.get()))
+            i32::from(self.native_alive.get() && admission_allowed(self.allow_downloads, self.accepting.get(), self.inbox.closed.get()))
         }
         fn on_before_download(&self, browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, suggested_name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> i32 {
             // Always claim handling: false delegates to Alloy's cancellation.
             // Rejected/invalid requests drop the callback without continuing.
-            if !self.allow_downloads || !self.accepting.get() || self.inbox.closed.get() { return 1; }
+            if !self.native_alive.get() || !self.allow_downloads || !self.accepting.get() || self.inbox.closed.get() { return 1; }
             if let (Some(browser), Some((native_download, info)), Some(callback)) = (browser, copy_item(download_item), callback) {
                 self.inbox.push(Incoming::Before {
                     key: Key { registration: self.registration, native_browser: browser.identifier(), native_download },
                     origin: self.origin, info,
                     suggested: suggested_name.map(ToString::to_string).unwrap_or_default(),
-                    callback: callback.clone(),
+                    callback: NativeCallback { value: callback.clone(), alive: self.native_alive.clone() },
                 });
             }
             1
         }
         fn on_download_updated(&self, browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, callback: Option<&mut DownloadItemCallback>) {
+            // OnBeforeClose is a release-only boundary, even before its queued
+            // lifecycle notification is collected. IsValid is allowed afterward.
+            if !self.native_alive.get() || !browser.as_ref().is_some_and(|browser| browser.is_valid() != 0) { return; }
             let copied = copy_item(download_item);
             if !self.allow_downloads || !self.accepting.get() || self.inbox.closed.get() || copied.is_none() || browser.is_none() {
                 // No inbox/model borrow exists while calling CEF, including
                 // late callbacks after explicit shutdown. Terminal updates only
                 // release their handle; invalid items are never read further.
                 if !copied.as_ref().is_some_and(|(_, info)| info.phase.is_terminal()) {
-                    if let Some(callback) = callback { callback.cancel(); }
+                    if let Some(callback) = callback {
+                        if self.native_alive.get() { callback.cancel(); }
+                    }
                 }
                 return;
             }
@@ -824,9 +857,406 @@ wrap_download_handler! {
             let (native_download, info) = copied.unwrap();
             self.inbox.push(Incoming::Update {
                 key: Key { registration: self.registration, native_browser: browser.identifier(), native_download },
-                origin: self.origin, info, callback: callback.map(|callback| callback.clone()),
+                origin: self.origin, info, callback: callback.map(|callback| NativeCallback { value: callback.clone(), alive: self.native_alive.clone() }),
             });
         }
+    }
+}
+
+fn release_closed_registration<B, C: Clone>(
+    ledger: &mut Ledger<B, C>,
+    id: u64,
+) -> Vec<Effect<B, C>> {
+    let mut effects = Vec::new();
+    if let Some(state) = ledger.registrations.get(&id) {
+        state.accepting.set(false);
+    }
+    for entry in ledger
+        .entries
+        .values_mut()
+        .filter(|entry| entry.key.registration == id)
+    {
+        if !entry.terminal && !entry.snapshot.closing {
+            entry.snapshot.closing = true;
+            entry.snapshot.cancel_requested = true;
+            ledger
+                .ready
+                .push(DownloadEvent::Updated(entry.snapshot.clone()));
+        }
+        Ledger::release_handles(entry, &mut effects);
+    }
+    // Native closure has already happened (or creation failed). Release
+    // handles without executing controls against the retired native owner.
+    // Preserve every unrelated registration's queued callback order.
+    let mut keep = Vec::new();
+    for incoming in ledger.inbox.take() {
+        if incoming.key().registration == id {
+            Ledger::release(incoming, &mut effects);
+        } else {
+            keep.push(incoming);
+        }
+    }
+    ledger.inbox.queue.lock().unwrap().extend(keep);
+    effects
+}
+
+/// Explicit opt-in for a local profile's downloads. The constructor acknowledges
+/// cancel-before-native-close teardown; it does not claim Arc parity for tab
+/// closure. Existing page creation methods never construct this capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DownloadOwner {
+    profile: u64,
+}
+
+impl DownloadOwner {
+    pub fn cancel_before_native_close(profile: u64) -> Self {
+        Self { profile }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DownloadGate {
+    admission: Arc<Gate>,
+    native_alive: Arc<Gate>,
+}
+impl DownloadGate {
+    pub(crate) fn seal(&self) {
+        self.native_alive.set(false);
+        self.admission.set(false);
+    }
+}
+
+impl DownloadRegistration {
+    pub(crate) fn gate(&self) -> DownloadGate {
+        DownloadGate {
+            admission: self.accepting.clone(),
+            native_alive: self.native_alive.clone(),
+        }
+    }
+}
+
+/// Callback ownership never points back to this owner or to Runtime. Contexts
+/// are the exact registry Rc leases, not StorageContext (which retains Runtime).
+struct OwnedBrowser<C> {
+    registration: DownloadRegistration,
+    context: Rc<C>,
+    native: Option<i32>,
+}
+
+pub(crate) struct PreparedDownloads {
+    pub(crate) registration: DownloadRegistration,
+}
+
+pub(crate) struct RuntimeDownloads<C> {
+    downloads: Downloads,
+    browsers: HashMap<u64, OwnedBrowser<C>>,
+    storage: Vec<(u64, std::rc::Weak<C>)>,
+    next_identity: u64,
+    failed: Vec<u64>,
+}
+
+impl<C> Default for RuntimeDownloads<C> {
+    fn default() -> Self {
+        Self {
+            downloads: Downloads::default(),
+            browsers: HashMap::new(),
+            storage: Vec::new(),
+            next_identity: 1,
+            failed: Vec::new(),
+        }
+    }
+}
+
+/// Native effects and final context releases are moved out before execution.
+/// Native browser references remain solely in the existing lifecycle ledger.
+pub(crate) struct RuntimeDownloadWork<C> {
+    effects: DownloadEffects,
+    contexts: Vec<Rc<C>>,
+}
+impl<C> RuntimeDownloadWork<C> {
+    pub(crate) fn execute(self) {
+        self.effects.execute();
+        drop(self.contexts);
+    }
+}
+
+impl<C> RuntimeDownloads<C> {
+    fn identity(&mut self) -> u64 {
+        let id = self.next_identity;
+        self.next_identity = id
+            .checked_add(1)
+            .expect("download ownership identity exhausted");
+        id
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        context: Rc<C>,
+        owner: DownloadOwner,
+        private: bool,
+    ) -> Result<PreparedDownloads, DownloadError> {
+        self.storage
+            .retain(|(_, context)| context.strong_count() != 0);
+        let storage = self.storage.iter().find_map(|(id, existing)| {
+            existing
+                .upgrade()
+                .filter(|existing| Rc::ptr_eq(existing, &context))
+                .map(|_| *id)
+        });
+        let storage = storage.unwrap_or_else(|| {
+            let id = self.identity();
+            self.storage.push((id, Rc::downgrade(&context)));
+            id
+        });
+        let browser = self.identity();
+        let provenance = DownloadProvenance::new(owner.profile, storage, browser, private);
+        let registration = self.downloads.register_browser(provenance, true)?;
+        self.browsers.insert(
+            registration.id,
+            OwnedBrowser {
+                registration: registration.clone(),
+                context,
+                native: None,
+            },
+        );
+        Ok(PreparedDownloads { registration })
+    }
+
+    /// Bind before the creation guard is dropped or any download collection.
+    pub(crate) fn bind(
+        &mut self,
+        registration: &DownloadRegistration,
+        native: i32,
+    ) -> Result<(), DownloadError> {
+        if registration.ledger != self.downloads.0.id {
+            return Err(DownloadError::UnknownToken);
+        }
+        if self
+            .browsers
+            .values()
+            .any(|browser| browser.native == Some(native))
+        {
+            return Err(DownloadError::Closed);
+        }
+        let browser = self
+            .browsers
+            .get_mut(&registration.id)
+            .ok_or(DownloadError::UnknownToken)?;
+        if browser.native.is_some() {
+            return Err(DownloadError::Closed);
+        }
+        let state = self
+            .downloads
+            .0
+            .registrations
+            .get_mut(&registration.id)
+            .ok_or(DownloadError::UnknownToken)?;
+        if state.native_browser.is_some_and(|id| id != native) {
+            return Err(DownloadError::Closed);
+        }
+        state.native_browser = Some(native);
+        browser.native = Some(native);
+        Ok(())
+    }
+
+    pub(crate) fn creation_failed(&mut self, registration: &DownloadRegistration) {
+        if registration.ledger == self.downloads.0.id {
+            registration.accepting.set(false);
+            registration.native_alive.set(false);
+            self.failed.push(registration.id);
+        }
+    }
+
+    fn release_registration(&mut self, id: u64) -> RuntimeDownloadWork<C> {
+        if let Some(browser) = self.browsers.get(&id) {
+            browser.registration.gate().seal();
+        }
+        let effects = release_closed_registration(&mut self.downloads.0, id);
+        let contexts = self
+            .browsers
+            .remove(&id)
+            .map(|browser| browser.context)
+            .into_iter()
+            .collect();
+        RuntimeDownloadWork {
+            effects: DownloadEffects(effects, PhantomData),
+            contexts,
+        }
+    }
+
+    pub(crate) fn collect(&mut self) -> RuntimeDownloadWork<C> {
+        let mut work = RuntimeDownloadWork {
+            effects: DownloadEffects(Vec::new(), PhantomData),
+            contexts: Vec::new(),
+        };
+        for id in std::mem::take(&mut self.failed) {
+            let failed = self.release_registration(id);
+            work.effects.append(failed.effects);
+            work.contexts.extend(failed.contexts);
+        }
+        work.effects.append(self.downloads.collect());
+        work
+    }
+
+    pub(crate) fn before_native_close(&mut self, native: i32) -> RuntimeDownloadWork<C> {
+        let mut work = self.collect();
+        if let Some(id) = self
+            .browsers
+            .iter()
+            .find_map(|(id, browser)| (browser.native == Some(native)).then_some(*id))
+        {
+            work.effects.append(DownloadEffects(
+                self.downloads.0.close_registration(id),
+                PhantomData,
+            ));
+        }
+        work
+    }
+
+    pub(crate) fn native_closed(&mut self, native: i32) -> RuntimeDownloadWork<C> {
+        let id = self
+            .browsers
+            .iter()
+            .find_map(|(id, browser)| (browser.native == Some(native)).then_some(*id));
+        id.map(|id| self.release_registration(id))
+            .unwrap_or_else(|| RuntimeDownloadWork {
+                effects: DownloadEffects(Vec::new(), PhantomData),
+                contexts: Vec::new(),
+            })
+    }
+
+    /// Admission seal performs no CEF calls and releases no native handles.
+    pub(crate) fn seal(&mut self) {
+        self.downloads.0.inbox.closed.set(true);
+        for browser in self.browsers.values() {
+            browser.registration.accepting.set(false);
+        }
+    }
+
+    pub(crate) fn shutdown(&mut self) -> RuntimeDownloadWork<C> {
+        let effects = self.downloads.shutdown();
+        self.failed.clear();
+        self.storage.clear();
+        let contexts = self
+            .browsers
+            .drain()
+            .map(|(_, browser)| browser.context)
+            .collect();
+        RuntimeDownloadWork { effects, contexts }
+    }
+}
+
+/// Explicit deny handler also blocks StartDownload, which bypasses can_download.
+pub(crate) fn denied_handler() -> DownloadHandler {
+    NativeDownloadHandler::new(
+        0,
+        DownloadProvenance::new(0, 0, 0, true),
+        Arc::new(Gate::new(false)),
+        false,
+        Arc::new(Gate::new(true)),
+        Arc::default(),
+    )
+}
+
+fn current_runtime() -> Option<Rc<crate::Runtime>> {
+    crate::RUNTIME.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn poll_runtime() {
+    if let Some(runtime) = current_runtime() {
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().collect();
+        work.execute();
+    }
+}
+pub(crate) fn before_native_close(native: i32) {
+    if let Some(runtime) = current_runtime() {
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().before_native_close(native);
+        work.execute();
+    }
+}
+pub(crate) fn native_closed(native: i32) {
+    if let Some(runtime) = current_runtime() {
+        let work = runtime.downloads.borrow_mut().native_closed(native);
+        work.execute();
+    }
+}
+pub(crate) fn shutdown_runtime() {
+    if let Some(runtime) = current_runtime() {
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().shutdown();
+        work.execute();
+    }
+}
+
+fn running_runtime() -> Result<Rc<crate::Runtime>, String> {
+    crate::shutdown::check_thread()?;
+    let runtime = current_runtime().ok_or("Chromium runtime is unavailable")?;
+    runtime.lifecycle.require_running()?;
+    if !runtime.lifecycle.download_dispatch_allowed() {
+        return Err(
+            "Download dispatch cannot run inside CEF creation, pumping or shutdown polling".into(),
+        );
+    }
+    runtime.lifecycle.collect_closed();
+    Ok(runtime)
+}
+
+impl crate::Engine {
+    /// One process-wide drain for a future central profile/private router, not
+    /// per-window page events. Call outside ALL window/model/engine borrows.
+    pub fn take_download_events() -> Result<Vec<DownloadEvent>, String> {
+        let runtime = running_runtime()?;
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().collect();
+        work.execute();
+        let events = runtime.downloads.borrow_mut().downloads.take_events();
+        Ok(events)
+    }
+
+    pub fn download_snapshot(token: DownloadToken) -> Result<Option<DownloadSnapshot>, String> {
+        let runtime = running_runtime()?;
+        let snapshot = runtime
+            .downloads
+            .borrow()
+            .downloads
+            .snapshot(token)
+            .cloned();
+        Ok(snapshot)
+    }
+
+    /// Caller has selected a full path externally. No picker/default path.
+    /// Call outside ALL window/model/engine borrows; native effects do not escape.
+    pub fn resolve_download_destination(token: DownloadToken, path: PathBuf) -> Result<(), String> {
+        let runtime = running_runtime()?;
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().collect();
+        work.execute();
+        let effects = runtime
+            .downloads
+            .borrow_mut()
+            .downloads
+            .resolve_destination(token, path)
+            .map_err(|error| format!("Cannot resolve download destination: {error:?}"))?;
+        effects.execute();
+        Ok(())
+    }
+
+    /// Call outside ALL window/model/engine borrows. CEF confirms actual state.
+    pub fn control_download(token: DownloadToken, command: DownloadControl) -> Result<(), String> {
+        let runtime = running_runtime()?;
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().collect();
+        work.execute();
+        let effects = runtime
+            .downloads
+            .borrow_mut()
+            .downloads
+            .control(token, command)
+            .map_err(|error| format!("Cannot control download: {error:?}"))?;
+        effects.execute();
+        Ok(())
     }
 }
 
@@ -1418,6 +1848,551 @@ mod tests {
     #[test]
     fn native_ingress_can_be_released_across_threads_without_unsafe_impls() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<Inbox<BeforeDownloadCallback, DownloadItemCallback>>();
+        assert_send_sync::<Inbox<NativeBefore, NativeControl>>();
+    }
+    #[test]
+    fn runtime_registrations_capture_shared_storage_and_distinct_browser_generations() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let context = Rc::new(());
+        let owner = DownloadOwner::cancel_before_native_close(17);
+        let first = runtime.prepare(context.clone(), owner, false).unwrap();
+        let second = runtime.prepare(context.clone(), owner, false).unwrap();
+        assert_eq!(first.registration.origin.owner(), 17);
+        assert_eq!(
+            first.registration.origin.storage(),
+            second.registration.origin.storage()
+        );
+        assert_ne!(
+            first.registration.origin.browser(),
+            second.registration.origin.browser()
+        );
+        assert!(!first.registration.origin.is_private());
+        assert!(Rc::ptr_eq(
+            &runtime.browsers[&first.registration.id].context,
+            &context
+        ));
+        runtime.bind(&first.registration, 100).unwrap();
+        runtime.bind(&second.registration, 101).unwrap();
+        assert_eq!(
+            runtime.bind(&first.registration, 102),
+            Err(DownloadError::Closed)
+        );
+        runtime.shutdown().execute();
+    }
+
+    #[test]
+    fn runtime_keeps_exact_private_context_after_view_retirement_until_native_close() {
+        struct Context(Rc<Cell<usize>>);
+        impl Drop for Context {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let drops = Rc::new(Cell::new(0));
+        let context = Rc::new(Context(drops.clone()));
+        let weak = Rc::downgrade(&context);
+        let mut runtime = RuntimeDownloads::default();
+        let prepared = runtime
+            .prepare(
+                context.clone(),
+                DownloadOwner::cancel_before_native_close(19),
+                true,
+            )
+            .unwrap();
+        runtime.bind(&prepared.registration, 103).unwrap();
+        let key = Key {
+            registration: prepared.registration.id,
+            native_browser: 103,
+            native_download: 1,
+        };
+        runtime.downloads.0.inbox.push(Incoming::Update {
+            key,
+            origin: prepared.registration.origin,
+            info: info(DownloadPhase::Interrupted, 12),
+            callback: None,
+        });
+        runtime.collect().execute();
+        let id = runtime.downloads.0.keys[&key];
+        drop(context); // Source view/pool drops its exact registry Rc.
+        assert!(weak.upgrade().is_some());
+        runtime.before_native_close(103).execute();
+        assert!(weak.upgrade().is_some());
+        assert!(runtime.downloads.0.entries[&id].snapshot.cancel_requested);
+        assert!(runtime.downloads.0.entries[&id]
+            .snapshot
+            .provenance
+            .is_private());
+        let release = runtime.native_closed(103);
+        assert_eq!(drops.get(), 0); // Lease is moved out of the state borrow.
+        release.execute();
+        assert_eq!(drops.get(), 1);
+        assert!(weak.upgrade().is_none());
+        assert!(runtime.browsers.is_empty());
+    }
+
+    #[test]
+    fn runtime_bind_rejects_callbacks_for_another_native_browser_without_new_tokens() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let prepared = runtime
+            .prepare(
+                Rc::new(()),
+                DownloadOwner::cancel_before_native_close(21),
+                false,
+            )
+            .unwrap();
+        runtime.bind(&prepared.registration, 104).unwrap();
+        let wrong = Key {
+            registration: prepared.registration.id,
+            native_browser: 105,
+            native_download: 1,
+        };
+        runtime.downloads.0.inbox.push(Incoming::Update {
+            key: wrong,
+            origin: prepared.registration.origin,
+            info: info(DownloadPhase::InProgress, 1),
+            callback: None,
+        });
+        runtime.collect().execute();
+        assert!(runtime.downloads.0.keys.is_empty());
+        assert!(runtime.downloads.0.ready.is_empty());
+        runtime.shutdown().execute();
+    }
+
+    #[test]
+    fn failed_creation_defers_exact_context_release_and_does_not_affect_other_browser() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let failed_context = Rc::new(());
+        let weak = Rc::downgrade(&failed_context);
+        let failed = runtime
+            .prepare(
+                failed_context.clone(),
+                DownloadOwner::cancel_before_native_close(23),
+                false,
+            )
+            .unwrap();
+        let live = runtime
+            .prepare(
+                Rc::new(()),
+                DownloadOwner::cancel_before_native_close(24),
+                false,
+            )
+            .unwrap();
+        runtime.bind(&live.registration, 106).unwrap();
+        let live_key = Key {
+            registration: live.registration.id,
+            native_browser: 106,
+            native_download: 2,
+        };
+        runtime.downloads.0.inbox.push(Incoming::Update {
+            key: live_key,
+            origin: live.registration.origin,
+            info: info(DownloadPhase::InProgress, 3),
+            callback: None,
+        });
+        runtime.creation_failed(&failed.registration);
+        drop(failed_context);
+        assert!(weak.upgrade().is_some());
+        assert!(!failed.registration.accepting.get());
+        let work = runtime.collect();
+        assert!(!runtime.browsers.contains_key(&failed.registration.id));
+        assert!(runtime.browsers.contains_key(&live.registration.id));
+        assert!(runtime.downloads.0.keys.contains_key(&live_key));
+        assert!(weak.upgrade().is_some());
+        work.execute();
+        assert!(weak.upgrade().is_none());
+        runtime.shutdown().execute();
+    }
+
+    #[test]
+    fn runtime_shutdown_seals_all_ingress_and_moves_contexts_out_before_owner_barrier() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let context = Rc::new(());
+        let weak = Rc::downgrade(&context);
+        let first = runtime
+            .prepare(
+                context.clone(),
+                DownloadOwner::cancel_before_native_close(25),
+                false,
+            )
+            .unwrap();
+        let second = runtime
+            .prepare(
+                context.clone(),
+                DownloadOwner::cancel_before_native_close(25),
+                false,
+            )
+            .unwrap();
+        runtime.bind(&first.registration, 107).unwrap();
+        runtime.bind(&second.registration, 108).unwrap();
+        drop(context);
+        runtime.seal();
+        assert!(!first.registration.accepting.get());
+        assert!(!second.registration.accepting.get());
+        assert!(runtime.downloads.0.inbox.closed.get());
+        assert!(weak.upgrade().is_some());
+        let work = runtime.shutdown();
+        assert!(runtime.browsers.is_empty());
+        assert!(weak.upgrade().is_some());
+        work.execute();
+        assert!(weak.upgrade().is_none());
+        assert_eq!(
+            runtime
+                .prepare(
+                    Rc::new(()),
+                    DownloadOwner::cancel_before_native_close(26),
+                    false
+                )
+                .err(),
+            Some(DownloadError::Closed)
+        );
+        runtime.shutdown().execute();
+    }
+
+    #[test]
+    fn late_native_close_releases_only_its_context_and_preserves_other_owner_events() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let first = runtime
+            .prepare(
+                Rc::new(()),
+                DownloadOwner::cancel_before_native_close(27),
+                false,
+            )
+            .unwrap();
+        let second = runtime
+            .prepare(
+                Rc::new(()),
+                DownloadOwner::cancel_before_native_close(28),
+                true,
+            )
+            .unwrap();
+        runtime.bind(&first.registration, 109).unwrap();
+        runtime.bind(&second.registration, 110).unwrap();
+        for prepared in [&first, &second] {
+            let native = runtime.browsers[&prepared.registration.id].native.unwrap();
+            runtime.downloads.0.inbox.push(Incoming::Update {
+                key: Key {
+                    registration: prepared.registration.id,
+                    native_browser: native,
+                    native_download: 1,
+                },
+                origin: prepared.registration.origin,
+                info: info(DownloadPhase::Interrupted, 1),
+                callback: None,
+            });
+        }
+        runtime.native_closed(109).execute();
+        runtime.collect().execute();
+        let events = runtime.downloads.take_events();
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], DownloadEvent::Updated(snapshot) if snapshot.provenance.owner() == 28 && snapshot.provenance.is_private())
+        );
+        assert!(runtime.browsers.contains_key(&second.registration.id));
+        assert!(!runtime.browsers.contains_key(&first.registration.id));
+        runtime.shutdown().execute();
+    }
+}
+
+#[cfg(test)]
+mod closure_order_tests {
+    use super::*;
+    use crate::shutdown::{Callback, Lifecycle};
+    use std::cell::RefCell;
+
+    #[derive(Clone)]
+    struct Probe {
+        native: i32,
+        trace: Rc<RefCell<Vec<String>>>,
+        released_outside_borrows: Rc<dyn Fn()>,
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            (self.released_outside_borrows)();
+        }
+    }
+    struct ContextProbe {
+        drops: Rc<Cell<usize>>,
+        verify: Rc<dyn Fn()>,
+    }
+    impl Drop for ContextProbe {
+        fn drop(&mut self) {
+            (self.verify)();
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+    struct Owned {
+        registration: u64,
+        alive: Arc<Gate>,
+        context: Rc<ContextProbe>,
+    }
+    #[derive(Default)]
+    struct TestRuntime {
+        ledger: Ledger<(), NativeCallback<Probe>>,
+        owners: HashMap<i32, Owned>,
+    }
+    struct Owner {
+        key: Key,
+        origin: DownloadProvenance,
+        admission: Arc<Gate>,
+        alive: Arc<Gate>,
+        context: std::rc::Weak<ContextProbe>,
+        drops: Rc<Cell<usize>>,
+        verify: Rc<dyn Fn()>,
+    }
+    fn add_owner(runtime: &Rc<RefCell<TestRuntime>>, lifecycle: &Lifecycle, native: i32) -> Owner {
+        let weak = Rc::downgrade(runtime);
+        let queue = lifecycle.queue.clone();
+        let verify: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(runtime) = weak.upgrade() {
+                assert!(
+                    runtime.try_borrow_mut().is_ok(),
+                    "native/context release under runtime borrow"
+                );
+            }
+            assert!(
+                queue.try_lock().is_ok(),
+                "native/context release under lifecycle lock"
+            );
+        });
+        let drops = Rc::new(Cell::new(0));
+        let context = Rc::new(ContextProbe {
+            drops: drops.clone(),
+            verify: verify.clone(),
+        });
+        let weak_context = Rc::downgrade(&context);
+        let origin = DownloadProvenance::new(native as u64, native as u64, native as u64, false);
+        let mut state = runtime.borrow_mut();
+        let (registration, admission) = state.ledger.register(origin).unwrap();
+        let alive = Arc::new(Gate::new(true));
+        state.owners.insert(
+            native,
+            Owned {
+                registration,
+                alive: alive.clone(),
+                context,
+            },
+        );
+        Owner {
+            key: Key {
+                registration,
+                native_browser: native,
+                native_download: 1,
+            },
+            origin,
+            admission,
+            alive,
+            context: weak_context,
+            drops,
+            verify,
+        }
+    }
+    fn update(
+        runtime: &Rc<RefCell<TestRuntime>>,
+        owner: &Owner,
+        phase: DownloadPhase,
+        trace: &Rc<RefCell<Vec<String>>>,
+    ) {
+        let info = DownloadInfo {
+            phase,
+            interrupt_reason: 41,
+            current_speed: 1,
+            percent_complete: -1,
+            total_bytes: -1,
+            received_bytes: 12,
+            start_time: 1,
+            end_time: 0,
+            full_path: PathBuf::new(),
+            url: "https://fixture.test/file".into(),
+            original_url: String::new(),
+            suggested_file_name: "file.bin".into(),
+            content_disposition: String::new(),
+            mime_type: String::new(),
+        };
+        let callback = NativeCallback {
+            value: Probe {
+                native: owner.key.native_browser,
+                trace: trace.clone(),
+                released_outside_borrows: owner.verify.clone(),
+            },
+            alive: owner.alive.clone(),
+        };
+        let inbox = runtime.borrow().ledger.inbox.clone();
+        inbox.push(Incoming::Update {
+            key: owner.key,
+            origin: owner.origin,
+            info,
+            callback: Some(callback),
+        });
+    }
+    fn run(effects: Vec<Effect<(), NativeCallback<Probe>>>) {
+        for effect in effects {
+            match effect {
+                Effect::Control(callback, command) => callback.when_alive(|probe| {
+                    (probe.released_outside_borrows)();
+                    probe
+                        .trace
+                        .borrow_mut()
+                        .push(format!("{command:?}:{}", probe.native));
+                }),
+                Effect::ReleaseControl(callback) => drop(callback),
+                Effect::ReleaseBefore(()) => (),
+                Effect::Continue((), _) => panic!("no destination is selected by ordering tests"),
+            }
+        }
+    }
+    fn queue_close(owner: &Owner, lifecycle: &Lifecycle) {
+        // Exact OnBeforeClose order: native liveness/admission seal, then Closed.
+        owner.alive.set(false);
+        owner.admission.set(false);
+        lifecycle
+            .queue
+            .lock()
+            .unwrap()
+            .push(Callback::Closed(owner.key.native_browser));
+    }
+    fn release(runtime: &Rc<RefCell<TestRuntime>>, native: i32) {
+        let (effects, context) = {
+            let mut state = runtime.borrow_mut();
+            let Some(owner) = state.owners.remove(&native) else {
+                return;
+            };
+            owner.alive.set(false);
+            let effects = release_closed_registration(&mut state.ledger, owner.registration);
+            (effects, owner.context)
+        };
+        run(effects);
+        drop(context);
+    }
+    fn shutdown(runtime: &Rc<RefCell<TestRuntime>>) {
+        let (effects, contexts) = {
+            let mut state = runtime.borrow_mut();
+            let effects = state.ledger.shutdown();
+            let contexts: Vec<_> = state
+                .owners
+                .drain()
+                .map(|(_, owner)| owner.context)
+                .collect();
+            (effects, contexts)
+        };
+        run(effects);
+        drop(contexts);
+    }
+
+    #[test]
+    fn queued_active_or_interrupted_update_then_closed_is_release_only_before_pump_collection() {
+        for phase in [DownloadPhase::InProgress, DownloadPhase::Interrupted] {
+            let lifecycle = Lifecycle::default();
+            let runtime = Rc::new(RefCell::new(TestRuntime::default()));
+            let trace = Rc::new(RefCell::new(Vec::new()));
+            let closed = add_owner(&runtime, &lifecycle, 201);
+            let live = add_owner(&runtime, &lifecycle, 202);
+            update(&runtime, &closed, phase, &trace);
+            update(&runtime, &live, phase, &trace);
+            queue_close(&closed, &lifecycle);
+            lifecycle
+                .queue
+                .lock()
+                .unwrap()
+                .push(Callback::CookieReady(9));
+
+            // Same production ordering used by pump_once/after_closed. The
+            // injected sink replaces only native CEF ownership with pure probes.
+            lifecycle.after_closed_with(
+                |native| release(&runtime, native),
+                || {
+                    assert_eq!(closed.drops.get(), 1);
+                    assert!(closed.context.upgrade().is_none());
+                    let effects = runtime.borrow_mut().ledger.collect();
+                    assert!(
+                        effects.is_empty(),
+                        "closed update was reduced into a cancel effect"
+                    );
+                    run(effects);
+                },
+            );
+            assert!(trace.borrow().is_empty());
+            assert!(!runtime.borrow().ledger.keys.contains_key(&closed.key));
+            let token = runtime.borrow().ledger.keys[&live.key];
+            let effects = runtime
+                .borrow_mut()
+                .ledger
+                .control(token, DownloadControl::Pause)
+                .unwrap();
+            run(effects);
+            assert_eq!(*trace.borrow(), vec!["Pause:202".to_owned()]);
+            assert_eq!(live.drops.get(), 0);
+            assert!(matches!(
+                &lifecycle.queue.lock().unwrap()[..],
+                [Callback::CookieReady(9)]
+            ));
+            shutdown(&runtime);
+            assert_eq!(live.drops.get(), 1);
+            assert!(trace.borrow().iter().all(|entry| !entry.ends_with(":201")));
+        }
+    }
+
+    #[test]
+    fn retained_control_then_queued_closed_is_released_before_shutdown_cancels_unrelated_owner() {
+        let lifecycle = Lifecycle::default();
+        let runtime = Rc::new(RefCell::new(TestRuntime::default()));
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let closed = add_owner(&runtime, &lifecycle, 203);
+        let live = add_owner(&runtime, &lifecycle, 204);
+        update(&runtime, &closed, DownloadPhase::Interrupted, &trace);
+        update(&runtime, &live, DownloadPhase::Interrupted, &trace);
+        let effects = runtime.borrow_mut().ledger.collect();
+        run(effects);
+        assert!(runtime
+            .borrow()
+            .ledger
+            .entries
+            .values()
+            .all(|entry| entry.control.is_some()));
+        queue_close(&closed, &lifecycle);
+        lifecycle.after_closed_with(
+            |native| release(&runtime, native),
+            || {
+                assert_eq!(closed.drops.get(), 1);
+                shutdown(&runtime);
+                // A new native close submission follows cancellation, never leads it.
+                trace.borrow_mut().push("SubmitClose:204".into());
+            },
+        );
+        assert_eq!(
+            *trace.borrow(),
+            vec!["Cancel:204".to_owned(), "SubmitClose:204".to_owned()]
+        );
+        assert_eq!(closed.drops.get(), 1);
+        assert_eq!(live.drops.get(), 1);
+        assert!(runtime.borrow().owners.is_empty());
+        assert!(runtime
+            .borrow()
+            .ledger
+            .entries
+            .values()
+            .all(|entry| entry.control.is_none()));
+    }
+
+    #[test]
+    fn already_prepared_native_control_effect_does_not_call_owner_closed_before_execution() {
+        let lifecycle = Lifecycle::default();
+        let runtime = Rc::new(RefCell::new(TestRuntime::default()));
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let owner = add_owner(&runtime, &lifecycle, 205);
+        update(&runtime, &owner, DownloadPhase::InProgress, &trace);
+        let effects = runtime.borrow_mut().ledger.collect();
+        run(effects);
+        let token = runtime.borrow().ledger.keys[&owner.key];
+        let effects = runtime
+            .borrow_mut()
+            .ledger
+            .control(token, DownloadControl::Resume)
+            .unwrap();
+        queue_close(&owner, &lifecycle);
+        run(effects); // Same generic liveness guard used by actual CEF effects.
+        assert!(trace.borrow().is_empty());
+        lifecycle.after_closed_with(|native| release(&runtime, native), || shutdown(&runtime));
+        assert_eq!(owner.drops.get(), 1);
+        assert!(trace.borrow().is_empty());
     }
 }

@@ -1,168 +1,187 @@
-# Engine download foundation integration
+# Engine download integration
 
-`crates/engine/src/downloads.rs` is **registered for compilation and tests only**
-through a private `mod downloads;` declaration in `engine/src/lib.rs`. Runtime
-hooks remain pending: no native download client, ledger owner, persistence,
-parity row, or browser UI is activated. Cargo, builds, native apps and tests were
-not run by this agent. The parent can now compile and run the 19 authored tests.
+Engine-only wiring is present. **All existing creation APIs and inspector clients
+deny downloads.** No browser caller opts in, no default destination is selected,
+and no UI, file picker, Save As dialog, settings, persistence or account service
+is introduced. Download parity rows remain missing pending native Arc reference.
 
-## Public data and reducer API
+## Explicit opt-in seam
 
-- `DownloadProvenance::new(owner, storage, browser, private)` captures immutable,
-  application-supplied opaque IDs. `owner` is the originating local profile;
-  Blank uses its retained normal source profile. `storage` identifies the actual
-  storage lease. `browser` is a never-reused browser generation, not a TabId.
-  These values do not change when a Space/profile is selected or renamed.
-- `Downloads::register_browser(provenance, allow_downloads)` returns a
-  `DownloadRegistration`; its engine-only `handler()` supplies the exact CEF
-  `DownloadHandler` for that browser's `Client`. Use a separate registration per
-  native content browser. Inspector clients must deny downloads.
-- `collect() -> DownloadEffects`, then `take_events() -> Vec<DownloadEvent>`.
-  Events contain owned snapshots: `DestinationRequested` or `Updated`. Token
-  identity is ledger-qualified and process-local. Never persist native IDs or
-  tokens. Only Complete and Canceled are terminal. Interrupted transfers can
-  resume: they retain their entry, destination and available control handle,
-  accept resume/cancel, and continue processing later progress/completion updates.
-  A resume request does not change the reported phase until CEF confirms it.
-  The ledger retains terminal tombstones so late updates cannot revive completed
-  or canceled downloads. Progress is coalesced only within a per-key progress run;
-  before, terminal, paused and interrupted events are barriers and are never
-  coalesced away. A missing control handle on a newer progress snapshot does
-  not discard the last usable control handle.
-- `resolve_destination(token, absolute_full_path)` returns deferred effects.
-  This does not select a location or create/reserve a file. Empty, relative,
-  non-UTF-8 and NUL-containing paths fail explicitly. It never substitutes CEF's
-  temporary-directory default. The selected path is a requested destination;
-  subsequent `DownloadInfo.full_path` is authoritative. Collision/overwrite,
-  symlink, access and actual native filename behavior require separate policy
-  and acceptance; no behavior is inferred here.
-- `control(token, Cancel | Pause | Resume)` returns deferred effects. Cancel is
-  sticky even before an update supplies its control callback. Dropping a pending
-  before callback cancels the pending destination. Running cancellation remains
-  a request until CEF reports a terminal phase; no synthetic completion is made.
-  Pause/resume require an available control handle; CEF reports actual state.
-- `snapshot(token)` gives a borrowed snapshot. All snapshots are ephemeral here,
-  including private data; no serialization or disk writer is introduced.
+The only admitting creation method is:
 
-## Required registration hooks (parent-owned existing-file edits)
+```rust
+Engine::create_view_in_context_with_download_owner(
+    &mut self,
+    context: &StorageContext,
+    owner: DownloadOwner,
+    ui_view: *mut c_void,
+    url: &str,
+    frame: Bounds,
+    corner_radius: f64,
+) -> Result<ViewId, String>
+```
 
-1. The private module declaration in `engine/src/lib.rs` is present for
-   compilation/tests. Runtime ownership and public facade exports remain pending.
-   Keep all CEF-facing
-   registrations/handlers inside engine; browser callers see only owned data,
-   opaque tokens/provenance and controls. The parent may narrow public exports
-   to its engine facade. Add a ledger to an engine/runtime owner independent of
-   view routing, shared appropriately across pools/windows, with one delivery
-   owner. Never drain it through `Engine::drain_events`' live-view filter or
-   `PageStore::capture_event`'s live-page requirement.
-2. Allocate immutable provenance and a registration before native browser
-   creation. Create a per-browser Client containing its registration's handler.
-   The current normal shared Client must be adapted; a handler cannot derive
-   ownership from the active Space or an already-retired page at callback time.
-   `Key` captures CEF's browser identifier and download ID inside that immutable
-   registration. Application IDs are opaque and must not be reused while any
-   registration/download can survive. Resolve profile/storage from the actual
-   page identity and its storage selection, not a current window default.
-3. CEF callbacks execute on the browser UI thread. The ledger/effects/registration
-   are explicitly main-thread-only. The native handler retains an `Arc` inbox
-   with atomic gates and a Mutex so native reference releases on other threads
-   cannot touch non-thread-safe Rust ownership. The inbox holds only copied item
-   data, native continuation/control handles and provenance; never Runtime,
-   context leases, Browser, GPUI views or DownloadItem. It relies on the installed
-   binding's existing ref-counted callback Send/Sync implementation; this module
-   adds no unsafe Send/Sync implementations. No lock is held across a CEF call or
-   displaced callback release.
-4. Pump CEF with no model/engine borrows. Collect/reduce and remove returned
-   effects while briefly borrowing the owner, then release that borrow and call
-   `effects.execute()`. Continue/cancel/pause/resume and callback releases happen
-   outside reducer/inbox borrows. Execute effects immediately on this thread;
-   do not queue a resolved destination across teardown. An unexecuted effect
-   owns its native handle; dropping Continue cancels instead of saving. Dropping
-   a control effect only releases its handle and does not perform its command.
-5. Collect before commands. Read destination events only after collection and
-   route them by their captured profile/private provenance. Resolve with an
-   externally chosen full path; this slice provides no picker, native Save As,
-   download tray, Library layout, folder preference, or default location.
-   `BeforeDownloadCallback::cont(path, 0)` is the sole continuation path. A
-   destination event can precede a terminal event in the same batch: recheck
-   `snapshot(token)` before requesting an external destination. The resolver
-   independently rejects terminal/closing/canceled or already-resolved requests.
+Construct the capability with
+`DownloadOwner::cancel_before_native_close(captured_local_profile_id)`. Its name
+requires an explicit teardown decision; it does not establish Arc's behavior.
+The profile ID is opaque to engine. Blank uses its retained normal source profile;
+never read the active Space/window profile later in a callback. Incognito data
+must be routed separately and never serialized into normal sessions/history.
 
-## Retirement, private lifetime and shutdown
+Before CEF creation, Runtime allocates immutable browser-generation and storage
+identities, captures the owner, and retains the exact request-context registry Rc.
+The context's configured cache path determines the existing private scope (empty
+means private). This is configuration evidence, not proof of named-profile disk
+persistence; the existing native restart acceptance requirement remains.
 
-Ordinary tab retirement must not delete the download ledger or stop its polling.
-Keep the registration/queue reachable as long as native callbacks may arrive.
-This module deliberately does not decide whether Arc continues an existing
-transfer after closing a tab/window. Observe Arc before selecting that policy.
+Each admitted browser gets its own native Client/DownloadHandler and admission
+gate. Admission and native-owner liveness have distinct atomic gates: close
+requests seal admission before canceling a still-live owner, while OnBeforeClose
+seals native liveness immediately before queuing Closed. Every continuation and
+control effect rechecks native liveness at execution, including effects prepared
+before another effect caused native closure. CEF browser identity is bound under the creation guard, before callbacks
+can be collected. Actual CEF context identity is checked; a mismatch or failed
+bind seals the registration and queues native closure. Failed creation closes
+admission immediately and releases deferred callback/context ownership through
+the runtime pump, outside the caller's engine borrow.
 
-`close_registration(&registration)` is an explicit cancel/teardown hook, not the
-ordinary tab-close hook. It closes admission, releases pending destination
-callbacks, and produces cancellation effects for retained running controls.
-Repeat close is harmless. Existing snapshots remain marked closing. Late native
-progress is canceled without creating new entries. Do not report those snapshots
-as terminal merely because close/cancel was requested.
+Legacy `create_view`, `create_view_in_context`, forks and inspector creation
+remain denied. The explicit deny handler blocks both user-initiated downloads
+and the before/update paths used by StartDownload (which bypasses can_download).
 
-`shutdown()` closes all admission, drains/rejects queued work, releases pending
-continuations and produces cancellations for active transfers, including both
-retained and queued interrupted transfers. Execute all effects BEFORE
-the runtime's browser-close/context/cookie-flush/CEF shutdown barriers. A dropped
-ledger only closes ingress/releases handles: explicit shutdown is needed to
-execute cancellations. Existing external effects also have to be executed or
-released before CEF unload. After shutdown, late handler updates cancel directly
-without a queue borrow; terminal updates only release their callback.
+## Native-close policy requiring reference before browser adoption
 
-**Context lease hook:** the parent must retain the exact originating
-`StorageContext` registry lease for an active download (private included), and
-release it after completion/cancellation or explicit cancel/shutdown teardown.
-Interruption alone must not release that lease or install a terminal tombstone. Keep
-that ownership outside callbacks/inbox and drop it before the existing runtime
-owner barrier. Never add queue -> Runtime -> queue or callback -> ledger cycles.
-The module does not itself promise downloads survive native browser destruction;
-verify that against CEF/Arc and retain the necessary native owner if required.
+Local CEF154 `include/cef_life_span_handler.h:279-290` says browser destruction
+aborts associated network requests and restricts browser methods after
+OnBeforeClose. Retaining a Rust Browser or context wrapper is not evidence that
+the native page/download remains usable after its host window is destroyed.
 
-Keep private metadata outside normal profile/session/history persistence and
-regular Library delivery. Downloaded files remain user files. Private destination
-inheritance, last-private-window cancellation and metadata lifetime require Arc
-observation. Profile deletion remains metadata-only under existing engine storage
-rules; do not remove downloaded files or Chromium storage directories.
+This patch therefore does not keep a retired native browser/child view alive or
+invent a detached download host. The opt-in capability explicitly selects
+**cancel before native close**: the existing lifecycle ledger invokes download
+cancellation before submitting CloseBrowser. It retains the exact context lease
+until Closed, then releases callback handles/context leases without issuing
+controls against the closed native owner. Unexpected OnBeforeClose seals its
+gate immediately; subsequent lifecycle collection releases that owner's state.
 
-## Exact local API evidence and validation still required
+The shared download ledger and captured owner outlive live view-map removal;
+progress is never passed through Engine/PageStore live-page event filters.
+This independence does not promise transfers continue after native destruction.
 
-Installed `third_party/cef/include/cef_version.h` reports CEF
-`154.0.34+g14c5a08+chromium-154.0.8037.98`; Cargo uses `cef 154.5.0+154.0.34`.
-Primary contracts are `include/cef_download_handler.h`, `cef_download_item.h`,
-and the installed Rust binding's `ImplDownloadHandler`,
-`ImplBeforeDownloadCallback`, `ImplDownloadItemCallback`, `ImplDownloadItem`.
+**Unresolved native question:** Does Arc continue normal/Blank/private/Little Arc
+transfers after source tab/window closure, and what happens at final private
+window closure? Observe this before any browser caller adopts the opt-in seam.
+If continuation is required, design and verify the native browser/host lifetime
+separately; do not weaken the existing CEF destruction barrier or preserve a raw
+child-view pointer after its parent window is gone.
 
-- Explicit `can_download` returns 1 only when the registration policy permits
-  downloads and both admission gates are open. Rust's generated default is 0.
-  `BrowserHost::start_download` bypasses can_download, so before/update callbacks
-  enforce the same policy independently.
-- `on_before_download` returns 1, retains its callback only for accepted valid
-  items, and defers continuation. Rejected/invalid requests leave no retained
-  continuation. Update may precede before. A DownloadItem is copied immediately
-  after `is_valid`; the live item never leaves its callback.
-- Unknown total/percentage and raw interrupt reason are preserved. Basetime is
-  copied verbatim; it is not labeled as Unix time.
+## Owned facade and borrowing contract
 
-The module contains CEF-free reducer tests for ordering, destination cancel,
-one-shot resolution, progress barriers, terminal/late updates, provenance and
-ledger qualification, native browser binding, interruption/unknown totals,
-interruption -> resume -> progress/completion, cancellation while interrupted,
-and shutdown cancellation of retained/queued interrupted transfers,
-deferred controls, closing, shutdown and callback release. Reentrant drop probes
-check that coalescing and terminal callback release do not hold inbox borrows.
-`copy_item(None)` covers the missing-item adapter branch; the same lazy validity
-guard used by the adapter is tested to prevent all field reads on invalid items.
-Actual non-null invalid CEF items need native/adapter acceptance rather than
-fabricated unsafe CEF objects. These tests are registered for compilation but
-unexecuted by this agent. Parent must compile/run and fix any integration
-issues; this slice does not claim a green test run.
+The engine exports DownloadOwner, Token, Provenance, Snapshot, Info, Phase,
+Destination, Event, Control and Error. CEF handlers/registrations and the raw
+ledger remain private. Browser routing uses:
 
-Native acceptance later: local attachment/redirect/slow/unknown-length fixtures,
-cancel while choosing destination, cancel/pause/resume races, duplicate filenames,
-unwritable destination, source retirement, two profiles with identical URLs,
-Blank source routing, private lifetime, and quit with active transfers. Verify
-bytes and reported final paths. Observe Arc UI first; parity rows remain missing
-until their actual native surfaces and flows are verified. No account or service
-integration is required.
+- `Engine::take_download_events() -> Result<Vec<DownloadEvent>, String>`: one
+  process-wide central drain, independent of which engine pool/window owns a
+  page. Route by captured owner, storage and private scope; never let independent
+  window drains race to consume another profile's events.
+- `Engine::download_snapshot(token) -> Result<Option<DownloadSnapshot>, String>`:
+  owned clone for checking current state before acting on an older queued event.
+- `Engine::resolve_download_destination(token, absolute_full_path)` and
+  `Engine::control_download(token, Cancel | Pause | Resume)`: return Result<(),
+  String>. They collect first, reduce briefly under runtime state borrow, then
+  execute native effects only after that borrow has ended. Effects cannot escape
+  the public facade and outlive CEF shutdown.
+
+Call these static facade methods on the CEF initialization thread with **no
+window, GPUI App/model, page-store or engine RefCell borrow held**. The future
+browser router must schedule them outside its update closure. They reject a
+missing/closing runtime and reject nested CEF creation, pumping or shutdown
+polling. No method pumps or waits synchronously. Runtime pumping
+first drains queued Closed notifications through release-only ownership cleanup,
+then collects owned download callbacks after do_message_loop_work and before
+new native close submissions. Each work batch executes after its RefCell borrow
+ends. Closed cleanup repeats if native/context releases enqueue another closure;
+unrelated callback order is preserved. Public facade and internal download
+helpers also perform this closed-owner cleanup before collecting or canceling.
+
+No path is synthesized. Resolution accepts only externally selected absolute,
+nonempty UTF-8 full paths without NUL. Continue uses `(path, show_dialog=0)`.
+Requested paths do not promise final names; subsequent CEF full_path is
+authoritative. Collision/overwrite, symlink and writable-directory behavior need
+separate acceptance. There is no temporary-directory fallback or silent Downloads
+folder assumption.
+
+## Reducer and ownership
+
+Snapshot item fields are copied only after is_valid and never retain DownloadItem.
+Updates can precede before-download. Only byte-progress runs coalesce; pending
+destination, paused, interrupted and terminal transitions remain barriers.
+Unknown length/percentage, interrupt reason and raw CEF Basetime values survive.
+Missing newer control handles do not discard a usable previous control.
+
+Only Complete/Canceled are terminal. Interrupted retains controls and destination
+and accepts resume/cancel and later progress/completion. A resume request does
+not fabricate progress. Terminal tombstones reject late resurrection. Tokens are
+process-local and ledger-qualified, never persisted. Cancellation is a request
+until CEF confirms it, except native teardown is explicitly marked closing.
+
+Runtime owns one ledger across pools. Its browser registrations retain exact
+`Rc<RequestContext>` leases, not StorageContext (which would retain Runtime).
+Those leases conservatively last through native browser closure, including after
+completion, because that live browser may initiate another transfer. Existing
+Lifecycle remains the only owner of native Browser/host leases. Native callbacks
+hold only Send/Sync inbox/gates and native continuation/control handles, never
+Runtime, storage leases, Browser, GPUI state or live DownloadItem. There is no
+Runtime -> callback -> Runtime cycle and no new public Runtime owner barrier.
+
+## Shutdown
+
+begin_shutdown seals download ingress only; it makes no download CEF calls while
+the caller may still own application state. poll_shutdown, already required to
+run from an app-owned task outside window/model borrows, shuts down downloads
+before owner/browser/context/cookie-flush barriers. Queued Closed notifications
+and release-only owner cleanup run BEFORE shutdown generates cancellation
+effects. Retained or queued controls belonging to an already-closed owner are
+released without invoking them. Cancellation still executes before submitting
+NEW CloseBrowser requests for live owners. It cancels retained and queued
+active/interrupted transfers, releases pending destination handles, and moves
+context leases out of the runtime borrow. Native effects execute before their
+final context releases. Repeated shutdown is harmless. Native clients retain
+sealed queues/gates, not Runtime; final library unload cannot be held hostage by
+download ownership. No external native effect batch is exposed by the facade.
+
+## Verification state
+
+The original 19 reducer tests passed in the parent's engine run before this
+integration patch. Ten additional CEF-free ownership/wiring tests cover immutable
+storage/browser generations, exact private registry lease survival after source
+retirement, native binding rejection, deferred failed-creation cleanup, shutdown
+lease release and isolation of late native closure from other owners' events.
+An additional lifecycle guard test rejects nested public dispatch during creation,
+pumping and shutdown polling. Existing reducer tests cover actual cancellation
+effects with fake handles. Three ordering regressions use the same closed-first
+lifecycle dispatcher and generic release-only reducer as production: queued
+active/interrupted update -> Closed -> pump collection; retained interrupted
+control -> queued Closed -> shutdown; and a precomputed native effect whose
+owner closes before execution. Real owned control probes record zero calls to
+closed owners, preserve unrelated owners and cancellation-before-new-close
+ordering, and assert exact context/callback releases occur outside state borrows
+and lifecycle queue locks. They construct no native CEF objects.
+
+The integrated engine passed all 82 engine tests and the combined workspace
+passed 786 tests on October 23, 2026. Native acceptance of the explicit admitting
+API with disposable local download fixtures remains outstanding. No current caller opts in, so applying
+it alone must leave existing downloads denied and must not change UI behavior.
+Keep Arc native-close observation as a gate for later browser adoption. No
+account, browser login or cross-device service is in scope.
+
+## Bundled regression check — October 23, 2026
+
+The rebuilt macOS bundle loaded a disposable local HTML fixture and followed
+its attachment link using real Tab/Enter events. The fixture received the
+attachment request; the original page remained visible and no Save As window
+opened. Screenshots were inspected. Ordinary application quit exited with
+`CEF Complete`, zero owners, no browsers and zero pending cookie flushes.
+This checks the existing denied admission path and teardown only. It does not
+accept the explicit admitting API, file output, browser routing or Arc parity.
