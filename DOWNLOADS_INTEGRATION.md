@@ -388,3 +388,25 @@ quit-coordinator hookup is still pending. Registration alone does not create a
 second consumer or claim terminal-race persistence acceptance. Final ordering
 must be Complete, final owned drain, persist, writer flush, service finish, then
 the existing native exit continuation.
+
+
+## Authoritative destination metadata
+
+The browser router now preserves the entire copied destination state. Only an
+actual DestinationRequested event paired with Requested authorizes a destination
+policy call. `DestinationRequest` freezes the callback's suggested name, exact
+provenance and original item snapshot independently of later item-name updates.
+The default remains Defer. Explicit retry reuses that same frozen request.
+
+A repeated callback name cannot replace its original snapshot. Conflicting
+request metadata is rejected; a genuine same-token/provenance terminal Updated
+is still ingested and persisted, while the conflict remains an error. During
+shutdown that error deliberately blocks exit rather than being cleared by a
+successful later write. No default path or filesystem collision policy is added.
+
+All 22 router tests passed, including the shared production conversion seam,
+both callback orders, repeated/empty names, conflicts, terminal persistence and
+explicit retry. The pre-quit-integration workspace checkpoint passed 912 tests
+(645 browser, 165 core, 102 engine). These tests use fictional keys through the
+same conversion helper, not fabricated engine-issued DownloadTokens; actual
+service-owned native persistence acceptance remains separate.

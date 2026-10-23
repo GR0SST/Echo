@@ -25,6 +25,7 @@ fn event(token: u64, owner: u64, phase: DownloadPhase) -> TransferEvent<u64> {
         provenance: DownloadProvenance::new(owner, 83, 97, false),
         info: info(phase, "actual (2).bin"),
         destination_requested: false,
+        destination: DownloadDestination::Unrequested,
     }
 }
 type Model = Rc<RefCell<Browser>>;
@@ -107,6 +108,9 @@ fn full_bytes_paused_interrupted_canceled_and_destination_are_not_completion() {
     }
     let mut before = event(91, owner, DownloadPhase::Complete);
     before.destination_requested = true;
+    before.destination = DownloadDestination::Requested {
+        suggested_name: "callback.bin".into(),
+    };
     router.reduce([before], |_, _| DestinationDecision::Defer);
     assert!(persist(&mut router).is_empty());
     assert!(!router.has_pending_records());
@@ -186,6 +190,9 @@ fn effects_reenter_router_only_after_borrow_release_and_do_not_confirm_completio
     let owner = register(&mut router.borrow_mut(), &model, profile);
     let mut request = event(1, owner, DownloadPhase::Pending);
     request.destination_requested = true;
+    request.destination = DownloadDestination::Requested {
+        suggested_name: "callback.bin".into(),
+    };
     let effects = router
         .borrow_mut()
         .reduce([request], |captured, _| {
@@ -351,6 +358,9 @@ fn deferred_destination_and_failed_effect_retry_keep_original_owner_without_new_
     let owner = register(&mut router, &model, profile);
     let mut request = event(5, owner, DownloadPhase::Pending);
     request.destination_requested = true;
+    request.destination = DownloadDestination::Requested {
+        suggested_name: "callback.bin".into(),
+    };
     assert!(
         router
             .reduce([request], |_, _| DestinationDecision::Defer)
@@ -569,6 +579,9 @@ fn destination_failure_requires_one_explicit_authorization_for_each_attempt() {
     let owner = register(&mut router, &model, profile);
     let mut request = event(88, owner, DownloadPhase::Pending);
     request.destination_requested = true;
+    request.destination = DownloadDestination::Requested {
+        suggested_name: "callback.bin".into(),
+    };
     let mut effects = router
         .reduce([request.clone()], |_, _| {
             DestinationDecision::Path(std::env::temp_dir().join("one.bin"))
@@ -895,4 +908,393 @@ fn supplied_copied_completions_use_shutdown_service_api_and_final_flush_without_
         shutdown.drain_copied_and_persist_with(|| panic!("finished"), writer),
         Err(ShutdownDownloadError::Inactive)
     ));
+}
+
+// Exercise the same lossless conversion seam called by From<DownloadEvent>,
+// using fake keys because production DownloadToken has no public constructor.
+fn converted_event(
+    token: u64,
+    owner: u64,
+    destination_requested: bool,
+    destination: DownloadDestination,
+    suggested_info: &str,
+    phase: DownloadPhase,
+) -> TransferEvent<u64> {
+    let mut snapshot_info = info(phase, "actual (2).bin");
+    snapshot_info.suggested_file_name = suggested_info.into();
+    TransferEvent::from_snapshot_parts(
+        token,
+        DownloadProvenance::new(owner, 83, 97, false),
+        snapshot_info,
+        destination,
+        destination_requested,
+    )
+}
+fn requested(token: u64, owner: u64, name: &str) -> TransferEvent<u64> {
+    converted_event(
+        token,
+        owner,
+        true,
+        DownloadDestination::Requested {
+            suggested_name: name.into(),
+        },
+        "",
+        DownloadPhase::Pending,
+    )
+}
+
+#[test]
+fn production_conversion_seam_retains_destination_and_empty_or_different_info_name() {
+    for info_name in ["", "different-item-name.bin"] {
+        let converted = converted_event(
+            51,
+            72,
+            true,
+            DownloadDestination::Requested {
+                suggested_name: "authoritative.bin".into(),
+            },
+            info_name,
+            DownloadPhase::Pending,
+        );
+        assert_eq!(converted.token, 51);
+        assert_eq!(
+            converted.provenance,
+            DownloadProvenance::new(72, 83, 97, false)
+        );
+        assert!(converted.destination_requested);
+        assert_eq!(
+            converted.destination,
+            DownloadDestination::Requested {
+                suggested_name: "authoritative.bin".into(),
+            }
+        );
+        assert_eq!(converted.info.suggested_file_name, info_name);
+    }
+    for destination in [
+        DownloadDestination::Unrequested,
+        DownloadDestination::Requested {
+            suggested_name: "retained.bin".into(),
+        },
+        DownloadDestination::Resolved(std::env::temp_dir().join("chosen.bin")),
+        DownloadDestination::Rejected,
+    ] {
+        let converted = converted_event(
+            51,
+            72,
+            false,
+            destination.clone(),
+            "",
+            DownloadPhase::InProgress,
+        );
+        assert!(!converted.destination_requested);
+        assert_eq!(converted.destination, destination);
+    }
+}
+
+#[test]
+fn request_and_update_order_freezes_authoritative_policy_request_with_empty_info() {
+    for update_first in [false, true] {
+        let model = Rc::new(RefCell::new(Browser::new()));
+        let profile = model.borrow().default_user_profile_id();
+        let mut router = DownloadRouter::default();
+        let owner = register(&mut router, &model, profile);
+        let request = requested(52, owner, "authoritative.bin");
+        let frozen_info = request.info.clone();
+        let mut update = event(52, owner, DownloadPhase::InProgress);
+        update.info.suggested_file_name.clear(); // Native R3/R4: never filled later.
+        update.info.received_bytes = 393_216;
+        if update_first {
+            assert!(
+                router
+                    .reduce([update.clone()], |_, _| panic!("no callback request yet"))
+                    .0
+                    .is_empty()
+            );
+        }
+        let batch = if update_first {
+            vec![request]
+        } else {
+            vec![request, update.clone()]
+        };
+        assert!(
+            router
+                .reduce(batch, |captured, request| {
+                    assert_eq!(captured, profile);
+                    assert_eq!(
+                        request.provenance,
+                        DownloadProvenance::new(owner, 83, 97, false)
+                    );
+                    assert_eq!(request.suggested_name, "authoritative.bin");
+                    assert!(request.info.suggested_file_name.is_empty());
+                    assert_eq!(request.info.phase, DownloadPhase::Pending);
+                    DestinationDecision::Defer
+                })
+                .0
+                .is_empty()
+        );
+        // A repeated callback name also cannot replace its original snapshot.
+        let mut repeated = requested(52, owner, "authoritative.bin");
+        repeated.info.url = "https://later.test/changed".into();
+        repeated.info.suggested_file_name = "different-item-name.bin".into();
+        let (effects, errors) = router.reduce([repeated], |_, request| {
+            assert_eq!(request.info, frozen_info);
+            assert_eq!(request.suggested_name, "authoritative.bin");
+            DestinationDecision::Defer
+        });
+        assert!(effects.is_empty());
+        assert!(errors.is_empty());
+        // Even a nonempty later item name does not mutate the frozen request.
+        update.info.suggested_file_name = "unrelated-later-item-name.bin".into();
+        let (effects, errors) = router.reduce([update], |captured, request| {
+            assert_eq!(captured, profile);
+            assert_eq!(request.suggested_name, "authoritative.bin");
+            assert!(request.info.suggested_file_name.is_empty());
+            DestinationDecision::Path(std::env::temp_dir().join("explicit-parent-choice.bin"))
+        });
+        assert!(errors.is_empty());
+        assert!(
+            matches!(&effects[..], [DownloadEffect::Destination(52, path)] if path.ends_with("explicit-parent-choice.bin"))
+        );
+        assert!(
+            router
+                .reduce([], |_, _| panic!("already dispatched"))
+                .0
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn updated_requested_metadata_alone_cannot_authorize_policy_or_poison_later_request() {
+    let model = Rc::new(RefCell::new(Browser::new()));
+    let profile = model.borrow().default_user_profile_id();
+    let mut router = DownloadRouter::default();
+    let owner = register(&mut router, &model, profile);
+    let mut update = requested(53, owner, "update-only.bin");
+    update.destination_requested = false;
+    assert!(
+        router
+            .reduce([update], |_, _| panic!("Updated cannot create request"))
+            .0
+            .is_empty()
+    );
+    let (_, errors) = router.reduce([requested(53, owner, "callback.bin")], |_, request| {
+        assert_eq!(request.suggested_name, "callback.bin");
+        DestinationDecision::Defer
+    });
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn conflicting_requested_metadata_is_rejected_without_losing_genuine_terminal_updates() {
+    for phase in [DownloadPhase::Complete, DownloadPhase::Canceled] {
+        let model = Rc::new(RefCell::new(Browser::new()));
+        let profile = model.borrow().default_user_profile_id();
+        let mut router = DownloadRouter::default();
+        let owner = register(&mut router, &model, profile);
+        router.reduce([requested(54, owner, "first.bin")], |_, _| {
+            DestinationDecision::Defer
+        });
+        for is_request in [true, false] {
+            let mut spoof = requested(54, owner, "spoof.bin");
+            spoof.destination_requested = is_request;
+            let (effects, errors) = router.reduce([spoof], |_, request| {
+                assert_eq!(request.suggested_name, "first.bin");
+                DestinationDecision::Defer
+            });
+            assert!(effects.is_empty());
+            assert_eq!(errors, ["Download requested destination changed"]);
+            assert_eq!(router.ledger[&54].info.phase, DownloadPhase::Pending);
+        }
+        let mut terminal = requested(54, owner, "conflicting-terminal-metadata.bin");
+        terminal.destination_requested = false;
+        terminal.info.phase = phase;
+        let (effects, errors) = router.reduce([terminal.clone()], |_, _| {
+            panic!("terminal must not dispatch")
+        });
+        assert!(effects.is_empty());
+        assert_eq!(errors, ["Download requested destination changed"]);
+        assert_eq!(router.ledger[&54].info.phase, phase);
+        assert!(persist(&mut router).is_empty());
+        let expected = usize::from(phase == DownloadPhase::Complete);
+        assert_eq!(
+            model.borrow().completed_downloads(profile).unwrap().len(),
+            expected
+        );
+        assert!(
+            router
+                .reduce(
+                    [terminal, requested(54, owner, "first.bin")],
+                    |_, _| panic!("terminal replay")
+                )
+                .0
+                .is_empty()
+        );
+        assert!(persist(&mut router).is_empty());
+        assert_eq!(
+            model.borrow().completed_downloads(profile).unwrap().len(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn malformed_request_variants_do_not_bind_tokens_or_invent_policy_names() {
+    let model = Rc::new(RefCell::new(Browser::new()));
+    let profile = model.borrow().default_user_profile_id();
+    let mut router = DownloadRouter::default();
+    let owner = register(&mut router, &model, profile);
+    for destination in [
+        DownloadDestination::Unrequested,
+        DownloadDestination::Rejected,
+        DownloadDestination::Resolved(std::env::temp_dir().join("spoof.bin")),
+    ] {
+        let malformed = converted_event(
+            55,
+            owner,
+            true,
+            destination,
+            "item.bin",
+            DownloadPhase::Complete,
+        );
+        let (effects, errors) = router.reduce([malformed], |_, _| panic!("malformed request"));
+        assert!(effects.is_empty());
+        assert_eq!(
+            errors,
+            ["Download request lacks requested destination metadata"]
+        );
+        assert!(router.ledger.is_empty());
+    }
+    // Empty callback names stay empty; the router never invents a name/path.
+    assert!(
+        router
+            .reduce([requested(55, owner, "")], |_, request| {
+                assert!(request.suggested_name.is_empty());
+                DestinationDecision::Defer
+            })
+            .0
+            .is_empty()
+    );
+}
+
+#[test]
+fn policy_retry_reuses_frozen_request_and_rejects_provenance_replays() {
+    let model = Rc::new(RefCell::new(Browser::new()));
+    let profile = model.borrow().default_user_profile_id();
+    let other = model.borrow_mut().create_user_profile("Other").unwrap();
+    let mut router = DownloadRouter::default();
+    let owner = register(&mut router, &model, profile);
+    let other_owner = register(&mut router, &model, other);
+    let request = requested(56, owner, "authoritative.bin");
+    let frozen = RefCell::new(None);
+    let (effects, errors) = router.reduce([request.clone()], |_, request| {
+        *frozen.borrow_mut() = Some(request.clone());
+        DestinationDecision::Path(std::env::temp_dir().join("explicit.bin"))
+    });
+    assert!(errors.is_empty());
+    let failures = execute_effects(effects, |_, _| Err("failed".into()), |_, _| panic!());
+    assert_eq!(failures.len(), 1);
+    router.destination_failed(failures[0].0);
+    for provenance in [
+        DownloadProvenance::new(other_owner, 83, 97, false),
+        DownloadProvenance::new(owner, 84, 97, false),
+        DownloadProvenance::new(owner, 83, 98, false),
+        DownloadProvenance::new(owner, 83, 97, true),
+    ] {
+        let mut spoof = requested(56, owner, "spoof.bin");
+        spoof.provenance = provenance;
+        let (effects, errors) = router.reduce([spoof], |_, _| panic!("blocked/spoofed"));
+        assert!(effects.is_empty());
+        assert_eq!(errors.len(), 1);
+    }
+    let mut update = event(56, owner, DownloadPhase::InProgress);
+    update.info.suggested_file_name.clear();
+    assert!(
+        router
+            .reduce([update, request], |_, _| panic!(
+                "callback cannot authorize retry"
+            ))
+            .0
+            .is_empty()
+    );
+    assert!(router.retry_destination(56, other).is_err());
+    router.retry_destination(56, profile).unwrap();
+    assert!(router.retry_destination(56, profile).is_err());
+    let (effects, errors) = router.reduce([], |captured, request| {
+        assert_eq!(captured, profile);
+        assert_eq!(Some(request), frozen.borrow().as_ref());
+        DestinationDecision::Reject
+    });
+    assert!(errors.is_empty());
+    assert!(matches!(
+        effects[..],
+        [DownloadEffect::Control(56, DownloadControl::Cancel)]
+    ));
+    assert!(
+        router
+            .reduce([], |_, _| panic!("one retry effect only"))
+            .0
+            .is_empty()
+    );
+    let terminal = event(56, owner, DownloadPhase::Complete);
+    router.reduce([terminal.clone(), terminal], |_, _| panic!("terminal"));
+    assert!(persist(&mut router).is_empty());
+    assert_eq!(
+        model.borrow().completed_downloads(profile).unwrap().len(),
+        1
+    );
+    assert!(
+        model
+            .borrow()
+            .completed_downloads(other)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn differing_nonempty_item_name_does_not_override_callback_or_cross_token_requests() {
+    let model = Rc::new(RefCell::new(Browser::new()));
+    let profile = model.borrow().default_user_profile_id();
+    let mut router = DownloadRouter::default();
+    let owner = register(&mut router, &model, profile);
+    let mut first = requested(57, owner, "first-callback.bin");
+    first.info.suggested_file_name = "different-item.bin".into();
+    let second = requested(58, owner, "second-callback.bin");
+    let seen = RefCell::new(Vec::new());
+    let (effects, errors) = router.reduce([first, second], |captured, request| {
+        assert_eq!(captured, profile);
+        seen.borrow_mut().push(request.suggested_name.clone());
+        match request.suggested_name.as_str() {
+            "first-callback.bin" => {
+                assert_eq!(request.info.suggested_file_name, "different-item.bin")
+            }
+            "second-callback.bin" => assert!(request.info.suggested_file_name.is_empty()),
+            _ => panic!("crossed request"),
+        }
+        DestinationDecision::Defer
+    });
+    assert!(effects.is_empty());
+    assert!(errors.is_empty());
+    seen.borrow_mut().sort();
+    assert_eq!(
+        *seen.borrow(),
+        ["first-callback.bin", "second-callback.bin"]
+    );
+    assert_eq!(
+        router.ledger[&57]
+            .destination_request
+            .as_ref()
+            .unwrap()
+            .suggested_name,
+        "first-callback.bin"
+    );
+    assert_eq!(
+        router.ledger[&58]
+            .destination_request
+            .as_ref()
+            .unwrap()
+            .suggested_name,
+        "second-callback.bin"
+    );
 }

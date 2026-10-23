@@ -9,8 +9,8 @@ use browser_core::{
     downloads::{CompletedDownload, CompletedDownloadId, DownloadCompletion, DownloadTime},
 };
 use engine::{
-    DownloadControl, DownloadEvent, DownloadInfo, DownloadPhase, DownloadProvenance, DownloadToken,
-    Engine,
+    DownloadControl, DownloadDestination, DownloadEvent, DownloadInfo, DownloadPhase,
+    DownloadProvenance, DownloadToken, Engine,
 };
 use gpui::{App, Global};
 use shutdown::{ConsumerGate, ConsumerOwner};
@@ -41,6 +41,14 @@ pub(crate) enum DestinationDecision {
     Path(PathBuf),
     Reject,
 }
+/// Frozen at DestinationRequested, independently of later mutable item updates.
+/// The callback argument is authoritative even when info's name is empty or different.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DestinationRequest {
+    pub provenance: DownloadProvenance,
+    pub suggested_name: String,
+    pub info: DownloadInfo,
+}
 #[derive(Clone, Debug)]
 pub(crate) enum DownloadEffect<T> {
     Destination(T, PathBuf),
@@ -52,6 +60,7 @@ pub(crate) struct TransferEvent<T> {
     pub provenance: DownloadProvenance,
     pub info: DownloadInfo,
     pub destination_requested: bool,
+    pub destination: DownloadDestination,
 }
 impl From<DownloadEvent> for TransferEvent<DownloadToken> {
     fn from(event: DownloadEvent) -> Self {
@@ -59,11 +68,30 @@ impl From<DownloadEvent> for TransferEvent<DownloadToken> {
             DownloadEvent::DestinationRequested(snapshot) => (snapshot, true),
             DownloadEvent::Updated(snapshot) => (snapshot, false),
         };
-        Self {
-            token: snapshot.token,
-            provenance: snapshot.provenance,
-            info: snapshot.info,
+        Self::from_snapshot_parts(
+            snapshot.token,
+            snapshot.provenance,
+            snapshot.info,
+            snapshot.destination,
             destination_requested,
+        )
+    }
+}
+impl<T> TransferEvent<T> {
+    // Shared production conversion seam; tests use fake keys, never forge engine tokens.
+    fn from_snapshot_parts(
+        token: T,
+        provenance: DownloadProvenance,
+        info: DownloadInfo,
+        destination: DownloadDestination,
+        destination_requested: bool,
+    ) -> Self {
+        Self {
+            token,
+            provenance,
+            info,
+            destination_requested,
+            destination,
         }
     }
 }
@@ -73,7 +101,7 @@ struct Transfer {
     completion: Option<DownloadCompletion>,
     committed: Option<CompletedDownloadId>,
     destination_dispatched: bool,
-    destination_requested: bool,
+    destination_request: Option<DestinationRequest>,
     destination_blocked: bool,
 }
 /// Process tokens stay intact; never convert a token to a persisted ID. This
@@ -119,7 +147,7 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
     pub(crate) fn reduce(
         &mut self,
         events: impl IntoIterator<Item = TransferEvent<T>>,
-        mut policy: impl FnMut(UserProfileId, &DownloadInfo) -> DestinationDecision,
+        mut policy: impl FnMut(UserProfileId, &DestinationRequest) -> DestinationDecision,
     ) -> (Vec<DownloadEffect<T>>, Vec<String>) {
         let mut effects = Vec::new();
         let mut errors = Vec::new();
@@ -133,13 +161,21 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
                 errors.push("Unregistered download owner".into());
                 continue;
             };
+            // Only the matching event variant can authorize a callback request.
+            // Invalid request metadata must not reserve a token or terminal tombstone.
+            if event.destination_requested
+                && !matches!(&event.destination, DownloadDestination::Requested { .. })
+            {
+                errors.push("Download request lacks requested destination metadata".into());
+                continue;
+            }
             let item = self.ledger.entry(event.token).or_insert_with(|| Transfer {
                 provenance: event.provenance,
                 info: event.info.clone(),
                 completion: None,
                 committed: None,
                 destination_dispatched: false,
-                destination_requested: false,
+                destination_request: None,
                 destination_blocked: false,
             });
             if item.provenance != event.provenance {
@@ -151,7 +187,24 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
             {
                 continue;
             }
-            item.destination_requested |= event.destination_requested;
+            if let DownloadDestination::Requested { suggested_name } = &event.destination {
+                if let Some(request) = &item.destination_request {
+                    if request.suggested_name != *suggested_name {
+                        errors.push("Download requested destination changed".into());
+                        // Reject spoofed request/progress data, but retain genuine
+                        // terminal Updated metadata under the exact bound provenance.
+                        if event.destination_requested || !event.info.phase.is_terminal() {
+                            continue;
+                        }
+                    }
+                } else if event.destination_requested {
+                    item.destination_request = Some(DestinationRequest {
+                        provenance: event.provenance,
+                        suggested_name: suggested_name.clone(),
+                        info: event.info.clone(),
+                    });
+                }
+            }
             item.info = event.info;
             // Only a real Updated(Complete), never byte counts/destination/file size.
             if !event.destination_requested
@@ -168,13 +221,13 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
             }
         }
         for (token, item) in &mut self.ledger {
-            if item.destination_requested
+            if item.destination_request.is_some()
                 && !item.destination_dispatched
                 && !item.destination_blocked
                 && !item.info.phase.is_terminal()
             {
                 let owner = &self.owners[&item.provenance.owner()];
-                match policy(owner.profile, &item.info) {
+                match policy(owner.profile, item.destination_request.as_ref().unwrap()) {
                     DestinationDecision::Defer => (),
                     DestinationDecision::Path(path) => {
                         item.destination_dispatched = true;
@@ -269,7 +322,8 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
     }
 }
 
-pub(crate) type DestinationPolicy = Rc<dyn Fn(UserProfileId, &DownloadInfo) -> DestinationDecision>;
+pub(crate) type DestinationPolicy =
+    Rc<dyn Fn(UserProfileId, &DestinationRequest) -> DestinationDecision>;
 pub(crate) struct DownloadService<T = DownloadToken, H = ProfileHandle> {
     router: DownloadRouter<T, H>,
     policy: Option<DestinationPolicy>,
@@ -321,10 +375,10 @@ impl DownloadService {
         let policy = self.policy.clone();
         let (effects, errors) = self.router.reduce(
             events.into_iter().map(TransferEvent::from),
-            |profile, info| {
+            |profile, request| {
                 policy
                     .as_ref()
-                    .map_or(DestinationDecision::Defer, |p| p(profile, info))
+                    .map_or(DestinationDecision::Defer, |p| p(profile, request))
             },
         );
         self.errors.extend(errors);
