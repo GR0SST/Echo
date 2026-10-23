@@ -6,6 +6,7 @@
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
 //! Commands: `reopen` (Dock request), `window <index|last>` (select a browser root),
+//! `transfer-new-host`, `transfer-back` (diagnostic live-page host transfer),
 //! `activate`, `require-focus` (abort on focus loss or occlusion),
 //! `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `menu <menu title> > <item title>` (invoke an enabled native menu item),
@@ -20,7 +21,7 @@
 use std::ffi::{c_void, CString};
 use std::time::Duration;
 
-use gpui::{App, AsyncApp, WeakEntity};
+use gpui::{App, AppContext, AsyncApp, WeakEntity};
 use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2::msg_send;
 use objc2::encode::{Encode, Encoding};
@@ -38,12 +39,65 @@ const OPTION: usize = 1 << 19;
 const COMMAND: usize = 1 << 20;
 const EVENT_GAP: Duration = Duration::from_millis(60);
 
+struct HostTransfer {
+    source: WeakEntity<BrowserWindow>,
+    source_view: usize,
+    source_window: gpui::AnyWindowHandle,
+    target: gpui::WindowHandle<BrowserWindow>,
+    pages: std::rc::Rc<std::cell::RefCell<crate::pages::Pages>>,
+    tab: browser_core::TabId,
+    frame: engine::Bounds,
+}
+
+fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> Option<(HostTransfer, WeakEntity<BrowserWindow>, usize)> {
+    let (source_window, source_view, profile, selection, pages, tab, frame) = source.read_with(cx, |view, _| {
+        let pages = view.pages.clone()?;
+        let layout = pages.borrow().surface_layout();
+        if layout.len() != 1 { return None; }
+        let (tab, frame) = layout[0];
+        Some((view.main_window, view.native_view? as usize, view.profile.handle.clone(), view.browser.window_selection(), pages, tab, frame))
+    }).ok().flatten()?;
+    let (target, target_view, target_entity) = cx.update(|cx| {
+        let bounds = source_window.update(cx, |_, window, _| window.bounds()).ok()?;
+        let target = cx.open_window(gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            titlebar: Some(gpui::TitlebarOptions { title: Some("Echo transfer probe".into()), appears_transparent: true,
+                traffic_light_position: Some(gpui::point(gpui::px(crate::window::TRAFFIC_LIGHT_X), gpui::px(crate::window::TRAFFIC_LIGHT_Y))) }),
+            ..Default::default()
+        }, |window, cx| cx.new(|cx| BrowserWindow::with_profile(profile, Some(selection), None, window, cx))).ok()?;
+        let (parent, entity) = target.update(cx, |_, window, cx| {
+            crate::native::view_of(window).map(|parent| (parent, cx.weak_entity()))
+        }).ok().flatten()?;
+        if !pages.borrow_mut().move_to_host(tab, parent, frame) {
+            let _ = target.update(cx, |_, window, _| window.remove_window());
+            return None;
+        }
+        let _ = target.update(cx, |_, window, _| window.activate_window());
+        pages.borrow_mut().focus_shown();
+        Some((target, parent as usize, entity))
+    }).ok().flatten()?;
+    Some((HostTransfer { source: source.clone(), source_view, source_window, target, pages, tab, frame }, target_entity, target_view))
+}
+
+fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
+    if transfer.source.upgrade().is_none() { return false; }
+    if !cx.update(|cx| transfer.source_window.update(cx, |_, _, _| ()).is_ok()).unwrap_or(false) { return false; }
+    if !transfer.pages.borrow_mut().move_to_host(transfer.tab, transfer.source_view as *mut c_void, transfer.frame) { return false; }
+    let restored = cx.update(|cx| {
+        let _ = transfer.source_window.update(cx, |_, window, _| window.activate_window());
+        transfer.pages.borrow_mut().focus_shown();
+        let _ = transfer.target.update(cx, |_, window, _| window.remove_window());
+    }).is_ok();
+    restored
+}
+
 pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut c_void, cx: &mut App) {
     let ns_view = ns_view as usize;
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut ns_view = ns_view as *mut AnyObject;
         unsafe { make_key(ns_view) };
         let mut require_focus = false;
+        let mut transfer = None;
         for command in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
@@ -58,6 +112,28 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             }
             match name {
                 "require-focus" => {},
+                "transfer-new-host" => {
+                    let moved = if transfer.is_none() { transfer_new_host(&view, cx) } else { None };
+                    let Some((state, target, parent)) = moved else {
+                        eprintln!("[automation] aborted: live host transfer needs one loaded standalone page and a supported native host");
+                        let _ = cx.update(|cx| cx.quit());
+                        return;
+                    };
+                    transfer = Some(state);
+                    view = target;
+                    ns_view = parent as *mut AnyObject;
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                }
+                "transfer-back" => {
+                    let Some(state) = transfer.take().filter(|state| transfer_back(state, cx)) else {
+                        eprintln!("[automation] aborted: live host transfer could not restore the source");
+                        let _ = cx.update(|cx| cx.quit());
+                        return;
+                    };
+                    view = state.source;
+                    ns_view = state.source_view as *mut AnyObject;
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                }
                 "window" => {
                     let selected = cx.update(|cx| {
                         let roots: Vec<_> = cx.windows().into_iter().filter_map(|handle| handle.downcast::<BrowserWindow>()).collect();

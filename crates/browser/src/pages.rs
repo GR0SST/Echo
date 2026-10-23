@@ -11,6 +11,8 @@ use engine::{Bounds, Engine, Event, ViewId};
 /// app and by a recording fake in tests.
 pub trait WebEngine {
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId>;
+    /// Transfer an existing native page. Engines without native hosting reject it.
+    fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn set_visible(&mut self, view: ViewId, visible: bool);
@@ -58,6 +60,9 @@ impl WebEngine for Chromium {
     }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.engine.set_frame(view, bounds)
+    }
+    fn move_view(&mut self, view: ViewId, parent: *mut c_void, bounds: Bounds) -> bool {
+        self.engine.move_view(view, parent, bounds)
     }
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
         self.engine.set_top_corners_rounded(view, rounded)
@@ -334,6 +339,13 @@ impl Pages {
         if let Some(view) = self.shown.and_then(|tab| self.view(tab)) {
             self.engine.focus_page(view);
         }
+    }
+
+    /// Transfers one loaded page, retaining its native view ID and cached state.
+    pub fn move_to_host(&mut self, tab: TabId, parent: *mut c_void, bounds: Bounds) -> bool {
+        if parent.is_null() { return false; }
+        let Some(view) = self.view(tab) else { return false; };
+        self.engine.move_view(view, parent, bounds)
     }
 
     pub fn audio_muted(&self, tab: TabId) -> Option<bool> {

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use cef::*;
 mod editing;
+mod host;
 pub use editing::subprocess_app;
 
 #[cfg(target_os = "macos")]
@@ -281,10 +282,7 @@ impl Engine {
         frame: Bounds,
         corner_radius: f64,
     ) -> Option<ViewId> {
-        #[cfg(target_os = "macos")]
-        let parent = mac::content_view_of(ui_view);
-        #[cfg(not(target_os = "macos"))]
-        let parent = ui_view;
+        let parent = host::parent_of(ui_view);
         #[cfg(target_os = "macos")]
         let (page_parent, bounds) = (
             mac::create_clip_view(parent, corner_radius),
@@ -362,11 +360,28 @@ impl Engine {
         }
         view.frame = frame;
         view.needs_layout = false;
-        #[cfg(target_os = "macos")]
-        mac::set_frame(view.host, view.parent, frame);
+        host::set_frame(view.host, view.parent, frame);
         if let Some(host) = view.browser.host() {
             host.was_resized();
         }
+    }
+
+    /// Moves a live page to another UI host without creating a browser or
+    /// navigating it. DOM state and back/forward history stay in the same CEF instance.
+    pub fn move_view(&mut self, id: ViewId, ui_view: *mut c_void, frame: Bounds) -> bool {
+        if ui_view.is_null() { return false; }
+        let Some(view) = self.views.get_mut(&id) else { return false; };
+        let parent = host::parent_of(ui_view);
+        if parent.is_null() { return false; }
+        if view.parent != parent {
+            #[cfg(not(target_os = "macos"))]
+            if let Some(browser) = view.browser.host() { browser.notify_move_or_resize_started(); }
+            if !host::move_to(view.host, parent) { return false; }
+            view.parent = parent;
+            view.needs_layout = true;
+        }
+        self.set_frame(id, frame);
+        true
     }
 
     /// Split headers own the pane's top corners; the page below joins them squarely.

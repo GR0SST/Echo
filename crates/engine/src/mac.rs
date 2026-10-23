@@ -195,6 +195,14 @@ pub fn create_clip_view(parent: *mut c_void, radius: f64) -> *mut c_void {
     }
 }
 
+/// Moves the retained clip host, keeping CEF's browser and renderer alive.
+pub fn move_clip_view(view: *mut c_void, parent: *mut c_void) {
+    unsafe {
+        let _: () = msg_send![view as *mut AnyObject, removeFromSuperview];
+        let _: () = msg_send![parent as *mut AnyObject, addSubview: view as *mut AnyObject];
+    }
+}
+
 /// The clip host is an unflipped NSView: minimum-Y corners are its bottom edge.
 /// Keep those rounded when the page joins a GPUI split header along its top edge.
 pub fn set_top_corners_rounded(view: *mut c_void, rounded: bool) {

@@ -185,6 +185,7 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
     Create(u64, String),
+    MoveHost(u64, usize, Bounds),
     Visible(u64, bool),
     TopCorners(u64, bool),
     FocusPage(u64),
@@ -216,6 +217,7 @@ struct FakeState {
     events: Vec<Event>,
     muted: std::collections::HashSet<u64>,
     focus_on_create: bool,
+    reject_move: bool,
 }
 
 #[derive(Clone, Default)]
@@ -238,6 +240,13 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn move_view(&mut self, view: ViewId, parent: *mut std::ffi::c_void, bounds: Bounds) -> bool {
+        let mut state = self.0.borrow_mut();
+        state.calls.push(Call::MoveHost(raw(view), parent as usize, bounds));
+        if state.reject_move { return false; }
+        state.bounds.insert(raw(view), bounds);
+        true
+    }
     fn undo(&mut self, view: ViewId) { self.call(Call::Undo(raw(view))); }
     fn redo(&mut self, view: ViewId) { self.call(Call::Redo(raw(view))); }
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId> {
@@ -5115,6 +5124,43 @@ fn incognito_never_saves_the_private_window_to_a_session(cx: &mut TestAppContext
     visual.cx.update(|_| {});
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "existing regular session");
     std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn moving_a_live_page_to_a_host_keeps_its_view_and_navigation_state(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_split_pages(cx, 2);
+    fake.send(visual, Event::LoadingChanged { view: page(2), loading: false, can_go_back: true, can_go_forward: true });
+    let (tab, original) = view.read_with(visual, |view, _| {
+        let pages = view.pages.as_ref().unwrap().borrow();
+        pages.surface_layout()[1]
+    });
+    let destination = Bounds { x: 24., y: 40., width: 640., height: 480. };
+    fake.take_calls();
+    view.update(visual, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        assert!(pages.move_to_host(tab, 0x1234usize as *mut _, destination));
+        assert!(pages.state(tab).can_go_back);
+        assert!(pages.state(tab).can_go_forward);
+        assert_eq!(pages.tab_for(page(2)), Some(tab));
+        assert!(pages.move_to_host(tab, 0x5678usize as *mut _, original));
+    });
+    assert_eq!(fake.take_calls(), vec![Call::MoveHost(2, 0x1234, destination), Call::MoveHost(2, 0x5678, original)]);
+}
+
+#[gpui::test]
+fn a_rejected_page_host_transfer_preserves_the_existing_page(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_split_pages(cx, 2);
+    let (tab, bounds) = view.read_with(visual, |view, _| view.pages.as_ref().unwrap().borrow().surface_layout()[1]);
+    fake.0.borrow_mut().reject_move = true;
+    fake.take_calls();
+    view.update(visual, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        assert!(!pages.move_to_host(tab, std::ptr::null_mut(), bounds));
+        assert!(!pages.move_to_host(tab, 0x1234usize as *mut _, bounds));
+        assert_eq!(pages.tab_for(page(2)), Some(tab));
+        assert!(pages.is_visible(tab));
+    });
+    assert_eq!(fake.take_calls(), vec![Call::MoveHost(2, 0x1234, bounds)]);
 }
 
 #[gpui::test]

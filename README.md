@@ -70,6 +70,10 @@ window, so a guarded script can inspect closure and test Dock restoration.
 root without changing focus; use `activate` explicitly when needed. Child
 panels are excluded from this index.
 
+For native page-lifetime checks, `transfer-new-host` moves the loaded standalone
+page into a temporary GPUI host. `transfer-back` restores the original host and
+closes the temporary window. Use `shotstack` to capture the temporary host.
+
 `menu Edit > Undo` invokes an enabled native menu item without moving the
 system pointer. Keyboard events follow the focused browser child window,
 including the Command Bar; point coordinates remain relative to the main window.

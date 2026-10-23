@@ -52,7 +52,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Tab… (opens the Command Bar) | ⌘T | done | — |
-| New Window | ⌘N | missing | GPUI now uses a single editable profile/session owner with read-only window projections. Two-window tests cover shared edits, independent selection, Space reordering and saving after the original window closes. The menu/shortcut action and shared live-page hosting are not wired yet |
+| New Window | ⌘N | missing | GPUI uses one editable profile/session owner and read-only window projections. CEF has a live host-transfer API; a macOS native probe retained the renderer identity, form input and navigation without reloading the page. Windows/X11 shims still need native verification. The shared page pool and menu/shortcut action are not wired yet |
 | Blank Window | ⌃⌘N | missing | — |
 | New Incognito Window | ⇧⌘N | partial | File menu, shortcut and Command Bar open independent private tab lists. CEF cookies and localStorage are shared only among live private windows, isolated from regular browsing and discarded after the last private window closes. Private visits and sessions are not saved; closed tabs can be restored in memory. Verified against installed Arc and bundled Echo. Private menu/action availability and remaining visual states still need parity work |
 | New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
