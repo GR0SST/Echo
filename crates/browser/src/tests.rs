@@ -1353,3 +1353,47 @@ fn exact_command_names_outrank_longer_actions_with_shared_words(cx: &mut TestApp
         assert_eq!(label, expected, "query: {query}");
     }
 }
+
+fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
+    click(cx, selector);
+    let position = cx.debug_bounds(selector).unwrap().center();
+    cx.simulate_event(gpui::MouseDownEvent { position, button: gpui::MouseButton::Left, modifiers: Modifiers::none(), click_count: 2, first_mouse: false });
+    cx.simulate_event(gpui::MouseUpEvent { position, button: gpui::MouseButton::Left, modifiers: Modifiers::none(), click_count: 2 });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn double_click_renames_a_tab_and_engine_titles_do_not_overwrite_it(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    double_click(cx, "tab-8");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Chromium"));
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("Engine research");
+    bar(&view, cx).simulate_keystrokes("enter");
+    fake.send(cx, Event::TitleChanged { view: page(1), title: "Updated by website".into() });
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Engine research");
+    let saved = view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser));
+    assert_eq!(browser_core::session::from_json(&saved).unwrap().active_tab().unwrap().title, "Engine research");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("reset tab name");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Updated by website");
+}
+
+#[gpui::test]
+fn rename_tab_command_keeps_focus_and_escape_does_not_change_the_name(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rename current tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Chromium"));
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("Cancelled name");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Chromium");
+    double_click(cx, "tab-8");
+    bar(&view, cx).simulate_input("  ");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Chromium");
+    assert!(bar_text(&view, cx).is_some());
+}

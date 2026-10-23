@@ -128,7 +128,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Pin/Unpin Tab | ⌘D | done | — |
 | Open Little Arc or Peek in… (pick a Space) | ⌘O | missing | — |
 | New Folder… | ⇧⌘N per nib (?) | missing | The nib gives it the same shortcut as Incognito; the real binding is set in code |
-| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | missing | — |
+| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | partial | Rename Current Tab is implemented; duplicate and folder actions remain missing |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
 | Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
 | Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | missing | — |
@@ -182,7 +182,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | missing | — |
 | Haptic feedback when reordering tabs | — | missing | Option in Advanced |
 | Multi-selecting tabs (⌘/⇧-click) | — | missing | — |
-| Renaming a tab by double-click ("Double-click to rename") | double-click | missing | Also needs "Reset Name and Icon" |
+| Renaming a tab by double-click ("Double-click to rename") | double-click | done | Double-click or Rename Current Tab… in the Command Bar. Custom names persist through navigation, archive and sessions; Reset Tab Name restores the page title. Custom icons remain a separate missing feature |
 | Custom tab icon ("Customize Tab") | — | missing | — |
 | Close button on hover (× for Today, − for Pinned) | hover | done | — |
 | Audio indicator, Mute/Unmute in the context menu | — | missing | — |
@@ -248,7 +248,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
-| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Reset Tab and Replace Pin with Current Page implemented for modified pinned tabs; duplicate, rename and mute remain missing |
+| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab and Reset Tab Name are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate and mute remain missing |
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
@@ -498,9 +498,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 48
-- **partial**: 24
-- **missing**: 223
+- **done**: 49
+- **partial**: 25
+- **missing**: 221
 
 ### Biggest gaps (by importance for parity)
 

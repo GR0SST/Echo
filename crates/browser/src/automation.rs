@@ -6,7 +6,7 @@
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
 //! Commands: `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
-//! `click <x> <y>` (logical px from the window's top-left),
+//! `click <x> <y>` or `doubleclick <x> <y>` (logical px from the window's top-left),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
 
@@ -75,6 +75,11 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                         unsafe { post_drag(ns_view, (x1, y1), (x2, y2)) };
                     }
                     cx.background_executor().timer(Duration::from_millis(500)).await;
+                }
+                "doubleclick" => {
+                    let coords: Vec<f64> = arg.split_whitespace().filter_map(|value| value.parse().ok()).collect();
+                    if let [x, y] = coords[..] { unsafe { post_double_click(ns_view, x, y) }; }
+                    cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "click" => {
                     // click <x> <y> [hold ms]
@@ -423,7 +428,24 @@ unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64, hold: Option<Duration
     }
 }
 
-unsafe fn post_mouse_button(kind: usize, (x, y): (f64, f64), window_number: isize) {
+unsafe fn post_double_click(view: *mut AnyObject, x: f64, y: f64) {
+    unsafe {
+        post_click(view, x, y, None);
+        let window = window_of(view);
+        let number: isize = msg_send![window, windowNumber];
+        let content: *mut AnyObject = msg_send![window, contentView];
+        let bounds: NSRect = msg_send![content, bounds];
+        let location = (x, bounds.size.height - y);
+        post_mouse_button_count(MOUSE_DOWN, location, number, 2);
+        post_mouse_button_count(MOUSE_UP, location, number, 2);
+    }
+}
+
+unsafe fn post_mouse_button(kind: usize, location: (f64, f64), window_number: isize) {
+    unsafe { post_mouse_button_count(kind, location, window_number, 1); }
+}
+
+unsafe fn post_mouse_button_count(kind: usize, (x, y): (f64, f64), window_number: isize, count: isize) {
     unsafe {
         let nil: *mut AnyObject = std::ptr::null_mut();
         let event: *mut AnyObject = msg_send![
@@ -435,7 +457,7 @@ unsafe fn post_mouse_button(kind: usize, (x, y): (f64, f64), window_number: isiz
             windowNumber: window_number,
             context: nil,
             eventNumber: 0isize,
-            clickCount: 1isize,
+            clickCount: count,
             pressure: 1.0f32
         ];
         post(event);

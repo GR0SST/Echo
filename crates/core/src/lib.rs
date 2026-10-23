@@ -35,11 +35,30 @@ pub enum Section {
 pub struct Tab {
     pub id: TabId,
     pub title: String,
+    /// A user label, kept independently of titles reported by the page.
+    #[serde(default)]
+    pub custom_title: Option<String>,
+    #[serde(default)]
+    pub page_title: Option<String>,
+    #[serde(default)]
+    pub pinned_title: Option<String>,
     pub url: String,
     pub last_active: SystemTime,
     /// The page a pinned tab returns to when closed, like Arc's.
     #[serde(default)]
     pub pinned_url: Option<String>,
+}
+
+impl Tab {
+    fn reset_to_pinned_url(&mut self) -> bool {
+        let Some(url) = self.pinned_url.clone() else { return false; };
+        self.url = url;
+        self.page_title = self.pinned_title.clone();
+        if let Some(title) = self.custom_title.clone().or_else(|| self.pinned_title.clone()) {
+            self.title = title;
+        }
+        true
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -211,6 +230,9 @@ impl Browser {
             Tab {
                 id,
                 title: url.clone(),
+                custom_title: None,
+                page_title: None,
+                pinned_title: None,
                 url,
                 last_active: now,
                 pinned_url: None,
@@ -267,9 +289,7 @@ impl Browser {
         match space.find(id)? {
             (Section::Pinned, i) => {
                 let tab = &mut space.pinned[i];
-                if let Some(url) = tab.pinned_url.clone() {
-                    tab.url = url;
-                }
+                tab.reset_to_pinned_url();
                 if space.active_tab == Some(id) {
                     // The tab stays in place, so focus moves past it.
                     space.active_tab = space
@@ -362,11 +382,13 @@ impl Browser {
             Some((Section::Pinned, i)) => {
                 let mut tab = space.pinned.remove(i);
                 tab.pinned_url = None;
+                tab.pinned_title = None;
                 space.today.insert(0, tab);
             }
             Some((Section::Today, i)) => {
                 let mut tab = space.today.remove(i);
                 tab.pinned_url = Some(tab.url.clone());
+                tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
                 space.pinned.push(tab);
             }
             None => {}
@@ -377,10 +399,7 @@ impl Browser {
     pub fn reset_pinned_tab(&mut self, id: TabId) -> bool {
         for space in &mut self.spaces {
             if let Some(tab) = space.pinned.iter_mut().find(|tab| tab.id == id) {
-                let Some(url) = tab.pinned_url.clone() else { return false; };
-                tab.title = url.clone();
-                tab.url = url;
-                return true;
+                return tab.reset_to_pinned_url();
             }
         }
         false
@@ -390,10 +409,7 @@ impl Browser {
     /// The returned pages should be unloaded to reset their navigation state too.
     pub fn reset_space(&mut self) -> Vec<TabId> {
         self.space_mut().pinned.iter_mut().filter_map(|tab| {
-            let url = tab.pinned_url.clone()?;
-            tab.title = url.clone();
-            tab.url = url;
-            Some(tab.id)
+            tab.reset_to_pinned_url().then_some(tab.id)
         }).collect()
     }
 
@@ -402,6 +418,7 @@ impl Browser {
         for space in &mut self.spaces {
             if let Some(tab) = space.pinned.iter_mut().find(|tab| tab.id == id) {
                 tab.pinned_url = Some(tab.url.clone());
+                tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
                 return true;
             }
         }
@@ -414,7 +431,8 @@ impl Browser {
         for space in &mut self.spaces {
             if let Some((section, i)) = space.find(id) {
                 let tab = &mut space.section_mut(section)[i];
-                tab.title = url.clone();
+                tab.page_title = None;
+                tab.title = tab.custom_title.clone().unwrap_or_else(|| url.clone());
                 tab.url = url;
                 return;
             }
@@ -442,10 +460,41 @@ impl Browser {
         let title = title.into();
         for space in &mut self.spaces {
             if let Some((section, i)) = space.find(id) {
-                space.section_mut(section)[i].title = title;
+                let tab = &mut space.section_mut(section)[i];
+                tab.page_title = Some(title.clone());
+                if tab.pinned_url.as_ref() == Some(&tab.url) { tab.pinned_title = Some(title.clone()); }
+                tab.title = tab.custom_title.clone().unwrap_or(title);
                 return;
             }
         }
+    }
+
+    pub fn rename_tab(&mut self, id: TabId, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() { return false; }
+        for space in &mut self.spaces {
+            if let Some((section, i)) = space.find(id) {
+                let tab = &mut space.section_mut(section)[i];
+                // Preserve the page label from sessions saved before page_title existed.
+                if tab.custom_title.is_none() && tab.page_title.is_none() { tab.page_title = Some(tab.title.clone()); }
+                tab.custom_title = Some(name.to_string());
+                tab.title = name.to_string();
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn reset_tab_name(&mut self, id: TabId) -> bool {
+        for space in &mut self.spaces {
+            if let Some((section, i)) = space.find(id) {
+                let tab = &mut space.section_mut(section)[i];
+                if tab.custom_title.take().is_none() { return false; }
+                tab.title = tab.page_title.clone().unwrap_or_else(|| tab.url.clone());
+                return true;
+            }
+        }
+        false
     }
 
     /// Archives Today tabs idle longer than `archive_after` in every space.
@@ -760,6 +809,58 @@ mod tests {
         assert_eq!(browser.active_tab().unwrap().url, "https://today");
         assert_eq!(browser.spaces[1].pinned[0].url, "https://other/elsewhere");
         assert!(browser.archive.is_empty());
+    }
+
+
+    #[test]
+    fn custom_tab_names_survive_navigation_and_pinned_resets() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("https://original", t0());
+        browser.set_title(tab, "Original page");
+        browser.toggle_pin(tab);
+        assert!(browser.rename_tab(tab, "My page"));
+        assert!(!browser.rename_tab(tab, "   "));
+        browser.navigate(tab, "https://elsewhere");
+        browser.set_title(tab, "Elsewhere page");
+        assert_eq!(browser.active_tab().unwrap().title, "My page");
+        assert!(browser.reset_tab_name(tab));
+        assert_eq!(browser.active_tab().unwrap().title, "Elsewhere page");
+        browser.rename_tab(tab, "My page");
+        browser.reset_space();
+        assert_eq!(browser.active_tab().unwrap().title, "My page");
+        assert_eq!(browser.active_tab().unwrap().url, "https://original");
+        browser.reset_tab_name(tab);
+        assert_eq!(browser.active_tab().unwrap().title, "Original page");
+    }
+
+    #[test]
+    fn renamed_tabs_survive_archive_restore_and_session_reload() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("https://original", t0());
+        browser.set_title(tab, "Original page");
+        browser.rename_tab(tab, "My page");
+        browser.close_tab(tab, t0());
+        let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
+        restored.restore_archived(tab, t0() + HOUR);
+        restored.set_title(tab, "Updated page");
+        assert_eq!(restored.active_tab().unwrap().title, "My page");
+        restored.reset_tab_name(tab);
+        assert_eq!(restored.active_tab().unwrap().title, "Updated page");
+    }
+
+
+    #[test]
+    fn legacy_sessions_can_rename_and_restore_their_existing_tab_labels() {
+        let mut browser = Browser::new();
+        let id = browser.new_tab("https://legacy", t0());
+        browser.set_title(id, "Legacy page title");
+        let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
+        let tab = json["spaces"][0]["today"][0].as_object_mut().unwrap();
+        for field in ["custom_title", "page_title", "pinned_title"] { tab.remove(field); }
+        let mut restored = session::from_json(&json.to_string()).unwrap();
+        assert!(restored.rename_tab(id, "Custom label"));
+        assert!(restored.reset_tab_name(id));
+        assert_eq!(restored.active_tab().unwrap().title, "Legacy page title");
     }
 
 }

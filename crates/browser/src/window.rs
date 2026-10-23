@@ -257,6 +257,7 @@ pub enum Target {
     Tab(TabId),
     NewSpace,
     RenameSpace(SpaceId),
+    RenameTab(TabId),
     ArchiveInterval,
     Archive(Option<SpaceId>),
     ConfirmClearArchive,
@@ -268,6 +269,7 @@ pub enum Suggestion {
     SwitchToTab { id: TabId, title: String, url: String, space: String },
     Action { command: Command, label: String },
     SaveSpace { name: String },
+    SaveTabName { name: String },
     ArchiveAfter { label: String, seconds: Option<u64> },
     ArchivedTab { id: TabId, title: String, detail: String },
     ConfirmClearArchive,
@@ -284,6 +286,8 @@ pub enum Command {
     RequestClearArchive,
     ResetPinnedTab,
     ResetSpace,
+    RenameTab,
+    ResetTabName,
     ReplacePinnedUrl,
     CopyUrl,
     CopyUrlAsMarkdown,
@@ -589,6 +593,7 @@ impl BrowserWindow {
             let placeholder = match target {
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
+                Target::RenameTab(_) => "Rename Tab…",
                 Target::ArchiveInterval => "Archive tabs after…",
                 Target::Archive(_) => "Search Archive…",
                 Target::ConfirmClearArchive => "Type “Clear Archive” to confirm…",
@@ -715,6 +720,9 @@ impl BrowserWindow {
             }
             return suggestions;
         }
+        if matches!(bar.target, Target::RenameTab(_)) {
+            return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveTabName { name: text.trim().to_string() }] };
+        }
         if matches!(bar.target, Target::NewSpace | Target::RenameSpace(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveSpace { name: text.trim().to_string() }] };
         }
@@ -726,6 +734,8 @@ impl BrowserWindow {
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::RenameTab, "Rename Current Tab…", "rename current tab|rename tab|rename current item", active.is_some()),
+                (Command::ResetTabName, "Reset Tab Name", "reset tab name|reset name and icon|reset name", active.is_some_and(|tab| tab.custom_title.is_some())),
                 (Command::ResetSpace, "Reset Space", "reset space|reset all pinned tabs|reset all tabs in space", self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some())),
                 (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
@@ -819,7 +829,7 @@ impl BrowserWindow {
                         self.browser.navigate(id, resolved.url());
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
+                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -847,6 +857,9 @@ impl BrowserWindow {
             Suggestion::ArchiveAfter { seconds, .. } => {
                 self.browser.archive_after = seconds.map(Duration::from_secs);
             }
+            Suggestion::SaveTabName { name } => {
+                if let Target::RenameTab(id) = target { self.browser.rename_tab(id, &name); }
+            }
             Suggestion::SaveSpace { name } => match target {
                 Target::NewSpace => {
                     let hue = (self.browser.space().hue + 137.5).rem_euclid(360.0);
@@ -862,6 +875,19 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::RenameTab => {
+                if let Some(tab) = self.browser.active_tab() {
+                    let (id, name) = (tab.id, tab.title.clone());
+                    if let Some(bar) = &mut self.command_bar {
+                        bar.target = Target::RenameTab(id);
+                        bar.selected = 0;
+                        bar.input.update(cx, |input, cx| { input.set_placeholder("Rename Tab…", cx); input.set_text(name, cx); });
+                    }
+                }
+            }
+            Command::ResetTabName => {
+                if let Some(id) = self.browser.space().active_tab { self.browser.reset_tab_name(id); }
+            }
             Command::ResetSpace => {
                 let tabs = self.browser.reset_space();
                 if let Some(pages) = &self.pages {
@@ -1246,8 +1272,12 @@ impl BrowserWindow {
             .rounded_lg()
             .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
             .when(!active, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3))))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 this.browser.activate_tab(id, SystemTime::now());
+                if event.click_count() == 2 {
+                    let title = this.browser.all_tabs().find(|tab| tab.id == id).map(|tab| tab.title.clone());
+                    if let Some(title) = title { this.open_command_bar(Target::RenameTab(id), &title, window, cx); }
+                }
                 cx.notify();
             }))
             .child(favicon(&tab.title, hue))
@@ -1614,6 +1644,7 @@ impl BrowserWindow {
                         ("⇥", title, format!("Switch to Tab · {space}"))
                     }
                     Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
+                    Suggestion::SaveTabName { name } => ("↵", name, "Rename Tab".into()),
                     Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
                     Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
                     Suggestion::ArchivedTab { title, detail, .. } => ("↩", title, detail),
