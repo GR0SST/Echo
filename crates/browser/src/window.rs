@@ -1677,6 +1677,7 @@ impl BrowserWindow {
             .id(("tab", key))
             .debug_selector(|| format!("tab-{key}"))
             .group(group.clone())
+            .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
             .flex_none()
             .flex()
             .items_center()
@@ -1741,6 +1742,7 @@ impl BrowserWindow {
         let url = tab.url.clone();
         div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
             .group(group.clone()).relative().flex().items_center().justify_center()
+            .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
             .w(px(68.0)).h(px(48.0)).rounded_lg()
             .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
             .when(active, |this| this.shadow_sm())

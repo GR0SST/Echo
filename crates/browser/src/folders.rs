@@ -375,6 +375,8 @@ impl BrowserWindow {
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(|this| this.bg(hsla(0., 0., 1., 0.35)))
                         .on_click(cx.listener(move |this, _, _, cx| { if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.browser.set_folder_collapsed(id, collapsed); } cx.notify(); }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_folder_menu(id, event.position, window, cx); }))
+                        .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.65)))
+                        .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_folder(drag.id, id, cx)))
                         .child(if folder.collapsed { "›" } else { "⌄" })
                         .child(crate::icons::glyph(folder.custom_icon.as_deref().unwrap_or("📁")))
                         .child(div().flex_1().min_w_0().truncate().child(folder.name.clone()))

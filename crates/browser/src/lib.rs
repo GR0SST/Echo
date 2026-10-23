@@ -14,6 +14,7 @@ mod icons;
 mod folders;
 mod space_menu;
 mod space_drag;
+mod tab_drag;
 pub mod pages;
 pub mod text_input;
 pub mod window;
