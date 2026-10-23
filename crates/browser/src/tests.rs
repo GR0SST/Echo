@@ -1891,7 +1891,7 @@ fn context_pin_and_rename_do_not_activate_the_clicked_tab(cx: &mut TestAppContex
     let (view, cx) = open(cx);
     let original = active_url(&view, cx);
     right_click(cx, "tab-7");
-    click(&mut tab_menu(&view, cx), "tab-menu-row-3");
+    click(&mut tab_menu(&view, cx), "tab-menu-pin");
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.id.get() == 7)));
     assert_eq!(active_url(&view, cx), original);
     right_click(cx, "tab-7");
@@ -1909,11 +1909,11 @@ fn context_favorite_and_unfavorite_preserve_the_other_active_tab(cx: &mut TestAp
     let (view, cx) = open(cx);
     let original = active_url(&view, cx);
     right_click(cx, "tab-7");
-    click(&mut tab_menu(&view, cx), "tab-menu-row-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-favorite");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.favorites[0].id.get()), 7);
     right_click(cx, "favorite-7");
-    click(&mut tab_menu(&view, cx), "tab-menu-row-3");
+    click(&mut tab_menu(&view, cx), "tab-menu-favorite");
     assert_eq!(active_url(&view, cx), original);
     assert!(view.read_with(cx, |w, _| w.browser.favorites.is_empty()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().today[0].id.get()), 7);
@@ -1952,7 +1952,7 @@ fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mu
     let original = active_url(&view, cx);
     fake.take_calls();
     right_click(cx, "tab-4");
-    click(&mut tab_menu(&view, cx), "tab-menu-row-5");
+    click(&mut tab_menu(&view, cx), "tab-menu-reset");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].url.clone()), "https://github.com");
     assert!(fake.take_calls().contains(&Call::Close(2)), "reset unloads an inactive page immediately");
@@ -1962,7 +1962,7 @@ fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mu
     bar(&view, cx).simulate_keystrokes("enter");
     click(cx, "tab-8");
     right_click(cx, "tab-4");
-    click(&mut tab_menu(&view, cx), "tab-menu-row-6");
+    click(&mut tab_menu(&view, cx), "tab-menu-replace");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].pinned_url.clone()).as_deref(), Some("https://github.com/new-original"));
     right_click(cx, "tab-4");
@@ -1996,7 +1996,7 @@ fn context_muting_a_background_page_does_not_activate_it(cx: &mut TestAppContext
     fake.take_calls();
     let original = active_url(&view, cx);
     right_click(cx, "tab-7");
-    click(&mut tab_menu(&view, cx), "tab-menu-row-5");
+    click(&mut tab_menu(&view, cx), "tab-menu-mute");
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Mute(2, true)));
     assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::FocusPage(2))));
@@ -2408,4 +2408,85 @@ fn sidebar_split_menu_resets_group_name_and_separates_the_whole_group(cx: &mut T
     click(&mut tab_menu(&view, cx), "tab-menu-separate-all");
     assert!(view.read_with(cx, |w, _| w.browser.space().splits.is_empty()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 2);
+}
+
+#[gpui::test]
+fn duplicate_command_creates_an_independent_page_beside_the_source(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let source = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    let url = active_url(&view, cx);
+    fake.take_calls();
+    run_named_command(&view, cx, "duplicate current tab");
+    view.read_with(cx, |w, _| {
+        assert_ne!(w.browser.active_tab().unwrap().id, source);
+        assert_eq!(w.browser.space().today[0].id, source);
+        assert_eq!(w.browser.space().today[1].id, w.browser.active_tab().unwrap().id);
+    });
+    assert_eq!(active_url(&view, cx), url);
+    assert_eq!(bar_text(&view, cx), None);
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::Create(2, _))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..))));
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    assert!(!fake.take_calls().contains(&Call::Close(1)));
+    click(cx, "tab-8");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), source);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..))));
+}
+
+#[gpui::test]
+fn context_duplicate_targets_the_clicked_pin_and_preserves_its_original_url(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    right_click(cx, "tab-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-duplicate");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().pinned.len(), 3);
+        assert_eq!(w.browser.space().pinned[0].id.get(), 4);
+        assert_eq!(w.browser.space().pinned[1].id, w.browser.active_tab().unwrap().id);
+        assert_eq!(w.browser.active_tab().unwrap().pinned_url.as_deref(), Some("https://github.com"));
+    });
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://github.com"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn duplicate_menu_copies_the_whole_split_and_closing_it_keeps_original_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    let source = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
+    fake.take_calls();
+    dispatch_menu(cx, "Tabs", "Duplicate Current Tab");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().splits.len(), 2);
+        let copy = w.browser.active_split().unwrap();
+        assert_ne!(copy.id, source.id);
+        assert_eq!(copy.panes.len(), 3);
+        assert!(copy.panes.iter().all(|id| !source.panes.contains(id)));
+    });
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 3);
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().id, source.id);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 3);
+    });
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Close(..))).count(), 3);
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn native_duplicate_menu_dismisses_command_input_and_regular_context_menu_can_start_a_split(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-t");
+    dispatch_menu(&mut bar(&view, cx), "Tabs", "Duplicate Current Tab");
+    assert_eq!(bar_text(&view, cx), None);
+    right_click(cx, "tab-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-add-right");
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("https://beside-pin.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().anchor.get(), 4));
 }

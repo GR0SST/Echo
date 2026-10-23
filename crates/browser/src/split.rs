@@ -5,6 +5,17 @@ use gpui::{div, hsla, prelude::*, px, AnyElement, Context};
 use std::time::SystemTime;
 
 impl BrowserWindow {
+    pub(crate) fn duplicate_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
+        self.close_command_bar(cx);
+        self.close_tab_menu(cx);
+        self.close_find(cx);
+        if self.browser.duplicate_item(id, SystemTime::now()).is_none() {
+            self.show_toast("You can have up to 12 Favorites".into(), cx);
+        }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        cx.notify();
+    }
+
     pub(crate) fn can_add_split(&self, anchor: TabId) -> bool {
         self.browser.all_tabs().any(|tab| tab.id == anchor && !omnibox::is_internal_url(&tab.url))
             && self.browser.split_for(anchor).is_none_or(|split| split.panes.len() < MAX_SPLIT_PANES)

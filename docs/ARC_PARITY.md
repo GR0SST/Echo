@@ -129,11 +129,11 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Pin/Unpin Tab | ⌘D | done | — |
 | Open Little Arc or Peek in… (pick a Space) | ⌘O | missing | — |
 | New Folder… | ⇧⌘N per nib (?) | missing | The nib gives it the same shortcut as Incognito; the real binding is set in code |
-| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | partial | Rename Current Tab is implemented; duplicate and folder actions remain missing |
+| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | partial | Duplicate Current Tab and Rename Current Tab are implemented; folder actions remain missing |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
 | Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
 | Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | missing | — |
-| Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | partial | Pinned, then Today. No Favorites and no "Include Favorites in ordering" option |
+| Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | partial | Favorites, then Pinned and Today; Split Views count as one item. The "Include Favorites in ordering" option remains missing |
 | Switch to Split View 1–4 / next / previous | (?) | done | Command Bar actions |
 | Reveal Tab in Sidebar | — | missing | — |
 | Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
@@ -249,7 +249,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | done | Command Bar and Tabs menu; Unfavorite returns the tab to Today in the current Space |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
-| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab, Reset Tab Name and Mute/Unmute All are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate remains missing |
+| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab, Reset Tab Name and Mute/Unmute All are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate works for ordinary tabs, Pinned, Favorites and entire Split Views, creating independent page identities |
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
@@ -264,11 +264,11 @@ in code, so some were reconstructed from translator comments (?).
 
 | Menu / item | Status | What's missing |
 |---|---|---|
-| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Mute/Unmute, Close/Archive. Up/Down/Enter/Escape and outside dismissal; actions target the clicked tab while preserving other active tabs. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
+| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Duplicate, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Add Split View, Mute/Unmute, Close/Archive. Up/Down/Enter/Escape and outside dismissal; actions target the clicked tab. Copy/rename/pin/mute preserve other active tabs; Duplicate focuses its independent copy. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
 | **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | missing | — |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
-| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share, duplicate and custom icons remain |
+| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, duplication, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share and custom icons remain |
 | **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | partial | GPUI ellipsis and right-click menus target the clicked pane; all listed local actions implemented. Share remains |
 | **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | missing | — |
 | **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |

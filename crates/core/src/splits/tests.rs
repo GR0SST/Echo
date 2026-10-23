@@ -397,3 +397,82 @@ fn duplicate_group_ids_in_a_session_are_repaired_without_losing_either_group() {
     assert_ne!(restored.space().splits[0].id, restored.space().splits[1].id);
     check_invariants(&restored, &HashSet::from([a, b, c, d]));
 }
+
+#[test]
+fn duplicating_today_and_pinned_items_preserves_labels_original_urls_and_independent_identity() {
+    let mut browser = Browser::new();
+    let a = page(&mut browser, "a");
+    browser.rename_tab(a, "Named page");
+    browser.set_tab_muted(a, true);
+    let later = NOW + Duration::from_secs(60);
+    let copy = browser.duplicate_item(a, later).unwrap();
+    assert_eq!(ids(&browser.space().today), vec![a, copy]);
+    assert_eq!(browser.active_tab().unwrap().custom_title.as_deref(), Some("Named page"));
+    assert_eq!(browser.active_tab().unwrap().last_active, later);
+    assert!(browser.active_tab().unwrap().muted);
+    browser.toggle_pin(a);
+    browser.navigate(a, "https://a.example/current");
+    let pinned_copy = browser.duplicate_item(a, later).unwrap();
+    assert_eq!(ids(&browser.space().pinned), vec![a, pinned_copy]);
+    assert_eq!(browser.active_tab().unwrap().url, "https://a.example/current");
+    assert_eq!(browser.active_tab().unwrap().pinned_url.as_deref(), Some("https://a.example"));
+    browser.close_tab(pinned_copy, later);
+    assert_eq!(browser.space().pinned[1].url, "https://a.example");
+    assert_eq!(browser.space().pinned[0].url, "https://a.example/current");
+}
+
+#[test]
+fn duplicating_a_split_copies_all_panes_order_focus_axis_weights_and_group_name() {
+    let mut browser = Browser::new();
+    let a = page(&mut browser, "a");
+    let b = page(&mut browser, "b");
+    let c = page(&mut browser, "c");
+    browser.add_split(a, b, Placement::Right, NOW).unwrap();
+    browser.add_split(b, c, Placement::Below, NOW).unwrap();
+    browser.set_split_weights(a, &[1., 2., 3.]);
+    browser.rename_tab(a, "Research comparison");
+    browser.activate_tab(b, NOW);
+    let original = browser.active_split().unwrap().clone();
+    let copy = browser.duplicate_item(a, NOW).unwrap();
+    let duplicate = browser.active_split().unwrap().clone();
+    assert_ne!(duplicate.id, original.id);
+    assert_eq!(duplicate.axis, original.axis);
+    assert_eq!(duplicate.weights, original.weights);
+    assert_eq!(duplicate.title, original.title);
+    assert_eq!(duplicate.active, copy);
+    assert_eq!(duplicate.active, duplicate.panes[1]);
+    assert_eq!(duplicate.anchor, duplicate.panes[0]);
+    assert!(duplicate.panes.iter().all(|id| !original.panes.contains(id)));
+    for (source, copy) in original.panes.iter().zip(&duplicate.panes) {
+        let tab = |id: &TabId| browser.all_tabs().find(|tab| tab.id == *id).unwrap();
+        assert_eq!(tab(source).url, tab(copy).url);
+        assert_eq!(tab(source).title, tab(copy).title);
+    }
+    browser.close_tab(copy, NOW);
+    assert_eq!(browser.space().splits.len(), 1);
+    assert_eq!(browser.space().splits[0].id, original.id);
+    let restored = session::from_json(&session::to_json(&browser)).unwrap();
+    assert_eq!(restored.archive[0].split.as_ref().unwrap().view.id, duplicate.id);
+    assert_eq!(restored.all_tabs().count(), 3);
+}
+
+#[test]
+fn favorite_duplication_is_one_dock_item_and_capacity_failure_is_atomic() {
+    let mut browser = Browser::new();
+    let a = page(&mut browser, "a");
+    let b = page(&mut browser, "b");
+    browser.add_split(a, b, Placement::Right, NOW).unwrap();
+    browser.favorite_tab(a);
+    browser.duplicate_item(a, NOW).unwrap();
+    assert_eq!(browser.favorite_count(), 2);
+    assert_eq!(browser.favorites.len(), 4);
+    while browser.favorite_count() < crate::favorites::MAX_FAVORITES {
+        let id = page(&mut browser, "extra");
+        browser.favorite_tab(id);
+    }
+    let before = session::to_json(&browser);
+    assert!(browser.duplicate_item(a, NOW).is_none());
+    assert_eq!(session::to_json(&browser), before);
+    assert!(browser.duplicate_item(TabId(u64::MAX), NOW).is_none());
+    assert_eq!(session::to_json(&browser), before);
+}

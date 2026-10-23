@@ -178,6 +178,43 @@ impl Browser {
         if let Some(split) = self.split_mut(tab) { split.active = tab; }
     }
 
+    /// Copies one sidebar item beside its source, including every Split View
+    /// page. Loaded engines are never shared: the returned page has a fresh id.
+    pub fn duplicate_item(&mut self, tab: TabId, now: SystemTime) -> Option<TabId> {
+        let scope = self.tab_scope(tab)?;
+        if scope == Scope::Favorites && self.favorite_count() >= crate::favorites::MAX_FAVORITES { return None; }
+        let source = self.split_for(tab).cloned();
+        let ids = self.related_tabs(tab);
+        let originals: Vec<_> = ids.iter().map(|id| self.all_tabs().find(|tab| tab.id == *id).cloned()).collect::<Option<_>>()?;
+        let mut mapping = HashMap::new();
+        let mut copies = Vec::new();
+        for mut page in originals {
+            let fresh = TabId(self.next_id());
+            mapping.insert(page.id, fresh);
+            page.id = fresh;
+            page.last_active = now;
+            copies.push(page);
+        }
+        let tabs = self.scope_tabs_mut(scope);
+        let position = tabs.iter().enumerate().filter(|(_, page)| ids.contains(&page.id)).map(|(index, _)| index + 1).max()?;
+        tabs.splice(position..position, copies);
+        let active = if let Some(mut split) = source {
+            split.id = SplitId(self.next_id());
+            split.anchor = mapping[&split.anchor];
+            split.active = mapping[&split.active];
+            split.panes = split.panes.iter().map(|id| mapping[id]).collect();
+            let active = split.active;
+            self.put_split(scope, split);
+            active
+        } else { mapping[&tab] };
+        if let Scope::Space(index, section) = scope {
+            self.active_space = index;
+            if section == Section::Pinned { self.spaces[index].pinned_collapsed = false; }
+        }
+        self.activate_tab(active, now);
+        Some(active)
+    }
+
     pub fn set_split_axis(&mut self, tab: TabId, axis: Axis) -> bool {
         let Some(split) = self.split_mut(tab) else { return false; };
         split.axis = axis;

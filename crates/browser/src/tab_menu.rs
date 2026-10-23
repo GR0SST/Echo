@@ -30,13 +30,13 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-enum Command { Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+enum Command { Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
-            Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
+            Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
             Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::Mute => "mute", Self::Close => "close",
             Self::Add(Placement::Left) => "add-left", Self::Add(Placement::Right) => "add-right",
             Self::Add(Placement::Above) => "add-top", Self::Add(Placement::Below) => "add-bottom",
@@ -132,6 +132,8 @@ impl BrowserWindow {
             rows.push(("Reset Tab to Original URL", Command::Reset));
             rows.push(("Replace Pinned URL with Current", Command::Replace));
         }
+        rows.push(("Duplicate", Command::Duplicate));
+        if split.is_none() && !browser_core::omnibox::is_internal_url(&tab.url) { rows.push(("Add Split View…", Command::Add(Placement::Right))); }
         if !browser_core::omnibox::is_internal_url(&tab.url) {
             let muted = if let Some(split) = split { split.panes.iter().all(|id| self.browser.all_tabs().any(|tab| tab.id == *id && tab.muted)) } else { tab.muted };
             rows.push((if split.is_some() { if muted { "Unmute Split View" } else { "Mute Split View" } } else if muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute));
@@ -173,6 +175,7 @@ impl BrowserWindow {
             Command::Move(delta) => { self.browser.move_split_pane(id, delta); }
             Command::ResetName => { self.browser.reset_tab_name(id); }
             Command::ClosePane => self.close_split_pane(id, cx),
+            Command::Duplicate => self.duplicate_tab(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),
             Command::CopyMarkdown => self.copy_tab_url(id, true, cx),
             Command::Pin => self.browser.toggle_pin(id),

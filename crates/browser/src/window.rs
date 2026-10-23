@@ -75,6 +75,7 @@ actions!(
         ZoomIn,
         ZoomOut,
         ResetZoom,
+        DuplicateTab,
         TogglePin,
         ToggleFavorite,
         ToggleMute,
@@ -303,6 +304,7 @@ pub enum Command {
     FocusPane(usize),
     CyclePane(isize),
     MovePane(isize),
+    DuplicateTab,
     NewSpace,
     RenameSpace,
     FindPage,
@@ -832,6 +834,7 @@ impl BrowserWindow {
             let favorite = active.is_some_and(|tab| self.browser.is_favorite(tab.id));
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::DuplicateTab, "Duplicate Current Tab", "duplicate current tab|duplicate tab|duplicate current item|duplicate split view", active.is_some()),
                 (Command::RenameTab, "Rename Current Tab…", "rename current tab|rename tab|rename current item", active.is_some()),
                 (Command::ResetTabName, "Reset Tab Name", "reset tab name|reset name and icon|reset name", active.is_some_and(|tab| self.browser.item_has_custom_name(tab.id))),
                 (Command::ResetSpace, "Reset Space", "reset space|reset all pinned tabs|reset all tabs in space", self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some())),
@@ -1050,6 +1053,7 @@ impl BrowserWindow {
             Command::FocusPane(index) => { self.browser.focus_split_pane(index, SystemTime::now()); }
             Command::CyclePane(delta) => { self.browser.cycle_split_pane(delta, SystemTime::now()); }
             Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.browser.move_split_pane(id, delta); } }
+            Command::DuplicateTab => { if let Some(id) = self.browser.space().active_tab { self.duplicate_tab(id, cx); } }
             Command::RenameTab => {
                 if let Some(tab) = self.browser.active_tab() {
                     let (id, name) = (tab.id, self.browser.item_title(tab.id));
@@ -1170,6 +1174,7 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
@@ -2150,6 +2155,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(Self::on_toggle_pin))
             .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| this.run_command(Command::ToggleFavorite, cx)))
             .on_action(cx.listener(|this, _: &ToggleMute, _, cx| this.run_command(Command::ToggleMute, cx)))
