@@ -74,7 +74,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI text fields restore text, caret and selection, including paste/cut and committed IME input. Sidebar history supports pin/unpin, Today tab and whole Split View archives, Clear Today and relative archive batches. Undo restores identities, order, split metadata and original selection without rewinding unrelated page changes; a batch is one step. Editable web frames and GPUI fields own their text history, even when empty. Shortcuts and native Edit menus verified. Undo of individual pane closure, Pinned/Favorite unloading, other sidebar actions, Peek and action-specific command suggestions remains unfinished |
+| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI fields restore text, caret and selection, including paste/cut and committed IME input. Sidebar history supports pin/unpin, tab and whole-group archives, Clear Today and relative archive batches. Pane-close Undo reconstructs the split while retaining the survivor's selection and live page; Redo archives the complete reconstructed group, matching Arc even for Pinned groups. Folder placement, pin URLs and group metadata survive repeated Undo. Native creation reasserts the intended pane's focus. Editable frames and GPUI fields own text history even when empty. Pinned/Favorite unloading, other sidebar actions, Peek and action-specific menu/command labels remain unfinished |
 | Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in `TextInput`; Edit menu includes OS editing selectors for native page responders. Page editing through CEF still needs an unlocked visual check |
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
@@ -96,7 +96,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | done | Reload and reload_ignore_cache through CEF |
 | Clear Cookies and Refresh / Clear Cache and Refresh | — | missing | — |
 | Add Split View | ⌃⇧= | partial | Picker, direction and four-pane limit implemented; fresh native visual review remains |
-| Close this Split Pane | ⌃⇧- | done | Menu, Command Bar, pane header and engine shortcut |
+| Close this Split Pane | ⌃⇧- | done | Reference menu label, Command Bar, pane header and engine shortcut. Undo restores the group while preserving the surviving page's selection and loaded view; Redo archives the entire reconstructed item as Arc does. Native Today and Pinned-folder checks passed |
 | Separate Page from Split View / Expand Current Split | — | partial | Both actions are implemented. Expand Current Split is available from View and the Command Bar, preserves the group and loaded pages, and leaves other panes as 220 px strips. Expansion animation fidelity remains |
 | Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | done | Chromium zoom steps from 25% to 500%, reset to 100%; also in the Command Bar |
 | Cast | — | missing | — |

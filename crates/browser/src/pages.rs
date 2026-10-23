@@ -270,6 +270,7 @@ impl Pages {
             self.shown = None;
             self.engine.focus_ui();
         }
+        let mut created = false;
         for (intent, bounds) in wanted {
             let PageIntent { tab, url, muted, .. } = intent;
             match self.pages.get_mut(&tab) {
@@ -287,6 +288,7 @@ impl Pages {
                 }
                 None => {
                     let Some(view) = self.engine.create(&url, bounds) else { continue; };
+                    created = true;
                     if muted { self.engine.set_audio_muted(view, true); }
                     self.pages.insert(tab, Page { view, url, state: PageState::default(), muted });
                 }
@@ -294,11 +296,13 @@ impl Pages {
             self.engine.set_top_corners_rounded(self.pages[&tab].view, !self.split);
             if self.visible.insert(tab) { self.engine.set_visible(self.pages[&tab].view, true); }
         }
-        if focused != self.shown {
+        // Creating a native browser may take the responder even when the
+        // intended active pane has not changed. Reassert it after all creates.
+        if focused != self.shown || created {
             if let Some((tab, view)) = focused.and_then(|id| self.view(id).map(|view| (id, view))) {
                 self.engine.focus_page(view);
                 self.shown = Some(tab);
-            } else if self.shown.take().is_some() {
+            } else if self.shown.take().is_some() || created {
                 self.engine.focus_ui();
             }
         }

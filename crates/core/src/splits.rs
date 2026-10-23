@@ -383,6 +383,13 @@ impl Browser {
     }
 
     pub fn close_split_pane(&mut self, tab: TabId, now: SystemTime) -> bool {
+        let capture = crate::undo::PaneCapture::new(self, tab);
+        let closed = self.close_split_pane_unrecorded(tab, now);
+        if closed { if let Some(capture) = capture { capture.record(self); } }
+        closed
+    }
+
+    fn close_split_pane_unrecorded(&mut self, tab: TabId, now: SystemTime) -> bool {
         let Some((scope, mut split)) = self.take_split(tab) else { return false; };
         let selected: Vec<_> = self.spaces.iter().enumerate().filter(|(_, space)| space.active_tab == Some(tab)).map(|(index, _)| index).collect();
         let Some(mut page) = self.take_tab(tab, scope) else { self.put_split(scope, split); return false; };
@@ -394,6 +401,24 @@ impl Browser {
         for index in selected { self.spaces[index].active_tab = Some(split.active); }
         if split.panes.len() > 1 { self.put_split(scope, split); }
         else { self.replace_pinned_item(crate::folders::PinnedItem::Split(split.id), &[crate::folders::PinnedItem::Tab(split.panes[0])]); }
+        self.repair_folders();
+        true
+    }
+
+    /// Arc's Redo after undoing pane closure archives the reconstructed item,
+    /// including a Pinned or Favorite group, instead of closing just one pane.
+    pub(crate) fn archive_split_for_redo(&mut self, tab: TabId, now: SystemTime) -> bool {
+        let Some(scope) = self.tab_scope(tab) else { return false; };
+        let Some(view) = self.split_for(tab) else { return false; };
+        if !view.panes.iter().all(|id| self.tab_scope(*id) == Some(scope)) { return false; }
+        self.forget_pinned_item(tab);
+        let Some((_, split)) = self.take_split(tab) else { return false; };
+        let mut pages: Vec<_> = split.panes.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
+        let index = pages.iter().position(|page| page.id == split.anchor).unwrap();
+        let page = pages.remove(index);
+        let space = match scope { Scope::Favorites => self.space().id, Scope::Space(index, _) => self.spaces[index].id };
+        self.archive.push(ArchivedTab { tab: page, space, archived_at: now, reason: ArchiveReason::Manual,
+            split: Some(ArchivedSplit { view: split, panes: pages }) });
         self.repair_folders();
         true
     }

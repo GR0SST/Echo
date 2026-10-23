@@ -377,3 +377,59 @@ Individual split-pane closure and Pinned/Favorite page unloading do not yet
 have undo entries. Other sidebar operations, Peek and action-specific command
 suggestions also remain unfinished; the overall Undo/Redo parity row stays
 partial.
+
+### Individual pane-close Undo — 2026-10-23
+
+The installed Arc was checked with disposable two-pane example.org/example.com
+splits in Blank Windows and a separate normal New Window. View → Close this
+Split Pane removed the selected pane and collapsed the remaining page into a
+standalone item. Edit → Undo Archive Tabs reconstructed the original split.
+The address display and blue selection outline stayed on the surviving pane;
+a subsequent Close this Split Pane removed that survivor, confirming the
+selection. Accessibility still reported the restored web content as focused,
+so its focused-element line alone is not evidence of Arc's selected pane.
+The restored split was inspected in a screenshot.
+
+Redo is asymmetric: after Undo has reconstructed the split, Edit → Redo
+archives the entire group, rather than removing only the original closed pane.
+This was reproduced twice in Blank Windows (closing the temporary window)
+and in the normal window (selecting its next unrelated Today item). A second
+normal-window check first pinned the test split; Redo removed that entire
+Pinned group too, rather than leaving it unloaded in Pinned. The test group's
+absence from the sidebar was checked. No pre-existing user items were
+archived, and the extra normal window was closed afterward.
+
+Echo's pane journal restores the closed page identity, anchor, original pane
+position and weight, while keeping the survivor selected and retaining its
+live page. Surviving panes' later geometry ratios and group customizations are
+retained. Collapsed pairs regain their group metadata; Pinned folder placement,
+pin URLs and the core model's shared Favorite selections are covered. Redo
+archives the current complete group as observed in Arc, and subsequent Undo
+restores that group to its saved section and folder. Regrouping/moving pages,
+explicit archive restoration/deletion and a subsequently full Favorites dock
+invalidate stale entries without duplicating or resurrecting pages.
+
+Native Echo verification caught a responder issue not represented by the old
+fake engine: creating a restored CEF view took focus even when the intended
+active survivor had not changed. Page reconciliation now reasserts the
+intended native responder after all view creation. A GPUI regression test
+models CEF's focus-on-create callbacks and verifies that the survivor remains
+selected. The View menu label now matches Close this Split Pane.
+
+The final native checks passed on two separate fixture profiles. In Today,
+⌘W closed the right pane; text on the surviving left page was changed to
+`SurvivorEdited`, then keyboard Undo restored the right pane while preserving
+that text, the left selection and its button's native focus. Native Edit →
+Redo archived the complete group; Undo restored it again. Closing the original
+anchor through the View menu and undoing it preserved the right survivor's
+selection. Keyboard Redo again archived the complete group.
+
+In the second profile, the split started in a Pinned folder. Native View/ Edit
+commands restored the collapsed split inside that folder, archived the entire
+Pinned group on Redo, and returned the full group to the same folder on the
+next Undo. All seven final screenshots were inspected; both runs reported
+key=true and onScreen=true. No system pointer movement or clipboard operation
+was used. All 382 workspace tests passed (269 browser, 111 core, 2 engine).
+Favorite-group restoration has model coverage; these native runs cover Today
+and Pinned folder groups. Pinned/Favorite unloading, other sidebar Undo actions,
+Peek and dynamic action labels remain unfinished.

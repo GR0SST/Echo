@@ -6,6 +6,8 @@ use crate::{Browser, Section, SpaceId, Tab, TabId, folders::{FolderId, PinnedIte
 const HISTORY_LIMIT: usize = 100;
 mod archive;
 pub(crate) use archive::ArchiveCapture;
+mod pane;
+pub(crate) use pane::PaneCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scope { Favorites, Space(SpaceId, Section) }
@@ -99,7 +101,21 @@ impl PinState {
                 Scope::Space(id, _) => browser.spaces.iter_mut().find(|space| space.id == id).unwrap().splits.push(split),
             }
         }
-        browser.forget_pinned_item(ids[0]);
+        self.restore_folder(browser);
+        for &(id, desired) in &self.selections {
+            let previous = source.selections.iter().find(|(space, _)| *space == id).map(|(_, active)| *active);
+            if previous == Some(desired) { continue; }
+            if let Some(space) = browser.spaces.iter_mut().find(|space| space.id == id) {
+                // Keep a selection the user changed after the operation.
+                if Some(space.active_tab) == previous { space.active_tab = desired; }
+            }
+        }
+        browser.repair_folders();
+        true
+    }
+
+    fn restore_folder(&self, browser: &mut Browser) {
+        browser.forget_pinned_item(self.tabs[0].id);
         if let Some(slot) = &self.folder {
             if let Some(space) = browser.spaces.iter_mut().find(|space| space.id == slot.space) {
                 let pool = match slot.folder {
@@ -112,16 +128,6 @@ impl PinState {
                 }
             }
         }
-        for &(id, desired) in &self.selections {
-            let previous = source.selections.iter().find(|(space, _)| *space == id).map(|(_, active)| *active);
-            if previous == Some(desired) { continue; }
-            if let Some(space) = browser.spaces.iter_mut().find(|space| space.id == id) {
-                // Keep a selection the user changed after the operation.
-                if Some(space.active_tab) == previous { space.active_tab = desired; }
-            }
-        }
-        browser.repair_folders();
-        true
     }
 }
 
@@ -150,13 +156,14 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit) }
+enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit) }
 
 impl SidebarEdit {
-    fn apply(&self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
+    fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
         match self {
             Self::Pin(edit) => if redo { edit.after.apply(&edit.before, browser) } else { edit.before.apply(&edit.after, browser) },
             Self::Archive(edit) => edit.apply(redo, browser, now),
+            Self::Pane(edit) => edit.apply(redo, browser, now),
         }
     }
 }
@@ -184,7 +191,7 @@ impl Browser {
     /// Reverses the last supported sidebar action, independently of text edits.
     /// Invalidated entries are discarded without recreating removed pages.
     pub fn undo_sidebar(&mut self, now: std::time::SystemTime) -> bool {
-        while let Some(edit) = self.sidebar_history.undo.pop() {
+        while let Some(mut edit) = self.sidebar_history.undo.pop() {
             if edit.apply(false, self, now) {
                 self.sidebar_history.redo.push(edit);
                 return true;
@@ -194,7 +201,7 @@ impl Browser {
     }
 
     pub fn redo_sidebar(&mut self, now: std::time::SystemTime) -> bool {
-        while let Some(edit) = self.sidebar_history.redo.pop() {
+        while let Some(mut edit) = self.sidebar_history.redo.pop() {
             if edit.apply(true, self, now) {
                 self.sidebar_history.undo.push(edit);
                 return true;

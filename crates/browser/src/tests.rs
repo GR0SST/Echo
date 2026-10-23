@@ -63,6 +63,7 @@ struct FakeState {
     next_view: u64,
     events: Vec<Event>,
     muted: std::collections::HashSet<u64>,
+    focus_on_create: bool,
 }
 
 #[derive(Clone, Default)]
@@ -94,6 +95,7 @@ impl WebEngine for FakeEngine {
         state.bounds.insert(id, bounds);
         state.rounded_top.insert(id, true);
         state.calls.push(Call::Create(id, url.to_string()));
+        if state.focus_on_create { state.events.push(Event::Focused { view: ViewId::from_raw(id) }); }
         Some(ViewId::from_raw(id))
     }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
@@ -110,6 +112,8 @@ impl WebEngine for FakeEngine {
     }
     fn focus_page(&mut self, view: ViewId) {
         self.call(Call::FocusPage(raw(view)));
+        let mut state = self.0.borrow_mut();
+        if state.focus_on_create { state.events.push(Event::Focused { view }); }
     }
     fn focus_ui(&mut self) {
         self.call(Call::FocusUi);
@@ -5562,4 +5566,73 @@ fn archive_undo_from_another_space_restores_the_source_space_and_settles_its_sid
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 0);
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
     assert!(cx.debug_bounds("tab-8").is_some());
+}
+
+#[gpui::test]
+fn pane_close_undo_reconstructs_the_pair_and_keeps_the_surviving_native_page_focused(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let group = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
+    cx.simulate_keystrokes("cmd-w");
+    let survivor = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().id), group);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), survivor);
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout().len()), 2);
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Create(..))).count(), 1);
+    assert!(!calls.iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..) | Call::FocusPage(3))));
+    dispatch_menu(cx, "Edit", "Redo");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 0);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Close(..))).count(), 2);
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().id), group);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), survivor);
+}
+
+#[gpui::test]
+fn header_close_undo_restores_the_anchor_of_a_three_pane_group_without_recreating_survivors(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor);
+    click(cx, "pane-close-2");
+    let survivor = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor), anchor);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), survivor);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 3);
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Create(..))).count(), 1);
+    assert!(!calls.iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn web_editor_undo_does_not_restore_a_closed_pane_until_edit_focus_leaves_the_field(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    cx.simulate_keystrokes("cmd-w");
+    fake.send(cx, Event::EditFocusChanged { view: page(1), editable: true });
+    fake.take_calls();
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(fake.take_calls(), vec![Call::Undo(1)]);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 1);
+    fake.send(cx, Event::EditFocusChanged { view: page(1), editable: false });
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 2);
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 1);
+}
+
+#[gpui::test]
+fn creating_the_restored_native_pane_cannot_steal_the_surviving_panes_selection(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    cx.simulate_keystrokes("cmd-w");
+    let survivor = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.0.borrow_mut().focus_on_create = true;
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-z");
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), survivor);
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().shown()), Some(survivor));
+    assert!(fake.take_calls().contains(&Call::FocusPage(1)));
 }
