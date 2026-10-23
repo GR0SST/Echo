@@ -675,3 +675,40 @@ as an alias until native checks establish the first action's behavior, including
 hidden sidebar, page input, Favorites, Split View and empty-window contexts.
 This was a bundle-only audit; no native behavior was observed for the hidden
 action.
+
+## Profile history and Blank Window (2026-10-23)
+
+Arc's [official Profiles documentation](https://resources.arc.net/hc/en-us/articles/19227964556183-Profiles-Separate-Work-Personal-Browsing)
+scopes browsing history and site storage to a Profile. Spaces assigned to the
+same Profile share history; different Profiles have separate histories. Consult
+documented contracts first, reserving native checks for undocumented behavior,
+visual presentation and input/focus details.
+
+Native observations below use installed Arc 1.170.0 (89123), disposable localhost
+fixtures and individually tracked test windows:
+
+- File → Blank Window opens an empty Today list with the Command Bar focused.
+  Its sidebar has the profile header and New Tab, with no Favorites, Pinned,
+  Space header or Space switcher. Pin Tab and New Folder are disabled.
+- Two Blank windows have independent Today lists. Their tabs do not appear in
+  the regular window's tab inventory.
+- Regular and Blank fixture documents share the selected normal Profile's
+  cookie/localStorage marker. Creating Blank from Incognito also uses the
+  normal Profile: the private source had no marker, while the Blank saw the
+  normal marker. This does not establish a multi-profile selection rule.
+- New Window invoked from Blank creates a regular window with the retained
+  regular Space and normal sidebar, rather than another Blank model.
+- Archiving a nonfinal Blank Today tab keeps that window open. Restore Last
+  Closed Tab restores locally into that Blank with a fresh document UUID.
+  Archiving its final Today tab closes the Blank window. Another Blank's
+  restore stack and the regular window's restore command stayed empty.
+  Global View Archive contents were not inspected.
+- Regular History showed visits from both Blank windows and the Blank created
+  from Incognito, but not the private source visit, consistent with the
+  documented Profile scope.
+
+The owned storage marker was cleared and the test windows closed. A previously
+created temporary reference Space remains tracked for cleanup. Profile chooser
+behavior, global archive presentation, relaunch persistence, and the exact
+creation shortcut's native input path remain unverified. The bundle establishes
+Control+Command+N; a tool key attempt alone did not establish shortcut behavior.
