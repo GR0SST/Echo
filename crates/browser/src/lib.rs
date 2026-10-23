@@ -37,6 +37,7 @@ mod space_creation;
 mod space_creation_view;
 mod sidebar_navigation;
 mod library;
+mod downloads_view;
 mod user_profile_dialog;
 mod user_profiles;
 pub mod pages;
