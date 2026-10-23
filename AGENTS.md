@@ -116,7 +116,7 @@ See `README.md`. In short:
 - The Command Bar (⌘T) is the main way to open a page, as in Arc:
   ⌘T doesn't create an empty tab, it opens a popup input.
 - Our code (everything except `src/` and `depot_tools/`) lives in
-  `https://github.com/GR0SST/echo`, branch `main`. Commit and push each
+  `https://github.com/GR0SST/Echo`, branch `main`. Commit and push each
   finished change (`cargo test` green, checked in the app) straight to
   `main` as a separate small commit, so it can be rolled back if needed.
   Don't let uncommitted work pile up.
