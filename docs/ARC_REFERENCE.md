@@ -71,3 +71,12 @@ per-Space persisted collapse state, and tab/folder drops at the Pinned root.
 The transition clips the list under the header and moves subsequent sidebar
 content with its height. macOS Reduce Motion bypasses the slide. Existing
 right-click Space actions and the optional hidden-header preference remain.
+
+The supplied close-ups also define the header's control states: the Space
+icon sits to the left of the title at rest; hovering replaces it with a
+downward chevron and reveals an ellipsis on the right. A collapsed header
+keeps a rightward chevron visible. The ellipsis opens Space actions without
+toggling Pinned. The 36 px row has a 12 px corner radius, 12 px horizontal
+insets, an 18 px leading icon slot and an 8 px title gap. Chevron and
+ellipsis use fixed vector geometry rather than font glyphs. The hover
+background and controls remain visible while the Space menu is open.

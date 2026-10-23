@@ -17,6 +17,10 @@ Anything beyond that (our own features, departures from Arc) comes after.
   dropdowns, sidebar items, spacing, and interaction states. Inspect the
   installed Arc app/reference before implementing a UI flow; do not invent
   replacement pickers or controls. Functional similarity alone is not parity.
+- Browser chrome controls (chevrons, ellipses, etc.) use fixed vector geometry,
+  not Unicode look-alikes whose shape and baseline depend on the font. Compare
+  idle, hovered, collapsed and menu-open states with the supplied Arc reference
+  before claiming visual parity. User-chosen emoji icons are content, not controls.
 - Split View parity must include a new empty pane with the Command Bar open,
   closing only the focused pane with Cmd+W, Arc's grouped sidebar presentation,
   and retaining original Favorites/Pinned items when Arc duplicates them into

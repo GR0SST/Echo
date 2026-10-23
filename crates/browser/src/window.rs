@@ -2014,6 +2014,7 @@ impl BrowserWindow {
             .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
         let pinned_height = pinned.len() as f32 * 34.;
         let header_group = SharedString::from(format!("space-header-{index}"));
+        let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
 
         div()
             .flex()
@@ -2026,7 +2027,8 @@ impl BrowserWindow {
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
                     .group(header_group.clone())
-                    .flex().items_center().gap_2().h(px(28.)).px_2().rounded_md()
+                    .flex().items_center().gap_2().h(px(36.)).px_3().rounded(px(12.))
+                    .when(header_menu_open, |style| style.bg(hsla(0., 0., 1., 0.15)))
                     .hover(|style| style.bg(hsla(0., 0., 1., 0.15)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_pinned_section(index, cx)))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
@@ -2037,13 +2039,31 @@ impl BrowserWindow {
                         cx.stop_propagation();
                         this.open_space_menu(space_id, event.position, window, cx);
                     }))
-                    .text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(hsla(0., 0., 0., 0.5))
-                    .children(space.custom_icon.as_deref().map(crate::icons::glyph))
-                    .child(div().flex_1().min_w_0().truncate().child(space.name.clone()))
-                    .child(div().invisible().group_hover(header_group, |style| style.visible())
-                        .when(space.pinned_collapsed, |this| this.visible())
-                        .child(if space.pinned_collapsed { "›" } else { "⌄" })),
+                    .child(div().relative().size(px(18.)).flex_none()
+                        .child(div().debug_selector(move || format!("space-header-icon-{index}"))
+                            .size_full().flex().items_center().justify_center()
+                            .when(space.pinned_collapsed || header_menu_open, |this| this.invisible())
+                            .group_hover(header_group.clone(), |style| style.invisible())
+                            .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon)))
+                            .when(space.custom_icon.is_none(), |this| this.child(div().size(px(7.)).rounded_full().bg(hsla(hue, 0.55, 0.5, 0.8)))))
+                        .child(div().debug_selector(move || format!("space-header-chevron-{index}"))
+                            .absolute().top_0().left_0().size_full().invisible()
+                            .when(space.pinned_collapsed || header_menu_open, |this| this.visible())
+                            .group_hover(header_group.clone(), |style| style.visible())
+                            .child(crate::icons::disclosure(space.pinned_collapsed))))
+                    .child(div().debug_selector(move || format!("space-header-name-{index}"))
+                        .flex_1().min_w_0().truncate().child(space.name.clone()))
+                    .child(div().id(("space-header-more", index)).debug_selector(move || format!("space-header-more-{index}"))
+                        .flex_none().size(px(18.)).invisible()
+                        .when(header_menu_open, |this| this.visible())
+                        .group_hover(header_group, |style| style.visible())
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_space_menu(space_id, event.position(), window, cx);
+                        }))
+                        .child(crate::icons::more())),
             ))
             .when(!pinned.is_empty(), |this| this.child(
                 div().id(("pinned-reveal", index)).when(current, |this| this.debug_selector(|| "pinned-reveal".into()))

@@ -4567,3 +4567,44 @@ fn dropping_on_a_collapsed_space_name_reveals_the_moved_pin(cx: &mut TestAppCont
     assert!(pin.origin.y >= header.bottom());
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn space_header_matches_reference_control_positions_and_more_does_not_toggle_pins(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    view.update(cx, |w, cx| {
+        w.browser.set_space_icon(w.browser.space().id, Some("🍕"));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let header = cx.debug_bounds("space-header-0").unwrap();
+    let icon = cx.debug_bounds("space-header-icon-0").unwrap();
+    let name = cx.debug_bounds("space-header-name-0").unwrap();
+    assert_eq!(header.size.height, gpui::px(36.));
+    assert!(icon.right() < name.origin.x);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    cx.simulate_mouse_move(header.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    let chevron = cx.debug_bounds("space-header-chevron-0").unwrap();
+    let more = cx.debug_bounds("space-header-more-0").unwrap();
+    assert_eq!(chevron.origin, icon.origin);
+    assert_eq!(chevron.size, icon.size);
+    assert!(chevron.right() < name.origin.x);
+    assert!(more.origin.x >= name.right());
+    assert_eq!(cx.debug_bounds("space-header-name-0").unwrap(), name);
+    click(cx, "space-header-more-0");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.tab_menu.as_ref().unwrap().target, crate::tab_menu::MenuTarget::Space(w.browser.space().id));
+        assert!(!w.browser.space().pinned_collapsed);
+    });
+    click(&mut tab_menu(&view, cx), "tab-menu-space-rename");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Personal"));
+    bar(&view, cx).simulate_keystrokes("escape");
+    click(cx, "space-header-0");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
+    assert_eq!(cx.debug_bounds("space-header-name-0").unwrap(), name);
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

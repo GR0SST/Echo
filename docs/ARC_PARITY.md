@@ -195,7 +195,7 @@ Folder duplication follows the right-click action documented in the
 | Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
 | Camera/microphone indicator on a tab | — | missing | — |
 | Split View item in the sidebar (tab group) | — | done | One item for 2–4 pages; shared title, Favorites, pinning, archive and last focused pane |
-| Space header (name), Show/Hide Space Header | — | done | Visibility persists per Space; Command Bar and Spaces menu. The name and optional Space icon form the collapse/expand control for Pinned tabs and folders |
+| Space header (name), Show/Hide Space Header | — | done | Visibility persists per Space; Command Bar and Spaces menu. The name and Space icon form the collapse/expand control for Pinned tabs and folders; hover replaces the icon with a vector chevron and reveals Space actions at the right. Collapsed state keeps the rightward chevron visible; the actions button does not toggle pins |
 | Spaces dock at the bottom (Space icons) | click | partial | User-selected symbols/emoji persist per Space and render in the dock. Default icons remain colored dots; graphical icon catalog remains missing |
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + creates a Space. The multi-action menu remains missing |
 | "Springy" click animation on sidebar items | — | missing | — |
