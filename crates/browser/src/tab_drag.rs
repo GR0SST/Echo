@@ -1,8 +1,9 @@
 //! Sidebar drags carry a logical item, including complete Split Views.
 use crate::window::{BrowserWindow, Target};
-use browser_core::{folders::FolderId, Tab, TabId};
+use browser_core::{folders::FolderId, Section, SpaceId, Tab, TabId};
 use gpui::{div, hsla, prelude::*, px, Context, Window};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 #[derive(Clone)]
 pub(crate) struct TabDrag {
@@ -14,6 +15,55 @@ pub(crate) struct TabDrag {
 }
 
 impl BrowserWindow {
+    pub(crate) fn drop_tab_on_section(
+        &mut self,
+        tab: TabId,
+        space: SpaceId,
+        section: Section,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.browser.space().active_tab;
+        let pages = self.browser.related_tabs(tab);
+        let changed = match section {
+            Section::Pinned => self.browser.move_item_to_pinned_root(tab, space),
+            Section::Today => self.browser.move_tab(tab, space, section),
+        };
+        if !changed {
+            return;
+        }
+        if let Some(index) = self
+            .browser
+            .spaces
+            .iter()
+            .position(|entry| entry.id == space)
+        {
+            self.switch_space(index, cx);
+        }
+        if let Some(active) = active.filter(|tab| pages.contains(tab)) {
+            self.browser.activate_tab(active, SystemTime::now());
+        } else {
+            self.browser.activate_sidebar_item(tab, SystemTime::now());
+        }
+        match section {
+            Section::Pinned => self.scroll_to_pinned_item(self.browser.pinned_item(tab), cx),
+            Section::Today => self.scroll_to_today_start(cx),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn drop_tab_in_favorites(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        let active = self.browser.space().active_tab;
+        let pages = self.browser.related_tabs(tab);
+        if self.browser.favorite_tab(tab) {
+            if let Some(active) = active.filter(|tab| pages.contains(tab)) {
+                self.browser.activate_tab(active, SystemTime::now());
+            } else {
+                self.browser.activate_sidebar_item(tab, SystemTime::now());
+            }
+            cx.notify();
+        }
+    }
+
     pub(crate) fn tab_drag(&self, tab: &Tab) -> TabDrag {
         TabDrag {
             id: self.browser.item_anchor(tab.id),

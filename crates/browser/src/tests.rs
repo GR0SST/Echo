@@ -3650,3 +3650,153 @@ fn dragging_an_empty_inactive_folder_preserves_the_active_item_and_the_destinati
     assert_eq!(active_url(&view, cx), active);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn dragging_between_pinned_and_today_keeps_page_identity_and_does_not_trigger_header_clicks(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "tab-8", "pinned-section");
+    view.read_with(cx, |w, _| {
+        assert!(!w.browser.space().pinned_collapsed);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
+        assert_eq!(w.browser.space().pinned.last().unwrap().pinned_url.as_deref(), original.as_deref());
+    });
+    drag_between(cx, "tab-8", "today-header");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().today[0].id.get(), 8);
+        assert!(w.browser.space().today[0].pinned_url.is_none());
+        assert_eq!(w.browser.all_tabs().count(), 5);
+        assert!(w.command_bar.is_none());
+    });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn pinned_root_drop_targets_extract_split_items_and_nested_folders_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let split = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
+    fake.take_calls();
+    drag_between(cx, "tab-4", "pinned-section");
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.folder_ancestors(w.browser.space().active_tab.unwrap()).is_empty());
+        assert_eq!(w.browser.active_split().unwrap().id, split);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert!(w.browser.space().folders[1].items.is_empty());
+    });
+    drag_between(cx, "folder-3", "pinned-section");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.folder_path(w.browser.space().folders[1].id), "Research");
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_on_a_space_header_creates_the_first_pin_without_creating_a_new_page(cx: &mut TestAppContext) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new();
+    browser.new_tab("https://single.example", std::time::SystemTime::now());
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "tab-2", "space-header-0");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().pinned[0].id.get(), 2);
+        assert_eq!(w.browser.space().pinned[0].pinned_url.as_deref(), Some("https://single.example"));
+        assert!(w.browser.space().today.is_empty());
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 2);
+        assert!(w.command_bar.is_none());
+    });
+    assert!(cx.debug_bounds("pinned-section").is_some());
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dragging_into_the_favorites_dock_and_back_to_today_reuses_the_live_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        let pin = w.browser.space().pinned[0].id;
+        w.browser.favorite_tab(pin);
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "tab-8", "favorites");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 8]);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
+    });
+    drag_between(cx, "favorite-8", "new-tab");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4]);
+        assert_eq!(w.browser.space().today[0].id.get(), 8);
+        assert!(w.browser.space().today[0].pinned_url.is_none());
+        assert!(w.command_bar.is_none());
+    });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn a_full_favorites_dock_rejects_a_drop_without_moving_or_loading_the_tab(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        for index in 0..browser_core::favorites::MAX_FAVORITES {
+            let id = w.browser.new_tab(format!("https://favorite{index}.example"), std::time::SystemTime::now());
+            assert!(w.browser.favorite_tab(id));
+        }
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "tab-8", "favorites");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorite_count(), browser_core::favorites::MAX_FAVORITES);
+        assert!(w.browser.space().today.iter().any(|tab| tab.id.get() == 8));
+        assert!(!w.browser.is_favorite(w.browser.space().active_tab.unwrap()));
+    });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_a_split_into_a_scrolled_today_list_reveals_its_new_first_row_and_keeps_both_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        for index in 0..40 { w.browser.new_tab(format!("https://long{index}.example"), std::time::SystemTime::now()); }
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    scroll(cx, "today-list", gpui::TouchPhase::Moved, 0., -5000.);
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "tab-4", "new-tab");
+    let row = cx.debug_bounds("tab-4").unwrap();
+    let list = cx.debug_bounds("today-list").unwrap();
+    assert!(row.top() >= list.top() && row.bottom() <= list.bottom());
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().today[0].id.get(), 4);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert!(w.browser.space().today.iter().filter(|tab| tab.id.get() == 4 || tab.id.get() == 5).all(|tab| tab.pinned_url.is_none()));
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        assert!(w.command_bar.is_none());
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
