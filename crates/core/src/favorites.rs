@@ -11,7 +11,8 @@ impl Browser {
     /// Moves an existing tab into the shared dock, preserving its loaded page.
     /// An existing Pinned tab keeps its original URL; Today captures its URL.
     pub fn favorite_tab(&mut self, id: TabId) -> bool {
-        if self.is_favorite(id) || self.favorites.len() >= MAX_FAVORITES { return false; }
+        if self.split_for(id).is_some() { return self.favorite_split(id); }
+        if self.is_favorite(id) || self.favorite_count() >= MAX_FAVORITES { return false; }
         let Some((space, section, index)) = self.spaces.iter().enumerate().find_map(|(i, space)| {
             space.find(id).map(|(section, index)| (i, section, index))
         }) else { return false; };
@@ -29,6 +30,7 @@ impl Browser {
 
     /// Returns a Favorite to Today in the current Space.
     pub fn unfavorite_tab(&mut self, id: TabId) -> bool {
+        if self.split_for(id).is_some() { return self.unfavorite_split(id); }
         let Some(mut tab) = self.take_favorite(id) else { return false; };
         tab.pinned_url = None;
         tab.pinned_title = None;

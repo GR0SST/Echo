@@ -11,6 +11,7 @@ pub mod history;
 pub mod favorites;
 pub mod favicons;
 pub mod audio;
+pub mod splits;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
@@ -78,6 +79,8 @@ pub struct Space {
     pub pinned_collapsed: bool,
     pub today: Vec<Tab>,
     pub active_tab: Option<TabId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<splits::SplitView>,
 }
 
 impl Space {
@@ -119,6 +122,8 @@ pub struct ArchivedTab {
     pub archived_at: SystemTime,
     #[serde(default)]
     pub reason: ArchiveReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<splits::ArchivedSplit>,
 }
 
 /// What closing a tab did to it.
@@ -143,6 +148,8 @@ pub struct Browser {
     pub favorites: Vec<Tab>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favicon_cache: Vec<favicons::SiteIcon>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favorite_splits: Vec<splits::SplitView>,
     /// `None` disables auto-archiving.
     pub archive_after: Option<Duration>,
     next_id: u64,
@@ -163,6 +170,7 @@ impl Browser {
             history: Vec::new(),
             favorites: Vec::new(),
             favicon_cache: Vec::new(),
+            favorite_splits: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
             next_id: 1,
         };
@@ -186,6 +194,8 @@ impl Browser {
             .max()
             .unwrap_or(0);
         self.next_id = self.next_id.max(max_id + 1);
+        self.next_id = self.next_id.max(self.split_max_id() + 1);
+        self.repair_splits();
     }
 
     fn next_id(&mut self) -> u64 {
@@ -218,6 +228,7 @@ impl Browser {
             pinned_collapsed: false,
             today: Vec::new(),
             active_tab: None,
+            splits: Vec::new(),
         });
         id
     }
@@ -264,6 +275,7 @@ impl Browser {
         if let Some(tab) = self.favorites.iter_mut().find(|tab| tab.id == id) {
             tab.last_active = now;
             self.space_mut().active_tab = Some(id);
+            self.note_split_focus(id);
             return;
         }
         let space = self.space_mut();
@@ -272,25 +284,26 @@ impl Browser {
         };
         space.section_mut(section)[i].last_active = now;
         space.active_tab = Some(id);
+        self.note_split_focus(id);
     }
 
     /// Focuses the tab `delta` steps away in sidebar order (Favorites,
     /// Pinned, then Today), wrapping around. Like Ctrl+Tab / Ctrl+Shift+Tab.
     pub fn cycle_tab(&mut self, delta: isize, now: SystemTime) {
         let space = self.space();
-        let ids: Vec<TabId> = self.favorites.iter().chain(space.tabs()).map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.favorites.iter().chain(space.tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
         if ids.is_empty() {
             return;
         }
         let current = space
             .active_tab
-            .and_then(|id| ids.iter().position(|t| *t == id));
+            .and_then(|id| ids.iter().position(|t| *t == self.item_anchor(id)));
         let next = match current {
             Some(i) => (i as isize + delta).rem_euclid(ids.len() as isize) as usize,
             None if delta < 0 => ids.len() - 1,
             None => 0,
         };
-        self.activate_tab(ids[next], now);
+        self.activate_sidebar_item(ids[next], now);
     }
 
     /// Removes a tab from the active space. Focus moves to the neighbor
@@ -308,6 +321,7 @@ impl Browser {
     /// Closes a tab like Arc's ⌘W: Today tabs go to the archive, pinned
     /// tabs stay pinned and return to their pinned page.
     pub fn close_tab(&mut self, id: TabId, now: SystemTime) -> Option<Closed> {
+        if self.split_for(id).is_some() { return self.close_split_item(id, now); }
         if self.is_favorite(id) {
             self.close_favorite(id);
             return Some(Closed::Unloaded);
@@ -331,7 +345,7 @@ impl Browser {
             (Section::Today, _) => {
                 let space_id = space.id;
                 let tab = self.remove_tab(id)?;
-                self.archive.push(ArchivedTab { tab, space: space_id, archived_at: now, reason: ArchiveReason::Manual });
+                self.archive.push(ArchivedTab { tab, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
                 Some(Closed::Archived)
             }
         }
@@ -340,6 +354,7 @@ impl Browser {
     /// Archives every Today tab of the active space (Arc's "Clear", ⇧⌘K).
     /// Returns how many were archived.
     pub fn clear_today(&mut self, now: SystemTime) -> usize {
+        if !self.space().splits.is_empty() { return self.clear_split_today(now); }
         let space = self.space_mut();
         let space_id = space.id;
         let cleared: Vec<Tab> = space.today.drain(..).collect();
@@ -352,6 +367,7 @@ impl Browser {
             space: space_id,
             archived_at: now,
             reason: ArchiveReason::Manual,
+            split: None,
         }));
         count
     }
@@ -366,6 +382,7 @@ impl Browser {
     pub fn restore_archived(&mut self, id: TabId, now: SystemTime) -> Option<TabId> {
         let index = self.archive.iter().position(|archived| archived.tab.id == id)?;
         let archived = self.archive.remove(index);
+        if archived.split.is_some() { return Some(self.restore_split_archived(archived, now)); }
         let index = self
             .spaces
             .iter()
@@ -391,19 +408,20 @@ impl Browser {
     /// Focuses the `n`th sidebar item (0-based, Favorites, Pinned, Today), or the
     /// last one for `None`. Like Arc's ⌘1…⌘8 and ⌘9.
     pub fn activate_item(&mut self, n: Option<usize>, now: SystemTime) {
-        let ids: Vec<TabId> = self.favorites.iter().chain(self.space().tabs()).map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.favorites.iter().chain(self.space().tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
         let id = match n {
             Some(n) => ids.get(n),
             None => ids.last(),
         };
         if let Some(&id) = id {
-            self.activate_tab(id, now);
+            self.activate_sidebar_item(id, now);
         }
     }
 
     /// Moves a tab between Pinned and Today. Newly pinned tabs go to the
     /// bottom of Pinned; unpinned tabs go to the top of Today.
     pub fn toggle_pin(&mut self, id: TabId) {
+        if self.split_for(id).is_some() { self.toggle_split_pin(id); return; }
         if self.is_favorite(id) {
             self.unfavorite_tab(id);
             return;
@@ -429,6 +447,7 @@ impl Browser {
     /// Moves an existing tab without cloning it. Source focus moves to a neighbor;
     /// the caller chooses whether to focus the destination Space and tab.
     pub fn move_tab(&mut self, id: TabId, destination: SpaceId, section: Section) -> bool {
+        if self.split_for(id).is_some() { return self.move_split(id, destination, section); }
         let Some(target) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
         if let Some(mut tab) = self.take_favorite(id) {
             match section {
@@ -469,7 +488,10 @@ impl Browser {
 
     /// Returns a pinned tab to the URL it was pinned at, keeping its identity.
     pub fn reset_pinned_tab(&mut self, id: TabId) -> bool {
-        self.tab_mut(id).is_some_and(Tab::reset_to_pinned_url)
+        let ids = self.related_tabs(id);
+        let mut changed = false;
+        for id in ids { changed |= self.tab_mut(id).is_some_and(Tab::reset_to_pinned_url); }
+        changed
     }
 
     /// Resets every pinned page in the current Space, leaving Today untouched.
@@ -482,10 +504,16 @@ impl Browser {
 
     /// Changes the original pinned URL without navigating the current page.
     pub fn replace_pinned_url(&mut self, id: TabId) -> bool {
-        let Some(tab) = self.tab_mut(id).filter(|tab| tab.pinned_url.is_some()) else { return false; };
-        tab.pinned_url = Some(tab.url.clone());
-        tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
-        true
+        let ids = self.related_tabs(id);
+        let mut changed = false;
+        for id in ids {
+            if let Some(tab) = self.tab_mut(id).filter(|tab| tab.pinned_url.is_some()) {
+                tab.pinned_url = Some(tab.url.clone());
+                tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Loads `url` in an existing tab of any space.
@@ -531,6 +559,7 @@ impl Browser {
     pub fn rename_tab(&mut self, id: TabId, name: &str) -> bool {
         let name = name.trim();
         if name.is_empty() { return false; }
+        if self.split_for(id).is_some() { return self.rename_split(id, Some(name.to_string())); }
         let Some(tab) = self.tab_mut(id) else { return false; };
         // Preserve the page label from sessions saved before page_title existed.
         if tab.custom_title.is_none() && tab.page_title.is_none() { tab.page_title = Some(tab.title.clone()); }
@@ -540,6 +569,7 @@ impl Browser {
     }
 
     pub fn reset_tab_name(&mut self, id: TabId) -> bool {
+        if self.split_for(id).is_some() { return self.rename_split(id, None); }
         let Some(tab) = self.tab_mut(id) else { return false; };
         if tab.custom_title.take().is_none() { return false; }
         tab.title = tab.page_title.clone().unwrap_or_else(|| tab.url.clone());
@@ -550,6 +580,7 @@ impl Browser {
     /// Favorites, Pinned tabs and each Space's focused tab are never archived.
     /// Returns the number of archived tabs.
     pub fn archive_idle(&mut self, now: SystemTime) -> usize {
+        if self.spaces.iter().any(|space| !space.splits.is_empty()) { return self.archive_split_idle(now); }
         let Some(limit) = self.archive_after else {
             return 0;
         };
@@ -567,6 +598,7 @@ impl Browser {
                 space: space.id,
                 archived_at: now,
                 reason: ArchiveReason::Automatic,
+                split: None,
             }));
         }
         archived
