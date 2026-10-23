@@ -597,3 +597,20 @@ A retained that UUID and accepted `-host-closed` at counter 7. All three images
 were inspected. No extra fixture tab or reload was created. The diagnostic
 window selector now sorts native root window numbers rather than depending
 on App::windows hash-map iteration order.
+
+### Echo DevTools transport and asset probe — 2026-10-23
+
+A native bundle probe loaded CEF 154's original inspector.html as an ordinary
+Alloy child in the same GPUI window. The original Elements/Console toolbar and
+Styles panel rendered; screenshots were inspected. No ShowDevTools window or
+remote-debugging port was used. The frontend has no host adapter yet, so these
+panels remain disconnected and DevTools parity stays missing.
+
+A live localhost fixture retained its input and document across closing and
+reopening that frontend. Two independent Runtime.evaluate replies returned the
+same diagnostic UUID `75793a24-3325-4b4d-8f81-1aa20b81d5bb`. A concurrent page
+snapshot also completed and its image was inspected. This establishes bundled
+asset availability and local transport correlation, not frontend readiness or
+private storage isolation. The workspace suite passed 466 tests (327 browser,
+123 core, 16 engine), including sessionless child-target errors and shared CDP
+request IDs. Renderer host injection and authenticated readiness come next.

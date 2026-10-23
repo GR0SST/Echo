@@ -10,7 +10,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use cef::*;
+mod devtools;
 mod editing;
+pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
 mod snapshot;
 pub use editing::subprocess_app;
@@ -19,7 +21,8 @@ pub use snapshot::PageSnapshot;
 #[cfg(target_os = "macos")]
 mod mac;
 
-/// Identifies one web view (one tab's page).
+/// Identifies one embedded content view. Inspector view IDs remain internal;
+/// callers use the distinct [`InspectorId`] for frontend operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId(u64);
 
@@ -83,6 +86,7 @@ enum RawEvent {
     Url(String),
     Status(String),
     Loading(bool, bool, bool),
+    LoadError(String, i32, String),
     Popup(String),
     Shortcut(Shortcut),
 }
@@ -90,7 +94,11 @@ enum RawEvent {
 type EventQueue = Arc<Mutex<Vec<(i32, RawEvent)>>>;
 type Shortcuts = Arc<Vec<Shortcut>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewRole { Page, Inspector(InspectorId) }
+
 struct View {
+    role: ViewRole,
     browser: Browser,
     parent: *mut c_void,
     /// What gets positioned and hidden: a rounded clip view holding the
@@ -120,6 +128,8 @@ pub struct Engine {
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
     snapshots: snapshot::Snapshots,
+    message_ids: devtools::MessageIds,
+    inspectors: devtools::Inspectors,
     _runtime: std::rc::Rc<Runtime>,
     private_context: Option<std::rc::Rc<RequestContext>>,
 }
@@ -198,6 +208,8 @@ impl Engine {
             by_browser_id: HashMap::new(),
             next_id: 1,
             snapshots: snapshot::Snapshots::default(),
+            message_ids: devtools::MessageIds::default(),
+            inspectors: devtools::Inspectors::default(),
             _runtime: runtime,
             private_context: None,
         })
@@ -250,29 +262,21 @@ impl Engine {
         let raw = std::mem::take(&mut *self.events.lock().unwrap());
         raw.into_iter()
             .filter_map(|(browser_id, event)| {
-                if let RawEvent::Shortcut(shortcut) = event {
-                    return Some(Event::Shortcut(shortcut));
-                }
                 let view = *self.by_browser_id.get(&browser_id)?;
-                Some(match event {
-                    RawEvent::Shortcut(_) => unreachable!(),
-                    RawEvent::Title(title) => Event::TitleChanged { view, title },
-                    RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
-                    RawEvent::Focused => Event::Focused { view },
-                    RawEvent::EditFocus(editable) => Event::EditFocusChanged { view, editable },
-                    RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
-                    RawEvent::Url(url) => Event::UrlChanged { view, url },
-                    RawEvent::Status(text) => Event::StatusChanged { view, text },
-                    RawEvent::Loading(loading, can_go_back, can_go_forward) => {
-                        Event::LoadingChanged {
-                            view,
-                            loading,
-                            can_go_back,
-                            can_go_forward,
+                if let ViewRole::Inspector(inspector) = self.views.get(&view)?.role {
+                    let browser = &self.views.get(&view)?.browser;
+                    match event {
+                        RawEvent::Url(url) => self.inspectors.loading(inspector, url, browser.is_loading() != 0),
+                        RawEvent::Loading(loading, _, _) => {
+                            let url = browser.main_frame().map(|frame| CefString::from(&frame.url()).to_string()).unwrap_or_default();
+                            self.inspectors.loading(inspector, url, loading);
                         }
+                        RawEvent::LoadError(url, code, text) => self.inspectors.load_failed(inspector, url, code, text),
+                        _ => {}
                     }
-                    RawEvent::Popup(url) => Event::OpenInNewTab { opener: view, url },
-                })
+                    return None;
+                }
+                page_event(view, self.views.get(&view)?.role, event)
             })
             .collect()
     }
@@ -286,7 +290,17 @@ impl Engine {
         frame: Bounds,
         corner_radius: f64,
     ) -> Option<ViewId> {
+        let context = self.private_context.as_ref().map(|context| context.as_ref().clone());
+        self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context)
+    }
+
+    fn create_content_view(
+        &mut self, ui_view: *mut c_void, url: &str, frame: Bounds,
+        corner_radius: f64, role: ViewRole, mut context: Option<RequestContext>,
+    ) -> Option<ViewId> {
+        if ui_view.is_null() { return None; }
         let parent = host::parent_of(ui_view);
+        if parent.is_null() { return None; }
         #[cfg(target_os = "macos")]
         let (page_parent, bounds) = (
             mac::create_clip_view(parent, corner_radius),
@@ -312,7 +326,6 @@ impl Engine {
             ..Default::default()
         }
         .set_as_child(page_parent as _, &bounds);
-        let mut context = self.private_context.as_ref().map(|context| context.as_ref().clone());
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut self.client.clone()),
@@ -343,6 +356,7 @@ impl Engine {
         self.views.insert(
             id,
             View {
+                role,
                 browser,
                 parent,
                 host,
@@ -501,7 +515,8 @@ impl Engine {
     /// [`Self::take_snapshots`]. Keep pumping CEF and polling for completions.
     pub fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
         let Some(page) = self.views.get(&view) else { return false };
-        self.snapshots.request(view, request, &page.browser)
+        if page.role != ViewRole::Page { return false; }
+        self.snapshots.request(view, request, &page.browser, &self.message_ids)
     }
 
     /// Drains screenshot completions and expires requests after five seconds.
@@ -510,7 +525,86 @@ impl Engine {
         self.snapshots.take()
     }
 
+    /// Opens ONLY a bundled-frontend loading probe in an Alloy child content
+    /// view. The original frontend's host adapter is not installed yet; use
+    /// inspector events to determine whether native bundled assets even load.
+    /// This is not a user-facing DevTools implementation.
+    ///
+    /// Repeated opens coalesce and update the requested panel. The panel is
+    /// recorded for the future host adapter; it is not claimed to be displayed.
+    /// No ShowDevTools, remote debugging port or global-context fallback is used.
+    pub fn open_inspector_probe(&mut self, inspected: ViewId, ui_view: *mut c_void, frame: Bounds, panel: InspectorPanel) -> Result<InspectorId, String> {
+        let page = self.views.get(&inspected).filter(|view| view.role == ViewRole::Page)
+            .ok_or("Unknown inspected page")?;
+        if ui_view.is_null() { return Err("A native GPUI parent is required".into()); }
+        let host = page.browser.host().ok_or("Inspected page has no host")?;
+        // Obtain the inspected browser's ACTUAL context, not this engine's
+        // default. Missing context fails closed, including private sessions.
+        let context = host.request_context().ok_or("Inspected request context is unavailable")?;
+        if let Some(id) = self.inspectors.existing(inspected, panel) { return Ok(id); }
+        let id = self.inspectors.allocate().ok_or("Inspector generation exhausted")?;
+        let mut observer = devtools::InspectorObserver::new(self.inspectors.queue.clone(), id);
+        let registration = host.add_dev_tools_message_observer(Some(&mut observer))
+            .ok_or("Cannot register local DevTools observer")?;
+        let frontend = self.create_content_view(ui_view, INSPECTOR_FRONTEND_URL, frame, 0.0, ViewRole::Inspector(id), Some(context.clone()))
+            .ok_or("Cannot create Alloy inspector content view")?;
+        let is_alloy = self.views.get(&frontend).and_then(|view| view.browser.host())
+            .is_some_and(|host| host.runtime_style() == RuntimeStyle::ALLOY);
+        if !is_alloy {
+            self.close(frontend);
+            return Err("Inspector did not create an Alloy content browser; probe closed".into());
+        }
+        let same_context = self.views.get(&frontend).and_then(|view| view.browser.host())
+            .and_then(|host| host.request_context())
+            .is_some_and(|actual| actual.is_same(Some(&mut context.clone())) != 0);
+        if !same_context {
+            self.close(frontend);
+            return Err("Inspector context differs from the inspected page; probe closed".into());
+        }
+        self.inspectors.insert(id, inspected, frontend, panel, devtools::NativeBinding { _context: context, _registration: registration });
+        Ok(id)
+    }
+
+    pub fn inspector_status(&self, inspector: InspectorId) -> Option<InspectorStatus> {
+        self.inspectors.sessions.get(&inspector).map(|session| session.status.clone())
+    }
+
+    pub fn set_inspector_frame(&mut self, inspector: InspectorId, frame: Bounds) {
+        if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_frame(session.frontend, frame); }
+    }
+
+    pub fn set_inspector_visible(&mut self, inspector: InspectorId, visible: bool) {
+        if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_visible(session.frontend, visible); }
+    }
+
+    /// Trusted native probe API. This does not accept renderer IPC. Before a
+    /// renderer bridge is added it must authenticate frontend role, main frame,
+    /// exact internal URL and generation; ordinary pages must never call this.
+    pub fn send_inspector_probe_message(&mut self, inspector: InspectorId, message: &str) -> bool {
+        let Some(session) = self.inspectors.sessions.get(&inspector) else { return false; };
+        let Some(host) = self.views.get(&session.status.inspected).and_then(|view| view.browser.host()) else { return false; };
+        let Some((id, bytes)) = self.inspectors.submit(inspector, &self.message_ids, message) else { return false; };
+        if host.send_dev_tools_message(Some(&bytes)) == 0 {
+            self.inspectors.failed(inspector, id);
+            return false;
+        }
+        true
+    }
+
+    /// Call take_events first to process load callbacks, then drain this queue.
+    /// Opening/FrontendLoaded do not assert that frontend JS or the host booted.
+    pub fn take_inspector_events(&mut self) -> Vec<InspectorEvent> { self.inspectors.take() }
+
+    /// Drops the observer and closes only the frontend. The inspected document
+    /// remains alive and is neither navigated nor reloaded.
+    pub fn close_inspector(&mut self, inspector: InspectorId) {
+        if let Some(frontend) = self.inspectors.close(inspector) { self.close(frontend); }
+    }
+
     pub fn close(&mut self, id: ViewId) {
+        let inspectors: Vec<_> = self.inspectors.sessions.iter()
+            .filter_map(|(&inspector, session)| (session.status.inspected == id || session.frontend == id).then_some(inspector)).collect();
+        for inspector in inspectors { self.close_inspector(inspector); }
         self.snapshots.close(id);
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
@@ -529,6 +623,36 @@ impl Drop for Engine {
             self.close(id);
         }
     }
+}
+
+// This is the only conversion from CEF callbacks into tab-facing events.
+// Keep role filtering here as well as in take_events so a future callback cannot
+// accidentally publish frontend metadata, popups, focus or shortcuts as tabs.
+fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
+    if role != ViewRole::Page { return None; }
+    if let RawEvent::Shortcut(shortcut) = event {
+        return Some(Event::Shortcut(shortcut));
+    }
+    Some(match event {
+        RawEvent::Shortcut(_) => unreachable!(),
+        RawEvent::LoadError(_, _, _) => return None,
+        RawEvent::Title(title) => Event::TitleChanged { view, title },
+        RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
+        RawEvent::Focused => Event::Focused { view },
+        RawEvent::EditFocus(editable) => Event::EditFocusChanged { view, editable },
+        RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
+        RawEvent::Url(url) => Event::UrlChanged { view, url },
+        RawEvent::Status(text) => Event::StatusChanged { view, text },
+        RawEvent::Loading(loading, can_go_back, can_go_forward) => {
+            Event::LoadingChanged {
+                view,
+                loading,
+                can_go_back,
+                can_go_forward,
+            }
+        }
+        RawEvent::Popup(url) => Event::OpenInNewTab { opener: view, url },
+    })
 }
 
 fn push(events: &EventQueue, browser: Option<&mut Browser>, event: RawEvent) {
@@ -675,6 +799,15 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
+        fn on_load_error(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                push(&self.events, browser, RawEvent::LoadError(
+                    failed_url.map(CefString::to_string).unwrap_or_default(),
+                    error_code.get_raw(),
+                    error_text.map(CefString::to_string).unwrap_or_default(),
+                ));
+            }
+        }
         fn on_loading_state_change(
             &self,
             browser: Option<&mut Browser>,
@@ -827,6 +960,21 @@ fn next_zoom_factor(current: f64, direction: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspector_callbacks_never_become_tab_events() {
+        let view = ViewId::from_raw(8);
+        let role = ViewRole::Inspector(InspectorId(3));
+        for event in [
+            RawEvent::Title("DevTools".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()),
+            RawEvent::Loading(false, false, false), RawEvent::Focused,
+            RawEvent::EditFocus(true), RawEvent::Status("internal".into()),
+            RawEvent::Popup("https://example.com".into()), RawEvent::Shortcut(Shortcut::default()),
+            RawEvent::Find(1, 1, true), RawEvent::Favicon("internal".into(), vec![]),
+            RawEvent::LoadError(INSPECTOR_FRONTEND_URL.into(), -302, "Unknown scheme".into()),
+        ] { assert!(page_event(view, role, event).is_none()); }
+        assert_eq!(page_event(view, ViewRole::Page, RawEvent::Title("Page".into())), Some(Event::TitleChanged { view, title: "Page".into() }));
+    }
 
     #[test]
     fn editable_web_fields_own_undo_redo_while_browser_shortcuts_still_work() {

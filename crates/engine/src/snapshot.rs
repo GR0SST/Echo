@@ -44,11 +44,12 @@ pub(crate) struct Snapshots {
     queue: Queue,
     pending: HashMap<ViewId, Pending>,
     ready: Vec<PageSnapshot>,
-    last_message_id: i32,
+    message_ids: crate::devtools::MessageIds,
 }
 
 impl Snapshots {
-    pub(crate) fn request(&mut self, view: ViewId, request: u64, browser: &Browser) -> bool {
+    pub(crate) fn request(&mut self, view: ViewId, request: u64, browser: &Browser, ids: &crate::devtools::MessageIds) -> bool {
+        self.message_ids = ids.clone();
         self.collect(Instant::now());
         if self.pending.contains_key(&view) {
             return false;
@@ -112,8 +113,7 @@ impl Snapshots {
     fn next_message_id(&mut self) -> Option<i32> {
         // Never reuse an ID, even after submission failure or timeout: a late
         // result must not complete a retry (including a reused caller request).
-        self.last_message_id = self.last_message_id.checked_add(1)?;
-        Some(self.last_message_id)
+        self.message_ids.next()
     }
 
     fn collect(&mut self, now: Instant) {
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn views_are_independent_and_ids_never_wrap() {
+    fn views_are_independent() {
         let mut state = Snapshots::default();
         let now = Instant::now();
         let a = ViewId::from_raw(1);
@@ -381,7 +381,19 @@ mod tests {
         state.collect(now);
         assert_eq!(state.ready.len(), 1);
         assert!(state.pending.contains_key(&b));
-        state.last_message_id = i32::MAX;
-        assert_eq!(state.next_message_id(), None);
+    }
+
+    #[test]
+    fn screenshot_ids_share_the_frontend_allocator() {
+        let ids = crate::devtools::MessageIds::default();
+        let mut state = Snapshots { message_ids: ids.clone(), ..Default::default() };
+        let now = Instant::now();
+        let first = ids.next().unwrap();
+        let screenshot = pending(&mut state, ViewId::from_raw(1), 7, now);
+        let second = ids.next().unwrap();
+        assert!(first < screenshot && screenshot < second);
+        state.close(ViewId::from_raw(1));
+        let retry = pending(&mut state, ViewId::from_raw(1), 7, now);
+        assert!(retry > second);
     }
 }
