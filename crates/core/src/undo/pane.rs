@@ -18,7 +18,7 @@ impl PaneCapture {
     pub(crate) fn new(browser: &Browser, closed: TabId) -> Option<Self> {
         let before = PinState::capture(browser, closed)?;
         let split = browser.split_for(closed)?.clone();
-        let space = match before.tabs[0].scope { Scope::Favorites => browser.space().id, Scope::Space(id, _) => id };
+        let space = match before.tabs[0].scope { Scope::Favorites(_) => browser.space().id, Scope::Space(id, _) => id };
         Some(Self(PaneEdit { closed, space, before, split, whole_archived: false }))
     }
     pub(crate) fn record(self, browser: &mut Browser) { browser.sidebar_history.record(SidebarEdit::Pane(self.0)); }
@@ -26,6 +26,7 @@ impl PaneCapture {
 
 impl PaneEdit {
     pub(super) fn apply(&mut self, redo: bool, browser: &mut Browser, now: SystemTime) -> bool {
+        if browser.spaces.iter().find(|space| space.id == self.space).is_none_or(|space| space.user_profile_id != self.before.user_profile_id) { return false; }
         let Some(space_index) = browser.spaces.iter().position(|space| space.id == self.space) else { return false; };
         let scope = self.before.tabs[0].scope;
         if redo {
@@ -82,7 +83,7 @@ impl PaneEdit {
     }
 
     fn restore_group(&self, browser: &mut Browser, space_index: usize, now: SystemTime) -> bool {
-        if self.before.tabs[0].scope == Scope::Favorites && browser.favorite_count() >= crate::favorites::MAX_FAVORITES { return false; }
+        if matches!(self.before.tabs[0].scope, Scope::Favorites(_)) && super::favorite_count(browser, self.before.user_profile_id) >= crate::favorites::MAX_FAVORITES { return false; }
         if self.split.panes.iter().any(|id| browser.all_tabs().any(|tab| tab.id == *id))
             || all_splits(browser).any(|split| split.id == self.split.id) { return false; }
         let Some(at) = browser.archive.iter().position(|entry| entry.tab.id == self.split.anchor && entry.space == self.space
@@ -115,15 +116,15 @@ fn insert_page(browser: &mut Browser, state: &PinState, mut page: Tab, now: Syst
 }
 
 fn all_splits(browser: &Browser) -> impl Iterator<Item = &SplitView> {
-    browser.favorite_splits.iter().chain(browser.spaces.iter().flat_map(|space| &space.splits))
+    browser.profiles.values().flat_map(|profile| &profile.favorite_splits).chain(browser.spaces.iter().flat_map(|space| &space.splits))
 }
 fn remove_split(browser: &mut Browser, id: crate::splits::SplitId) {
-    browser.favorite_splits.retain(|split| split.id != id);
+    for profile in browser.profiles.values_mut() { profile.favorite_splits.retain(|split| split.id != id); }
     for space in &mut browser.spaces { space.splits.retain(|split| split.id != id); }
 }
 fn put_split(browser: &mut Browser, scope: Scope, split: SplitView) {
     match scope {
-        Scope::Favorites => browser.favorite_splits.push(split),
+        Scope::Favorites(id) => browser.profiles.get_mut(&id).unwrap().favorite_splits.push(split),
         Scope::Space(id, _) => browser.spaces.iter_mut().find(|space| space.id == id).unwrap().splits.push(split),
     }
 }
@@ -251,11 +252,11 @@ mod tests {
         browser.close_split_pane(b, NOW);
         assert!(browser.undo_sidebar(later()));
         assert_eq!(browser.favorite_count(), 1);
-        assert_eq!(browser.favorites.len(), 2);
+        assert_eq!(browser.active_user_profile().favorites.len(), 2);
         assert_eq!(browser.spaces[0].active_tab, Some(a));
         assert_eq!(browser.spaces[1].active_tab, Some(a));
         assert!(browser.redo_sidebar(later()));
-        assert!(browser.favorites.is_empty());
+        assert!(browser.active_user_profile().favorites.is_empty());
         assert!(browser.undo_sidebar(later()));
         assert_eq!(browser.favorite_count(), 1);
         assert_eq!(browser.spaces[0].active_tab, Some(a));

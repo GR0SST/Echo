@@ -14,6 +14,8 @@ actions!(
         ToggleFullscreen,
         CloseWindow,
         NewWindow,
+        NewProfile,
+        ChangeProfile,
         BlankWindow,
         NewIncognitoWindow,
         RenameSpace,
@@ -34,7 +36,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &BlankWindow, cx| { cx.defer(crate::blank_window::open); });
     cx.on_action(|_: &NewWindow, cx| { cx.defer(|cx| crate::new_window::open(true, cx)); });
     cx.on_action(|_: &NewIncognitoWindow, cx| { cx.defer(crate::open_incognito_window); });
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| crate::quit::request(cx));
     cx.on_action(|_: &HideApp, cx| native::set_app_visibility(native::AppVisibility::Hide, cx));
     cx.on_action(|_: &HideOthers, cx| {
         native::set_app_visibility(native::AppVisibility::HideOthers, cx)
@@ -82,6 +84,7 @@ pub(crate) fn build() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Tab…", window::OpenCommandBar),
                 MenuItem::action("New Window", NewWindow),
+                MenuItem::action("New Profile", NewProfile),
                 MenuItem::action("Blank Window", BlankWindow),
                 MenuItem::action("New Incognito Window", NewIncognitoWindow),
                 MenuItem::action("Open Location…", window::EditCurrentUrl),
@@ -150,6 +153,7 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::action("New Space…", window::NewSpace),
                 MenuItem::action("New Folder…", window::NewFolder),
                 MenuItem::action("Rename Space…", RenameSpace),
+                MenuItem::action("Change Profile", ChangeProfile),
                 MenuItem::action("Change Space Icon…", window::CustomizeSpaceIcon),
                 MenuItem::action("Show/Hide Space Header", window::ToggleSpaceHeader),
                 MenuItem::separator(),

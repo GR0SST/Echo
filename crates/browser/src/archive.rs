@@ -35,6 +35,7 @@ impl BrowserWindow {
         let reason = self.command_bar.as_ref().and_then(|bar| bar.archive_reason);
         let today = DateTime::<Local>::from(now).date_naive();
         let mut entries: Vec<_> = self.browser.archive.iter().rev()
+            .filter(|entry| entry.user_profile_id == self.browser.active_user_profile_id())
             .filter(|entry| space.is_none_or(|space| entry.space == space))
             .filter(|entry| {
                 entry.tab.title.to_lowercase().contains(&query)

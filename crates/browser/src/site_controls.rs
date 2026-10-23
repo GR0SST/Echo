@@ -39,6 +39,7 @@ impl BrowserWindow {
     pub(crate) fn toggle_site_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.site_controls.is_some() { self.close_site_controls(cx); return; }
         if self.browser.active_tab().is_none() { return; }
+        self.close_user_profile_dialog(cx);
         self.close_tab_menu(cx);
         self.close_command_bar(cx);
         let anchor = self.site_controls_anchor.get().unwrap_or_default();
@@ -75,17 +76,12 @@ impl BrowserWindow {
     }
 
     pub(crate) fn close_site_controls(&mut self, cx: &mut Context<Self>) {
+        self.close_site_controls_with_focus(crate::window::PopupFocus::Restore, cx);
+    }
+
+    pub(crate) fn close_site_controls_with_focus(&mut self, focus: crate::window::PopupFocus, cx: &mut Context<Self>) {
         let Some(panel) = self.site_controls.take() else { return; };
-        let main = self.main_window;
-        let focus = self.focus_handle.clone();
-        let pages = self.pages.clone();
-        let browser = cx.entity().downgrade();
-        cx.defer(move |cx| {
-            if let Some(overlay) = panel.overlay { let _ = overlay.update(cx, |_, window, _| window.remove_window()); }
-            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.site_controls.is_some()).unwrap_or(false) { return; }
-            let _ = main.update(cx, |_, window, _| { window.activate_window(); focus.focus(window); });
-            if let Some(pages) = pages { pages.borrow_mut().focus_shown(); }
-        });
+        self.close_popup_overlay(panel.overlay, focus, false, cx);
         cx.notify();
     }
 

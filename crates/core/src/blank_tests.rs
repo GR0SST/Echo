@@ -17,8 +17,8 @@ fn blank_is_fresh_normal_privacy_with_one_unshown_internal_space() {
     assert!(blank.space().pinned.is_empty());
     assert!(blank.space().pinned_items.is_empty());
     assert!(blank.space().folders.is_empty());
-    assert!(blank.favorites.is_empty());
-    assert!(blank.favorite_splits.is_empty());
+    assert!(blank.active_user_profile().favorites.is_empty());
+    assert!(blank.active_user_profile().favorite_splits.is_empty());
     assert!(blank.archive.is_empty());
     assert!(!Browser::new().is_blank());
     assert!(Browser::new().can_edit_persistent_sidebar());
@@ -129,15 +129,15 @@ fn blank_today_reordering_split_and_local_archive_restore_preserve_other_models(
 #[test]
 fn blank_keeps_normal_history_and_configurable_auto_archive_until_browser_policy_decides() {
     let mut blank = Browser::new_blank();
-    assert_eq!(blank.archive_after, Some(DEFAULT_ARCHIVE_AFTER));
-    blank.record_visit("https://visited.example", NOW);
-    assert_eq!(blank.history.len(), 1);
+    assert_eq!(blank.active_user_profile().archive_after, Some(DEFAULT_ARCHIVE_AFTER));
+    blank.record_visit(blank.active_user_profile_id(), "https://visited.example", NOW);
+    assert_eq!(blank.active_user_profile().history.len(), 1);
     let idle = blank.new_tab("https://idle.example", NOW);
     blank.new_tab("https://selected.example", NOW);
-    blank.archive_after = None;
+    blank.active_user_profile_mut().archive_after = None;
     let later = NOW + DEFAULT_ARCHIVE_AFTER + Duration::from_secs(1);
     assert_eq!(blank.archive_idle(later), 0);
-    blank.archive_after = Some(DEFAULT_ARCHIVE_AFTER);
+    blank.active_user_profile_mut().archive_after = Some(DEFAULT_ARCHIVE_AFTER);
     assert_eq!(blank.archive_idle(later), 1);
     assert_eq!(blank.restore_last_archived(later), Some(idle));
 }

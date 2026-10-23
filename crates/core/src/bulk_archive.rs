@@ -9,7 +9,7 @@ pub enum Relative { Other, Above, Below }
 impl Browser {
     pub fn tabs_to_archive(&self, reference: TabId, relative: Relative) -> Vec<TabId> {
         let anchor = self.item_anchor(reference);
-        let order: Vec<_> = self.favorites.iter().chain(self.space().tabs())
+        let order: Vec<_> = self.active_user_profile().favorites.iter().chain(self.space().tabs())
             .filter(|tab| !self.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
         let Some(position) = order.iter().position(|id| *id == anchor) else { return Vec::new(); };
         self.space().today.iter().filter(|tab| !self.is_split_secondary(tab.id))

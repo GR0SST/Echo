@@ -21,7 +21,9 @@
 //! `drag <x1> <y1> <x2> <y2> [hold_ms]` (hold at the destination before releasing),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`,
 //! `position <x> <y>` (native screen coordinates), `shot <file.png>`,
-//! `dump` (prints the model), `quit`.
+//! `dump` (prints the model), `quit` (app coordinator),
+//! `native-quit` (no arguments; sends AppKit terminate:nil from the foreground task,
+//! exercising the native pre-terminate gate, then ends the script).
 
 use std::ffi::{c_void, CString};
 use std::time::Duration;
@@ -54,6 +56,7 @@ struct HostTransfer {
 }
 
 async fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> Option<(HostTransfer, WeakEntity<BrowserWindow>, usize)> {
+    if crate::quit::is_quitting() { return None; }
     let (source_window, source_view, profile, selection, pages, tab, frame) = source.read_with(cx, |view, _| {
         let pages = view.pages.clone()?;
         let layout = pages.borrow().surface_layout();
@@ -138,7 +141,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             let after_close = matches!(name, "wait" | "windows" | "reopen" | "window" | "activate" | "quit");
             if require_focus && !after_close && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
                 eprintln!("[automation] aborted: browser lost focus or is not on screen");
-                let _ = cx.update(|cx| cx.quit());
+                let _ = cx.update(|cx| crate::quit::request(cx));
                 return;
             }
             match name {
@@ -147,7 +150,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let moved = if transfer.is_none() { transfer_new_host(&view, cx).await } else { None };
                     let Some((state, target, parent)) = moved else {
                         eprintln!("[automation] aborted: live host transfer needs one loaded standalone page and a supported native host");
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| crate::quit::request(cx));
                         return;
                     };
                     transfer = Some(state);
@@ -160,7 +163,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let restored = if let Some(state) = &state { transfer_back(state, cx).await } else { false };
                     let Some(state) = state.filter(|_| restored) else {
                         eprintln!("[automation] aborted: live host transfer could not restore the source");
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| crate::quit::request(cx));
                         return;
                     };
                     view = state.source;
@@ -193,7 +196,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     }).ok().flatten();
                     let Some((new_view, parent)) = selected else {
                         eprintln!("[automation] aborted: browser window selector did not match");
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| crate::quit::request(cx));
                         return;
                     };
                     view = new_view;
@@ -207,7 +210,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let invoked = arg.split_once(" > ").is_some_and(|(menu, item)| unsafe { perform_menu_action(menu, item) });
                     if !invoked {
                         eprintln!("[automation] aborted: native menu item is missing or disabled");
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| crate::quit::request(cx));
                         return;
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
@@ -250,7 +253,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     for ch in arg.chars() {
                         if require_focus && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
                             eprintln!("[automation] aborted: browser lost focus or is not on screen");
-                            let _ = cx.update(|cx| cx.quit());
+                            let _ = cx.update(|cx| crate::quit::request(cx));
                             return;
                         }
                         unsafe { post_key(ns_view, &ch.to_string()) };
@@ -394,7 +397,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     });
                     let Some((pages, tab, request)) = requested else {
                         eprintln!("[automation] aborted: active page snapshot request was rejected");
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| crate::quit::request(cx));
                         return;
                     };
                     let mut captured = None;
@@ -411,7 +414,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         }
                     } else {
                         eprintln!("[automation] aborted: active page snapshot failed or timed out");
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = cx.update(|cx| crate::quit::request(cx));
                         return;
                     }
                 },
@@ -492,8 +495,25 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         }
                     });
                 }
+                "native-quit" => {
+                    if !arg.trim().is_empty() {
+                        eprintln!("[automation] native-quit takes no arguments");
+                        return;
+                    }
+                    // This foreground automation task runs outside cx.update
+                    // and all page/App borrows. Send directly: delayed selectors
+                    // depend on run-loop modes and hide whether AppKit was called.
+                    eprintln!("[automation] native-quit sending terminate:nil");
+                    unsafe {
+                        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").expect("AppKit is loaded"), sharedApplication];
+                        let nil: *mut AnyObject = std::ptr::null_mut();
+                        let _: () = msg_send![app, terminate: nil];
+                    }
+                    eprintln!("[automation] native-quit terminate:nil returned");
+                    return;
+                }
                 "quit" => {
-                    let _ = cx.update(|cx| cx.quit());
+                    let _ = cx.update(|cx| crate::quit::request(cx));
                 }
                 _ => eprintln!("[automation] unknown command"),
             }
@@ -514,7 +534,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
             .map(|bar| bar.input.read(cx).text().to_string()),
     );
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
-    out += &format!("[dump] history_count={}\n", browser.history.len());
+    out += &format!("[dump] history_count={}\n", browser.active_user_profile().history.len());
     out += &format!("[dump] inline_rename={:?}\n", this.tab_rename.as_ref().map(|editor| (editor.tab.get(), editor.input.read(cx).text().to_string())));
     out += &format!("[dump] link_status={:?}\n", this.link_status.as_ref().map(|status| (status.tab.get(), &status.text, status.expanded)));
     if this.history_is_open() { out += &format!("[dump] history_query={:?}\n", this.history_page.input.read(cx).text()); }
@@ -523,7 +543,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
         out += &format!("[dump] command_target={:?} selected={} suggestions={}\n", bar.target, bar.selected, this.suggestions(cx).len());
     }
     if let Some(menu) = &this.tab_menu { out += &format!("[dump] sidebar_menu={:?} selected={:?}\n", menu.target, menu.selected); }
-    out += &format!("[dump] archive_after_seconds={:?}\n", browser.archive_after.map(|duration| duration.as_secs()));
+    out += &format!("[dump] archive_after_seconds={:?}\n", browser.active_user_profile().archive_after.map(|duration| duration.as_secs()));
     if let Some(toast) = &this.toast {
         out += &format!("[dump] toast={:?}\n", toast.message);
     }
@@ -531,7 +551,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
         out += &format!("[dump] find={:?} count={:?} active={} searching={}\n", find.input.read(cx).text(), find.count, find.active, find.searching);
     }
     let shown = this.pages.as_ref().and_then(|pages| pages.borrow().shown());
-    for (section, tabs) in [("favorite", &this.browser.favorites), ("pinned", &space.pinned), ("today", &space.today)] {
+    for (section, tabs) in [("favorite", &this.browser.active_user_profile().favorites), ("pinned", &space.pinned), ("today", &space.today)] {
         for tab in tabs {
             let active = space.active_tab == Some(tab.id);
             let state = this
@@ -547,7 +567,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 tab.url,
                 state.loading,
                 state.can_go_back,
-                this.browser.favicon(&tab.url).map_or(0, |png| png.len()),
+                this.browser.favicon(this.browser.active_user_profile_id(), &tab.url).map_or(0, |png| png.len()),
                 tab.muted,
                 this.pages.as_ref().and_then(|pages| pages.borrow().audio_muted(tab.id)),
                 this.pages.as_ref().is_some_and(|pages| pages.borrow().is_visible(tab.id)),
@@ -723,6 +743,8 @@ fn parse_key(spec: &str) -> (usize, String, u16) {
         "right" => special("\u{f703}", 124),
         "down" => special("\u{f701}", 125),
         "up" => special("\u{f700}", 126),
+        "home" => special("\u{f729}", 115),
+        "end" => special("\u{f72b}", 119),
         _ => {
             let ch = key.chars().next().unwrap_or(' ');
             (flags, ch.to_string(), key_code(ch))
@@ -1174,5 +1196,23 @@ unsafe fn write_png(image: *mut c_void, path: &str) -> Result<(), String> {
         CFRelease(url);
         CGImageRelease(image);
         if ok { Ok(()) } else { Err("could not write PNG".into()) }
+    }
+}
+
+#[cfg(test)]
+mod key_parsing_tests {
+    use super::*;
+
+    #[test]
+    fn home_and_end_emit_native_function_characters_keycodes_and_modifiers() {
+        for (spec, expected_flags, expected_chars, expected_code) in [
+            ("home", 0, "\u{f729}", 115),
+            ("end", 0, "\u{f72b}", 119),
+            ("cmd-shift-home", COMMAND | SHIFT, "\u{f729}", 115),
+            ("ctrl-alt-end", CONTROL | OPTION, "\u{f72b}", 119),
+        ] {
+            let (flags, chars, code) = parse_key(spec);
+            assert_eq!((flags, chars.as_str(), code), (expected_flags, expected_chars, expected_code), "{spec}");
+        }
     }
 }

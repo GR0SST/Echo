@@ -1,22 +1,65 @@
 //! Keeps the engine's web views in sync with the browser model: one view per
 //! opened page, with the active tab or Split View laid out over the content card.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use browser_core::{Browser, TabId};
+use browser_core::{Browser, TabId, UserProfileId};
 use engine::{Bounds, Engine, Event, ViewId};
 
 #[path = "devtools.rs"]
 pub(crate) mod devtools;
+
+/// Storage selection at the browser/engine boundary. Current preserves the
+/// independent ephemeral context of Incognito; normal profiles never use it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum StorageSelection { Current, Default, Named(String) }
+
+impl StorageSelection {
+    pub fn for_profile(id: UserProfileId) -> Self {
+        id.storage_key().map_or(Self::Default, Self::Named)
+    }
+}
+
+pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
+    match event {
+        Event::OpenInNewTab { opener, .. } => Some(*opener),
+        Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
+        | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
+        | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        Event::Shortcut { view, .. } => Some(*view),
+        Event::InspectorInput(_) => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PageIdentity {
+    pub tab: TabId,
+    pub profile: UserProfileId,
+    pub generation: u64,
+}
+
+/// Only Pending authorizes automatic clock retries. Resolution/native errors
+/// are Failed, never a request to retry or fall back to another storage context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageCreation { Created(ViewId), Pending, Failed }
 
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
     /// Independent page/event ownership over this engine's regular storage.
     fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> { None }
+    fn fork_in_storage(&self, storage: &StorageSelection) -> Option<Box<dyn WebEngine>> {
+        match storage { StorageSelection::Current | StorageSelection::Default => self.fork_with_shared_storage(), StorageSelection::Named(_) => None }
+    }
+    fn create_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
+        match storage { StorageSelection::Current | StorageSelection::Default => self.create_in_host(parent, url, bounds), StorageSelection::Named(_) => None }
+    }
+    fn create_page_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        self.create_in_storage(storage, parent, url, bounds).map_or(PageCreation::Failed, PageCreation::Created)
+    }
     /// Product commands stay disabled until the renderer host bridge is ready.
     fn supports_inspector(&self) -> bool { false }
     /// Reuse this page's frontend, selecting the requested panel. `inspect`
@@ -82,8 +125,43 @@ pub const CONTENT_INSET: f32 = 8.0;
 /// Concentric with the window corner: inner radius = outer radius - inset.
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
+impl Chromium {
+    fn resolve_storage(&self, storage: &StorageSelection) -> Result<engine::StorageContext, String> {
+        if crate::quit::is_quitting() { return Err("Browser is quitting".into()); }
+        match storage {
+            StorageSelection::Current => Ok(self.engine.storage_context()),
+            StorageSelection::Default => self.engine.default_storage_context(),
+            StorageSelection::Named(key) => self.engine.named_storage_context(&engine::StorageKey::new(key)?),
+        }
+    }
+}
+
 impl WebEngine for Chromium {
+    fn fork_in_storage(&self, storage: &StorageSelection) -> Option<Box<dyn WebEngine>> {
+        let context = self.resolve_storage(storage).ok()?;
+        let engine = self.engine.fork_with_context(&context).ok()?;
+        Some(Box::new(Self { engine, parent: std::ptr::null_mut() }))
+    }
+    fn create_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
+        match self.create_page_in_storage(storage, parent, url, bounds) {
+            PageCreation::Created(view) => Some(view), PageCreation::Pending | PageCreation::Failed => None,
+        }
+    }
+    fn create_page_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        let context = match self.resolve_storage(storage) {
+            Ok(context) => context,
+            Err(error) => { eprintln!("Cannot resolve page storage: {error}"); return PageCreation::Failed; }
+        };
+        if !context.is_ready() { return PageCreation::Pending; }
+        let parent = if parent.is_null() { self.parent } else { parent };
+        match self.engine.create_view_in_context(&context, parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS)) {
+            Ok(view) => PageCreation::Created(view),
+            Err(error) => { eprintln!("Cannot create page: {error}"); PageCreation::Failed }
+        }
+    }
+
     fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> {
+        if crate::quit::is_quitting() { return None; }
         Some(Box::new(Self { engine: self.engine.fork_with_shared_storage(), parent: std::ptr::null_mut() }))
     }
     fn supports_inspector(&self) -> bool { true }
@@ -176,6 +254,9 @@ pub struct PageState {
 }
 
 struct Page {
+    input_attachment: u64,
+    identity: PageIdentity,
+    source_space: browser_core::SpaceId,
     owner: u64,
     frame: Bounds,
     visible: bool,
@@ -192,6 +273,9 @@ struct Page {
 
 #[derive(Clone)]
 struct PageIntent {
+    identity: PageIdentity,
+    source_space: browser_core::SpaceId,
+    storage: StorageSelection,
     tab: TabId,
     url: String,
     muted: bool,
@@ -222,6 +306,34 @@ struct InspectorProbe {
     host: u64,
 }
 
+/// Provenance is captured before a host retains a callback for another host.
+/// A later owner must never stamp a replacement page onto an older callback.
+#[derive(Clone)]
+pub(crate) struct PageEvent {
+    pub sequence: u64,
+    pub event: Event,
+    pub identity: PageIdentity,
+    pub source_space: browser_core::SpaceId,
+    pub input_origin: Option<InputOrigin>,
+}
+
+impl PageEvent {
+    pub(crate) fn is_metadata(&self) -> bool {
+        matches!(self.event, Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
+            | Event::StatusChanged { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
+    }
+}
+
+/// Input belongs to one continuous host attachment, independently of the
+/// document generation. A live document may move without carrying old input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InputOrigin {
+    pub identity: PageIdentity,
+    host: u64,
+    attachment: u64,
+    inspector: Option<engine::InspectorId>,
+}
+
 struct PageStore {
     inspector_probe: Option<InspectorProbe>,
     devtools: Option<devtools::Dock>,
@@ -229,10 +341,14 @@ struct PageStore {
     next_inspector_eval: u64,
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
+    identities: HashMap<TabId, PageIdentity>,
+    next_generation: u64,
     hosts: HashMap<u64, *mut c_void>,
     next_host: u64,
     active_host: u64,
-    events: Vec<Event>,
+    events: Vec<PageEvent>,
+    next_event: u64,
+    metadata: BTreeMap<u64, (PageEvent, Option<u64>)>,
     next_snapshot: u64,
     handoffs: HashMap<TabId, Handoff>,
     layouts: HashMap<u64, HashMap<TabId, Bounds>>,
@@ -256,13 +372,67 @@ pub struct Pages {
     shown: Option<TabId>,
     bounds: Option<Bounds>,
     seen_revision: u64,
+    creation_pending: bool,
+}
+
+thread_local! {
+    // Weak registration never extends an engine's normal lifetime. During quit it
+    // reaches stores retained by deferred closures, splitters, or diagnostics.
+    static STORES: RefCell<Vec<std::rc::Weak<RefCell<PageStore>>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn take_shutdown_engines() -> Result<Vec<Box<dyn WebEngine>>, String> {
+    let stores = STORES.with(|stores| stores.borrow().iter().filter_map(std::rc::Weak::upgrade).collect::<Vec<_>>());
+    // Check all stores before mutation. No CEF pumping happens under these borrows.
+    for store in &stores { store.try_borrow_mut().map_err(|_| "Page store is still borrowed during quit".to_owned())?; }
+    let mut engines = Vec::new();
+    for store in stores {
+        let mut store = store.borrow_mut();
+        engines.push(std::mem::replace(&mut store.engine, Box::new(RetiredEngine)));
+        store.pages.clear();
+        store.identities.clear();
+        store.events.clear();
+        store.metadata.clear();
+        store.devtools = None;
+        store.inspector_probe = None;
+        store.handoffs.clear();
+        store.frozen.clear();
+    }
+    Ok(engines)
+}
+
+/// Stale UI closures may keep an inert layout alive, never a CEF owner.
+struct RetiredEngine;
+impl WebEngine for RetiredEngine {
+    fn create(&mut self, _: &str, _: Bounds) -> Option<ViewId> { None }
+    fn set_bounds(&mut self, _: ViewId, _: Bounds) {}
+    fn set_top_corners_rounded(&mut self, _: ViewId, _: bool) {}
+    fn set_visible(&mut self, _: ViewId, _: bool) {}
+    fn focus_page(&mut self, _: ViewId) {}
+    fn focus_ui(&mut self) {}
+    fn navigate(&mut self, _: ViewId, _: &str) {}
+    fn go_back(&mut self, _: ViewId) {}
+    fn go_forward(&mut self, _: ViewId) {}
+    fn undo(&mut self, _: ViewId) {}
+    fn redo(&mut self, _: ViewId) {}
+    fn reload(&mut self, _: ViewId) {}
+    fn force_reload(&mut self, _: ViewId) {}
+    fn stop_loading(&mut self, _: ViewId) {}
+    fn set_audio_muted(&mut self, _: ViewId, _: bool) {}
+    fn audio_muted(&self, _: ViewId) -> Option<bool> { None }
+    fn zoom(&mut self, _: ViewId, _: i32) {}
+    fn find(&mut self, _: ViewId, _: &str, _: bool, _: bool) {}
+    fn stop_finding(&mut self, _: ViewId) {}
+    fn close(&mut self, _: ViewId) {}
+    fn pump_fn(&self) -> fn() { || {} }
+    fn take_events(&mut self) -> Vec<Event> { Vec::new() }
 }
 
 impl Pages {
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
-        Self {
-            store: Rc::new(RefCell::new(PageStore { devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
-                events: Vec::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
+        let pages = Self {
+            store: Rc::new(RefCell::new(PageStore { devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+                events: Vec::new(), next_event: 0, metadata: BTreeMap::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             host: 1,
             parent: std::ptr::null_mut(),
             page_focus: true,
@@ -277,15 +447,76 @@ impl Pages {
             shown: None,
             bounds: None,
             seen_revision: 0,
-        }
+            creation_pending: false,
+        };
+        STORES.with(|stores| {
+            let mut stores = stores.borrow_mut();
+            stores.retain(|store| store.strong_count() > 0);
+            stores.push(Rc::downgrade(&pages.store));
+        });
+        pages
     }
 
     /// Independent models may reuse TabIds, so they must never share PageStore.
     pub fn independent_with_shared_storage(&self, parent: *mut c_void) -> Option<Self> {
+        if crate::quit::is_quitting() { return None; }
         let engine = self.store.borrow().engine.fork_with_shared_storage()?;
         let mut pages = Self::new(engine);
         pages.set_parent(parent);
         Some(pages)
+    }
+
+    pub fn independent_in_storage(&self, parent: *mut c_void, storage: &StorageSelection) -> Option<Self> {
+        if crate::quit::is_quitting() { return None; }
+        let engine = self.store.borrow().engine.fork_in_storage(storage)?;
+        let mut pages = Self::new(engine);
+        pages.set_parent(parent);
+        Some(pages)
+    }
+
+    pub(crate) fn identity_for(&self, view: ViewId) -> Option<PageIdentity> {
+        self.store.borrow().pages.values().find(|page| page.view == view).map(|page| page.identity)
+    }
+
+    pub(crate) fn inspector_input_identity(&self, input: &engine::InspectorEvent) -> Option<PageIdentity> {
+        let store = self.store.borrow();
+        let dock = store.inspector_input_owner(input).filter(|dock| dock.host == self.host)?;
+        store.pages.get(&dock.tab).filter(|page| page.view == dock.view).map(|page| page.identity)
+    }
+
+    pub(crate) fn source_space_for(&self, view: ViewId) -> Option<browser_core::SpaceId> {
+        self.store.borrow().pages.values().find(|page| page.view == view).map(|page| page.source_space)
+    }
+
+    pub(crate) fn capture_event(&self, event: Event) -> Option<PageEvent> {
+        let mut store = self.store.borrow_mut();
+        let event = store.capture_event(event)?;
+        if let Some((_, host)) = store.metadata.get_mut(&event.sequence) { *host = Some(self.host); }
+        Some(event)
+    }
+
+    /// Claim every unapplied metadata callback up to this event for its live
+    /// document, including callbacks held behind another window's shortcut.
+    /// Claiming atomically makes later copies in window queues harmless.
+    pub(crate) fn claim_metadata_through(&self, event: &PageEvent) -> Vec<PageEvent> {
+        let mut store = self.store.borrow_mut();
+        if !store.pages.get(&event.identity.tab).is_some_and(|page| page.identity == event.identity) { return Vec::new(); }
+        let sequences: Vec<_> = store.metadata.range(..=event.sequence)
+            .filter(|(_, (pending, _))| pending.identity == event.identity).map(|(sequence, _)| *sequence).collect();
+        sequences.into_iter().filter_map(|sequence| store.metadata.remove(&sequence).map(|(event, _)| event)).collect()
+    }
+
+    pub(crate) fn accepts_input_origin(&self, origin: InputOrigin) -> bool {
+        let store = self.store.borrow();
+        origin.host == self.host && store.hosts.contains_key(&origin.host)
+            && store.pages.get(&origin.identity.tab).is_some_and(|page|
+                page.identity == origin.identity && page.owner == origin.host && page.input_attachment == origin.attachment)
+            && origin.inspector.is_none_or(|inspector| store.inspector_event_owner(inspector)
+                .is_some_and(|dock| dock.host == origin.host && dock.tab == origin.identity.tab))
+    }
+
+    pub(crate) fn accepts_identity(&self, identity: PageIdentity) -> bool {
+        self.store.borrow().pages.get(&identity.tab).is_some_and(|page| page.identity == identity)
     }
 
     /// Creates an independent layout over the same live pages and engine.
@@ -296,7 +527,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0 }
+            axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -324,6 +555,7 @@ impl Pages {
     /// parked, hidden, in another surviving host until selected there.
     pub fn release_host(&mut self) {
         let mut store = self.store.borrow_mut();
+        store.capture_pending_engine_events();
         if store.devtools.is_some_and(|dock| dock.host == self.host) { store.close_devtools(); }
         if store.inspector_probe.is_some_and(|probe| probe.host == self.host) { store.close_inspector_probe(); }
         if store.hosts.remove(&self.host).is_none() { return; }
@@ -342,12 +574,16 @@ impl Pages {
                 engine.set_visible(page.view, false);
                 page.visible = false;
                 page.state.status.clear();
+                page.input_attachment = page.input_attachment.checked_add(1).expect("input attachment generations exhausted");
                 page.owner = host;
             } else {
                 // A rejected native transfer must never leave a child attached
                 // to a window that is about to be destroyed.
                 engine.close(page.view);
                 pages.remove(&tab);
+                store.next_generation = store.next_generation.checked_add(1).expect("page generations exhausted");
+                let generation = store.next_generation;
+                if let Some(identity) = store.identities.get_mut(&tab) { identity.generation = generation; }
             }
         }
         if store.active_host == self.host { store.active_host = destination.map_or(0, |(host, _)| host); }
@@ -370,27 +606,41 @@ impl Pages {
 
     /// Reconciles views with the model. `visible` is false while UI covers
     /// the page (the command bar), since native views draw above the UI.
-    pub fn sync(&mut self, browser: &Browser, visible: bool) {
+    pub(crate) fn reconcile_inventory(&mut self, browser: &Browser) {
+        if crate::quit::is_quitting() { return; }
         {
             let mut store = self.store.borrow_mut();
-            let PageStore { engine, pages, .. } = &mut *store;
-            let open: Vec<TabId> = browser.all_tabs().filter(|tab| !browser_core::omnibox::is_internal_url(&tab.url)).map(|tab| tab.id).collect();
-            let closed: Vec<TabId> = pages
-                .keys()
-                .filter(|tab| !open.contains(tab))
-                .copied()
-                .collect();
-            for tab in closed {
-                let page = pages.remove(&tab).unwrap();
-                engine.close(page.view);
+            // all_tabs is the canonical workspace inventory, including Favorites
+            // of profiles that this window is not currently displaying.
+            let open: HashMap<_, _> = browser.all_tabs()
+                .filter_map(|tab| browser.user_profile_id_for_tab(tab.id).map(|profile| (tab.id, profile))).collect();
+            let retired: Vec<_> = store.identities.iter().filter(|(tab, identity)| open.get(tab) != Some(&identity.profile)
+                || (store.pages.contains_key(tab) && browser.all_tabs().any(|entry| entry.id == **tab && browser_core::omnibox::is_internal_url(&entry.url))))
+                .map(|(tab, _)| *tab).collect();
+            for tab in retired {
+                store.retire(tab);
+                store.identities.remove(&tab);
                 self.visible.remove(&tab);
                 if self.shown == Some(tab) {
                     self.shown = None;
-                    if page.owner == self.host { engine.focus_ui_in_host(self.parent); }
+                    store.engine.focus_ui_in_host(self.parent);
+                }
+            }
+            for (tab, profile) in open {
+                if !store.identities.contains_key(&tab) {
+                    store.next_generation = store.next_generation.checked_add(1).expect("page generations exhausted");
+                    let generation = store.next_generation;
+                    store.identities.insert(tab, PageIdentity { tab, profile, generation });
                 }
             }
         }
 
+        self.store.borrow_mut().prune();
+    }
+
+    pub fn sync(&mut self, browser: &Browser, visible: bool) {
+        if crate::quit::is_quitting() { return; }
+        self.reconcile_inventory(browser);
         self.store.borrow_mut().prune();
         self.wanted.clear();
         self.wanted_focus = None;
@@ -403,12 +653,14 @@ impl Pages {
                     self.axis = split.axis;
                     for (index, id) in split.panes.iter().enumerate() {
                         if let Some(tab) = browser.all_tabs().find(|tab| tab.id == *id) {
-                            self.wanted.push(PageIntent { tab: *id, url: tab.url.clone(), muted: tab.muted,
+                            let Some(identity) = self.store.borrow().identities.get(id).copied() else { continue; };
+                            self.wanted.push(PageIntent { identity, source_space: browser.space().id, storage: if browser.is_private() { StorageSelection::Current } else { StorageSelection::for_profile(identity.profile) }, tab: *id, url: tab.url.clone(), muted: tab.muted,
                                 weight: split.weights[index], internal: browser_core::omnibox::is_internal_url(&tab.url) });
                         }
                     }
                 } else if self.wanted_focus.is_some() {
-                    self.wanted.push(PageIntent { tab: active.id, url: active.url.clone(), muted: active.muted, weight: 1., internal: false });
+                    let identity = self.store.borrow().identities[&active.id];
+                    self.wanted.push(PageIntent { identity, source_space: browser.space().id, storage: if browser.is_private() { StorageSelection::Current } else { StorageSelection::for_profile(identity.profile) }, tab: active.id, url: active.url.clone(), muted: active.muted, weight: 1., internal: false });
                 }
             }
         }
@@ -438,11 +690,10 @@ impl Pages {
     /// sidebar. It loads again when the tab is next shown.
     pub fn discard(&mut self, tab: TabId) {
         let mut store = self.store.borrow_mut();
-        let PageStore { engine, pages, .. } = &mut *store;
-        let Some(page) = pages.remove(&tab) else {
-            return;
-        };
-        engine.close(page.view);
+        store.retire(tab);
+        store.next_generation = store.next_generation.checked_add(1).expect("page generations exhausted");
+        let generation = store.next_generation;
+        if let Some(identity) = store.identities.get_mut(&tab) { identity.generation = generation; }
         store.prune();
         self.visible.remove(&tab);
         if self.shown == Some(tab) {
@@ -467,10 +718,18 @@ impl Pages {
     // Only sync supplies fresh model intent. Capture completion and geometry
     // updates must never navigate using an inactive window's cached URL.
     fn apply_with_navigation(&mut self, navigate: bool) {
+        // Geometry/snapshot polls carry cached intent. An outstanding failed
+        // create is retried only by sync with a refreshed authoritative model.
+        let retry_requires_model = self.creation_pending && !navigate;
+        self.creation_pending = retry_requires_model;
         let frames = self.pane_bounds();
-        let wanted: Vec<_> = self.wanted.iter().zip(frames).filter(|(intent, frame)| !intent.internal && frame.page.width >= 1. && frame.page.height >= 1.)
+        let identities = self.store.borrow().identities.clone();
+        let wanted: Vec<_> = self.wanted.iter().zip(frames).filter(|(intent, frame)| identities.get(&intent.tab) == Some(&intent.identity) && !intent.internal && frame.page.width >= 1. && frame.page.height >= 1.)
             .map(|(intent, frame)| (intent.clone(), frame.page)).collect();
         let mut store = self.store.borrow_mut();
+        // Capture raw input while the old attachment still owns each document.
+        // No pumping/awaiting occurs between this barrier and native transfers.
+        store.capture_pending_engine_events();
         let active = store.active_host == self.host;
         let layout: HashMap<_, _> = wanted.iter().map(|(intent, bounds)| (intent.tab, *bounds)).collect();
         if store.layouts.get(&self.host) != Some(&layout) {
@@ -502,16 +761,18 @@ impl Pages {
         let mut created = false;
         let mut moved = false;
         for (intent, bounds) in wanted {
-            let PageIntent { tab, url, muted, .. } = intent;
+            let PageIntent { tab, identity, source_space, storage, url, muted, .. } = intent;
             match pages.get_mut(&tab) {
                 Some(page) => {
                     if page.owner != self.host {
                         if waiting.contains(&tab) || !active || self.parent.is_null() || !engine.move_view(page.view, self.parent, bounds) { self.visible.remove(&tab); continue; }
+                        page.input_attachment = page.input_attachment.checked_add(1).expect("input attachment generations exhausted");
                         page.owner = self.host;
                         moved = true;
                         self.visible.remove(&tab);
                         created = true;
                     }
+                    page.source_space = source_space;
                     if page.muted != muted {
                         engine.set_audio_muted(page.view, muted);
                         page.muted = muted;
@@ -526,10 +787,15 @@ impl Pages {
                 }
                 None => {
                     if !active { continue; }
-                    let Some(view) = engine.create_in_host(self.parent, &url, bounds) else { continue; };
+                    if retry_requires_model { continue; }
+                    let view = match engine.create_page_in_storage(&storage, self.parent, &url, bounds) {
+                        PageCreation::Created(view) => view,
+                        PageCreation::Pending => { self.creation_pending = true; continue; }
+                        PageCreation::Failed => continue,
+                    };
                     created = true;
                     if muted { engine.set_audio_muted(view, true); }
-                    pages.insert(tab, Page { owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
+                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
             engine.set_top_corners_rounded(pages[&tab].view, !self.split);
@@ -643,7 +909,9 @@ impl Pages {
     pub fn move_to_host(&mut self, tab: TabId, parent: *mut c_void, bounds: Bounds) -> bool {
         if parent.is_null() { return false; }
         let Some(view) = self.view(tab) else { return false; };
-        self.store.borrow_mut().engine.move_view(view, parent, bounds)
+        let mut store = self.store.borrow_mut();
+        store.capture_pending_engine_events();
+        store.engine.move_view(view, parent, bounds)
     }
 
     pub fn audio_muted(&self, tab: TabId) -> Option<bool> {
@@ -732,6 +1000,7 @@ impl Pages {
     /// Native-only diagnostic entry point: use this host's actual focused,
     /// visible page, never a mirror or an arbitrary model tab.
     pub fn open_inspector_probe(&mut self) -> Result<engine::InspectorStatus, String> {
+        if crate::quit::is_quitting() { return Err("Browser is quitting".into()); }
         let mut store = self.store.borrow_mut();
         let tab = self.shown.filter(|tab| Some(*tab) == self.wanted_focus && self.visible.contains(tab))
             .ok_or("No focused visible page")?;
@@ -793,11 +1062,33 @@ impl Pages {
         }
     }
 
+    pub(crate) fn creation_retry_pending(&self) -> bool { self.creation_pending }
+
+    /// The owner must refresh its authoritative projection before calling this.
+    /// Rebuild intent rather than applying a cached URL/profile while waiting
+    /// for asynchronous context initialization. No engine pumping occurs here.
+    pub(crate) fn retry_pending_creation(&mut self, browser: &Browser) -> bool {
+        if !self.creation_pending { return false; }
+        self.sync(browser, true);
+        !self.creation_pending
+    }
+
     pub fn pump_fn(&self) -> fn() {
         self.store.borrow_mut().engine.pump_fn()
     }
 
+    /// Compatibility inspection drain. The native window loop uses the routed
+    /// drain below so host provenance survives delivery and deferred dispatch.
     pub fn take_events(&mut self) -> Vec<Event> {
+        let events = self.take_routed_events();
+        // This compatibility drain is an explicit inspection consumer, unlike
+        // the native routed drain whose metadata is acknowledged by the model.
+        let mut store = self.store.borrow_mut();
+        for event in &events { store.metadata.remove(&event.sequence); }
+        events.into_iter().map(|event| event.event).collect()
+    }
+
+    pub(crate) fn take_routed_events(&mut self) -> Vec<PageEvent> {
         let mut store = self.store.borrow_mut();
         store.drain_snapshots();
         // Every host polls, even without a browser event. A source may drain the
@@ -813,28 +1104,38 @@ impl Pages {
             self.preserve_ui_focus = false;
         }
         let mut store = self.store.borrow_mut();
-        let fresh = store.engine.take_events();
+        store.capture_pending_engine_events();
         // take_events processes inspector load callbacks first. This runs after
         // the regular pump, with no borrow retained across pumping or awaiting.
         store.handle_devtools_events(self.host, self.page_focus);
         store.layout_inspector_probe();
         let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus);
         if closed { self.devtools_focused = false; self.page_has_focus = focused; }
-        store.events.extend(fresh);
+        let recover: Vec<_> = store.metadata.values().filter_map(|(event, delivered)| {
+            let page = store.pages.get(&event.identity.tab).filter(|page| page.identity == event.identity)?;
+            (page.owner == self.host && *delivered != Some(self.host)
+                && !store.events.iter().any(|queued| queued.sequence == event.sequence)).then(|| event.clone())
+        }).collect();
+        store.events.extend(recover);
+        store.events.sort_by_key(|event| event.sequence);
         let queued = std::mem::take(&mut store.events);
         let mut delivered = Vec::new();
-        for event in queued {
-            let owner = match &event {
-                Event::Shortcut(_) => Some(store.active_host),
-                Event::InspectorInput(input) => store.inspector_input_owner(input).map(|dock| dock.host),
-                Event::OpenInNewTab { opener, .. } => store.pages.values().find(|page| page.view == *opener).map(|page| page.owner),
-                Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
-                | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-                | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } =>
-                    store.pages.values().find(|page| page.view == *view).map(|page| page.owner),
-            };
-            if owner == Some(self.host) { delivered.push(event); }
-            else if owner.is_some_and(|owner| store.hosts.contains_key(&owner)) { store.events.push(event); }
+        for queued in queued {
+            if queued.is_metadata() && !store.metadata.contains_key(&queued.sequence) { continue; }
+            let Some(page) = store.pages.get(&queued.identity.tab).filter(|page| page.identity == queued.identity) else { continue; };
+            let owner = page.owner;
+            if queued.input_origin.is_some_and(|origin|
+                origin.host != owner || origin.attachment != page.input_attachment || !store.hosts.contains_key(&origin.host)) { continue; }
+            // Inspector input also requires the same still-open frontend; its
+            // inspected page alone does not authorize an obsolete dock event.
+            if let Event::InspectorInput(input) = &queued.event {
+                if !store.inspector_input_owner(input).is_some_and(|dock| dock.host == owner && dock.view == page.view) { continue; }
+            }
+            if owner == self.host {
+                if let Some((_, host)) = store.metadata.get_mut(&queued.sequence) { *host = Some(self.host); }
+                delivered.push(queued);
+            }
+            else if store.hosts.contains_key(&owner) { store.events.push(queued); }
         }
         delivered
     }
@@ -876,7 +1177,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }
@@ -887,6 +1188,41 @@ fn inspector_probe_frames(frame: Bounds) -> (Bounds, Bounds) {
 }
 
 impl PageStore {
+    /// Drain without pumping before a transfer/parking changes owner metadata.
+    /// Input keeps its callback-time attachment, even if no host polled first.
+    fn capture_pending_engine_events(&mut self) {
+        for event in self.engine.take_events() {
+            if let Some(event) = self.capture_event(event) { self.events.push(event); }
+        }
+    }
+
+    fn capture_event(&mut self, event: Event) -> Option<PageEvent> {
+        let view = event_view(&event).or_else(|| match &event {
+            Event::InspectorInput(input) => self.inspector_input_owner(input).map(|dock| dock.view),
+            _ => None,
+        })?;
+        let page = self.pages.values().find(|page| page.view == view)?;
+        let input_origin = matches!(&event, Event::Shortcut { .. } | Event::InspectorInput(_)).then_some(InputOrigin {
+            identity: page.identity, host: page.owner, attachment: page.input_attachment,
+            inspector: match &event { Event::InspectorInput(input) => self.inspector_input_owner(input).map(|dock| dock.id), _ => None },
+        });
+        self.next_event = self.next_event.checked_add(1).expect("page event sequence exhausted");
+        let event = PageEvent { sequence: self.next_event, event, identity: page.identity, source_space: page.source_space, input_origin };
+        if event.is_metadata() { self.metadata.insert(event.sequence, (event.clone(), None)); }
+        Some(event)
+    }
+
+    fn retire(&mut self, tab: TabId) {
+        self.metadata.retain(|_, (event, _)| event.identity.tab != tab);
+        if self.devtools.is_some_and(|dock| dock.tab == tab) { self.close_devtools(); }
+        if self.inspector_probe.is_some_and(|probe| probe.tab == tab) { self.close_inspector_probe(); }
+        self.cancel_handoff(tab);
+        if let Some(page) = self.pages.remove(&tab) { self.engine.close(page.view); }
+        self.frozen.retain(|(_, entry), _| *entry != tab);
+        for layout in self.layouts.values_mut() { layout.remove(&tab); }
+        self.mirror_revision = self.mirror_revision.wrapping_add(1);
+    }
+
     fn close_inspector_probe(&mut self) {
         let Some(probe) = self.inspector_probe.take() else { return; };
         self.engine.close_inspector(probe.id);
@@ -925,6 +1261,7 @@ impl PageStore {
     }
 
     fn prune(&mut self) {
+        self.metadata.retain(|_, (event, _)| self.pages.get(&event.identity.tab).is_some_and(|page| page.identity == event.identity));
         let cancelled: Vec<_> = self.handoffs.iter().filter(|(tab, claim)| {
             self.active_host != claim.target
                 || !self.hosts.contains_key(&claim.source)

@@ -80,15 +80,15 @@ impl BrowserWindow {
         if self.split_draft.is_none() && !self.can_add_split(anchor) { return Vec::new(); }
         let query = text.trim().to_lowercase();
         let mut rows: Vec<_> = omnibox::resolve(text).filter(|resolved| !omnibox::is_internal_url(resolved.url())).map(Suggestion::Load).into_iter().collect();
-        let favorites = self.browser.favorites.iter().map(|tab| ("Favorites", tab));
-        rows.extend(favorites.chain(self.browser.spaces.iter().flat_map(|space| space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))))
+        let favorites = self.browser.active_user_profile().favorites.iter().map(|tab| ("Favorites", tab));
+        rows.extend(favorites.chain(self.browser.spaces.iter().filter(|space| space.user_profile_id == self.browser.active_user_profile_id()).flat_map(|space| space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))))
             .filter(|(_, tab)| tab.id != anchor && tab.url != EMPTY_PANE_URL && self.browser.split_for(tab.id).is_none() && !omnibox::is_internal_url(&tab.url))
             .filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
                 || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
             .take(6).map(|(space, tab)| Suggestion::SplitTab { id: tab.id, title: tab.title.clone(), space: space.into() }));
         if !query.is_empty() {
-            let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.url.as_str()).collect();
-            rows.extend(self.browser.history.iter()
+            let open: std::collections::HashSet<_> = self.browser.all_tabs().filter(|tab| self.browser.user_profile_id_for_tab(tab.id) == Some(self.browser.active_user_profile_id())).map(|tab| tab.url.as_str()).collect();
+            rows.extend(self.browser.active_user_profile().history.iter()
                 .filter(|entry| !open.contains(entry.url.as_str()))
                 .filter(|entry| entry.title.to_lowercase().contains(&query) || entry.url.to_lowercase().contains(&query))
                 .take(4).map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));

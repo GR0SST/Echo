@@ -283,7 +283,7 @@ impl Browser {
 
     pub fn move_item_to_pinned_root(&mut self, tab: TabId, space: SpaceId) -> bool {
         if !self.can_edit_persistent_sidebar() { return false; }
-        if !self.spaces.iter().any(|entry| entry.id == space)
+        if !self.spaces.iter().any(|entry| entry.id == space && Some(entry.user_profile_id) == self.user_profile_id_for_tab(tab))
             || !self.all_tabs().any(|entry| entry.id == tab)
         {
             return false;
@@ -319,6 +319,7 @@ impl Browser {
         let Some(target) = self.spaces.iter().position(|space| space.id == destination) else {
             return false;
         };
+        if self.spaces[source].user_profile_id != self.spaces[target].user_profile_id { return false; }
         if parent.is_some_and(|parent| self.folder_space(parent) != Some(destination)) {
             return false;
         }
@@ -453,7 +454,7 @@ impl Browser {
                 self.spaces
                     .iter()
                     .flat_map(|space| &space.splits)
-                    .chain(&self.favorite_splits)
+                    .chain(self.profiles.values().flat_map(|profile| &profile.favorite_splits))
                     .map(|split| split.id.get()),
             )
             .collect();

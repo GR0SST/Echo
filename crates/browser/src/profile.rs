@@ -1,6 +1,6 @@
 //! One editable profile and session writer, with read-only window projections.
 use crate::{split::SplitDraft, window::BrowserWindow};
-use browser_core::{Browser, TabId, windows::{WindowProjection, WindowSelection}};
+use browser_core::{Browser, TabId, UserProfileId, windows::{WindowProjection, WindowSelection}};
 use gpui::{prelude::*, App, AsyncApp, Context, Entity, ForegroundExecutor, Subscription};
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::{Rc, Weak}, time::{Duration, SystemTime}};
 
@@ -23,6 +23,7 @@ impl Profile {
     fn session_json(&self) -> String { session_json(&self.data, &self.drafts) }
 
     fn flush(&mut self) {
+        if crate::quit::is_quitting() { return; }
         let Some(path) = &self.path else { return; };
         let json = self.session_json();
         if self.saved.as_ref() == Some(&json) { return; }
@@ -43,6 +44,7 @@ impl Profile {
     }
 
     fn archive_idle(&mut self) -> usize {
+        if crate::quit::is_quitting() { return 0; }
         let mut slots = self.selections.borrow_mut();
         slots.retain(|slot| slot.strong_count() > 0);
         let protected: Vec<_> = slots.iter().filter_map(Weak::upgrade).flat_map(|slot| slot.borrow().clone()).collect();
@@ -61,7 +63,7 @@ pub(crate) struct ProfileHandle {
     executor: ForegroundExecutor,
     app: AsyncApp,
     // Retains the actual normal profile (and its session writer), never a window snapshot.
-    history_source: Option<Box<ProfileHandle>>,
+    history_source: Option<(Box<ProfileHandle>, UserProfileId)>,
 }
 
 impl ProfileHandle {
@@ -96,15 +98,17 @@ impl ProfileHandle {
         assert!(browser.is_blank() && !browser.is_private(), "Shared history requires a Blank model");
         assert!(!normal_source.data.borrow().is_private() && !normal_source.data.borrow().is_blank(),
             "Blank history must come from the retained normal profile");
+        let source_id = browser.blank_source_user_profile_id().expect("Blank retains its source profile");
+        assert!(normal_source.data.borrow().user_profile(source_id).is_some());
         let mut handle = Self::new(browser, cx);
-        handle.history_source = Some(Box::new(normal_source.clone()));
+        handle.history_source = Some((Box::new(normal_source.clone()), source_id));
         handle.sync_history();
         let source = normal_source.data.clone();
         handle.owner.update(cx, |profile, cx| {
             profile._observe_history = Some(cx.observe(&normal_source.owner, move |profile, _, cx| {
-                let history = source.borrow().history.clone();
+                let history = source.borrow().user_profile(source_id).map(|profile| profile.history.clone()).unwrap_or_default();
                 let mut browser = profile.data.borrow_mut();
-                browser.history = history;
+                if let Some(profile) = browser.user_profile_mut(source_id) { profile.history = history; }
                 drop(browser);
                 profile.revision.set(profile.revision.get().wrapping_add(1));
                 cx.notify();
@@ -114,8 +118,9 @@ impl ProfileHandle {
     }
 
     fn sync_history(&self) {
-        if let Some(source) = &self.history_source {
-            self.data.borrow_mut().history = source.data.borrow().history.clone();
+        if let Some((source, id)) = &self.history_source {
+            let history = source.data.borrow().user_profile(*id).map(|profile| profile.history.clone()).unwrap_or_default();
+            if let Some(profile) = self.data.borrow_mut().user_profile_mut(*id) { profile.history = history; }
         }
     }
 
@@ -124,11 +129,11 @@ impl ProfileHandle {
     fn edit<R>(&self, edit: impl FnOnce(&mut Browser) -> R) -> R {
         self.sync_history();
         let result = edit(&mut self.data.borrow_mut());
-        if let Some(source) = &self.history_source {
-            let history = self.data.borrow().history.clone();
+        if let Some((source, id)) = &self.history_source {
+            let history = self.data.borrow().user_profile(*id).expect("Blank source profile").history.clone();
             let mut normal = source.data.borrow_mut();
-            if !same_history(&normal.history, &history) {
-                normal.history = history;
+            if let Some(profile) = normal.user_profile_mut(*id).filter(|profile| !same_history(&profile.history, &history)) {
+                profile.history = history;
                 drop(normal);
                 source.revision.set(source.revision.get().wrapping_add(1));
                 source.notify();
@@ -136,6 +141,28 @@ impl ProfileHandle {
         }
         result
     }
+
+    pub(crate) fn save_session_to(&self, path: PathBuf, cx: &mut App) {
+        self.owner.update(cx, |profile, cx| profile.save_session_to(path, cx));
+    }
+
+    pub(crate) fn flush_for_quit(&self, cx: &mut App) -> Result<(), String> {
+        self.owner.update(cx, |profile, _| {
+            let Some(path) = &profile.path else { return Ok(()); };
+            let json = profile.session_json();
+            browser_core::session::save(path, &json).map_err(|error| format!("Cannot save {}: {error}", path.display()))?;
+            profile.saved = Some(json);
+            Ok(())
+        })
+    }
+
+    pub(crate) fn same_workspace(&self, other: &Self) -> bool { Rc::ptr_eq(&self.data, &other.data) }
+
+    pub(crate) fn blank_browser(&self, id: UserProfileId) -> Browser {
+        self.data.borrow().new_blank_for_user_profile(id).expect("retained normal source profile")
+    }
+
+    pub(crate) fn default_user_profile_id(&self) -> UserProfileId { self.data.borrow().default_user_profile_id() }
 
     pub(crate) fn selection(&self) -> WindowSelection { self.data.borrow().window_selection() }
     pub(crate) fn new_window_selection(&self) -> WindowSelection { self.data.borrow().new_window_selection() }
@@ -176,9 +203,10 @@ impl ProfileBinding {
         handle.selections.borrow_mut().push(Rc::downgrade(&protected));
         let observe_profile = cx.observe(&handle.owner, |window, _, cx| {
             window.refresh_profile_projection();
+            window.validate_user_profile_dialog(cx);
             cx.notify();
         });
-        let observe_window = cx.observe_self(|window, _| window.profile.remember_draft(&window.split_draft));
+        let observe_window = cx.observe_self(|window, cx| { window.profile.remember_draft(&window.split_draft); window.validate_user_profile_dialog(cx); });
         Self { revision: handle.revision.get(), handle, selection, draft, protected,
             _observe_profile: observe_profile, _observe_window: observe_window }
     }
@@ -217,7 +245,7 @@ impl BrowserWindow {
         });
         let selection_changed = self.browser.space().id != projection.space().id
             || self.browser.space().active_tab != projection.space().active_tab;
-        if selection_changed && self.command_bar.is_none() && self.tab_rename.is_none() {
+        if selection_changed && self.user_profile_dialog.is_none() && self.command_bar.is_none() && self.tab_rename.is_none() {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 // A native Focused event has already selected its responder.
@@ -244,6 +272,8 @@ impl BrowserWindow {
             self.reset_profile_pager(projection.active_space);
         }
         self.browser = projection;
+        self.invalidate_history_confirmation();
+        if let Some(pages) = &self.pages { pages.borrow_mut().reconcile_inventory(&self.browser); }
         self.profile.remember_draft(&self.split_draft);
         self.profile.remember_selection();
         let revision = self.profile.handle.revision.get().wrapping_add(1);

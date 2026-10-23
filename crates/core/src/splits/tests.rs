@@ -92,7 +92,7 @@ fn split_favorites_are_one_shared_item_and_move_between_spaces_as_a_unit() {
     browser.set_tab_muted(a, true);
     assert!(browser.favorite_tab(a));
     assert_eq!(browser.favorite_count(), 1);
-    assert_eq!(browser.favorites.len(), 2);
+    assert_eq!(browser.active_user_profile().favorites.len(), 2);
     let work = browser.add_space("Work", 20.);
     browser.switch_space(1);
     browser.activate_sidebar_item(a, NOW);
@@ -100,7 +100,7 @@ fn split_favorites_are_one_shared_item_and_move_between_spaces_as_a_unit() {
     assert!(browser.unfavorite_tab(b));
     assert!(browser.spaces[0].active_tab.is_none());
     assert_eq!(browser.space().splits[0].id, split);
-    assert_eq!(browser.favorites.len(), 0);
+    assert_eq!(browser.active_user_profile().favorites.len(), 0);
     assert_eq!(browser.space().today.len(), 2);
     assert!(browser.move_tab(b, personal, Section::Pinned));
     assert_eq!(browser.space().id, work, "moving does not switch Spaces on its own");
@@ -160,7 +160,7 @@ fn clear_today_archives_one_entry_per_split_and_preserves_pins_favorites_and_oth
     assert_eq!(browser.archive.iter().filter(|entry| entry.split.is_some()).count(), 1);
     assert_eq!(browser.space().pinned[0].id, pinned);
     assert_eq!(browser.space().active_tab, Some(favorite));
-    assert_eq!(browser.favorites.len(), 1);
+    assert_eq!(browser.active_user_profile().favorites.len(), 1);
     assert_eq!(browser.spaces[1].today.len(), 1);
     assert!(browser.space().splits.is_empty());
 }
@@ -221,10 +221,10 @@ fn favorite_limit_counts_groups_and_blocks_separation_without_discarding_tabs() 
     browser.favorite_tab(a);
     for index in 1..crate::favorites::MAX_FAVORITES { let tab = page(&mut browser, &format!("app{index}")); assert!(browser.favorite_tab(tab)); }
     assert_eq!(browser.favorite_count(), 12);
-    assert_eq!(browser.favorites.len(), 13);
+    assert_eq!(browser.active_user_profile().favorites.len(), 13);
     assert!(!browser.separate_split(a));
     assert!(!browser.separate_split_pane(b));
-    assert_eq!(browser.favorites.len(), 13);
+    assert_eq!(browser.active_user_profile().favorites.len(), 13);
     browser.activate_tab(b, NOW);
     browser.add_space("Work", 20.);
     browser.switch_space(1);
@@ -232,8 +232,8 @@ fn favorite_limit_counts_groups_and_blocks_separation_without_discarding_tabs() 
     assert!(browser.close_split_pane(b, NOW));
     assert!(browser.spaces.iter().all(|space| space.active_tab == Some(a)));
     assert_eq!(browser.favorite_count(), 12);
-    assert_eq!(browser.favorites.len(), 12);
-    assert!(browser.favorite_splits.is_empty());
+    assert_eq!(browser.active_user_profile().favorites.len(), 12);
+    assert!(browser.active_user_profile().favorite_splits.is_empty());
 }
 
 #[test]
@@ -295,17 +295,17 @@ fn resetting_and_replacing_pinned_urls_apply_to_the_entire_split() {
 
 fn check_invariants(browser: &Browser, expected: &HashSet<TabId>) {
     let mut open = HashMap::new();
-    for tab in &browser.favorites { assert!(open.insert(tab.id, (0, 0)).is_none()); }
+    for tab in &browser.active_user_profile().favorites { assert!(open.insert(tab.id, (0, 0)).is_none()); }
     for (index, space) in browser.spaces.iter().enumerate() {
         for tab in &space.pinned { assert!(open.insert(tab.id, (index + 1, 1)).is_none()); }
         for tab in &space.today { assert!(open.insert(tab.id, (index + 1, 2)).is_none()); }
         if let Some(active) = space.active_tab {
-            assert!(browser.favorites.iter().any(|tab| tab.id == active) || space.tabs().any(|tab| tab.id == active), "dangling active tab: {active:?}");
+            assert!(browser.active_user_profile().favorites.iter().any(|tab| tab.id == active) || space.tabs().any(|tab| tab.id == active), "dangling active tab: {active:?}");
         }
     }
     let mut grouped = HashSet::new();
     let mut group_ids = HashSet::new();
-    for (scope, views) in std::iter::once((0, &browser.favorite_splits)).chain(browser.spaces.iter().enumerate().map(|(index, space)| (index + 1, &space.splits))) {
+    for (scope, views) in std::iter::once((0, &browser.active_user_profile().favorite_splits)).chain(browser.spaces.iter().enumerate().map(|(index, space)| (index + 1, &space.splits))) {
         for view in views {
             assert!(group_ids.insert(view.id));
             assert!((2..=4).contains(&view.panes.len()));
@@ -465,7 +465,7 @@ fn favorite_duplication_is_one_dock_item_and_capacity_failure_is_atomic() {
     browser.favorite_tab(a);
     browser.duplicate_item(a, NOW).unwrap();
     assert_eq!(browser.favorite_count(), 2);
-    assert_eq!(browser.favorites.len(), 4);
+    assert_eq!(browser.active_user_profile().favorites.len(), 4);
     while browser.favorite_count() < crate::favorites::MAX_FAVORITES {
         let id = page(&mut browser, "extra");
         browser.favorite_tab(id);

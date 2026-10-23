@@ -169,7 +169,7 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
         right
     }));
     let (empty, _) = another_profile_window(&a, visual_a);
-    empty.update(visual_a, |view, _| view.edit_browser(|browser| browser.archive_after = Some(Duration::ZERO)));
+    empty.update(visual_a, |view, _| view.edit_browser(|browser| browser.active_user_profile_mut().archive_after = Some(Duration::ZERO)));
     visual_b.executor().advance_clock(Duration::from_secs(61));
     visual_b.run_until_parked();
     for view in [&a, &b] {
@@ -213,12 +213,15 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    storage: std::collections::HashMap<u64, crate::pages::StorageSelection>,
+    fork_storage: Vec<crate::pages::StorageSelection>,
     forks: Vec<FakeEngine>,
     calls: Vec<Call>,
     /// Latest bounds given to each view.
     bounds: std::collections::HashMap<u64, Bounds>,
     rounded_top: std::collections::HashMap<u64, bool>,
     next_view: u64,
+    focused_page: Option<ViewId>,
     events: Vec<Event>,
     muted: std::collections::HashSet<u64>,
     focus_on_create: bool,
@@ -232,6 +235,8 @@ struct FakeState {
     inspector_events: Vec<engine::InspectorEvent>,
     inspector_bounds: Option<Bounds>,
     reject_create: bool,
+    pending_storage: std::collections::HashSet<crate::pages::StorageSelection>,
+    storage_attempts: Vec<crate::pages::StorageSelection>,
     snapshots: Vec<engine::PageSnapshot>,
 }
 
@@ -239,11 +244,15 @@ struct FakeState {
 struct FakeEngine(Rc<RefCell<FakeState>>);
 
 impl FakeEngine {
+    fn shortcut(&self, shortcut: Shortcut) -> Event {
+        Event::Shortcut { view: self.0.borrow().focused_page.expect("native shortcut source page"), shortcut }
+    }
     fn take_calls(&self) -> Vec<Call> {
         std::mem::take(&mut self.0.borrow_mut().calls)
     }
 
     fn send(&self, cx: &mut VisualTestContext, event: Event) {
+        if let Event::Focused { view } = &event { self.0.borrow_mut().focused_page = Some(*view); }
         self.0.borrow_mut().events.push(event);
         cx.executor().advance_clock(Duration::from_millis(50));
         cx.run_until_parked();
@@ -255,6 +264,27 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn create_page_in_storage(&mut self, storage: &crate::pages::StorageSelection, parent: *mut std::ffi::c_void, url: &str, bounds: Bounds) -> crate::pages::PageCreation {
+        if self.0.borrow().pending_storage.contains(storage) {
+            self.0.borrow_mut().storage_attempts.push(storage.clone());
+            return crate::pages::PageCreation::Pending;
+        }
+        self.create_in_storage(storage, parent, url, bounds).map_or(crate::pages::PageCreation::Failed, crate::pages::PageCreation::Created)
+    }
+    fn fork_in_storage(&self, storage: &crate::pages::StorageSelection) -> Option<Box<dyn WebEngine>> {
+        self.0.borrow_mut().fork_storage.push(storage.clone());
+        self.fork_with_shared_storage()
+    }
+    fn create_in_storage(&mut self, storage: &crate::pages::StorageSelection, _parent: *mut std::ffi::c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
+        {
+            let mut state = self.0.borrow_mut();
+            state.storage_attempts.push(storage.clone());
+            if state.pending_storage.contains(storage) { return None; }
+        }
+        let view = self.create(url, bounds)?;
+        self.0.borrow_mut().storage.insert(raw(view), storage.clone());
+        Some(view)
+    }
     fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> {
         let child = Self::default();
         self.0.borrow_mut().forks.push(child.clone());
@@ -328,6 +358,7 @@ impl WebEngine for FakeEngine {
         self.call(Call::Visible(raw(view), visible));
     }
     fn focus_page(&mut self, view: ViewId) {
+        self.0.borrow_mut().focused_page = Some(view);
         self.call(Call::FocusPage(raw(view)));
         let mut state = self.0.borrow_mut();
         if state.focus_on_create { state.events.push(Event::Focused { view }); }
@@ -925,14 +956,14 @@ fn shortcuts_pressed_inside_a_page_reach_the_browser(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let shortcut = |key: &str| Shortcut { cmd: true, key: key.into(), ..Default::default() };
 
-    fake.send(cx, Event::Shortcut(shortcut("t")));
+    fake.send(cx, fake.shortcut(shortcut("t")));
     assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
     assert!(bar_input_focused(&view, cx));
     bar(&view, cx).simulate_keystrokes("escape");
     fake.take_calls();
 
-    fake.send(cx, Event::Shortcut(shortcut("[")));
-    fake.send(cx, Event::Shortcut(shortcut("r")));
+    fake.send(cx, fake.shortcut(shortcut("[")));
+    fake.send(cx, fake.shortcut(shortcut("r")));
     assert_eq!(fake.take_calls(), vec![Call::Back(1), Call::Reload(1)]);
 }
 
@@ -1322,7 +1353,7 @@ fn page_controls_work_from_ui_and_from_page_focus(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-shift-r cmd-. cmd-= cmd-- cmd-0 cmd-left cmd-right");
     assert_eq!(fake.take_calls(), vec![Call::ForceReload(1), Call::StopLoading(1), Call::Zoom(1, 1), Call::Zoom(1, -1), Call::Zoom(1, 0), Call::Back(1), Call::Forward(1)]);
     for (key, shift) in [("r", true), (".", false), ("=", false), ("-", false), ("0", false)] {
-        fake.send(cx, Event::Shortcut(Shortcut { cmd: true, shift, key: key.into(), ..Default::default() }));
+        fake.send(cx, fake.shortcut(Shortcut { cmd: true, shift, key: key.into(), ..Default::default() }));
     }
     assert_eq!(fake.take_calls(), vec![Call::ForceReload(1), Call::StopLoading(1), Call::Zoom(1, 1), Call::Zoom(1, -1), Call::Zoom(1, 0)]);
 }
@@ -1497,7 +1528,7 @@ fn find_handles_no_matches_empty_input_and_refocus(cx: &mut TestAppContext) {
 #[gpui::test]
 fn find_shortcut_from_page_focus_and_tab_switch_clear_find(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
-    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, key: "f".into(), ..Default::default() }));
+    fake.send(cx, fake.shortcut(Shortcut { cmd: true, key: "f".into(), ..Default::default() }));
     find_overlay(&view, cx).simulate_input("page text");
     fake.take_calls();
     // Clicking another sidebar item must not keep searching the old page.
@@ -1529,7 +1560,7 @@ fn find_command_opens_a_small_panel_with_input_focus(cx: &mut TestAppContext) {
 fn auto_archive_picker_keeps_four_intervals_in_fixed_order_with_current_third(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let current = Some(Duration::from_secs(7 * 86400));
-    view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = current));
+    view.update(cx, |w, _| w.edit_browser(|browser| browser.active_user_profile_mut().archive_after = current));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("archive tabs after");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -1541,16 +1572,16 @@ fn auto_archive_picker_keeps_four_intervals_in_fixed_order_with_current_third(cx
         Suggestion::ArchiveAfter { label: "7 days".into(), seconds: Some(604800) },
         Suggestion::ArchiveAfter { label: "30 days".into(), seconds: Some(2592000) },
     ]);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), current);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), current);
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(bar_text(&view, cx), None);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), current);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), current);
 }
 
 #[gpui::test]
 fn auto_archive_picker_filters_valid_choice_and_persists_interval(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
-    view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = None));
+    view.update(cx, |w, _| w.edit_browser(|browser| browser.active_user_profile_mut().archive_after = None));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("auto archive settings");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -1559,23 +1590,23 @@ fn auto_archive_picker_filters_valid_choice_and_persists_interval(cx: &mut TestA
         Suggestion::ArchiveAfter { label: "7 days".into(), seconds: Some(604800) },
     ]);
     click(&mut bar(&view, cx), "suggestion-0");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(7 * 86400)));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(7 * 86400)));
     assert_eq!(bar_text(&view, cx), None);
     let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
-    assert_eq!(restored.archive_after, Some(Duration::from_secs(7 * 86400)));
+    assert_eq!(restored.active_user_profile().archive_after, Some(Duration::from_secs(7 * 86400)));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("archive tabs after");
     bar(&view, cx).simulate_keystrokes("enter");
     bar(&view, cx).simulate_input("1 hour");
     bar(&view, cx).simulate_keystrokes("escape");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), Some(Duration::from_secs(7 * 86400)));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(7 * 86400)));
 }
 
 #[gpui::test]
 fn auto_archive_picker_cancel_and_unsupported_queries_preserve_legacy_intervals(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     for saved in [None, Some(Duration::from_secs(12345)), Some(Duration::from_secs(3600)), Some(Duration::from_secs(21600))] {
-        view.update(cx, |w, _| w.edit_browser(|browser| browser.archive_after = saved));
+        view.update(cx, |w, _| w.edit_browser(|browser| browser.active_user_profile_mut().archive_after = saved));
         cx.simulate_keystrokes("cmd-t");
         bar(&view, cx).simulate_input("archive tabs after");
         bar(&view, cx).simulate_keystrokes("enter");
@@ -1584,19 +1615,19 @@ fn auto_archive_picker_cancel_and_unsupported_queries_preserve_legacy_intervals(
         assert!(options.iter().all(|option| matches!(option,
             Suggestion::ArchiveAfter { seconds: Some(43200 | 86400 | 604800 | 2592000), .. }
         )));
-        assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), saved);
+        assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), saved);
         for query in ["Never", "1 hour", "6 hours", "Current interval", "12345"] {
             bar(&view, cx).simulate_keystrokes("cmd-a");
             bar(&view, cx).simulate_input(query);
             assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
             bar(&view, cx).simulate_keystrokes("enter");
             assert_eq!(bar_text(&view, cx).as_deref(), Some(query));
-            assert_eq!(view.read_with(cx, |w, _| w.browser.archive_after), saved);
+            assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), saved);
         }
         bar(&view, cx).simulate_keystrokes("cmd-a backspace escape");
         assert_eq!(bar_text(&view, cx), None);
         let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
-        assert_eq!(restored.archive_after, saved);
+        assert_eq!(restored.active_user_profile().archive_after, saved);
     }
 }
 
@@ -1605,7 +1636,7 @@ fn copy_url_cleans_trackers_and_keeps_page_focus(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/article?utm_source=mail&id=4#part".into() });
     fake.take_calls();
-    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, shift: true, key: "c".into(), ..Default::default() }));
+    fake.send(cx, fake.shortcut(Shortcut { cmd: true, shift: true, key: "c".into(), ..Default::default() }));
     let clipboard = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(clipboard.as_deref(), Some("https://example.com/article?id=4#part"));
     assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Copied a clean link without trackers"));
@@ -2031,7 +2062,7 @@ fn view_source_from_menu_shortcut_and_command_bar_opens_a_new_tab(cx: &mut TestA
 fn view_source_from_native_split_focus_preserves_the_original_group(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 2);
     let original = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
-    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, alt: true, key: "u".into(), ..Default::default() }));
+    fake.send(cx, fake.shortcut(Shortcut { cmd: true, alt: true, key: "u".into(), ..Default::default() }));
     assert_eq!(active_url(&view, cx).as_deref(), Some("view-source:https://pane1.example"));
     assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
     fake.take_calls();
@@ -2377,7 +2408,7 @@ fn fullscreen_targets_the_main_window_from_pages_and_overlays(cx: &mut TestAppCo
     let (view, cx, fake) = open_pages(cx);
     cx.simulate_keystrokes("ctrl-cmd-f");
     assert!(cx.update(|window, _| window.is_fullscreen()));
-    fake.send(cx, Event::Shortcut(Shortcut { ctrl: true, cmd: true, key: "f".into(), ..Default::default() }));
+    fake.send(cx, fake.shortcut(Shortcut { ctrl: true, cmd: true, key: "f".into(), ..Default::default() }));
     assert!(!cx.update(|window, _| window.is_fullscreen()));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_keystrokes("ctrl-cmd-f");
@@ -2431,17 +2462,17 @@ fn history_deletion_and_confirmation_preserve_tabs_and_can_be_cancelled(cx: &mut
     cx.simulate_keystrokes("cmd-y");
     let tabs = today_urls(&view, cx);
     click(cx, "history-remove-0");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.history.len()), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().history.len()), 1);
     assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
     click(cx, "clear-history");
     click(cx, "history-clear-cancel");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.history.len()), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().history.len()), 1);
     click(cx, "clear-history");
     cx.simulate_keystrokes("escape");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.history.len()), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().history.len()), 1);
     click(cx, "clear-history");
     click(cx, "history-clear-confirm");
-    assert!(view.read_with(cx, |w, _| w.browser.history.is_empty()));
+    assert!(view.read_with(cx, |w, _| w.browser.active_user_profile().history.is_empty()));
     assert_eq!(today_urls(&view, cx), tabs);
     assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
 }
@@ -2596,8 +2627,8 @@ fn deleting_a_history_suggestion_keeps_the_bar_and_does_not_open_the_page(cx: &m
         assert_eq!(w.command_bar.as_ref().unwrap().selected, 0);
         assert!(!w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::History { .. })));
         let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
-        assert_eq!(restored.history.len(), 1);
-        assert_eq!(restored.history[0].url, "https://example.com/two");
+        assert_eq!(restored.active_user_profile().history.len(), 1);
+        assert_eq!(restored.active_user_profile().history[0].url, "https://example.com/two");
         assert_eq!(restored.archive.len(), w.browser.archive.len());
     });
     bar(&view, cx).simulate_keystrokes("escape");
@@ -2613,7 +2644,7 @@ fn favorites_are_shared_and_keep_the_loaded_page_across_spaces(cx: &mut TestAppC
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("favorite tab");
     bar(&view, cx).simulate_keystrokes("enter");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites.len()), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().favorites.len()), 1);
     assert!(cx.debug_bounds("favorite-8").is_some());
     fake.take_calls();
     cx.simulate_keystrokes("ctrl-2");
@@ -2650,7 +2681,7 @@ fn closing_a_favorite_unloads_it_and_clicking_it_reopens_the_original_url(cx: &m
     assert!(fake.take_calls().contains(&Call::Close(1)));
     assert!(active_url(&view, cx).is_none());
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), archive);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites.len()), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().favorites.len()), 1);
     click(cx, "favorite-8");
     assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
     assert!(fake.take_calls().contains(&Call::Create(2, original)));
@@ -2666,11 +2697,11 @@ fn unfavorite_returns_the_shared_tab_to_the_current_spaces_today(cx: &mut TestAp
     bar(&view, cx).simulate_input("unfavorite tab");
     bar(&view, cx).simulate_keystrokes("enter");
     view.read_with(cx, |w, _| {
-        assert!(w.browser.favorites.is_empty());
+        assert!(w.browser.active_user_profile().favorites.is_empty());
         assert_eq!(w.browser.space().today.len(), 1);
         assert_eq!(w.browser.space().today[0].id.get(), 8);
         let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
-        assert!(restored.favorites.is_empty());
+        assert!(restored.active_user_profile().favorites.is_empty());
         assert_eq!(restored.active_tab().unwrap().id.get(), 8);
     });
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
@@ -2686,7 +2717,7 @@ fn a_favorite_can_move_to_the_current_spaces_pinned_section(cx: &mut TestAppCont
     bar(&view, cx).simulate_input("move to pinned in work");
     bar(&view, cx).simulate_keystrokes("enter");
     view.read_with(cx, |w, _| {
-        assert!(w.browser.favorites.is_empty());
+        assert!(w.browser.active_user_profile().favorites.is_empty());
         assert_eq!(w.browser.space().pinned[0].id.get(), 8);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
         assert_ne!(w.browser.spaces[0].active_tab, w.browser.space().active_tab);
@@ -2700,15 +2731,15 @@ fn engine_favicons_follow_tabs_into_favorites_and_survive_closing_and_sessions(c
     let original = active_url(&view, cx).unwrap();
     let png = include_bytes!("../testdata/favicon.png").to_vec();
     fake.send(cx, Event::Favicon { view: page(1), page_url: original.clone(), png: png.clone() });
-    assert_eq!(view.read_with(cx, |w, _| w.browser.favicon(&original).map(Vec::from)), Some(png.clone()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.favicon(w.browser.active_user_profile_id(), &original).map(Vec::from)), Some(png.clone()));
     dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
     cx.simulate_keystrokes("ctrl-2 cmd-1");
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://elsewhere.example/page".into() });
     cx.simulate_keystrokes("cmd-w");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites[0].url, original);
+        assert_eq!(w.browser.active_user_profile().favorites[0].url, original);
         let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
-        assert_eq!(restored.favicon(&original), Some(png.as_slice()));
+        assert_eq!(restored.favicon(restored.active_user_profile_id(), &original), Some(png.as_slice()));
     });
     click(cx, "favorite-8");
     assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
@@ -2776,11 +2807,11 @@ fn context_favorite_and_unfavorite_preserve_the_other_active_tab(cx: &mut TestAp
     right_click(cx, "tab-7");
     click(&mut tab_menu(&view, cx), "tab-menu-favorite");
     assert_eq!(active_url(&view, cx), original);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites[0].id.get()), 7);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().favorites[0].id.get()), 7);
     right_click(cx, "favorite-7");
     click(&mut tab_menu(&view, cx), "tab-menu-favorite");
     assert_eq!(active_url(&view, cx), original);
-    assert!(view.read_with(cx, |w, _| w.browser.favorites.is_empty()));
+    assert!(view.read_with(cx, |w, _| w.browser.active_user_profile().favorites.is_empty()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().today[0].id.get()), 7);
 }
 
@@ -3262,10 +3293,10 @@ fn split_shortcuts_from_native_page_focus_use_the_same_picker_and_close_action(c
     let shortcuts = crate::window::page_shortcuts();
     assert!(shortcuts.contains(&shortcut("=")));
     assert!(shortcuts.contains(&shortcut("-")));
-    fake.send(cx, Event::Shortcut(shortcut("=")));
+    fake.send(cx, fake.shortcut(shortcut("=")));
     assert!(bar_input_focused(&view, cx));
     bar(&view, cx).simulate_keystrokes("escape");
-    fake.send(cx, Event::Shortcut(shortcut("-")));
+    fake.send(cx, fake.shortcut(shortcut("-")));
     assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
 }
@@ -3725,7 +3756,7 @@ fn numbered_sidebar_shortcuts_can_exclude_and_include_favorites(cx: &mut TestApp
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 6);
     view.read_with(cx, |w, _| {
         let saved = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
-        assert!(!saved.include_favorites_in_ordering);
+        assert!(!saved.active_user_profile().include_favorites_in_ordering);
     });
     dispatch_menu(cx, "Tabs", "Include/Exclude Favorites in Ordering");
     cx.simulate_keystrokes("cmd-1");
@@ -3746,9 +3777,9 @@ fn hidden_cycle_shortcuts_work_from_ui_and_native_page_focus_and_keep_split_grou
     let shortcut = |key: &str| Shortcut { ctrl: true, cmd: true, key: key.into(), ..Default::default() };
     assert!(crate::window::page_shortcuts().contains(&shortcut("left")));
     assert!(crate::window::page_shortcuts().contains(&shortcut("right")));
-    fake.send(cx, Event::Shortcut(shortcut("left")));
+    fake.send(cx, fake.shortcut(shortcut("left")));
     assert_eq!(active_url(&view, cx), split_page);
-    fake.send(cx, Event::Shortcut(shortcut("right")));
+    fake.send(cx, fake.shortcut(shortcut("right")));
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://next.example"));
 }
 
@@ -4500,7 +4531,7 @@ fn dragging_a_favorite_into_a_folder_preserves_the_loaded_page_and_original_url(
     fake.take_calls();
     drag_between(cx, "favorite-8", "folder-9");
     view.read_with(cx, |w, _| {
-        assert!(w.browser.favorites.is_empty());
+        assert!(w.browser.active_user_profile().favorites.is_empty());
         assert_eq!(w.browser.folder_tabs(folder).iter().map(|tab| tab.get()).collect::<Vec<_>>(), vec![8]);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
         assert!(w.browser.folder(folder).unwrap().collapsed);
@@ -4675,12 +4706,12 @@ fn dragging_into_the_favorites_dock_and_back_to_today_reuses_the_live_page(cx: &
     // A lone favorite fills the row, so the drop lands on its tile.
     drag_between(cx, "tab-8", "favorites");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
+        assert_eq!(w.browser.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
     });
     drag_between(cx, "favorite-8", "new-tab");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4]);
+        assert_eq!(w.browser.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4]);
         assert_eq!(w.browser.space().today[0].id.get(), 8);
         assert!(w.browser.space().today[0].pinned_url.is_none());
         assert!(w.command_bar.is_none());
@@ -4756,14 +4787,14 @@ fn reordering_favorite_icons_preserves_the_current_page_for_both_inactive_and_ac
     let original = active_url(&view, cx);
     fake.take_calls();
     drag_between(cx, "favorite-5", "favorite-4");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>()), vec![5, 4]);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>()), vec![5, 4]);
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
     click(cx, "favorite-5");
     fake.take_calls();
     drag_between(cx, "favorite-5", "favorite-4");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.browser.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 5]);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
     });
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
@@ -4785,7 +4816,7 @@ fn reordering_a_favorite_split_keeps_pane_focus_and_numbered_navigation_uses_the
     fake.take_calls();
     drag_between(cx, "favorite-4", "favorite-7");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![7, 4, 5]);
+        assert_eq!(w.browser.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![7, 4, 5]);
         assert_eq!(w.browser.active_split().unwrap().id, split);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
         assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
@@ -4814,11 +4845,11 @@ fn dropping_a_new_favorite_on_an_icon_inserts_it_at_that_position_without_copyin
     fake.take_calls();
     drag_between(cx, "tab-8", "favorite-4");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
+        assert_eq!(w.browser.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
         assert_eq!(w.browser.all_tabs().count(), 5);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
         let loaded = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
-        assert_eq!(loaded.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
+        assert_eq!(loaded.active_user_profile().favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
     });
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
@@ -4842,7 +4873,7 @@ fn a_full_favorites_dock_still_allows_existing_items_to_be_reordered(cx: &mut Te
     drag_between(cx, "favorite-9", "favorite-20");
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.favorite_count(), browser_core::favorites::MAX_FAVORITES);
-        assert_eq!(w.browser.favorites.last().unwrap().id.get(), 9);
+        assert_eq!(w.browser.active_user_profile().favorites.last().unwrap().id.get(), 9);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
     });
     assert_eq!(active_url(&view, cx), original);
@@ -4928,7 +4959,7 @@ fn dragging_a_favorite_after_a_today_row_unfavorites_without_reloading_or_openin
     fake.take_calls();
     drag_to_row_edge(cx, "favorite-8", "tab-6", true);
     view.read_with(cx, |w, _| {
-        assert!(w.browser.favorites.is_empty());
+        assert!(w.browser.active_user_profile().favorites.is_empty());
         assert_eq!(w.browser.space().today.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![7, 6, 8]);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
         assert!(w.browser.space().today.last().unwrap().pinned_url.is_none());
@@ -5121,7 +5152,7 @@ fn dragging_a_favorite_split_to_a_space_icon_turns_it_into_local_pins_without_lo
     drag_between(cx, "favorite-4", "space-1");
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.space().name, "Work");
-        assert!(w.browser.favorites.is_empty());
+        assert!(w.browser.active_user_profile().favorites.is_empty());
         assert_eq!(w.browser.space().pinned.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 5]);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
         assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
@@ -5159,7 +5190,7 @@ fn a_shared_favorite_drag_keeps_its_source_pane_when_hovering_another_spaces_pan
     run_named_command(&view, cx, "favorite tab");
     view.update(cx, |w, cx| {
         w.edit_browser(|browser| browser.add_space("Work", 100.));
-        let panes = w.browser.favorite_splits[0].panes.clone();
+        let panes = w.browser.active_user_profile().favorite_splits[0].panes.clone();
         w.edit_browser(|browser| browser.switch_space(1));
         w.edit_browser(|browser| browser.activate_tab(panes[0], std::time::SystemTime::now()));
         w.edit_browser(|browser| browser.switch_space(0));
@@ -5181,7 +5212,7 @@ fn a_shared_favorite_drag_keeps_its_source_pane_when_hovering_another_spaces_pan
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.space().name, "Work");
-        assert!(w.browser.favorites.is_empty());
+        assert!(w.browser.active_user_profile().favorites.is_empty());
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
         assert_eq!(w.browser.active_split().unwrap().active.get(), 5);
         assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
@@ -5245,7 +5276,7 @@ fn incognito_shortcut_opens_an_independent_window_with_command_input(cx: &mut Te
         assert!(view.command_bar.is_some());
         assert!(view.command_bar.as_ref().unwrap().input.read(cx).text().is_empty());
         assert!(view.browser.all_tabs().next().is_none());
-        assert!(view.browser.favorites.is_empty());
+        assert!(view.browser.active_user_profile().favorites.is_empty());
         assert_eq!(view.browser.space().name, "Incognito");
     });
     assert_eq!(regular.read_with(visual, |view, _| browser_core::session::to_json(&view.browser)), original);
@@ -5258,7 +5289,7 @@ fn incognito_shortcut_opens_an_independent_window_with_command_input(cx: &mut Te
     private.read_with(&private_visual, |view, _| {
         assert_eq!(view.browser.space().today.len(), 1);
         assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/first-window");
-        assert!(view.browser.history.is_empty());
+        assert!(view.browser.active_user_profile().history.is_empty());
     });
     let roots = private_visual.cx.update(|cx| {
         let views: Vec<_> = cx.windows().into_iter().filter_map(|window| window.downcast::<BrowserWindow>())
@@ -5314,7 +5345,7 @@ fn incognito_never_saves_the_private_window_to_a_session(cx: &mut TestAppContext
     visual.run_until_parked();
     view.read_with(visual, |view, _| {
         assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/secret");
-        assert!(view.browser.history.is_empty());
+        assert!(view.browser.active_user_profile().history.is_empty());
     });
     visual.simulate_keystrokes("cmd-shift-w");
     drop(view);
@@ -5401,7 +5432,7 @@ fn close_window_from_page_shortcut_keeps_the_other_window_open(cx: &mut TestAppC
             cx.new(|cx| BrowserWindow::new(demo_browser(), None, window, cx))
         }).unwrap()
     });
-    fake.send(visual, Event::Shortcut(Shortcut {
+    fake.send(visual, fake.shortcut(Shortcut {
         cmd: true, shift: true, key: "w".into(), ..Default::default()
     }));
     visual.run_until_parked();
@@ -5442,7 +5473,7 @@ fn cmd_w_closes_only_the_focused_split_pane_from_ui_and_native_page_focus(cx: &m
     let calls = fake.take_calls();
     assert_eq!(calls.iter().filter(|call| matches!(call, Call::Close(..))).count(), 1);
     assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
-    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, key: "w".into(), ..Default::default() }));
+    fake.send(cx, fake.shortcut(Shortcut { cmd: true, key: "w".into(), ..Default::default() }));
     assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 1);
     assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Close(..))).count(), 1);
@@ -5947,17 +5978,19 @@ fn sidebar_context_menus_follow_the_reference_layout(cx: &mut TestAppContext) {
     for row in ["tab-menu-space-icon", "tab-menu-space-rename", "tab-menu-edit-theme-color", "tab-menu-set-profile", "tab-menu-space-new-folder", "tab-menu-live-folders", "tab-menu-share-space", "tab-menu-manage-spaces", "tab-menu-delete-space"] {
         assert!(menu.debug_bounds(row).is_some(), "{row}");
     }
-    // Submenus open with the right arrow and close with the left one.
+    // Set Profile now opens the reference sheet for this stable Space ID;
+    // it is no longer a placeholder submenu containing only Default.
     assert!(menu.debug_bounds("tab-context-submenu").is_none());
-    menu.simulate_keystrokes("down down down down right");
-    menu.run_until_parked();
-    assert!(menu.debug_bounds("tab-context-submenu").is_some());
-    assert!(menu.debug_bounds("tab-menu-default").is_some());
-    menu.simulate_keystrokes("left");
-    menu.run_until_parked();
-    assert!(menu.debug_bounds("tab-context-submenu").is_none());
-    menu.simulate_keystrokes("escape");
+    click(&mut menu, "tab-menu-set-profile");
     assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
+    let overlay = view.read_with(cx, |w, _| w.user_profile_dialog.as_ref().unwrap().overlay.unwrap());
+    let mut sheet = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    sheet.run_until_parked();
+    assert!(sheet.debug_bounds("user-profile-sheet").is_some());
+    assert!(sheet.debug_bounds("profile-dropdown").is_some());
+    sheet.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.user_profile_dialog.is_none()));
 }
 
 #[gpui::test]
@@ -5971,7 +6004,7 @@ fn sidebar_pin_undo_and_redo_work_from_shortcuts_and_edit_menu_without_reloading
     dispatch_menu(cx, "Edit", "Redo");
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|entry| entry.id == tab)));
     dispatch_menu(cx, "Edit", "Undo");
-    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, shift: true, key: "z".into(), ..Default::default() }));
+    fake.send(cx, fake.shortcut(Shortcut { cmd: true, shift: true, key: "z".into(), ..Default::default() }));
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|entry| entry.id == tab)));
     assert!(fake.take_calls().iter().all(|call| !matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Undo(..) | Call::Redo(..))));
 }
@@ -6776,7 +6809,7 @@ fn devtools_uses_the_private_windows_current_page_engine(cx: &mut TestAppContext
     assert_eq!(view.read_with(visual, |view, _| view.pages.as_ref().unwrap().borrow().tab_for(page)), Some(focused));
     assert!(fake.take_calls().iter().any(|call| matches!(call, Call::InspectorOpen(id, 1, _, engine::InspectorPanel::Console, false) if *id == raw(page))));
     view.read_with(visual, |view, _| {
-        assert!(view.browser.history.is_empty());
+        assert!(view.browser.active_user_profile().history.is_empty());
         assert_eq!(view.browser.all_tabs().count(), 1);
         assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/document");
     });
@@ -6868,7 +6901,7 @@ fn assert_same_drain_split_focus_order(cx: &mut TestAppContext, frontend_last: b
     let batch = if frontend_last {
         vec![page_focus, frontend_focus, Event::InspectorInput(engine::InspectorEvent::Shortcut { inspector: inspector.id, shortcut: close })]
     } else {
-        vec![frontend_focus, page_focus, Event::Shortcut(close)]
+        vec![frontend_focus, page_focus, Event::Shortcut { view: b_view, shortcut: close }]
     };
     fake.take_calls();
     // Both focus callbacks and Cmd+W enter one queue before a single drain.
@@ -6922,7 +6955,7 @@ fn assert_focus_after_shortcut_keeps_original_target(cx: &mut TestAppContext, fr
     let action = if frontend_shortcut {
         Event::InspectorInput(engine::InspectorEvent::Shortcut { inspector: inspector.id, shortcut })
     } else {
-        Event::Shortcut(shortcut)
+        Event::Shortcut { view: inspector.inspected, shortcut }
     };
     fake.take_calls();
     fake.0.borrow_mut().events.extend([focus_a, action, Event::Focused { view: b_view }]);
@@ -6963,3 +6996,44 @@ fn same_drain_deferred_console_action_precedes_later_page_focus(cx: &mut TestApp
 
 #[path = "blank_window_tests.rs"]
 mod blank_window_tests;
+
+#[path = "profile_routing_tests.rs"]
+mod profile_routing_tests;
+
+#[path = "user_profile_host_tests.rs"]
+mod user_profile_host_tests;
+
+#[gpui::test]
+fn cmd_q_seals_window_and_command_bar_producers_before_final_quit(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    let before = visual.cx.update(|cx| cx.windows().len());
+    visual.simulate_keystrokes("cmd-q");
+    visual.simulate_keystrokes("cmd-t");
+    visual.simulate_keystrokes("cmd-n");
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| assert!(view.command_bar.is_none()));
+    visual.cx.update(|cx| {
+        assert!(crate::quit::is_quitting());
+        assert_eq!(cx.windows().len(), before);
+        assert!(cx.windows().iter().any(|window| window.downcast::<BrowserWindow>().is_some()));
+        // Test only pre-quit routing: no CEF-global shutdown is started here.
+        crate::quit::reset_for_test(cx);
+    });
+}
+
+#[test]
+fn quit_retires_every_pool_even_while_stale_layout_closures_hold_pages() {
+    let engines = [FakeEngine::default(), FakeEngine::default(), FakeEngine::default()];
+    // Independent normal/private/Blank pools plus shared normal-window layout.
+    let layouts: Vec<_> = engines.iter().map(|engine| Rc::new(RefCell::new(crate::pages::Pages::new(Box::new(engine.clone()))))).collect();
+    let stale = layouts.clone();
+    let shared = layouts[0].borrow().for_host(std::ptr::null_mut());
+    let owners = crate::pages::take_shutdown_engines().unwrap();
+    assert_eq!(owners.len(), 3);
+    drop(layouts);
+    for engine in &engines { assert_eq!(Rc::strong_count(&engine.0), 2); }
+    drop(owners);
+    for engine in &engines { assert_eq!(Rc::strong_count(&engine.0), 1); }
+    assert!(shared.independent_with_shared_storage(std::ptr::null_mut()).is_none());
+    for pages in &stale { assert!(pages.borrow_mut().open_inspector_probe().is_err()); }
+}

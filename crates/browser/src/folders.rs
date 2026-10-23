@@ -141,6 +141,7 @@ impl BrowserWindow {
                 .filter(|space| space.id != self.browser.space().id),
         );
         for space in spaces {
+            if space.user_profile_id != self.browser.active_user_profile_id() { continue; }
             for folder in &space.folders {
                 let eligible = match target {
                     Target::MoveFolder(id) => {
@@ -185,6 +186,12 @@ impl BrowserWindow {
         parent: Option<FolderId>,
         cx: &mut Context<Self>,
     ) -> bool {
+        let source_profile = match target {
+            Target::MoveToFolder(tab) => self.browser.user_profile_id_for_tab(tab),
+            Target::MoveFolder(folder) => self.browser.folder_space(folder).and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).map(|space| space.user_profile_id),
+            _ => None,
+        };
+        if source_profile.is_none() || !self.browser.spaces.iter().any(|entry| entry.id == space && Some(entry.user_profile_id) == source_profile) { return false; }
         let active = self.browser.space().active_tab;
         let moved = match target {
             Target::MoveToFolder(tab) => self.browser.related_tabs(tab),
@@ -375,7 +382,7 @@ impl BrowserWindow {
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(|this| this.bg(hsla(0., 0., 1., 0.35)))
                         .on_click(cx.listener(move |this, _, _, cx| { if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed)); } cx.notify(); }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_folder_menu(id, event.position, window, cx); }))
-                        .on_drag(crate::folder_drag::FolderDrag::new(folder, focus), |drag, _, _, cx| cx.new(|_| drag.clone()))
+                        .on_drag(crate::folder_drag::FolderDrag::new(folder, focus, self.profile.handle.clone(), self.browser.spaces.iter().find(|entry| entry.id == space).expect("folder Space").user_profile_id), |drag, _, _, cx| cx.new(|_| drag.clone()))
                         .can_drop(move |value, _, cx| {
                             if let Some(drag) = value.downcast_ref::<crate::folder_drag::FolderDrag>() {
                                 browser.read_with(cx, |this, _| this.browser.can_move_folder(drag.id, space, Some(id))).unwrap_or(false)

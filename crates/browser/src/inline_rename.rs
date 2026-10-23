@@ -34,6 +34,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn rename_tab_inline(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        self.close_user_profile_dialog(cx);
         self.finish_tab_rename(true, cx);
         if !self.can_rename_tab_inline(tab) { return; }
         self.reveal_tab_row(tab, cx);

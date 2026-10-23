@@ -274,3 +274,14 @@ pub fn content_view_of(view: *mut c_void) -> *mut c_void {
         if content.is_null() { view } else { content as *mut c_void }
     }
 }
+
+/// CEF154 CefBrowserHostView::dealloc calls WindowDestroyed(). The owning
+/// superview supplies the native child's strong reference; detach ONLY this
+/// child, never the clip host or NSWindow. Do not retain the child ourselves:
+/// that would prevent dealloc and therefore OnBeforeClose. The clip remains
+/// retained by the runtime lease until the callback has returned.
+pub(crate) fn destroy_browser_child(child: *mut c_void) {
+    unsafe {
+        let _: () = msg_send![child as *mut AnyObject, removeFromSuperview];
+    }
+}

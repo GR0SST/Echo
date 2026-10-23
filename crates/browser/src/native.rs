@@ -432,3 +432,6 @@ pub fn set_app_visibility(action: AppVisibility, cx: &gpui::App) {
         }
     }
 }
+
+#[cfg(all(target_os = "macos", not(test)))]
+pub(crate) mod termination;

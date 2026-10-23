@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cef::*;
@@ -16,6 +16,10 @@ mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
 mod snapshot;
+mod storage;
+mod shutdown;
+pub use shutdown::{ShutdownPhase, ShutdownStatus};
+pub use storage::StorageKey;
 pub use editing::subprocess_app;
 pub use snapshot::PageSnapshot;
 
@@ -72,8 +76,9 @@ pub enum Event {
     },
     /// The page asked for a new window (target=_blank, window.open, ⌘-click).
     OpenInNewTab { opener: ViewId, url: String },
-    /// A browser shortcut pressed while the page had focus; the page did not get it.
-    Shortcut(Shortcut),
+    /// A browser shortcut pressed while this exact page had focus. Preserve
+    /// the callback view through queues; the current active page may change.
+    Shortcut { view: ViewId, shortcut: Shortcut },
     /// Native frontend input in the same chronological stream as page input.
     /// The browser validates inspector ownership; this is never tab metadata.
     InspectorInput(InspectorEvent),
@@ -101,9 +106,15 @@ type Shortcuts = Arc<Vec<Shortcut>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewRole { Page, Inspector(InspectorId) }
 
-struct View {
+// Defaults are the native types. Generic payloads let lifecycle tests exercise
+// the actual view ownership without loading CEF or constructing a native host.
+struct View<B = Browser, C = RequestContext> {
     role: ViewRole,
-    browser: Browser,
+    browser: B,
+    // Retain the exact registry Rc, not just a clone of the native CEF handle.
+    // In particular, a private page in a normal pool must keep Runtime.private
+    // upgradeable after the source private engine and public handle are dropped.
+    context: std::rc::Rc<C>,
     parent: *mut c_void,
     /// What gets positioned and hidden: a rounded clip view holding the
     /// page on macOS, the page's own native view elsewhere.
@@ -117,12 +128,102 @@ struct View {
 // CEF is initialized once per process, including across closed/reopened windows.
 thread_local! {
     static RUNTIME: std::cell::RefCell<Option<std::rc::Rc<Runtime>>> = const { std::cell::RefCell::new(None) };
-    static PRIVATE_CONTEXT: std::cell::RefCell<std::rc::Weak<RequestContext>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
 }
 
 struct Runtime {
+    root: PathBuf,
+    persistent: storage::PersistentContexts<RequestContext>,
+    private: std::cell::RefCell<std::rc::Weak<RequestContext>>,
+    readiness: storage::ContextReadiness<RequestContext>,
+    lifecycle: shutdown::Lifecycle,
     #[cfg(target_os = "macos")]
     _library: library_loader::LibraryLoader,
+}
+
+/// Opaque, cloneable storage lease retaining the initialized CEF runtime.
+/// Resolve it through an engine, then use it for pages in that same engine or
+/// an independent fork. It contains no application profile ID. Main thread only.
+/// Dropping this handle does not delete storage or imply CEF has released it.
+/// Physical deletion requires a future barrier covering pages, inspectors,
+/// forks, retained handles and CEF background users. Until then, deletion in
+/// the application must only remove metadata; never remove these directories.
+pub struct StorageContext {
+    context: std::rc::Rc<RequestContext>,
+    runtime: std::rc::Rc<Runtime>,
+}
+
+impl Clone for StorageContext {
+    fn clone(&self) -> Self {
+        self.runtime.lifecycle.require_running().expect("Cannot clone storage during shutdown");
+        Self { context: self.context.clone(), runtime: self.runtime.clone() }
+    }
+}
+
+impl StorageContext {
+    /// True after CEF has initialized this context, while the runtime is running.
+    /// While running, false is pending, not a page-creation error: return to the
+    /// normal event loop and retry on a later frame. Also returns false during
+    /// shutdown. This never pumps or waits synchronously.
+    /// Native parent availability is separate; readiness does not prove disk
+    /// persistence or guarantee that browser creation will succeed.
+    pub fn is_ready(&self) -> bool {
+        self.runtime.lifecycle.require_running().is_ok()
+            && self.runtime.readiness.is_ready(&self.context)
+    }
+}
+
+wrap_request_context_handler! {
+    struct StorageReadyHandler { ready: storage::ContextReady }
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, request_context: Option<&mut RequestContext>) {
+            // CEF posts this AFTER profile initialization. No Runtime capture,
+            // application callback, native creation or nested pump is permitted.
+            if request_context.is_some() { self.ready.mark_initialized(); }
+        }
+    }
+}
+
+impl Runtime {
+    fn default_context(&self) -> Result<std::rc::Rc<RequestContext>, String> {
+        self.lifecycle.require_running()?;
+        let path = storage::default_path(&self.root)?;
+        let context = self.persistent.resolve(path.clone(), || {
+            let context = request_context_get_global_context()
+                .ok_or_else(|| "Global Chromium request context is unavailable".to_string())?;
+            storage::verify_cache_path(&path, &CefString::from(&context.cache_path()).to_string())?;
+            if context.is_global() == 0 { return Err("Chromium Default context is not global".into()); }
+            Ok(context)
+        })?;
+        // The global profile is bootstrapped before initialize() returns. It
+        // has no per-request-context handler, unlike named/private profiles.
+        self.readiness.track(&context, storage::ContextReady::initialized());
+        Ok(context)
+    }
+
+    fn named_context(&self, key: &StorageKey) -> Result<std::rc::Rc<RequestContext>, String> {
+        self.lifecycle.require_running()?;
+        // Validate the directories on every lookup, including registry hits.
+        let path = storage::named_path(&self.root, key)?;
+        let ready = storage::ContextReady::default();
+        let context = self.persistent.resolve(path.clone(), || {
+            let settings = RequestContextSettings {
+                cache_path: CefString::from(storage::utf8_path(&path)?),
+                persist_session_cookies: 1,
+                ..Default::default()
+            };
+            let mut handler = StorageReadyHandler::new(ready.clone());
+            let context = request_context_create_context(Some(&settings), Some(&mut handler))
+                .ok_or_else(|| "Cannot create a persistent Chromium context".to_string())?;
+            // GetCachePath reports configuration, even if asynchronous profile
+            // creation falls back to OffTheRecord. This check is necessary but
+            // is not runtime persistence proof; native restart acceptance is required.
+            storage::verify_cache_path(&path, &CefString::from(&context.cache_path()).to_string())?;
+            if context.is_global() != 0 { return Err("Named Chromium context unexpectedly uses Default".into()); }
+            Ok(context)
+        })?;
+        self.readiness.track(&context, ready);
+        Ok(context)
+    }
 }
 
 pub struct Engine {
@@ -135,10 +236,10 @@ pub struct Engine {
     snapshots: snapshot::Snapshots,
     message_ids: devtools::MessageIds,
     inspectors: devtools::Inspectors,
-    _runtime: std::rc::Rc<Runtime>,
     // Always the actual CEF context, including the global normal profile.
     // Keeping this explicit prevents a fork from silently using global storage.
     context: std::rc::Rc<RequestContext>,
+    _runtime: std::rc::Rc<Runtime>,
 }
 
 
@@ -151,16 +252,22 @@ impl Engine {
     /// cannot provide it instead of creating a replacement profile.
     pub fn start(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
         let runtime = Self::start_runtime(data_dir)?;
-        let context = request_context_get_global_context()
-            .ok_or_else(|| "Global Chromium request context is unavailable".to_string())?;
-        Ok(Self::with_context(runtime, std::rc::Rc::new(context), Arc::new(shortcuts)))
+        let context = runtime.default_context()?;
+        Ok(Self::with_context(runtime, context, Arc::new(shortcuts)))
     }
 
     fn start_runtime(data_dir: &Path) -> Result<std::rc::Rc<Runtime>, String> {
+        shutdown::check_start_thread()?;
+        // Never bypass path validation when returning an existing runtime.
+        let root_cache = storage::canonical_root(data_dir)?;
         RUNTIME.with(|slot| -> Result<std::rc::Rc<Runtime>, String> {
             if let Some(runtime) = slot.borrow().as_ref() {
+                runtime.lifecycle.require_running()?;
+                storage::require_same_root(&runtime.root, &root_cache)?;
+                storage::default_path(&root_cache)?;
                 return Ok(runtime.clone());
             }
+            let default_cache = storage::default_path(&root_cache)?;
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
 
             #[cfg(target_os = "macos")]
@@ -184,13 +291,12 @@ impl Engine {
             #[cfg(target_os = "macos")]
             mac::install_app_protocols();
 
-            let root_cache = data_dir;
             let settings = Settings {
                 no_sandbox: 0,
                 external_message_pump: 1,
                 multi_threaded_message_loop: 0,
-                root_cache_path: CefString::from(root_cache.to_string_lossy().as_ref()),
-                cache_path: CefString::from(root_cache.join("Default").to_string_lossy().as_ref()),
+                root_cache_path: CefString::from(storage::utf8_path(&root_cache)?),
+                cache_path: CefString::from(storage::utf8_path(&default_cache)?),
                 persist_session_cookies: 1,
                 log_severity: LogSeverity::WARNING,
                 ..Default::default()
@@ -208,10 +314,22 @@ impl Engine {
             }
 
             let runtime = std::rc::Rc::new(Runtime {
+                root: root_cache,
+                lifecycle: shutdown::Lifecycle::default(),
+                persistent: storage::PersistentContexts::default(),
+                private: std::cell::RefCell::new(std::rc::Weak::new()),
+                readiness: storage::ContextReadiness::default(),
                 #[cfg(target_os = "macos")]
                 _library: library,
             });
             *slot.borrow_mut() = Some(runtime.clone());
+            // Register Default even if a later pool constructor fails. Once
+            // initialize succeeds the loader/runtime must remain available for
+            // explicit shutdown, including an initialization-context failure.
+            if let Err(error) = runtime.default_context() {
+                runtime.lifecycle.fail(format!("Cannot retain Default for shutdown: {error}"));
+                return Err(error);
+            }
             Ok(runtime)
         })
     }
@@ -222,9 +340,10 @@ impl Engine {
         context: std::rc::Rc<RequestContext>,
         shortcuts: Shortcuts,
     ) -> Self {
+        runtime.lifecycle.require_running().expect("Cannot fork an engine during shutdown");
         let events = EventQueue::default();
         Self {
-            client: EngineClient::new(events.clone(), shortcuts.clone(), None),
+            client: EngineClient::new(events.clone(), shortcuts.clone(), None, runtime.lifecycle.queue.clone()),
             shortcuts,
             events,
             views: HashMap::new(),
@@ -242,16 +361,28 @@ impl Engine {
     /// and their forks. Never fall back to the persistent global context.
     pub fn start_private(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
         let runtime = Self::start_runtime(data_dir)?;
-        let context = PRIVATE_CONTEXT.with(|slot| {
-            if let Some(context) = slot.borrow().upgrade() { return Ok(context); }
-            // CEF: an empty cache path makes both HTTP cache and site data
-            // ephemeral, independent of the global context's cache path.
-            let context = request_context_create_context(Some(&RequestContextSettings::default()), None)
+        let existing = runtime.private.borrow().upgrade();
+        let context = if let Some(context) = existing {
+            context
+        } else {
+            // Private contexts never enter the persistent registry.
+            let settings = RequestContextSettings {
+                cache_path: CefString::from(""),
+                persist_session_cookies: 0,
+                ..Default::default()
+            };
+            let ready = storage::ContextReady::default();
+            let mut handler = StorageReadyHandler::new(ready.clone());
+            let context = request_context_create_context(Some(&settings), Some(&mut handler))
                 .ok_or_else(|| "Cannot create a private Chromium context".to_string())?;
+            if !CefString::from(&context.cache_path()).to_string().is_empty() || context.is_global() != 0 {
+                return Err("Private Chromium context has unexpected cache-path or global configuration".into());
+            }
             let context = std::rc::Rc::new(context);
-            *slot.borrow_mut() = std::rc::Rc::downgrade(&context);
-            Ok::<_, String>(context)
-        })?;
+            *runtime.private.borrow_mut() = std::rc::Rc::downgrade(&context);
+            runtime.readiness.track(&context, ready);
+            context
+        };
         Ok(Self::with_context(runtime, context, Arc::new(shortcuts)))
     }
 
@@ -275,10 +406,56 @@ impl Engine {
         Self::with_context(self._runtime.clone(), self.context.clone(), self.shortcuts.clone())
     }
 
+    /// Resolves the actual global context at the legacy `data_dir/Default`.
+    /// Even on a private engine, this explicitly selects persistent Default.
+    pub fn default_storage_context(&self) -> Result<StorageContext, String> {
+        Ok(StorageContext { runtime: self._runtime.clone(), context: self._runtime.default_context()? })
+    }
+
+    /// Configures persistent storage at `data_dir/profile-<key>`, a direct child
+    /// required by CEF 154's disk-profile selection. Default remains unchanged.
+    /// Calls for the same key reuse a retained context; errors never fall back
+    /// to Default. Cache-path equality checks configuration, not actual runtime
+    /// persistence: CEF can silently select OffTheRecord. Acceptance requires
+    /// cookie and localStorage verification across a full process restart.
+    /// Display names and application profile IDs must be mapped to stable keys
+    /// by the caller. No physical profile deletion is supported (see storage.rs).
+    pub fn named_storage_context(&self, key: &StorageKey) -> Result<StorageContext, String> {
+        Ok(StorageContext { runtime: self._runtime.clone(), context: self._runtime.named_context(key)? })
+    }
+
+    /// Retains this pool's default context, including a private context.
+    pub fn storage_context(&self) -> StorageContext {
+        self._runtime.lifecycle.require_running().expect("Cannot acquire storage during shutdown");
+        StorageContext { runtime: self._runtime.clone(), context: self.context.clone() }
+    }
+
+    fn check_storage_context(&self, context: &StorageContext) -> Result<(), String> {
+        self._runtime.lifecycle.require_running()?;
+        if !std::rc::Rc::ptr_eq(&self._runtime, &context.runtime) {
+            return Err("Storage context belongs to a different CEF runtime".into());
+        }
+        Ok(())
+    }
+
+    /// Creates an independent empty page pool for Blank windows, retaining the
+    /// selected context and this engine's shortcuts. All view/event/inspector/
+    /// snapshot/ID state is fresh, as with `fork_with_shared_storage`.
+    /// For workspace Pages use `create_view_in_context` on the existing engine.
+    pub fn fork_with_context(&self, context: &StorageContext) -> Result<Self, String> {
+        self.check_storage_context(context)?;
+        Ok(Self::with_context(self._runtime.clone(), context.context.clone(), self.shortcuts.clone()))
+    }
+
     /// Runs pending Chromium work. Call often (every few milliseconds).
     /// Chromium may process native UI events inside this call, so the
     /// caller must not hold state that those events' handlers need.
     pub fn pump() {
+        if shutdown::is_polling() { return; }
+        Self::pump_impl();
+    }
+
+    fn pump_impl() {
         // Chromium's work also takes native events off the queue and
         // dispatches them itself. AppKit's mouse tracking (window buttons,
         // resizing) then misses the button going up, so events are left to
@@ -297,7 +474,7 @@ impl Engine {
             }
             SKIPS.set(0);
         }
-        do_message_loop_work();
+        shutdown::pump_once();
     }
 
     pub fn take_events(&mut self) -> Vec<Event> {
@@ -345,15 +522,55 @@ impl Engine {
         frame: Bounds,
         corner_radius: f64,
     ) -> Option<ViewId> {
-        let context = self.context.as_ref().clone();
+        let context = self.context.clone();
         self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context)
+    }
+
+    /// Creates a page with explicitly selected storage in THIS engine's view,
+    /// event, inspector and snapshot namespace. The pool's default is unchanged.
+    /// A foreign runtime or failed native creation returns an error, never a
+    /// page in Default. Existing pages keep their original context.
+    /// The page retains the exact storage lease even after the supplied handle
+    /// and its source engine are dropped, including private storage.
+    /// Check `StorageContext::is_ready` first; pending contexts require returning
+    /// to the event loop and retrying on a later frame, not logging a failure.
+    pub fn create_view_in_context(
+        &mut self,
+        context: &StorageContext,
+        ui_view: *mut c_void,
+        url: &str,
+        frame: Bounds,
+        corner_radius: f64,
+    ) -> Result<ViewId, String> {
+        self.check_storage_context(context)?;
+        if !context.is_ready() {
+            return Err("Chromium storage context is still initializing; retry on a later frame".into());
+        }
+        let id = self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context.context.clone())
+            .ok_or_else(|| "Cannot create Chromium page in the selected storage context".to_string())?;
+        let same_context = self.views.get(&id).and_then(|view| view.browser.host())
+            .and_then(|host| host.request_context())
+            .is_some_and(|actual| actual.is_same(Some(&mut context.context.as_ref().clone())) != 0);
+        if !same_context {
+            self.close(id);
+            return Err("Created page did not use the selected Chromium storage context".into());
+        }
+        Ok(id)
     }
 
     fn create_content_view(
         &mut self, ui_view: *mut c_void, url: &str, frame: Bounds,
-        corner_radius: f64, role: ViewRole, mut context: RequestContext,
+        corner_radius: f64, role: ViewRole, context: std::rc::Rc<RequestContext>,
     ) -> Option<ViewId> {
-        if ui_view.is_null() { return None; }
+        if self._runtime.lifecycle.require_running().is_err() || ui_view.is_null() { return None; }
+        // CreateBrowserSync rejects an uninitialized BrowserContext. Do not
+        // allocate native clips or call CEF speculatively; a later normal frame
+        // can retry after OnRequestContextInitialized. No nested pumping.
+        if !self._runtime.readiness.is_ready(&context) { return None; }
+        // Nested native event dispatch must not drain Created before its lease
+        // has been registered, nor recursively enter the CEF message pump.
+        let runtime = self._runtime.clone();
+        let creation = runtime.lifecycle.creating();
         let parent = host::parent_of(ui_view);
         if parent.is_null() { return None; }
         #[cfg(target_os = "macos")]
@@ -387,15 +604,16 @@ impl Engine {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())));
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone());
         }
+        let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
             Some(&CefString::from(url)),
             Some(&BrowserSettings::default()),
             extra.as_mut(),
-            Some(&mut context),
+            Some(&mut native_context),
         );
         let Some(browser) = browser else {
             #[cfg(target_os = "macos")]
@@ -413,6 +631,9 @@ impl Engine {
         #[cfg(not(target_os = "macos"))]
         let host = page_view;
 
+        self._runtime.lifecycle.register(browser.identifier(), shutdown::BrowserLease {
+            browser: browser.clone(), _context: context.clone(), host,
+        });
         let id = ViewId(self.next_id);
         self.next_id += 1;
         self.by_browser_id.insert(browser.identifier(), id);
@@ -421,6 +642,7 @@ impl Engine {
             View {
                 role,
                 browser,
+                context,
                 parent,
                 host,
                 frame,
@@ -428,6 +650,7 @@ impl Engine {
                 rounded_top: true,
             },
         );
+        drop(creation);
         self.set_frame(id, frame);
         Some(id)
     }
@@ -577,6 +800,7 @@ impl Engine {
     /// view or submission failure; accepted requests complete via
     /// [`Self::take_snapshots`]. Keep pumping CEF and polling for completions.
     pub fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
+        if self._runtime.lifecycle.require_running().is_err() { return false; }
         let Some(page) = self.views.get(&view) else { return false };
         if page.role != ViewRole::Page { return false; }
         self.snapshots.request(view, request, &page.browser, &self.message_ids)
@@ -594,13 +818,19 @@ impl Engine {
     /// FrontendReady requires a verified protocol roundtrip and frontend boot.
     /// No ShowDevTools, remote port or global-context fallback is used.
     pub fn open_inspector_probe(&mut self, inspected: ViewId, ui_view: *mut c_void, frame: Bounds, panel: InspectorPanel) -> Result<InspectorId, String> {
+        self._runtime.lifecycle.require_running()?;
         let page = self.views.get(&inspected).filter(|view| view.role == ViewRole::Page)
             .ok_or("Unknown inspected page")?;
         if ui_view.is_null() { return Err("A native GPUI parent is required".into()); }
         let host = page.browser.host().ok_or("Inspected page has no host")?;
-        // Obtain the inspected browser's ACTUAL context, not this engine's
-        // default. Missing context fails closed, including private sessions.
-        let context = host.request_context().ok_or("Inspected request context is unavailable")?;
+        // Retain the inspected view's exact registry lease, never this engine's
+        // default or a fresh Rc around a native handle. Still check that the
+        // inspected browser actually uses it; missing/mismatched contexts fail closed.
+        let context = page.context.clone();
+        let actual = host.request_context().ok_or("Inspected request context is unavailable")?;
+        if actual.is_same(Some(&mut context.as_ref().clone())) == 0 {
+            return Err("Inspected page context differs from its retained storage lease".into());
+        }
         if let Some(id) = self.inspectors.existing(inspected, panel) { self.show_inspector_panel(id, panel); return Ok(id); }
         let id = self.inspectors.allocate().ok_or("Inspector generation exhausted")?;
         let mut observer = devtools::InspectorObserver::new(self.inspectors.queue.clone(), id);
@@ -616,12 +846,12 @@ impl Engine {
         }
         let same_context = self.views.get(&frontend).and_then(|view| view.browser.host())
             .and_then(|host| host.request_context())
-            .is_some_and(|actual| actual.is_same(Some(&mut context.clone())) != 0);
+            .is_some_and(|actual| actual.is_same(Some(&mut context.as_ref().clone())) != 0);
         if !same_context {
             self.close(frontend);
             return Err("Inspector context differs from the inspected page; probe closed".into());
         }
-        self.inspectors.insert(id, inspected, frontend, panel, devtools::NativeBinding { _context: context, _registration: registration });
+        self.inspectors.insert(id, inspected, frontend, panel, devtools::NativeBinding { _context: context.as_ref().clone(), _registration: registration });
         Ok(id)
     }
 
@@ -725,11 +955,9 @@ impl Engine {
         self.snapshots.close(id);
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
-            if let Some(host) = view.browser.host() {
-                host.close_browser(1);
-            }
-            #[cfg(target_os = "macos")]
-            mac::release_clip_view(view.host);
+            // Runtime owns the exact context and child host until OnBeforeClose.
+            // Close is queued: no CEF call or callback while page state is borrowed.
+            self._runtime.lifecycle.request_close(view.browser.identifier());
         }
     }
 }
@@ -750,7 +978,7 @@ fn browser_input(view: ViewId, role: ViewRole, event: &RawEvent) -> Option<Event
         ViewRole::Inspector(inspector) => inspector_input(inspector, event).map(Event::InspectorInput),
         ViewRole::Page => match event {
             RawEvent::Focused => Some(Event::Focused { view }),
-            RawEvent::Shortcut(shortcut) => Some(Event::Shortcut(shortcut.clone())),
+            RawEvent::Shortcut(shortcut) => Some(Event::Shortcut { view, shortcut: shortcut.clone() }),
             _ => None,
         },
     }
@@ -767,7 +995,7 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
 fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     if role != ViewRole::Page { return None; }
     if let RawEvent::Shortcut(shortcut) = event {
-        return Some(Event::Shortcut(shortcut));
+        return Some(Event::Shortcut { view, shortcut });
     }
     Some(match event {
         RawEvent::Shortcut(_) => unreachable!(),
@@ -802,6 +1030,7 @@ wrap_client! {
         events: EventQueue,
         shortcuts: Shortcuts,
         inspector: Option<(InspectorId, devtools::Queue)>,
+        lifecycle: shutdown::Queue,
     }
 
     impl Client {
@@ -838,7 +1067,7 @@ wrap_client! {
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(EngineLifeSpanHandler::new(self.events.clone()))
+            Some(EngineLifeSpanHandler::new(self.events.clone(), self.lifecycle.clone()))
         }
     }
 }
@@ -967,6 +1196,7 @@ wrap_load_handler! {
 wrap_life_span_handler! {
     struct EngineLifeSpanHandler {
         events: EventQueue,
+        lifecycle: shutdown::Queue,
     }
 
     impl LifeSpanHandler {
@@ -994,10 +1224,33 @@ wrap_life_span_handler! {
             1
         }
 
-        /// Pages live inside the browser window, which must stay open when
-        /// one closes: by default CEF closes the page's top-level window.
-        fn do_close(&self, _browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
-            1
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            if let Some(browser) = browser {
+                shutdown::enqueue(&self.lifecycle, shutdown::Callback::Created(browser.identifier()));
+            }
+        }
+
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            if let Some(browser) = browser {
+                shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
+            }
+        }
+
+        fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+            // CEF154 Linux CloseHostWindow targets CefWindowX11, not its parent.
+            // Its WM_DELETE_WINDOW path must run to call WindowDestroyed; raw
+            // XDestroyWindow alone does not implement that CEF callback path.
+            #[cfg(target_os = "linux")]
+            { let _ = browser; 0 }
+            #[cfg(not(target_os = "linux"))]
+            {
+                if let Some(browser) = browser {
+                    let child = browser.host().map(|host| host.window_handle() as usize).unwrap_or(0);
+                    shutdown::enqueue(&self.lifecycle, shutdown::Callback::DestroyChild(browser.identifier(), child));
+                }
+                // macOS/Windows default close targets the GPUI top-level window.
+                1
+            }
         }
     }
 }
@@ -1140,7 +1393,7 @@ mod tests {
         assert_eq!(shortcut_for(&event), shortcut);
         assert_eq!(intercepted_shortcut(&event, &[shortcut.clone()]), Some(shortcut.clone()));
         assert_eq!(inspector_input(InspectorId(1), &RawEvent::Shortcut(shortcut.clone())), Some(InspectorEvent::Shortcut { inspector: InspectorId(1), shortcut: shortcut.clone() }));
-        assert_eq!(page_event(ViewId::from_raw(1), ViewRole::Page, RawEvent::Shortcut(shortcut.clone())), Some(Event::Shortcut(shortcut)));
+        assert_eq!(page_event(ViewId::from_raw(1), ViewRole::Page, RawEvent::Shortcut(shortcut.clone())), Some(Event::Shortcut { view: ViewId::from_raw(1), shortcut }));
     }
 
     #[test]
@@ -1180,6 +1433,71 @@ mod tests {
 }
 
 #[cfg(test)]
+mod view_storage_lifetime_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Exercise the actual View ownership with inert native payloads. This does
+    // not initialize CEF or assert native cookie/disk persistence behavior.
+    fn view<C>(role: ViewRole, context: Rc<C>) -> View<(), C> {
+        View {
+            role,
+            browser: (),
+            context,
+            parent: std::ptr::null_mut(),
+            host: std::ptr::null_mut(),
+            frame: Bounds::default(),
+            needs_layout: false,
+            rounded_top: true,
+        }
+    }
+
+    #[test]
+    fn private_page_in_normal_pool_keeps_weak_registry_lease_alive() {
+        let normal_pool_context = Rc::new(Cell::new(0));
+        let private_source_context = Rc::new(Cell::new(7));
+        // Same weak ownership used by Runtime.private; native-handle clones
+        // alone do not keep this particular Rc allocation upgradeable.
+        let private_registry = Rc::downgrade(&private_source_context);
+        let public_handle_context = private_source_context.clone();
+        let page = view(ViewRole::Page, public_handle_context.clone());
+        drop(private_source_context);
+        drop(public_handle_context);
+
+        // A subsequent start_private must find the existing lease while a
+        // private page remains open in the otherwise normal engine pool.
+        let next_private_context = private_registry.upgrade().expect("open page lost private registry lease");
+        assert!(Rc::ptr_eq(&next_private_context, &page.context));
+        next_private_context.set(8);
+        assert_eq!(page.context.get(), 8);
+        assert_eq!(normal_pool_context.get(), 0);
+        drop(next_private_context);
+        drop(page);
+        assert!(private_registry.upgrade().is_none());
+    }
+
+    #[test]
+    fn inspector_frontend_retains_exact_inspected_page_lease() {
+        let source_context = Rc::new(Cell::new(7));
+        let private_registry = Rc::downgrade(&source_context);
+        let page = view(ViewRole::Page, source_context.clone());
+        // Inspector creation derives its lease from the page, not the pool's
+        // default context and not a new Rc around a native RequestContext clone.
+        let frontend = view(ViewRole::Inspector(InspectorId::from_raw(1)), page.context.clone());
+        assert!(Rc::ptr_eq(&page.context, &frontend.context));
+        drop(source_context);
+        drop(page);
+        let retained = private_registry.upgrade().expect("frontend lost inspected storage lease");
+        assert!(Rc::ptr_eq(&retained, &frontend.context));
+        assert_eq!(retained.get(), 7);
+        drop(retained);
+        drop(frontend);
+        assert!(private_registry.upgrade().is_none());
+    }
+}
+
+#[cfg(test)]
 mod ordered_input_tests {
     use super::*;
 
@@ -1203,7 +1521,7 @@ mod ordered_input_tests {
             let expected = if frontend_last {
                 vec![page_focus, frontend_focus, Event::InspectorInput(InspectorEvent::Shortcut { inspector, shortcut: shortcut.clone() })]
             } else {
-                vec![frontend_focus, page_focus, Event::Shortcut(shortcut.clone())]
+                vec![frontend_focus, page_focus, Event::Shortcut { view: page, shortcut: shortcut.clone() }]
             };
             assert_eq!(events, expected);
         }

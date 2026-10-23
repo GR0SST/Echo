@@ -45,7 +45,7 @@ impl Browser {
             tabs: self.spaces.iter().map(|space| {
                 (space.id, TabSelection { active: space.active_tab, fallback: fallback(self, space) })
             }).collect(),
-            panes: self.favorite_splits.iter().chain(self.spaces.iter().flat_map(|space| &space.splits))
+            panes: self.profiles.values().flat_map(|profile| &profile.favorite_splits).chain(self.spaces.iter().flat_map(|space| &space.splits))
                 .map(|split| (split.id, split.active)).collect(),
         }
     }
@@ -80,8 +80,8 @@ impl Browser {
     fn apply_window_selection(&mut self, selection: &WindowSelection) {
         self.active_space = self.spaces.iter().position(|space| space.id == selection.active_space)
             .unwrap_or_else(|| selection.space_index.min(self.spaces.len() - 1));
-        let favorites: Vec<_> = self.favorites.iter().map(|tab| tab.id).collect();
         for space in &mut self.spaces {
+            let favorites: Vec<_> = self.profiles[&space.user_profile_id].favorites.iter().map(|tab| tab.id).collect();
             let valid = |id| favorites.contains(&id) || space.tabs().any(|tab| tab.id == id);
             let active = selection.tabs.get(&space.id).and_then(|saved| {
                 let active = saved.active?;
@@ -90,7 +90,7 @@ impl Browser {
             });
             space.active_tab = active;
         }
-        for split in self.favorite_splits.iter_mut().chain(self.spaces.iter_mut().flat_map(|space| &mut space.splits)) {
+        for split in self.profiles.values_mut().flat_map(|profile| &mut profile.favorite_splits).chain(self.spaces.iter_mut().flat_map(|space| &mut space.splits)) {
             if let Some(active) = selection.panes.get(&split.id).filter(|id| split.panes.contains(id)) {
                 split.active = *active;
             }
@@ -111,9 +111,9 @@ fn fallback(browser: &Browser, space: &Space) -> Vec<TabId> {
     }
     let section = if space.today.iter().any(|tab| tab.id == active) { &space.today }
         else if space.pinned.iter().any(|tab| tab.id == active) { &space.pinned }
-        else { &browser.favorites };
+        else { &browser.profiles[&space.user_profile_id].favorites };
     candidates.extend(neighbors(&section.iter().map(|tab| tab.id).collect::<Vec<_>>(), active));
-    candidates.extend(space.tabs().chain(&browser.favorites).map(|tab| tab.id));
+    candidates.extend(space.tabs().chain(&browser.profiles[&space.user_profile_id].favorites).map(|tab| tab.id));
     let mut seen = std::collections::HashSet::from([active]);
     candidates.retain(|id| seen.insert(*id));
     candidates
@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(window.space().name, "Work");
         assert!(window.spaces.iter().all(|space| space.active_tab.is_none()));
         assert_eq!(window.all_tabs().count(), 4);
-        assert_eq!(window.favorites[0].id, favorite);
+        assert_eq!(window.active_user_profile().favorites[0].id, favorite);
         assert_eq!(window.spaces[0].pinned[0].id, pinned);
         assert_eq!(crate::session::to_json(&profile), original);
     }

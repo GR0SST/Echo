@@ -139,7 +139,7 @@ fn finish_drag(cx: &mut VisualTestContext, destination: &'static str) {
 fn move_first_favorite(cx: &mut TestAppContext, pinned: bool, dismissed: bool) {
     let now = SystemTime::now();
     let mut browser = Browser::new();
-    browser.empty_favorites_dismissed = dismissed;
+    browser.active_user_profile_mut().empty_favorites_dismissed = dismissed;
     let tab = browser.new_tab("https://original.example/path?keep=1", now);
     if pinned {
         browser.toggle_pin(tab);
@@ -157,8 +157,8 @@ fn move_first_favorite(cx: &mut TestAppContext, pinned: bool, dismissed: bool) {
     assert!(dock.bottom() <= visual.debug_bounds("space-header-0").unwrap().top());
     finish_drag(visual, "favorites");
     view.read_with(visual, |view, _| {
-        assert_eq!(view.browser.favorites.len(), 1);
-        let favorite = &view.browser.favorites[0];
+        assert_eq!(view.browser.active_user_profile().favorites.len(), 1);
+        let favorite = &view.browser.active_user_profile().favorites[0];
         assert_eq!(favorite.id, tab);
         assert_eq!(favorite.url, original.url);
         assert_eq!(
@@ -220,8 +220,7 @@ fn move_first_split(cx: &mut TestAppContext, pinned: bool) {
     view.read_with(visual, |view, _| {
         assert_eq!(view.browser.favorite_count(), 1);
         assert_eq!(
-            view.browser
-                .favorites
+            view.browser.active_user_profile().favorites
                 .iter()
                 .map(|tab| tab.id)
                 .collect::<Vec<_>>(),
@@ -230,7 +229,7 @@ fn move_first_split(cx: &mut TestAppContext, pinned: bool) {
         assert!(view.browser.space().today.is_empty());
         assert!(view.browser.space().pinned.is_empty());
         assert!(view.browser.space().splits.is_empty());
-        assert_eq!(view.browser.favorite_splits.len(), 1);
+        assert_eq!(view.browser.active_user_profile().favorite_splits.len(), 1);
         let moved = view.browser.active_split().unwrap();
         assert_eq!(moved.id, split.id);
         assert_eq!(moved.anchor, split.anchor);
@@ -332,8 +331,7 @@ fn a_full_dock_rejects_a_new_item_but_still_reorders_existing_favorites(cx: &mut
             browser_core::favorites::MAX_FAVORITES
         );
         assert_eq!(
-            view.browser
-                .favorites
+            view.browser.active_user_profile().favorites
                 .iter()
                 .map(|tab| tab.id)
                 .collect::<Vec<_>>(),
@@ -349,7 +347,7 @@ fn unrelated_drag_keeps_the_empty_card_unchanged(cx: &mut TestAppContext, folder
     // Test both the visible onboarding card and the persisted collapsed state.
     let mut browser = Browser::new();
     browser.new_tab("https://active.example", SystemTime::now());
-    browser.empty_favorites_dismissed = dismissed;
+    browser.active_user_profile_mut().empty_favorites_dismissed = dismissed;
     let folder = browser.create_folder(browser.space().id, None, "Projects").unwrap();
     let (view, visual, engine) = open(cx, browser);
     let header = visual.debug_bounds("space-header-0").unwrap();
@@ -393,7 +391,7 @@ fn dismissing_the_card_collapses_its_full_height_and_survives_session_restore(cx
     visual.run_until_parked();
     assert_eq!(visual.debug_bounds("space-header-0").unwrap().top(), header.top() - gpui::px(103.));
     let json = view.read_with(visual, |view, _| {
-        assert!(view.browser.empty_favorites_dismissed);
+        assert!(view.browser.active_user_profile().empty_favorites_dismissed);
         assert!(view.command_bar.is_none());
         view.session_json()
     });
@@ -407,7 +405,7 @@ fn dismissing_the_card_collapses_its_full_height_and_survives_session_restore(cx
 #[gpui::test]
 fn dismissed_card_returns_only_for_tab_drag_and_cancelling_restores_collapsed_layout(cx: &mut TestAppContext) {
     let mut browser = Browser::new();
-    browser.empty_favorites_dismissed = true;
+    browser.active_user_profile_mut().empty_favorites_dismissed = true;
     let tab = browser.new_tab("https://active.example", SystemTime::now());
     let (view, visual, engine) = open(cx, browser);
     let before = view.read_with(visual, |view, _| view.session_json());
@@ -450,6 +448,6 @@ fn dismissal_updates_other_windows_in_the_same_profile(cx: &mut TestAppContext) 
     visual.simulate_click(close, Modifiers::none());
     visual.run_until_parked();
     other_visual.run_until_parked();
-    assert!(other.read_with(other_visual, |view, _| view.browser.empty_favorites_dismissed));
+    assert!(other.read_with(other_visual, |view, _| view.browser.active_user_profile().empty_favorites_dismissed));
     assert_eq!(other_visual.debug_bounds("space-header-0").unwrap().top(), header.top() - gpui::px(103.));
 }

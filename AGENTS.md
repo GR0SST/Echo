@@ -37,6 +37,8 @@ Anything beyond that (our own features, departures from Arc) comes after.
   Profile creation must not display a synchronization notice or its icon.
 - Native testing may create new Spaces. Never delete a Space in live Arc or
   Echo sessions, including test Spaces; the owner will remove them manually.
+  Run profile reassignment checks only in test Spaces; preserve user Space
+  assignments and restore any test assignment after inspection.
 - The owner authorizes taking focus, mouse and keyboard for browser tests
   without repeated confirmation. If progress requires the owner's intervention,
   use the Ringmind skill to call and explain the specific help needed.

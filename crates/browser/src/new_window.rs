@@ -31,12 +31,14 @@ struct NewWindow {
 
 impl BrowserWindow {
     pub(crate) fn retain_normal_source(&self, cx: &mut App) {
+        if crate::quit::is_quitting() { return; }
         if !self.browser.is_private() && !self.browser.is_blank() {
             cx.set_global(NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() });
         }
     }
 
     pub(crate) fn new_window(&mut self, cx: &mut Context<Self>) {
+        if crate::quit::is_quitting() { return; }
         self.refresh_profile_projection();
         self.close_command_bar(cx);
         if self.browser.is_private() || self.browser.is_blank() {
@@ -57,7 +59,11 @@ impl BrowserWindow {
 
 /// `command_bar` distinguishes New Window from initial launch/session restore.
 pub(crate) fn open(command_bar: bool, cx: &mut App) {
-    let normal = normal_source(cx);
+        if crate::quit::is_quitting() { return; }
+    let normal = match normal_source(cx) {
+        Ok(normal) => normal,
+        Err(error) => { crate::show_session_error(error, cx); return; }
+    };
     let selection = if command_bar {
         normal.profile.new_window_selection()
     } else {
@@ -67,6 +73,7 @@ pub(crate) fn open(command_bar: bool, cx: &mut App) {
 }
 
 fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
+        if crate::quit::is_quitting() { return; }
     let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
     let handle = cx
         .open_window(
@@ -130,14 +137,22 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
 }
 
 /// The retained regular model is also the storage/history source for Blank.
-pub(crate) fn normal_source(cx: &mut App) -> NormalProfile {
+pub(crate) fn normal_source(cx: &mut App) -> std::io::Result<NormalProfile> {
+    if crate::quit::is_quitting() { return Err(std::io::Error::other("Browser is quitting")); }
     if let Some(normal) = cx.try_global::<NormalProfile>() {
-        normal.clone()
+        Ok(normal.clone())
     } else {
         let session = crate::profile_dir().join("session.json");
-        NormalProfile {
-            profile: ProfileHandle::new(crate::load_session(&session), cx),
-            pages: None,
-        }
+        source_from_session(&session, cx)
     }
+}
+
+/// Construct the retained owner only after a successful restore. No engine,
+/// save subscription, reset or file mutation occurs on the error path.
+pub(crate) fn source_from_session(path: &std::path::Path, cx: &mut App) -> std::io::Result<NormalProfile> {
+    if crate::quit::is_quitting() { return Err(std::io::Error::other("Browser is quitting")); }
+    let browser = crate::load_session(path)?;
+    let profile = ProfileHandle::new(browser, cx);
+    profile.save_session_to(path.to_path_buf(), cx);
+    Ok(NormalProfile { profile, pages: None })
 }

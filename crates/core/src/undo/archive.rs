@@ -11,6 +11,7 @@ struct ArchivedItem { anchor: TabId, panes: Vec<TabId> }
 #[derive(Clone, Debug)]
 pub(super) struct ArchiveEdit {
     space: SpaceId,
+    user_profile_id: crate::UserProfileId,
     order: Vec<TabId>,
     active: Option<TabId>,
     items: Vec<ArchivedItem>,
@@ -18,6 +19,7 @@ pub(super) struct ArchiveEdit {
 
 pub(crate) struct ArchiveCapture {
     space: SpaceId,
+    user_profile_id: crate::UserProfileId,
     order: Vec<TabId>,
     active: Option<TabId>,
     archive_start: usize,
@@ -25,7 +27,7 @@ pub(crate) struct ArchiveCapture {
 
 impl ArchiveCapture {
     pub(crate) fn new(browser: &Browser) -> Self {
-        Self { space: browser.space().id, order: browser.space().today.iter().map(|tab| tab.id).collect(),
+        Self { user_profile_id: browser.space().user_profile_id, space: browser.space().id, order: browser.space().today.iter().map(|tab| tab.id).collect(),
             active: browser.space().active_tab, archive_start: browser.archive.len() }
     }
 
@@ -35,7 +37,7 @@ impl ArchiveCapture {
             .map(|entry| ArchivedItem { anchor: entry.tab.id, panes: archived_ids(entry) }).collect();
         if items.is_empty() { return; }
         browser.sidebar_history.record(SidebarEdit::Archive(ArchiveEdit {
-            space: self.space, order: self.order, active: self.active, items,
+            space: self.space, user_profile_id: self.user_profile_id, order: self.order, active: self.active, items,
         }));
     }
 }
@@ -47,6 +49,7 @@ fn archived_ids(entry: &ArchivedTab) -> Vec<TabId> {
 impl ArchiveEdit {
     pub(super) fn apply(&self, redo: bool, browser: &mut Browser, now: SystemTime) -> bool {
         let Some(index) = browser.spaces.iter().position(|space| space.id == self.space) else { return false; };
+        if browser.spaces[index].user_profile_id != self.user_profile_id { return false; }
         if redo {
             // Validate the complete transaction before removing anything.
             // A subsequently regrouped, pinned or moved page invalidates it.
@@ -62,10 +65,10 @@ impl ArchiveEdit {
             return true;
         }
         if self.items.iter().any(|item| {
-            !browser.archive.iter().any(|entry| entry.tab.id == item.anchor && entry.space == self.space
+            !browser.archive.iter().any(|entry| entry.tab.id == item.anchor && entry.space == self.space && entry.user_profile_id == self.user_profile_id
                 && entry.reason == ArchiveReason::Manual && archived_ids(entry) == item.panes)
                 || item.panes.iter().any(|id| browser.all_tabs().any(|tab| tab.id == *id))
-                || browser.favorite_splits.iter().chain(browser.spaces.iter().flat_map(|space| &space.splits))
+                || browser.profiles.values().flat_map(|profile| &profile.favorite_splits).chain(browser.spaces.iter().flat_map(|space| &space.splits))
                     .any(|split| browser.archive.iter().find(|entry| entry.tab.id == item.anchor)
                         .and_then(|entry| entry.split.as_ref()).is_some_and(|saved| saved.view.id == split.id))
         }) { return false; }
@@ -89,7 +92,7 @@ impl ArchiveEdit {
         }
         space.splits.extend(splits);
         browser.active_space = index;
-        if self.active.is_some_and(|active| browser.favorites.iter().any(|tab| tab.id == active)
+        if self.active.is_some_and(|active| browser.active_user_profile().favorites.iter().any(|tab| tab.id == active)
             || browser.spaces[index].tabs().any(|tab| tab.id == active)) {
             browser.spaces[index].active_tab = self.active;
         }
@@ -195,7 +198,7 @@ mod tests {
         assert!(browser.redo_sidebar(later()));
         assert_eq!(browser.archive.len(), 2);
         assert!(ids(&browser).is_empty());
-        assert_eq!(browser.favorites[0].id, favorite);
+        assert_eq!(browser.active_user_profile().favorites[0].id, favorite);
         assert_eq!(browser.space().pinned[0].id, pin);
         assert_eq!(browser.spaces[1].today[0].id, elsewhere);
         assert!(browser.archive.iter().any(|entry| entry.tab.id == single));
@@ -272,7 +275,7 @@ mod tests {
             let b = browser.new_tab("https://b", NOW);
             if grouped { browser.add_split(a, b, Placement::Right, NOW).unwrap(); }
             browser.new_tab("https://active", later());
-            browser.archive_after = Some(Duration::from_secs(100));
+            browser.active_user_profile_mut().archive_after = Some(Duration::from_secs(100));
             assert!(browser.archive_idle(later()) > 0);
             assert!(!browser.undo_sidebar(later()));
             assert!(browser.archive.iter().all(|entry| entry.reason == ArchiveReason::Automatic));

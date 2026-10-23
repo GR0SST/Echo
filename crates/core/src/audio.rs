@@ -41,11 +41,11 @@ mod tests {
         assert!(!browser.set_tab_muted(history, true));
         assert_eq!(browser.set_all_tabs_muted(true), 2);
         assert_eq!(browser.set_all_tabs_muted(true), 0);
-        assert!(browser.favorites[0].muted);
+        assert!(browser.active_user_profile().favorites[0].muted);
         assert!(!browser.archive[0].tab.muted);
         assert_eq!(browser.active_tab().unwrap().id, history);
         let mut restored = crate::session::from_json(&crate::session::to_json(&browser)).unwrap();
-        assert!(restored.favorites[0].muted);
+        assert!(restored.active_user_profile().favorites[0].muted);
         assert!(restored.all_tabs().find(|tab| tab.id == local).unwrap().muted);
         assert_eq!(restored.set_all_tabs_muted(false), 2);
         assert!(!restored.set_tab_muted(archived, true));

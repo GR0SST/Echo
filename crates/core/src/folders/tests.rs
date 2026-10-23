@@ -98,7 +98,7 @@ fn relative_moves_adopt_folder_section_and_space_without_losing_pin_urls_or_spli
     assert_eq!(browser.split_for(b).unwrap().weights, vec![0.25, 0.75]);
     assert_eq!(browser.split_for(b).unwrap().title.as_deref(), Some("Pair"));
     assert!(browser.move_tab_relative(favorite, a, false));
-    assert!(browser.favorites.is_empty());
+    assert!(browser.active_user_profile().favorites.is_empty());
     assert_eq!(browser.folder(folder).unwrap().items, vec![PinnedItem::Tab(favorite), PinnedItem::Tab(a)]);
     assert_eq!(browser.folder_ancestors(favorite), vec![parent, folder]);
     assert_eq!(tab_ids(&browser), original);

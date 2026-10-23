@@ -1,6 +1,7 @@
 #[cfg(target_os = "macos")]
 mod automation;
 mod native;
+mod quit;
 mod find;
 mod toast;
 mod archive;
@@ -28,6 +29,8 @@ mod link_status;
 mod status_url;
 mod private;
 mod profile;
+mod user_profile_dialog;
+mod user_profiles;
 pub mod pages;
 pub(crate) use pages::devtools;
 pub mod text_input;
@@ -41,6 +44,8 @@ mod new_window_tests;
 mod empty_favorites_tests;
 #[cfg(test)]
 mod window_snapshot_tests;
+#[cfg(test)]
+mod session_startup_tests;
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -57,6 +62,7 @@ use window::BrowserWindow;
 actions!(app, [Quit]);
 
 pub fn init(cx: &mut App) {
+    quit::init(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     text_input::bind_keys(cx);
     window::bind_keys(cx);
@@ -66,6 +72,7 @@ pub fn init(cx: &mut App) {
     tab_menu::bind_keys(cx);
     site_controls::bind_keys(cx);
     new_menu::bind_keys(cx);
+    user_profile_dialog::bind_keys(cx);
 }
 
 /// Content of the first launch.
@@ -114,23 +121,45 @@ fn profile_dir() -> PathBuf {
     dir
 }
 
-/// The saved session, or demo content on first launch. A session that
-/// cannot be read is kept aside rather than overwritten.
-fn load_session(path: &std::path::Path) -> Browser {
-    match browser_core::session::load(path) {
-        Ok(Some(browser)) => browser,
-        Ok(None) => demo_browser(),
-        Err(error) => {
-            eprintln!("Cannot restore the session from {}: {error}", path.display());
-            let _ = std::fs::rename(path, path.with_extension("json.broken"));
-            demo_browser()
-        }
+/// Only a genuinely absent session is a first launch. Existing invalid or
+/// unreadable state is preserved byte-for-byte and must never select Default.
+fn load_session(path: &std::path::Path) -> std::io::Result<Browser> {
+    browser_core::session::load(path).map(|browser| browser.unwrap_or_else(demo_browser))
+}
+
+struct SessionRestoreError { message: String }
+
+impl gpui::Render for SessionRestoreError {
+    fn render(&mut self, _: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        gpui::div().size_full().p_8().flex().flex_col().gap_4()
+            .bg(gpui::rgb(0x202126)).text_color(gpui::rgb(0xf2f2f2))
+            .child(gpui::div().text_xl().child("Cannot open the saved workspace"))
+            .child(self.message.clone())
+            .child("The saved file has been preserved. Restore a valid session file, then retry.")
+            .child(gpui::div().id("retry-session").debug_selector(|| "retry-session".into())
+                .px_4().py_2().rounded_md().bg(gpui::rgb(0x454854)).cursor_pointer().child("Retry")
+                .on_click(cx.listener(|_, _, window, cx| {
+                    if quit::is_quitting() { return; }
+                    window.remove_window();
+                    cx.defer(|cx| new_window::open(false, cx));
+                })))
     }
+}
+
+fn show_session_error(error: std::io::Error, cx: &mut App) {
+    let message = format!("{}: {error}", profile_dir().join("session.json").display());
+    eprintln!("Cannot restore workspace: {message}");
+    let bounds = Bounds::centered(None, size(px(620.), px(300.)), cx);
+    let _ = cx.open_window(WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default()
+    }, |_, cx| cx.new(|_| SessionRestoreError { message }));
+    cx.activate(true);
 }
 
 /// Starts Chromium inside `window`, or returns `None` (pages are then
 /// shown as placeholders), e.g. when not running from the app bundle.
 fn start_engine(window: &gpui::Window, data_dir: &std::path::Path, private: bool) -> Option<Box<dyn WebEngine>> {
+    if quit::is_quitting() { return None; }
     let parent = native::view_of(window)?;
     let engine = if private { engine::Engine::start_private(data_dir, window::page_shortcuts()) }
         else { engine::Engine::start(data_dir, window::page_shortcuts()) };
@@ -153,6 +182,7 @@ fn open_browser_window(cx: &mut App) {
 }
 
 fn open_incognito_window(cx: &mut App) {
+    if quit::is_quitting() { return; }
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     let handle = cx.open_window(
         WindowOptions {
@@ -192,6 +222,7 @@ fn reopen(cx: &mut App) {
 }
 
 fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
+    if quit::is_quitting() { return; }
     if let Some(handle) = cx.windows().into_iter().find(|handle| handle.downcast::<BrowserWindow>().is_some()) {
         let _ = handle.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);

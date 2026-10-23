@@ -1,7 +1,7 @@
 //! Browser-owned history page, rendered in GPUI rather than Chromium WebUI.
 use crate::text_input::{Changed, TextInput};
 use crate::window::BrowserWindow;
-use browser_core::{history::HistoryEntry, TabId};
+use browser_core::{history::HistoryEntry, TabId, UserProfileId};
 use gpui::{
     actions, div, hsla, prelude::*, px, AnyElement, App, Context, Entity, Focusable, KeyBinding,
     Subscription, Window,
@@ -21,7 +21,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 
 pub(crate) struct HistoryPage {
     pub input: Entity<TextInput>,
-    confirm_clear: bool,
+    confirm_clear: Option<UserProfileId>,
     limit: usize,
     last_tab: Option<TabId>,
     _changed: Subscription,
@@ -36,7 +36,7 @@ impl HistoryPage {
         });
         Self {
             input,
-            confirm_clear: false,
+            confirm_clear: None,
             limit: 100,
             last_tab: None,
             _changed: changed,
@@ -66,7 +66,14 @@ impl BrowserWindow {
         true
     }
 
+    pub(crate) fn invalidate_history_confirmation(&mut self) {
+        if self.history_page.confirm_clear.is_some_and(|owner| owner != self.browser.active_user_profile_id()) {
+            self.history_page.confirm_clear = None;
+        }
+    }
+
     pub(crate) fn sync_history_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.invalidate_history_confirmation();
         if self.history_is_open() {
             let tab = self.browser.space().active_tab;
             if self.history_page.last_tab != tab {
@@ -75,13 +82,28 @@ impl BrowserWindow {
             }
         } else {
             self.history_page.last_tab = None;
-            self.history_page.confirm_clear = false;
+            self.history_page.confirm_clear = None;
         }
+    }
+
+    /// A painted confirmation remains bound to its original data owner even
+    /// when a Space is reassigned before the next frame or event drain.
+    pub(crate) fn confirm_history_clear(&mut self, owner: UserProfileId, cx: &mut Context<Self>) {
+        self.refresh_profile_projection();
+        if self.history_page.confirm_clear != Some(owner) || owner != self.browser.active_user_profile_id() { return; }
+        self.history_page.confirm_clear = None;
+        self.edit_browser(|browser| {
+            if browser.active_user_profile_id() == owner {
+                if let Some(profile) = browser.user_profile_mut(owner) { profile.history.clear(); }
+            }
+        });
+        self.history_page.input.update(cx, |input, cx| input.set_text("", cx));
+        cx.notify();
     }
 
     pub(crate) fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_tab_menu(cx);
-        let existing = self.browser.favorites.iter()
+        let existing = self.browser.active_user_profile().favorites.iter()
             .chain(&self.browser.space().pinned)
             .chain(&self.browser.space().today)
             .find(|tab| tab.url.eq_ignore_ascii_case(HISTORY_URL))
@@ -93,7 +115,7 @@ impl BrowserWindow {
             let id = self.edit_browser(|browser| browser.new_tab(HISTORY_URL, now));
             self.edit_browser(|browser| browser.set_title(id, "History"));
         }
-        self.history_page.confirm_clear = false;
+        self.history_page.confirm_clear = None;
         self.focus_history_search(window, cx);
         cx.notify();
     }
@@ -117,8 +139,7 @@ impl BrowserWindow {
             .text()
             .trim()
             .to_lowercase();
-        self.browser
-            .history
+        self.browser.active_user_profile().history
             .iter()
             .filter(|entry| {
                 entry.title.to_lowercase().contains(&query)
@@ -141,6 +162,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+        let owner = self.browser.active_user_profile_id();
         let entries = self.filtered_history(cx);
         let count = entries.len();
         let rows: Vec<_> = entries
@@ -210,7 +232,9 @@ impl BrowserWindow {
                             .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.edit_browser(|browser| browser.delete_history_entry(&remove));
+                                this.refresh_profile_projection();
+                                if this.browser.active_user_profile_id() != owner { return; }
+                                this.edit_browser(|browser| browser.delete_history_entry(owner, &remove));
                                 cx.notify();
                             }))
                             .child(crate::icons::control(crate::icons::Icon::Close)),
@@ -240,7 +264,7 @@ impl BrowserWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &CancelClear, _, cx| {
-                this.history_page.confirm_clear = false;
+                this.history_page.confirm_clear = None;
                 cx.notify();
             }))
             .child(
@@ -249,7 +273,7 @@ impl BrowserWindow {
                     .justify_between()
                     .items_center()
                     .child(div().text_2xl().child("History"))
-                    .when(!self.browser.history.is_empty(), |this| {
+                    .when(!self.browser.active_user_profile().history.is_empty(), |this| {
                         this.child(
                             div()
                                 .id("clear-history")
@@ -259,8 +283,10 @@ impl BrowserWindow {
                                 .rounded_lg()
                                 .text_sm()
                                 .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.05)))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.history_page.confirm_clear = true;
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.refresh_profile_projection();
+                                    if this.browser.active_user_profile_id() != owner { return; }
+                                    this.history_page.confirm_clear = Some(owner);
                                     this.focus_history_search(window, cx);
                                     cx.notify();
                                 }))
@@ -282,7 +308,7 @@ impl BrowserWindow {
                     .text_sm()
                     .child(self.history_page.input.clone()),
             )
-            .when(self.history_page.confirm_clear, |this| {
+            .when(self.history_page.confirm_clear == Some(owner), |this| {
                 this.child(
                     div()
                         .p_3()
@@ -306,7 +332,7 @@ impl BrowserWindow {
                                 .rounded_md()
                                 .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.history_page.confirm_clear = false;
+                                    this.history_page.confirm_clear = None;
                                     cx.notify();
                                 }))
                                 .child("Cancel"),
@@ -320,13 +346,8 @@ impl BrowserWindow {
                                 .rounded_md()
                                 .bg(hsla(0.0, 0.65, 0.45, 1.0))
                                 .text_color(gpui::white())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.edit_browser(|browser| browser.history.clear());
-                                    this.history_page.confirm_clear = false;
-                                    this.history_page
-                                        .input
-                                        .update(cx, |input, cx| input.set_text("", cx));
-                                    cx.notify();
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.confirm_history_clear(owner, cx);
                                 }))
                                 .child("Delete history"),
                         ),
@@ -357,7 +378,7 @@ impl BrowserWindow {
                                 .py_8()
                                 .text_sm()
                                 .text_color(hsla(0.0, 0.0, 0.45, 1.0))
-                                .child(if self.browser.history.is_empty() {
+                                .child(if self.browser.active_user_profile().history.is_empty() {
                                     "No browsing history yet."
                                 } else {
                                     "No pages match your search."

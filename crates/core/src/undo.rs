@@ -10,7 +10,7 @@ mod pane;
 pub(crate) use pane::PaneCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scope { Favorites, Space(SpaceId, Section) }
+enum Scope { Favorites(crate::UserProfileId), Space(SpaceId, Section) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Position {
@@ -31,6 +31,7 @@ struct FolderSlot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PinState {
     item: PinnedItem,
+    user_profile_id: crate::UserProfileId,
     tabs: Vec<Position>,
     folder: Option<FolderSlot>,
     selections: Vec<(SpaceId, Option<TabId>)>,
@@ -55,10 +56,11 @@ impl PinState {
             space.folders.iter().find(|folder| folder.items.contains(&item)).map(|folder|
                 FolderSlot { space: space.id, folder: Some(folder.id), order: folder.items.clone() })
         });
-        Some(Self { item, tabs, folder, selections: browser.spaces.iter().map(|space| (space.id, space.active_tab)).collect() })
+        Some(Self { item, user_profile_id: browser.user_profile_id_for_tab(tab)?, tabs, folder, selections: browser.spaces.iter().map(|space| (space.id, space.active_tab)).collect() })
     }
 
     fn apply(&self, source: &Self, browser: &mut Browser) -> bool {
+        if source.tabs.iter().any(|position| browser.user_profile_id_for_tab(position.id) != Some(source.user_profile_id)) { return false; }
         // An unrecorded structural operation can invalidate an entry. Do not
         // resurrect closed pages or steal a tab back from another Space.
         if source.tabs.iter().any(|position| locate(browser, position.id).is_none_or(|(scope, pool)| {
@@ -66,8 +68,8 @@ impl PinState {
                 scope != position.scope || tab.pinned_url != position.pinned_url
             }))
             || self.tabs.iter().any(|position| match position.scope {
-                Scope::Favorites => false,
-                Scope::Space(id, _) => !browser.spaces.iter().any(|space| space.id == id),
+                Scope::Favorites(id) => browser.user_profile(id).is_none(),
+                Scope::Space(id, _) => !browser.spaces.iter().any(|space| space.id == id && space.user_profile_id == self.user_profile_id),
             })
             || self.tabs.iter().any(|position| browser.pinned_item(position.id) != self.item)
         { return false; }
@@ -76,11 +78,11 @@ impl PinState {
         let current_folder = Self::capture(browser, ids[0]).and_then(|state| state.folder);
         if current_folder.as_ref().map(|slot| (slot.space, slot.folder))
             != source.folder.as_ref().map(|slot| (slot.space, slot.folder)) { return false; }
-        if self.tabs[0].scope == Scope::Favorites && source.tabs[0].scope != Scope::Favorites
-            && browser.favorite_count() >= crate::favorites::MAX_FAVORITES { return false; }
+        if matches!(self.tabs[0].scope, Scope::Favorites(_)) && !matches!(source.tabs[0].scope, Scope::Favorites(_))
+            && favorite_count(browser, self.user_profile_id) >= crate::favorites::MAX_FAVORITES { return false; }
         // Retain the current split geometry, focus and customizations.
         let split = browser.split_for(ids[0]).cloned();
-        browser.favorite_splits.retain(|split| !ids.contains(&split.anchor));
+        for profile in browser.profiles.values_mut() { profile.favorite_splits.retain(|split| !ids.contains(&split.anchor)); }
         for space in &mut browser.spaces { space.splits.retain(|split| !ids.contains(&split.anchor)); }
         for position in &self.tabs {
             let (scope, _) = locate(browser, position.id).unwrap();
@@ -97,7 +99,7 @@ impl PinState {
         }
         if let Some(split) = split {
             match self.tabs[0].scope {
-                Scope::Favorites => browser.favorite_splits.push(split),
+                Scope::Favorites(id) => browser.profiles.get_mut(&id).unwrap().favorite_splits.push(split),
                 Scope::Space(id, _) => browser.spaces.iter_mut().find(|space| space.id == id).unwrap().splits.push(split),
             }
         }
@@ -132,16 +134,20 @@ impl PinState {
 }
 
 fn locate(browser: &Browser, id: TabId) -> Option<(Scope, &[Tab])> {
-    if browser.is_favorite(id) { return Some((Scope::Favorites, &browser.favorites)); }
+    if let Some(profile) = browser.profiles.values().find(|profile| profile.favorites.iter().any(|tab| tab.id == id)) { return Some((Scope::Favorites(profile.id), &profile.favorites)); }
     browser.spaces.iter().find_map(|space| space.find(id).map(|(section, _)|
         (Scope::Space(space.id, section), match section { Section::Pinned => &space.pinned[..], Section::Today => &space.today[..] })))
 }
 
 fn pool_mut(browser: &mut Browser, scope: Scope) -> &mut Vec<Tab> {
     match scope {
-        Scope::Favorites => &mut browser.favorites,
+        Scope::Favorites(id) => &mut browser.profiles.get_mut(&id).unwrap().favorites,
         Scope::Space(id, section) => browser.spaces.iter_mut().find(|space| space.id == id).unwrap().section_mut(section),
     }
+}
+
+fn favorite_count(browser: &Browser, id: crate::UserProfileId) -> usize {
+    browser.user_profile(id).map_or(0, |profile| profile.favorites.iter().filter(|tab| !profile.favorite_splits.iter().any(|split| split.anchor != tab.id && split.panes.contains(&tab.id))).count())
 }
 
 fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize {

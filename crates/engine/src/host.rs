@@ -38,12 +38,21 @@ mod windows {
     unsafe extern "system" {
         fn SetParent(child: *mut c_void, parent: *mut c_void) -> *mut c_void;
         fn IsWindow(window: *mut c_void) -> i32;
+        fn DestroyWindow(window: *mut c_void) -> i32;
         fn MoveWindow(window: *mut c_void, x: i32, y: i32, width: i32, height: i32, repaint: i32) -> i32;
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn SetLastError(error: u32);
         fn GetLastError() -> u32;
+    }
+    pub(super) fn destroy_child(child: *mut c_void) -> Result<(), String> {
+        // CEF154 WM_NCDESTROY calls WindowDestroyed(), which completes close.
+        // DestroyWindow is synchronous and only accepts windows on this thread.
+        unsafe {
+            if DestroyWindow(child) != 0 { Ok(()) }
+            else { Err(format!("DestroyWindow failed: {}", GetLastError())) }
+        }
     }
     pub(super) fn move_to(view: *mut c_void, parent: *mut c_void) -> bool {
         unsafe {
@@ -110,4 +119,16 @@ mod x11 {
             (connection.flush)(connection.display);
         });
     }
+}
+
+/// Complete the Alloy DoClose(true) handshake by destroying ONLY the native
+/// browser child after returning from the callback. Never target its parent.
+pub(crate) fn destroy_child(child: *mut c_void) -> Result<(), String> {
+    if child.is_null() { return Err("missing native child handle".into()); }
+    #[cfg(target_os = "macos")]
+    { crate::mac::destroy_browser_child(child); Ok(()) }
+    #[cfg(target_os = "windows")]
+    { windows::destroy_child(child) }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    { Err("explicit Alloy child destruction is unsupported on this platform".into()) }
 }

@@ -5,6 +5,7 @@ use gpui::{div, hsla, prelude::*, px, Context, Window};
 #[derive(Clone)]
 pub(crate) struct SpaceDrag {
     pub id: SpaceId,
+    pub workspace: crate::profile::ProfileHandle,
     pub name: String,
     pub icon: Option<String>,
     pub hue: f32,

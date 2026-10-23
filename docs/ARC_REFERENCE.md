@@ -810,3 +810,166 @@ reference checks. The parent closed only its disposable window
 `9F759E29-D319-48F3-9DA1-86A2370BC5E1`, leaving the test Space and profile
 intact. Loaded-tab reassignment, successful switching, deletion and timing
 propagation remain unverified.
+
+### Loaded-tab profile switching follow-up
+
+With a fresh owned normal window and the retained test Space, a localhost
+fixture in `Echo Profile Reference 20261023` stored an owned cookie/localStorage
+marker. It then navigated to a marker-reading URL with no write query.
+Spaces → Change Profile selected the renamed Default profile, Grosst.
+Clicking Change Profile opened a second confirmation, rather than applying
+immediately: “Switch to your Grosst Profile?”, explanatory text about different
+browser data/Favorites/extensions, “This action cannot be undone.”, and
+Cancel / Switch it up. Only the final button completed the switch.
+
+The Today item retained its URL and reloaded. Fixture reports changed document
+UUID from `ec416636-c747-4046-8ff4-7c4697a02ec7` to
+`22e04417-082e-4834-8c95-f2bfefa6e752`; the target document saw neither owned
+cookie nor localStorage marker. The resulting page screenshot was inspected.
+The parent archived only its test tab and closed owned window
+`AC6CF7C9-840C-4803-8AF5-3A06595A16DC`. The Space remains intact, assigned back
+to Default; the test profile remains intact and is now unassigned. Other
+Spaces/profiles were not changed. The user granted a short focus slot; slow
+native observations extended it, and focus was released after cleanup.
+
+### Profile creation visual correction and local storage acceptance
+
+A subsequent direct comparison found that Echo's initial creation form did
+not match Arc: its shortened explanatory copy and minimum-height layout packed
+the controls at the top and left excess empty space below the buttons. This
+presentation is not accepted as visual parity.
+
+Echo intentionally omits the synchronization notice and its icon at the
+owner's explicit request. Do not reintroduce them during reference matching.
+
+Arc 1.170.0 File → New Profile opens an accessibility sheet attached to the
+originating window. Native accessibility measurements are 450 × 426 for the
+name step and 450 × 506 for Space assignment, superseding the earlier rounded
+425/495 targets. The name step describes separate history, saved passwords,
+extensions and other browsing data; its input is about 48 px high. The second
+step explains logging back into websites and switching back to the previous
+Profile. Five 64 × 95 Space cards fit across the sheet. Screenshots of both
+steps were inspected. Creation was cancelled, and only owned window
+`F6B20C7C-62E7-4EA5-89BA-0C24A8901B52` was closed. No Profile was created or
+reassigned; the user-retained reference Space was untouched.
+
+An isolated Echo workspace containing Default and two named profiles passed
+a full process restart against one localhost origin. Each profile retained its
+own session cookie, persistent cookie, localStorage and IndexedDB marker.
+The reading URLs had no write query, and the reloaded documents had fresh
+UUIDs. Screenshots for all three profiles were inspected. A production
+DevTools Elements panel also displayed the named profile's live document.
+Both automation Quit and native-keyboard Cmd+Q reached logged CEF Complete
+with zero owners, browsers and cookie flushes before process exit. This checks
+the tested bundle's storage/shutdown foundation, not the later input-ordering
+fixes, private cleanup, final dialog presentation, or other-platform behavior.
+
+A later isolated bundle verified the private-session lifetime with the same
+localhost fixture. Two concurrent Incognito windows shared session cookies,
+persistent cookies, localStorage and IndexedDB. After both windows closed,
+a new Incognito window read null for all four stores. The screenshots and
+fixture reports were inspected. The native script must retain the newly opened
+Command Bar child's focus: explicitly activating its root first redirects
+typing away from that input. This check does not establish OS-initiated quit
+acceptance; the AppKit termination path is still under correction.
+
+The same bundle's Profile creation screenshot confirms that the requested
+synchronization notice and icon are absent. Switching a test Space from a new
+empty profile back to Storage B required the second confirmation, retained the
+Today URL, created a fresh document, and restored Storage B's four independent
+storage markers. The full restart checker passed again. Dropdown selection
+was exercised with Enter and Home/arrow navigation; native Space-key activation
+needs a separate check. Switching-sheet visual parity remains unaccepted.
+
+Native malformed-session acceptance used a separate directory containing an
+invalid version-2 session. Echo displayed a Retry-only recovery window, left
+the original bytes unchanged and created no Chromium storage files. Ordinary
+Cmd+Q reached CEF Complete with zero owners/browsers/flushes and exited. This
+checks preservation rather than replacing an invalid workspace with demo data.
+
+A Blank opened from Storage B read that named profile's four storage markers.
+After closing the last normal window, the surviving Blank opened another local
+fixture page and quit through the complete CEF barrier. The retained normal
+session writer saved the new visit only in Storage B's history; its normal
+Today inventory excluded both Blank tabs. The Blank screenshot and saved
+session were inspected. Blank relaunch/profile-chooser parity remains separate.
+
+The corrected native pre-quit path passed both a direct AppKit terminate call
+and a standard AppleScript quit addressed to the isolated Echo bundle. The
+AppleEvent was suspended before Cocoa handling, then resumed through its
+preserved original handler only after CEF Complete with zero pending owners,
+browsers and cookie flushes. AppKit legitimately returned noErr before one
+later terminate continuation; the original reply was preserved. Both sender
+and application exited 0 without forced cleanup. Default and both named
+profiles again passed the full restart storage checker. Actual OS logout,
+restart, joined-event scenarios and other-platform termination remain untested.
+
+Additional Change Profile reference: in an owned empty New Window, the first
+sheet measured 450 × 338 px. Its body says “Each Profile has different browser
+data, so you might get logged out of some websites, see different Favorites
+up top, or need to re-install extensions.” The row labels the originating
+Space's Profile and uses a compact selected-profile pill. With no selected page
+in that window, Change Profile applied immediately rather than displaying the
+loaded-page confirmation. This unexpectedly changed Grosst's assignment during
+inspection; the original Grosst Profile was immediately restored and its
+Favorites verified. Owned window `B1627C9F-22A4-45CE-B681-E1B3A565D2BE` was
+closed. No Space was created or deleted. Do not generalize the confirmation
+condition beyond this empty-window observation without further inspection.
+
+The first chooser with the longer test Space name `Echo Space Reference
+20261023` measured 450 × 357 px. Its heading wrapped onto two lines rather
+than truncating, shifting the body, row and footer down. The short-name
+450 × 338 measurement is therefore not a fixed height for all names. This
+chooser was cancelled without reassignment; the owned local reference tab
+and window `BC4530E7-BB86-4E4B-B224-F047B911CB55` were closed afterward.
+
+The corresponding Echo bundle renders a 357 px chooser with the full 12 px
+Space row label and compact selected-profile pill visible together; its footer
+remains inside the sheet. The screenshot was inspected. Exact heading word
+wrapping still differs from Arc, so typography and full visual parity remain
+partial. GPUI's NoopTextSystem uses fixed-width test metrics and cannot prove
+the native font's full-label fit by itself.
+
+### Sidebar Space creation and Library → Spaces
+
+The user explicitly identified four creation entry points: the sidebar + menu,
+Spaces menu, swiping to the creation page at the right edge, and the far-left
+Home/Library → Spaces view. They also requested reproducing the Library view.
+
+Direct Arc 1.170.0 checks confirmed that both Spaces → New Space and sidebar
++ → New Space insert a temporary Create Space page immediately after the
+originating real Space. This is a sidebar page, not a Command Bar or central
+dialog. The name input receives focus. The sidebar shows a Create a Space
+illustration/title, “Separate your tabs for life, work, projects, and more.”,
+name/icon row, Profile selector with information control, and Choose a Theme.
+Create Space and Cancel are anchored above the bottom dock; Create is disabled
+for an empty name. The main content card becomes an empty themed surface.
+Choose a Theme opens an anchored popover with color canvas, swatches, theme
+mode and intensity/noise controls. No theme was applied to a real Space.
+
+Home opens Library in the same browser window. Its left navigation includes
+Media, Downloads, Easels, Spaces, Boosts and Archived Tabs. Spaces displays
+horizontally arranged tall cards containing each Space's sidebar, profile and
+theme controls, drag handle and overflow menu. A circular + follows the final
+card. Clicking it returns to the same sidebar creation page. Cancel returns to
+the originating real Space rather than Library. Screenshots of Library's Media
+empty state, Spaces overview and the creation page/popover were inspected.
+Easels remain outside Echo's existing agreed scope.
+
+Cmd+Option+Right from the final real Space wraps to the first real Space;
+it did not enter creation. The user-reported right-edge swipe entry still
+needs a true trackpad-phase check; a generic horizontal mouse-wheel event did
+not reproduce it. Profile dropdown contents and final successful creation
+placement remain unverified. All drafts were cancelled. Owned reference window
+`B66C4814-259D-4059-A337-EF32913EF1C0` was closed; no Space or Profile was
+created, deleted or reassigned, including the user-retained reference Space.
+
+With the owner's later permission to create test Spaces, an owned Arc window
+created `Echo Space Reference 20261023`, ID
+`15EE919F-EB0C-4F24-BDD4-718BE92F521C`, from Grosst. The committed Space replaced
+the virtual creation page immediately after Grosst, before the preexisting
+Favorites Reference Space. It became selected with no selected tab and no
+Command Bar. It retained the originating Grosst Profile and therefore showed
+that Profile's existing Favorites. The new Space remains for the owner to
+delete manually. Owned window `DCDCDCE3-66D3-4261-B99A-A6107F35ACD4` was closed;
+no Space was deleted. Creation-draft Profile-menu contents remain unverified.

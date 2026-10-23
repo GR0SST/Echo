@@ -95,6 +95,7 @@ impl BrowserWindow {
             return;
         }
         let tab = self.browser.active_tab().unwrap().id;
+        self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         self.close_find(cx);
         // Closing an overlay restores its root responder asynchronously. Focus
@@ -107,6 +108,7 @@ impl BrowserWindow {
                     .browser
                     .active_tab()
                     .is_none_or(|active| active.id != tab)
+                    || this.user_profile_dialog.is_some()
                     || this.command_bar.is_some()
                     || this.find_bar.is_some()
                 {

@@ -25,7 +25,7 @@ impl Browser {
 
     pub fn set_item_icon(&mut self, tab: TabId, icon: Option<&str>) -> bool {
         let Some(icon) = normalized(icon) else { return false; };
-        if let Some(split) = self.favorite_splits.iter_mut().chain(self.spaces.iter_mut().flat_map(|space| &mut space.splits)).find(|split| split.panes.contains(&tab)) {
+        if let Some(split) = self.profiles.values_mut().flat_map(|profile| &mut profile.favorite_splits).chain(self.spaces.iter_mut().flat_map(|space| &mut space.splits)).find(|split| split.panes.contains(&tab)) {
             return replace(&mut split.custom_icon, icon);
         }
         self.tab_mut(tab).is_some_and(|tab| replace(&mut tab.custom_icon, icon))

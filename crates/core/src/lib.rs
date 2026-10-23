@@ -18,6 +18,8 @@ pub mod icons;
 pub mod folders;
 pub mod undo;
 pub mod windows;
+pub mod profiles;
+pub use profiles::UserProfileId;
 
 fn default_enabled() -> bool { true }
 pub mod session;
@@ -84,6 +86,7 @@ impl Tab {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Space {
     pub id: SpaceId,
+    pub user_profile_id: UserProfileId,
     pub name: String,
     /// Accent hue in degrees, 0..360.
     pub hue: f32,
@@ -140,6 +143,8 @@ pub enum ArchiveReason {
 pub struct ArchivedTab {
     pub tab: Tab,
     pub space: SpaceId,
+    /// Origin identity only; global Archive visibility is not yet established.
+    pub user_profile_id: UserProfileId,
     pub archived_at: SystemTime,
     #[serde(default)]
     pub reason: ArchiveReason,
@@ -161,23 +166,13 @@ pub enum Closed {
 pub struct Browser {
     pub spaces: Vec<Space>,
     pub active_space: usize,
-    #[serde(default = "default_enabled")]
-    pub include_favorites_in_ordering: bool,
     pub archive: Vec<ArchivedTab>,
-    #[serde(default)]
-    pub history: Vec<history::HistoryEntry>,
-    /// Shared by all Spaces in the current profile.
-    #[serde(default)]
-    pub favorites: Vec<Tab>,
-    /// Profile-wide dismissal of the empty Favorites onboarding card.
-    #[serde(default)]
-    pub empty_favorites_dismissed: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub favicon_cache: Vec<favicons::SiteIcon>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub favorite_splits: Vec<splits::SplitView>,
-    /// `None` disables auto-archiving.
-    pub archive_after: Option<Duration>,
+    /// Profile-owned data; the workspace retains global Space order and IDs.
+    profiles: std::collections::BTreeMap<profiles::UserProfileId, profiles::UserProfile>,
+    default_user_profile_id: profiles::UserProfileId,
+    next_user_profile_id: u64,
+    #[serde(skip)]
+    blank_source_user_profile_id: Option<profiles::UserProfileId>,
     #[serde(skip)]
     sidebar_history: undo::SidebarHistory,
     #[serde(skip)]
@@ -210,14 +205,11 @@ impl Browser {
         let mut browser = Self {
             spaces: Vec::new(),
             active_space: 0,
-            include_favorites_in_ordering: true,
             archive: Vec::new(),
-            history: Vec::new(),
-            favorites: Vec::new(),
-            empty_favorites_dismissed: false,
-            favicon_cache: Vec::new(),
-            favorite_splits: Vec::new(),
-            archive_after: Some(DEFAULT_ARCHIVE_AFTER),
+            profiles: std::collections::BTreeMap::from([(UserProfileId::DEFAULT, profiles::UserProfile::default_profile())]),
+            default_user_profile_id: UserProfileId::DEFAULT,
+            next_user_profile_id: 2,
+            blank_source_user_profile_id: blank.then_some(UserProfileId::DEFAULT),
             sidebar_history: undo::SidebarHistory::default(),
             private: false,
             blank,
@@ -233,7 +225,7 @@ impl Browser {
         let mut browser = Self::new();
         browser.private = true;
         browser.spaces[0].name = "Incognito".into();
-        browser.archive_after = None;
+        browser.active_user_profile_mut().archive_after = None;
         browser
     }
 
@@ -257,13 +249,19 @@ impl Browser {
             .iter()
             .flat_map(|space| std::iter::once(space.id.0).chain(space.tabs().map(|t| t.id.0)))
             .chain(self.archive.iter().map(|a| a.tab.id.0))
-            .chain(self.favorites.iter().map(|tab| tab.id.0))
+            .chain(self.profiles.values().flat_map(|profile| profile.favorites.iter().map(|tab| tab.id.0)))
             .max()
             .unwrap_or(0);
         self.next_id = self.next_id.max(max_id + 1);
         self.next_id = self.next_id.max(self.split_max_id() + 1).max(self.folder_max_id().saturating_add(1));
+        self.repair_profile_tab_ids();
         self.repair_splits();
         self.repair_folders();
+        for space in &mut self.spaces {
+            if space.active_tab.is_some_and(|id| !space.tabs().any(|tab| tab.id == id) && !self.profiles[&space.user_profile_id].favorites.iter().any(|tab| tab.id == id)) {
+                space.active_tab = None;
+            }
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -283,13 +281,15 @@ impl Browser {
     pub fn active_tab(&self) -> Option<&Tab> {
         let space = self.space();
         let id = space.active_tab?;
-        self.favorites.iter().chain(space.tabs()).find(|t| t.id == id)
+        self.active_user_profile().favorites.iter().chain(space.tabs()).find(|t| t.id == id)
     }
 
     pub fn add_space(&mut self, name: impl Into<String>, hue: f32) -> SpaceId {
         let id = SpaceId(self.next_id());
+        let user_profile_id = self.spaces.get(self.active_space).map_or(self.default_user_profile_id, |space| space.user_profile_id);
         self.spaces.push(Space {
             id,
+            user_profile_id,
             name: name.into(),
             hue,
             show_header: true,
@@ -356,7 +356,7 @@ impl Browser {
     }
 
     pub fn activate_tab(&mut self, id: TabId, now: SystemTime) {
-        if let Some(tab) = self.favorites.iter_mut().find(|tab| tab.id == id) {
+        if let Some(tab) = self.active_user_profile_mut().favorites.iter_mut().find(|tab| tab.id == id) {
             tab.last_active = now;
             self.space_mut().active_tab = Some(id);
             self.note_split_focus(id);
@@ -375,7 +375,7 @@ impl Browser {
     /// Pinned, then Today), wrapping around. Like Ctrl+Tab / Ctrl+Shift+Tab.
     pub fn cycle_tab(&mut self, delta: isize, now: SystemTime) {
         let space = self.space();
-        let ids: Vec<TabId> = self.favorites.iter().chain(space.tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.active_user_profile().favorites.iter().chain(space.tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
         if ids.is_empty() {
             return;
         }
@@ -436,7 +436,7 @@ impl Browser {
             (Section::Today, _) => {
                 let space_id = space.id;
                 let tab = self.remove_tab(id)?;
-                self.archive.push(ArchivedTab { tab, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
+                self.archive.push(ArchivedTab { tab, user_profile_id: self.space().user_profile_id, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
                 Some(Closed::Archived)
             }
         }
@@ -465,7 +465,11 @@ impl Browser {
     /// Restores a chosen archived tab to its original Space and focuses it.
     pub fn restore_archived(&mut self, id: TabId, now: SystemTime) -> Option<TabId> {
         let index = self.archive.iter().position(|archived| archived.tab.id == id)?;
-        let archived = self.archive.remove(index);
+        let source = &self.archive[index];
+        let target = self.spaces.iter().position(|space| space.id == source.space && space.user_profile_id == source.user_profile_id)
+            .or_else(|| self.spaces.iter().position(|space| space.user_profile_id == source.user_profile_id))?;
+        let mut archived = self.archive.remove(index);
+        archived.space = self.spaces[target].id;
         if archived.split.is_some() { return Some(self.restore_split_archived(archived, now)); }
         let index = self
             .spaces
@@ -492,7 +496,7 @@ impl Browser {
     /// Focuses the `n`th sidebar item (0-based, optional Favorites, Pinned, Today), or the
     /// last one for `None`. Like Arc's ⌘1…⌘8 and ⌘9.
     pub fn activate_item(&mut self, n: Option<usize>, now: SystemTime) {
-        let ids: Vec<TabId> = self.favorites.iter().filter(|_| self.include_favorites_in_ordering).chain(self.space().tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.active_user_profile().favorites.iter().filter(|_| self.active_user_profile().include_favorites_in_ordering).chain(self.space().tabs()).filter(|tab| !self.is_split_secondary(tab.id)).map(|t| t.id).collect();
         let id = match n {
             Some(n) => ids.get(n),
             None => ids.last(),
@@ -545,6 +549,8 @@ impl Browser {
     /// the caller chooses whether to focus the destination Space and tab.
     pub fn move_tab(&mut self, id: TabId, destination: SpaceId, section: Section) -> bool {
         if section == Section::Pinned && !self.can_edit_persistent_sidebar() { return false; }
+        let Some(target_profile) = self.spaces.iter().find(|space| space.id == destination).map(|space| space.user_profile_id) else { return false; };
+        if self.user_profile_id_for_tab(id) != Some(target_profile) { return false; }
         if self.split_for(id).is_some() { return self.move_split(id, destination, section); }
         let Some(target) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
         if let Some(mut tab) = self.take_favorite(id) {
@@ -635,7 +641,7 @@ impl Browser {
 
     /// Every open tab, with shared Favorites included once.
     pub fn all_tabs(&self) -> impl Iterator<Item = &Tab> {
-        self.favorites.iter().chain(self.spaces.iter().flat_map(|space| space.tabs()))
+        self.profiles.values().flat_map(|profile| &profile.favorites).chain(self.spaces.iter().flat_map(|space| space.tabs()))
     }
 
     fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
@@ -643,7 +649,7 @@ impl Browser {
     }
 
     fn all_tabs_mut(&mut self) -> impl Iterator<Item = &mut Tab> {
-        self.favorites.iter_mut().chain(self.spaces.iter_mut().flat_map(|space| {
+        self.profiles.values_mut().flat_map(|profile| &mut profile.favorites).chain(self.spaces.iter_mut().flat_map(|space| {
             space.pinned.iter_mut().chain(&mut space.today)
         }))
     }
@@ -686,29 +692,7 @@ impl Browser {
 
     /// The profile owner also protects selections from its other windows.
     pub fn archive_idle_except(&mut self, now: SystemTime, protected: &[TabId]) -> usize {
-        if self.spaces.iter().any(|space| !space.splits.is_empty()) { return self.archive_split_idle(now, protected); }
-        let Some(limit) = self.archive_after else {
-            return 0;
-        };
-        let mut archived = 0;
-        for space in &mut self.spaces {
-            let active = space.active_tab;
-            let (idle, keep): (Vec<_>, Vec<_>) = space.today.drain(..).partition(|t| {
-                Some(t.id) != active
-                    && !protected.contains(&t.id)
-                    && now.duration_since(t.last_active).unwrap_or_default() >= limit
-            });
-            space.today = keep;
-            archived += idle.len();
-            self.archive.extend(idle.into_iter().map(|tab| ArchivedTab {
-                tab,
-                space: space.id,
-                archived_at: now,
-                reason: ArchiveReason::Automatic,
-                split: None,
-            }));
-        }
-        archived
+        self.archive_split_idle(now, protected)
     }
 }
 
@@ -909,7 +893,7 @@ mod tests {
         let mut b = Browser::new();
         b.new_tab("a", t0());
         b.new_tab("b", t0());
-        b.archive_after = None;
+        b.active_user_profile_mut().archive_after = None;
         assert_eq!(b.archive_idle(t0() + 1000 * HOUR), 0);
     }
 
@@ -1045,7 +1029,7 @@ mod tests {
         let id = browser.new_tab("https://legacy", t0());
         browser.set_title(id, "Legacy page title");
         let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
-        json.as_object_mut().unwrap().remove("history");
+        json["profiles"]["1"].as_object_mut().unwrap().remove("history");
         let tab = json["spaces"][0]["today"][0].as_object_mut().unwrap();
         for field in ["custom_title", "page_title", "pinned_title"] { tab.remove(field); }
         let mut restored = session::from_json(&json.to_string()).unwrap();

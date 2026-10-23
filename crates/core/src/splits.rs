@@ -53,15 +53,15 @@ enum Scope { Favorites, Space(usize, Section) }
 
 impl Browser {
     pub fn split_for(&self, tab: TabId) -> Option<&SplitView> {
-        self.favorite_splits.iter().chain(self.spaces.iter().flat_map(|space| &space.splits))
+        self.profiles.values().flat_map(|profile| &profile.favorite_splits).chain(self.spaces.iter().flat_map(|space| &space.splits))
             .find(|split| split.panes.contains(&tab))
     }
 
-    pub fn active_split(&self) -> Option<&SplitView> { self.split_for(self.space().active_tab?) }
+    pub fn active_split(&self) -> Option<&SplitView> { self.split_for(self.active_tab()?.id) }
     pub fn item_anchor(&self, tab: TabId) -> TabId { self.split_for(tab).map_or(tab, |split| split.anchor) }
     pub fn is_split_secondary(&self, tab: TabId) -> bool { self.item_anchor(tab) != tab }
     pub fn related_tabs(&self, tab: TabId) -> Vec<TabId> { self.split_for(tab).map_or_else(|| vec![tab], |split| split.panes.clone()) }
-    pub fn favorite_count(&self) -> usize { self.favorites.iter().filter(|tab| !self.is_split_secondary(tab.id)).count() }
+    pub fn favorite_count(&self) -> usize { self.active_user_profile().favorites.iter().filter(|tab| !self.is_split_secondary(tab.id)).count() }
 
     pub fn item_title(&self, tab: TabId) -> String {
         if let Some(split) = self.split_for(tab) {
@@ -83,7 +83,7 @@ impl Browser {
     }
 
     fn split_mut(&mut self, tab: TabId) -> Option<&mut SplitView> {
-        self.favorite_splits.iter_mut().chain(self.spaces.iter_mut().flat_map(|space| &mut space.splits))
+        self.profiles.values_mut().flat_map(|profile| &mut profile.favorite_splits).chain(self.spaces.iter_mut().flat_map(|space| &mut space.splits))
             .find(|split| split.panes.contains(&tab))
     }
 
@@ -93,7 +93,7 @@ impl Browser {
     }
 
     fn scope_tabs_mut(&mut self, scope: Scope) -> &mut Vec<Tab> {
-        match scope { Scope::Favorites => &mut self.favorites, Scope::Space(index, section) => self.spaces[index].section_mut(section) }
+        match scope { Scope::Favorites => &mut self.active_user_profile_mut().favorites, Scope::Space(index, section) => self.spaces[index].section_mut(section) }
     }
 
     fn take_tab(&mut self, tab: TabId, scope: Scope) -> Option<Tab> {
@@ -120,19 +120,19 @@ impl Browser {
         match scope {
             Scope::Space(index, Section::Today) => self.spaces[index].today.insert(0, tab),
             Scope::Space(index, Section::Pinned) => { self.spaces[index].pinned.push(tab); self.spaces[index].pinned_collapsed = false; }
-            Scope::Favorites => self.favorites.push(tab),
+            Scope::Favorites => self.active_user_profile_mut().favorites.push(tab),
         }
     }
 
     fn take_split(&mut self, tab: TabId) -> Option<(Scope, SplitView)> {
         let scope = self.tab_scope(tab)?;
-        let views = match scope { Scope::Favorites => &mut self.favorite_splits, Scope::Space(index, _) => &mut self.spaces[index].splits };
+        let views = match scope { Scope::Favorites => &mut self.active_user_profile_mut().favorite_splits, Scope::Space(index, _) => &mut self.spaces[index].splits };
         let index = views.iter().position(|split| split.panes.contains(&tab))?;
         Some((scope, views.remove(index)))
     }
 
     fn put_split(&mut self, scope: Scope, view: SplitView) {
-        match scope { Scope::Favorites => self.favorite_splits.push(view), Scope::Space(index, _) => self.spaces[index].splits.push(view) }
+        match scope { Scope::Favorites => self.active_user_profile_mut().favorite_splits.push(view), Scope::Space(index, _) => self.spaces[index].splits.push(view) }
     }
 
     fn arrange_split_tabs(&mut self, scope: Scope, split: &SplitView) {
@@ -154,6 +154,7 @@ impl Browser {
     pub fn add_split(&mut self, anchor: TabId, other: TabId, placement: Placement, now: SystemTime) -> Result<SplitId, SplitError> {
         let scope = self.tab_scope(anchor).ok_or(SplitError::UnknownTab)?;
         let other_scope = self.tab_scope(other).ok_or(SplitError::UnknownTab)?;
+        if self.user_profile_id_for_tab(anchor) != self.user_profile_id_for_tab(other) { return Err(SplitError::UnknownTab); }
         if anchor == other || self.related_tabs(anchor).contains(&other) { return Err(SplitError::SameItem); }
         if self.split_for(other).is_some() { return Err(SplitError::AlreadyGrouped); }
         if self.split_for(anchor).is_some_and(|split| split.panes.len() >= MAX_SPLIT_PANES) { return Err(SplitError::LimitReached); }
@@ -323,6 +324,7 @@ impl Browser {
         if section == Section::Pinned && !self.can_edit_persistent_sidebar() { return false; }
         let Some(index) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
         let Some(scope) = self.tab_scope(tab) else { return false; };
+        if self.user_profile_id_for_tab(tab) != Some(self.spaces[index].user_profile_id) { return false; }
         let target = Scope::Space(index, section);
         if scope == target { return false; }
         self.forget_pinned_item(tab);
@@ -419,7 +421,7 @@ impl Browser {
         page.pinned_url = None;
         page.pinned_title = None;
         let space = match scope { Scope::Favorites => self.space().id, Scope::Space(index, _) => self.spaces[index].id };
-        self.archive.push(ArchivedTab { tab: page, space, archived_at: now, reason: ArchiveReason::Manual, split: None });
+        self.archive.push(ArchivedTab { tab: page, user_profile_id: self.spaces.iter().find(|entry| entry.id == space).unwrap().user_profile_id, space, archived_at: now, reason: ArchiveReason::Manual, split: None });
         for index in selected { self.spaces[index].active_tab = Some(split.active); }
         if split.panes.len() > 1 { self.put_split(scope, split); }
         else { self.replace_pinned_item(crate::folders::PinnedItem::Split(split.id), &[crate::folders::PinnedItem::Tab(split.panes[0])]); }
@@ -439,7 +441,7 @@ impl Browser {
         let index = pages.iter().position(|page| page.id == split.anchor).unwrap();
         let page = pages.remove(index);
         let space = match scope { Scope::Favorites => self.space().id, Scope::Space(index, _) => self.spaces[index].id };
-        self.archive.push(ArchivedTab { tab: page, space, archived_at: now, reason: ArchiveReason::Manual,
+        self.archive.push(ArchivedTab { tab: page, user_profile_id: self.spaces.iter().find(|entry| entry.id == space).unwrap().user_profile_id, space, archived_at: now, reason: ArchiveReason::Manual,
             split: Some(ArchivedSplit { view: split, panes: pages }) });
         self.repair_folders();
         true
@@ -454,7 +456,7 @@ impl Browser {
             let mut pages: Vec<_> = split.panes.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
             let anchor = pages.iter().position(|page| page.id == split.anchor)?;
             let page = pages.remove(anchor);
-            self.archive.push(ArchivedTab { tab: page, space: self.spaces[index].id, archived_at: now,
+            self.archive.push(ArchivedTab { tab: page, user_profile_id: self.spaces[index].user_profile_id, space: self.spaces[index].id, archived_at: now,
                 reason: ArchiveReason::Manual, split: Some(ArchivedSplit { view: split, panes: pages }) });
             return Some(Closed::Archived);
         }
@@ -501,9 +503,9 @@ impl Browser {
     }
 
     pub(crate) fn archive_split_idle(&mut self, now: SystemTime, protected: &[TabId]) -> usize {
-        let Some(limit) = self.archive_after else { return 0; };
         let items: Vec<_> = self.spaces.iter().enumerate().flat_map(|(index, space)| {
             space.today.iter().filter(|tab| !self.is_split_secondary(tab.id)).filter(|tab| {
+                let Some(limit) = self.profiles[&space.user_profile_id].archive_after else { return false; };
                 let panes = self.related_tabs(tab.id);
                 !space.active_tab.is_some_and(|id| panes.contains(&id)) && !panes.iter().any(|id| protected.contains(id)) && panes.iter().all(|id| {
                     self.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| now.duration_since(tab.last_active).unwrap_or_default() >= limit)
@@ -526,7 +528,7 @@ impl Browser {
     }
 
     pub(crate) fn split_max_id(&self) -> u64 {
-        self.favorite_splits.iter().map(|split| split.id.get())
+        self.profiles.values().flat_map(|profile| profile.favorite_splits.iter().map(|split| split.id.get()))
             .chain(self.spaces.iter().flat_map(|space| space.splits.iter().map(|split| split.id.get())))
             .chain(self.archive.iter().flat_map(|entry| entry.split.iter().flat_map(|saved| {
                 std::iter::once(saved.view.id.get()).chain(saved.view.panes.iter().map(|id| id.get())).chain(saved.panes.iter().map(|tab| tab.id.get()))
@@ -535,26 +537,49 @@ impl Browser {
 
     pub(crate) fn repair_splits(&mut self) {
         let mut used_panes = HashSet::new();
-        let mut used_ids = HashSet::new();
+        // Split IDs share the workspace allocator with Space, page and folder
+        // IDs. Reserve canonical pages and archived groups before repairing
+        // live groups; folder repair runs afterward against this whole union.
+        let mut used_ids: HashSet<SplitId> = self.spaces.iter().map(|space| space.id.0)
+            .chain(self.all_tabs().map(|tab| tab.id.0))
+            .chain(self.archive.iter().flat_map(|entry| std::iter::once(entry.tab.id.0)
+                .chain(entry.split.iter().flat_map(|saved| std::iter::once(saved.view.id.get())
+                    .chain(saved.panes.iter().map(|tab| tab.id.0))))))
+            .map(SplitId).collect();
         let mut next = self.next_id;
-        let lanes: HashMap<_, _> = self.favorites.iter().map(|tab| (tab.id, 0)).collect();
-        repair_views(&mut self.favorite_splits, &lanes, &mut used_panes, &mut used_ids, &mut next);
+        for profile in self.profiles.values_mut() {
+            let lanes = profile.favorites.iter().map(|tab| (tab.id, 0)).collect();
+            repair_views(&mut profile.favorite_splits, &lanes, &mut used_panes, &mut used_ids, &mut next);
+        }
         for space in &mut self.spaces {
             let lanes = space.pinned.iter().map(|tab| (tab.id, 1)).chain(space.today.iter().map(|tab| (tab.id, 2))).collect();
-            repair_views(&mut space.splits, &lanes, &mut used_panes, &mut used_ids, &mut next);
+            let repaired = repair_views(&mut space.splits, &lanes, &mut used_panes, &mut used_ids, &mut next);
+            // References belong to this Space's item order, not the global ID
+            // namespace. Preserve their exact slots when a live group moves
+            // away from an ID reserved by another profile's physical page.
+            for item in space.pinned_items.iter_mut().chain(space.folders.iter_mut().flat_map(|folder| &mut folder.items)) {
+                if let crate::folders::PinnedItem::Split(id) = item {
+                    if let Some(replacement) = repaired.get(id) { *id = *replacement; }
+                }
+            }
         }
         self.next_id = next;
     }
 }
 
-fn repair_views(views: &mut Vec<SplitView>, lanes: &HashMap<TabId, u8>, used_panes: &mut HashSet<TabId>, used_ids: &mut HashSet<SplitId>, next: &mut u64) {
+fn repair_views(views: &mut Vec<SplitView>, lanes: &HashMap<TabId, u8>, used_panes: &mut HashSet<TabId>, used_ids: &mut HashSet<SplitId>, next: &mut u64) -> HashMap<SplitId, SplitId> {
+    let mut repaired = HashMap::new();
     views.retain_mut(|view| {
         let unique: HashSet<_> = view.panes.iter().copied().collect();
         let lane = view.panes.first().and_then(|id| lanes.get(id));
         if !(2..=MAX_SPLIT_PANES).contains(&view.panes.len()) || unique.len() != view.panes.len()
             || lane.is_none() || view.panes.iter().any(|id| lanes.get(id) != lane || used_panes.contains(id)) { return false; }
         used_panes.extend(unique);
+        let original = view.id;
         if !used_ids.insert(view.id) { view.id = SplitId(*next); *next += 1; used_ids.insert(view.id); }
+        // Duplicate group IDs within one Space are ambiguous: retain the
+        // first surviving group's reference rather than stealing its slot.
+        repaired.entry(original).or_insert(view.id);
         if !view.panes.contains(&view.anchor) { view.anchor = view.panes[0]; }
         if !view.panes.contains(&view.active) { view.active = view.anchor; }
         let sum: f32 = view.weights.iter().sum();
@@ -564,6 +589,7 @@ fn repair_views(views: &mut Vec<SplitView>, lanes: &HashMap<TabId, u8>, used_pan
         view.title = view.title.take().map(|title| title.trim().to_string()).filter(|title| !title.is_empty());
         true
     });
+    repaired
 }
 
 fn remove_pane(split: &mut SplitView, tab: TabId) {

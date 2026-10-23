@@ -70,14 +70,14 @@ mod tests {
     fn old_sessions_enable_headers_and_favorites_ordering_and_new_preferences_persist() {
         let browser = Browser::new();
         let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
-        json.as_object_mut().unwrap().remove("include_favorites_in_ordering");
+        json["profiles"]["1"].as_object_mut().unwrap().remove("include_favorites_in_ordering");
         json["spaces"][0].as_object_mut().unwrap().remove("show_header");
         let mut loaded = session::from_json(&json.to_string()).unwrap();
-        assert!(loaded.include_favorites_in_ordering && loaded.space().show_header);
-        loaded.include_favorites_in_ordering = false;
+        assert!(loaded.active_user_profile().include_favorites_in_ordering && loaded.space().show_header);
+        loaded.active_user_profile_mut().include_favorites_in_ordering = false;
         loaded.set_space_header(loaded.space().id, false);
         let loaded = session::from_json(&session::to_json(&loaded)).unwrap();
-        assert!(!loaded.include_favorites_in_ordering && !loaded.space().show_header);
+        assert!(!loaded.active_user_profile().include_favorites_in_ordering && !loaded.space().show_header);
     }
 
     #[test]
@@ -91,7 +91,7 @@ mod tests {
         let local = browser.new_tab("https://local", now);
         browser.activate_item(Some(0), now);
         assert_eq!(browser.active_tab().unwrap().id, b);
-        browser.include_favorites_in_ordering = false;
+        browser.active_user_profile_mut().include_favorites_in_ordering = false;
         browser.activate_item(Some(0), now);
         assert_eq!(browser.active_tab().unwrap().id, local);
         browser.activate_item(None, now);

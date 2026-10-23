@@ -29,7 +29,7 @@ impl BrowserWindow {
             item("Change Space Icon…", Command::SpaceIcon).into(),
             item("Rename Space…", Command::SpaceRename).into(),
             pending("Edit Theme Color…").into(),
-            pending("Set Profile").submenu(vec![pending("Default").checked(true).into()]).into(),
+            item("Set Profile", Command::SpaceProfile).into(),
             Entry::Separator,
             item("New Folder", Command::SpaceNewFolder).into(),
             pending("Live Folders").submenu(vec![pending("GitHub Pull Requests").into(), pending("GitHub Issues").into()]).into(),
@@ -55,6 +55,7 @@ impl BrowserWindow {
             return;
         };
         match command {
+            Command::SpaceProfile => self.open_user_profile_switch(id, cx),
             Command::SpaceRename => {
                 let name = space.name.clone();
                 self.open_command_bar(Target::RenameSpace(id), &name, window, cx);

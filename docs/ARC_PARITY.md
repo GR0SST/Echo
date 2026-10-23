@@ -66,7 +66,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Restore Last Closed Tab | ⇧⌘T | done | Brings the last archived tab back to its Space |
 | Open Command Bar (on the current URL) | ⌘L | done | — |
 | New Boost / Edit Boost / Boost Gallery | hidden | missing | See "Boosts" |
-| New Profile | — | missing | No profiles |
+| New Profile | — | partial | Local name/Space-assignment sheets and menu/Command Bar routes work; exact visual states and Settings entry remain incomplete |
 | New Note | ⌃⇧N | missing | Notes (Arc Notes) |
 | New Note (in Split) | ⌃⌥N (hidden) | missing | — |
 | Close Window | ⇧⌘W | done | File menu and shortcut close the owning window from page or popup input focus, retain tabs without archiving and remove child panels. Checked against Arc and in bundled Echo, including Dock restoration. The engine retains its native clip hosts until teardown so closing a live CEF page is safe |
@@ -127,7 +127,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | New Space… | — | partial | Create a named Space from the dock + menu or Command Bar. Icon, theme and profile choices in the creation dialog remain missing |
 | Edit Theme… | — | missing | See "Space themes" |
 | Rename Space | — | done | Command Bar action opens a focused name editor; Escape cancels |
-| Change Profile | — | missing | — |
+| Change Profile | — | partial | Captured-Space routing and storage replacement work; warning conditions and exact sheet presentation still need matching |
 | Next Space / Previous Space | ⌥⌘→ / ⌥⌘← | done | — |
 | Go to Space N ("Jumps over to your %@ Space") | ⌃1…⌃9 (?) | done | Default shortcuts aren't in the nib |
 | Manage Spaces… (Space Manager in Library) | — | missing | — |
@@ -233,7 +233,7 @@ Folder duplication follows the right-click action documented in the
 | Turning a Space into a folder ("Export “%@” into Folder") | — | missing | — |
 | Live Folders for a Space | — | missing | — |
 | Space Manager (Library → Spaces) | — | missing | — |
-| Assigning a profile to a Space ("Set Profile", "Edit Space profile") | — | missing | — |
+| Assigning a profile to a Space ("Set Profile", "Edit Space profile") | — | partial | Set Profile opens the captured Space's sheet; creation-page profile selection and remaining visual details are missing |
 
 ## 4. Space themes and colors (Space Style Editor)
 
@@ -373,9 +373,9 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Profile: separate history, cookies, passwords, extensions | missing | The engine uses a single `Default` cache |
-| Creating a profile: name and which Spaces use it | missing | — |
-| Changing a Space's profile, with warnings ("Switch to your … Profile?") | missing | — |
+| Profile: separate history, cookies, passwords, extensions | partial | Profile-owned history/Favorites and persistent CEF contexts are isolated; cookies, localStorage and IndexedDB survived a full process restart. Password/autofill and extension management remain unimplemented |
+| Creating a profile: name and which Spaces use it | partial | Atomic local creation and Space assignment work; visual matching and Settings entry remain incomplete. The synchronization notice is intentionally omitted at the owner's request |
+| Changing a Space's profile, with warnings ("Switch to your … Profile?") | partial | Loaded-page switching preserves the Today URL and recreates the document in the selected storage; empty-window warning policy and final visual matching remain unresolved |
 | Deleting a profile by typing its name, "Delete unused Profiles". The default profile can't be deleted | missing | — |
 | Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | missing | — |
 | Profiles don't sync between computers (same in Arc) | — | Reference |
@@ -533,8 +533,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 71
-- **partial**: 57
-- **missing**: 167
+- **partial**: 61
+- **missing**: 156
 
 ### Biggest gaps (by importance for parity)
 
@@ -552,7 +552,9 @@ rows without a status aren't counted.
 7. **Managing Spaces and the theme editor.** Named Spaces can be created
    and renamed. Needs icons, deleting, plus multi-color gradients, color sets, noise,
    Intensity and Light/Dark.
-8. **Profiles.** Currently one cache for everything.
+8. **Profiles.** Local ownership, persistent storage isolation, creation and
+   reassignment foundations work. Finish visual matching, warning conditions,
+   deletion UI, credentials, extensions and profile settings.
 9. **Settings window**, including the shortcut editor with the "Arc or
    website" priority.
 10. **Shortcuts.** Missing ⇧⌘L.

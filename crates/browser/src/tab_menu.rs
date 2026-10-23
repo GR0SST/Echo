@@ -58,13 +58,13 @@ pub(crate) struct TabMenu {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Command { NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
-    SpaceRename, SpaceIcon, SpaceNewFolder,
+    SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
-            Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceNewFolder => "space-new-folder",
+            Self::SpaceProfile => "set-profile", Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceNewFolder => "space-new-folder",
             Self::FolderDuplicate => "folder-duplicate",
             Self::FolderIntoSpace => "folder-into-space",
             Self::NewFolderWithTab => "new-folder-with-tab", Self::MoveToFolder => "move-to-folder",
@@ -181,7 +181,7 @@ impl BrowserWindow {
 
     pub(crate) fn menu_target_exists(&self, target: MenuTarget) -> bool {
         match target {
-            MenuTarget::Tab(tab) => self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
+            MenuTarget::Tab(tab) => self.browser.active_user_profile().favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
             MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Address => self.browser.active_tab().is_some(),
@@ -191,6 +191,7 @@ impl BrowserWindow {
     pub(crate) fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.menu_target_exists(target) { return; }
         self.close_tab_menu(cx);
+        self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
         self.tab_menu = Some(TabMenu { target, selected: None, submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), window_width: window.bounds().size.width, scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None, bounds: Default::default() });
@@ -270,7 +271,7 @@ impl BrowserWindow {
     }
 
     fn tab_entries(&self, id: TabId, pane_menu: bool) -> Vec<Entry> {
-        let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == id) else { return Vec::new(); };
+        let Some(tab) = self.browser.active_user_profile().favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == id) else { return Vec::new(); };
         let split = self.browser.split_for(tab.id);
         let internal = browser_core::omnibox::is_internal_url(&tab.url);
         let orientation = if split.is_some_and(|split| split.axis == Axis::Horizontal) {

@@ -23,6 +23,8 @@ impl Browser {
                     .map(|tab| self.split_for(*tab).map_or(*tab, |split| split.active))
             });
         let space = self.add_space(folder.name, self.spaces[source].hue);
+        let source_profile = self.spaces[source].user_profile_id;
+        self.spaces.last_mut().unwrap().user_profile_id = source_profile;
         // The new empty Space always has room for the original subtree.
         assert!(self.move_folder(id, space, None));
         self.replace_pinned_item(PinnedItem::Folder(id), &folder.items);

@@ -45,7 +45,7 @@ fn blank_root_overlay_and_cef_shortcuts_open_focused_independent_today(cx: &mut 
     visual.run_until_parked();
     assert_eq!(roots(visual).len(), 3);
     let shortcut = crate::window::page_shortcuts().into_iter().find(|s| s.ctrl && s.cmd && s.key == "n").unwrap();
-    fake.send(visual, Event::Shortcut(shortcut));
+    fake.send(visual, fake.shortcut(shortcut));
     assert_eq!(roots(visual).len(), 4);
     assert_eq!(fake.0.borrow().forks.len(), 3);
     assert!(!normal.read_with(visual, |view, _| view.browser.is_blank()));
@@ -99,7 +99,7 @@ fn blank_persistent_routes_are_disabled_and_new_window_uses_retained_normal_spac
         }
     });
     a.read_with(&av, |view, _| {
-        assert!(view.browser.favorites.is_empty());
+        assert!(view.browser.active_user_profile().favorites.is_empty());
         assert!(view.browser.space().pinned.is_empty());
         assert!(view.browser.space().folders.is_empty());
         assert_eq!(view.browser.spaces.len(), 1);
@@ -115,7 +115,7 @@ fn blank_persistent_routes_are_disabled_and_new_window_uses_retained_normal_spac
         assert!(!view.browser.is_blank());
         assert_eq!(view.browser.space().id, space);
         assert_eq!(view.browser.spaces.len(), 3);
-        assert_eq!(view.browser.favorites.len(), normal.read_with(visual, |view, _| view.browser.favorites.len()));
+        assert_eq!(view.browser.active_user_profile().favorites.len(), normal.read_with(visual, |view, _| view.browser.active_user_profile().favorites.len()));
     });
 }
 
@@ -191,5 +191,28 @@ fn blank_from_private_forks_normal_engine_and_blank_drops_cannot_collide(cx: &mu
         assert_eq!(view.browser.active_tab().unwrap().url, "https://blank.example/b");
         assert!(view.browser.space().pinned.is_empty());
         assert_eq!(view.browser.all_tabs().count(), 1);
+    });
+}
+
+#[gpui::test]
+fn named_blank_uses_captured_source_storage_even_after_the_normal_window_switches(cx: &mut TestAppContext) {
+    let (normal, visual, fake) = open_pages(cx);
+    let named = normal.update(visual, |view, _| view.edit_browser(|browser| {
+        let named = browser.create_user_profile("Named").unwrap();
+        browser.assign_space_user_profile(browser.spaces[1].id, named).unwrap();
+        browser.switch_space(1);
+        named
+    }));
+    let (blank, mut blank_visual) = blank(&normal, visual);
+    normal.update(visual, |view, _| view.edit_browser(|browser| browser.switch_space(0)));
+    enter(&blank, &mut blank_visual, "https://named.example/blank");
+    assert_eq!(fake.0.borrow().fork_storage, vec![crate::pages::StorageSelection::for_profile(named)]);
+    let child = fake.0.borrow().forks[0].clone();
+    assert_eq!(child.0.borrow().storage[&1], crate::pages::StorageSelection::for_profile(named));
+    child.send(&mut blank_visual, Event::UrlChanged { view: page(1), url: "https://named.example/blank".into() });
+    visual.run_until_parked();
+    normal.read_with(visual, |view, _| {
+        assert!(view.browser.active_user_profile().history.is_empty());
+        assert_eq!(view.browser.user_profile(named).unwrap().history[0].url, "https://named.example/blank");
     });
 }
