@@ -229,6 +229,7 @@ impl TextInput {
     }
 
     fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.composition_before.is_some() { return; }
         self.finish_composition();
         let Some(after) = self.redo_history.pop() else { return; };
         self.undo_history.push(self.edit_state());
@@ -718,8 +719,10 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
-            .when(!self.undo_history.is_empty() || self.composition_before.as_ref().is_some_and(|before| before.text != self.content), |this| this.on_action(cx.listener(Self::undo)))
-            .when(!self.redo_history.is_empty() && self.composition_before.is_none(), |this| this.on_action(cx.listener(Self::redo)))
+            // Even an empty editor owns these actions: bubbling could undo
+            // an unrelated sidebar operation.
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))

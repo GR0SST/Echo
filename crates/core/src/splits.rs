@@ -446,9 +446,10 @@ impl Browser {
     }
 
     pub(crate) fn clear_split_today(&mut self, now: SystemTime) -> usize {
-        let items: Vec<_> = self.space().today.iter().filter(|tab| !self.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
+        let active = self.space().active_tab.map(|id| self.item_anchor(id));
+        let items: Vec<_> = self.space().today.iter().filter(|tab| !self.is_split_secondary(tab.id) && Some(tab.id) != active).map(|tab| tab.id).collect();
         let mut count = 0;
-        for id in items { if self.close_tab(id, now) == Some(Closed::Archived) { count += 1; } }
+        for id in items { if self.close_tab_unrecorded(id, now) == Some(Closed::Archived) { count += 1; } }
         count
     }
 
@@ -468,7 +469,7 @@ impl Browser {
         let mut count = 0;
         for (index, tab) in items {
             self.active_space = index;
-            if self.close_tab(tab, now) == Some(Closed::Archived) {
+            if self.close_tab_unrecorded(tab, now) == Some(Closed::Archived) {
                 self.archive.last_mut().unwrap().reason = ArchiveReason::Automatic;
                 count += 1;
             }

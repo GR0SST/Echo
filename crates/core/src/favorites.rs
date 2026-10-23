@@ -245,6 +245,7 @@ mod tests {
         assert_eq!(browser.reset_space(), vec![local]);
         assert_eq!(browser.favorites[0].url, "https://app/next");
         browser.new_tab("https://today", NOW);
+        browser.activate_tab(favorite, NOW);
         assert_eq!(browser.clear_today(NOW), 1);
         browser.archive_idle(NOW + Duration::from_secs(86400));
         assert_eq!(browser.favorites[0].id, favorite);

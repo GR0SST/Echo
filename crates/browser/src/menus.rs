@@ -162,7 +162,7 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Next Tab", window::NextTab),
                 MenuItem::action("Previous Tab", window::PreviousTab),
-                MenuItem::action("Clear Unpinned Tabs", window::ClearToday),
+                MenuItem::action("Clear Today", window::ClearToday),
             ],
         },
         Menu {

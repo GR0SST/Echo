@@ -4,6 +4,8 @@
 use crate::{Browser, Section, SpaceId, Tab, TabId, folders::{FolderId, PinnedItem}};
 
 const HISTORY_LIMIT: usize = 100;
+mod archive;
+pub(crate) use archive::ArchiveCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scope { Favorites, Space(SpaceId, Section) }
@@ -147,15 +149,31 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 #[derive(Clone, Debug)]
 struct PinEdit { before: PinState, after: PinState }
 
+#[derive(Clone, Debug)]
+enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit) }
+
+impl SidebarEdit {
+    fn apply(&self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
+        match self {
+            Self::Pin(edit) => if redo { edit.after.apply(&edit.before, browser) } else { edit.before.apply(&edit.after, browser) },
+            Self::Archive(edit) => edit.apply(redo, browser, now),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SidebarHistory { undo: Vec<PinEdit>, redo: Vec<PinEdit> }
+pub(crate) struct SidebarHistory { undo: Vec<SidebarEdit>, redo: Vec<SidebarEdit> }
 
 impl SidebarHistory {
     pub(crate) fn record_pin(&mut self, before: PinState, after: PinState) {
         if before == after { return; }
+        self.record(SidebarEdit::Pin(PinEdit { before, after }));
+    }
+
+    fn record(&mut self, edit: SidebarEdit) {
         self.redo.clear();
         if self.undo.len() == HISTORY_LIMIT { self.undo.remove(0); }
-        self.undo.push(PinEdit { before, after });
+        self.undo.push(edit);
     }
 }
 
@@ -165,9 +183,9 @@ impl Browser {
 
     /// Reverses the last supported sidebar action, independently of text edits.
     /// Invalidated entries are discarded without recreating removed pages.
-    pub fn undo_sidebar(&mut self) -> bool {
+    pub fn undo_sidebar(&mut self, now: std::time::SystemTime) -> bool {
         while let Some(edit) = self.sidebar_history.undo.pop() {
-            if edit.before.apply(&edit.after, self) {
+            if edit.apply(false, self, now) {
                 self.sidebar_history.redo.push(edit);
                 return true;
             }
@@ -175,9 +193,9 @@ impl Browser {
         false
     }
 
-    pub fn redo_sidebar(&mut self) -> bool {
+    pub fn redo_sidebar(&mut self, now: std::time::SystemTime) -> bool {
         while let Some(edit) = self.sidebar_history.redo.pop() {
-            if edit.after.apply(&edit.before, self) {
+            if edit.apply(true, self, now) {
                 self.sidebar_history.undo.push(edit);
                 return true;
             }
@@ -205,14 +223,14 @@ mod tests {
         browser.navigate(target, "https://target/next");
         browser.set_title(target, "Loaded later");
         let newer = browser.new_tab("https://newer", NOW);
-        assert!(browser.undo_sidebar());
+        assert!(browser.undo_sidebar(NOW));
         assert_eq!(ids(&browser.space().today), vec![newer, top, target, bottom]);
         let tab = browser.all_tabs().find(|tab| tab.id == target).unwrap();
         assert_eq!(tab.url, "https://target/next");
         assert_eq!(tab.title, "Loaded later");
         assert!(tab.pinned_url.is_none());
         assert_eq!(browser.active_tab().unwrap().id, newer);
-        assert!(browser.redo_sidebar());
+        assert!(browser.redo_sidebar(NOW));
         assert_eq!(browser.space().pinned[0].pinned_url.as_deref(), Some("https://target"));
         assert_eq!(browser.space().pinned[0].url, "https://target/next");
     }
@@ -229,10 +247,10 @@ mod tests {
         browser.move_item_to_folder(other, folder);
         browser.toggle_pin(target);
         browser.rename_folder(folder, "Renamed later");
-        assert!(browser.undo_sidebar());
+        assert!(browser.undo_sidebar(NOW));
         assert_eq!(browser.folder(folder).unwrap().name, "Renamed later");
         assert_eq!(browser.folder(folder).unwrap().items, vec![PinnedItem::Tab(target), PinnedItem::Tab(other)]);
-        assert!(browser.redo_sidebar());
+        assert!(browser.redo_sidebar(NOW));
         assert_eq!(browser.folder(folder).unwrap().items, vec![PinnedItem::Tab(other)]);
         assert_eq!(browser.space().today[0].id, target);
     }
@@ -247,12 +265,12 @@ mod tests {
         browser.toggle_pin(b);
         browser.spaces[0].splits[0].weights = vec![0.3, 0.7];
         browser.activate_tab(b, NOW);
-        assert!(browser.undo_sidebar());
+        assert!(browser.undo_sidebar(NOW));
         assert!(browser.space().pinned.is_empty());
         assert_eq!(browser.split_for(b).unwrap().id, split);
         assert_eq!(browser.split_for(b).unwrap().weights, vec![0.3, 0.7]);
         assert_eq!(browser.active_tab().unwrap().id, b);
-        assert!(browser.redo_sidebar());
+        assert!(browser.redo_sidebar(NOW));
         assert_eq!(browser.space().pinned.len(), 2);
         assert!(browser.space().today.is_empty());
         assert_eq!(browser.split_for(b).unwrap().panes, vec![a, b]);
@@ -269,11 +287,11 @@ mod tests {
         browser.activate_tab(favorite, NOW);
         browser.toggle_pin(favorite);
         browser.activate_tab(local, NOW);
-        assert!(browser.undo_sidebar());
+        assert!(browser.undo_sidebar(NOW));
         assert!(browser.is_favorite(favorite));
         assert_eq!(browser.spaces[0].active_tab, Some(favorite));
         assert_eq!(browser.spaces[1].active_tab, Some(local));
-        assert!(browser.redo_sidebar());
+        assert!(browser.redo_sidebar(NOW));
         assert!(!browser.is_favorite(favorite));
         assert_eq!(browser.spaces[1].active_tab, Some(local));
     }
@@ -284,16 +302,16 @@ mod tests {
         let a = browser.new_tab("https://a", NOW);
         let b = browser.new_tab("https://b", NOW);
         browser.toggle_pin(a);
-        assert!(browser.undo_sidebar());
+        assert!(browser.undo_sidebar(NOW));
         browser.toggle_pin(b);
-        assert!(!browser.redo_sidebar());
+        assert!(!browser.redo_sidebar(NOW));
         let json = session::to_json(&browser);
         assert!(!json.contains("sidebar_history"));
         let mut restored = session::from_json(&json).unwrap();
-        assert!(!restored.undo_sidebar());
-        assert!(!restored.redo_sidebar());
-        assert!(browser.undo_sidebar());
-        assert!(!browser.undo_sidebar());
+        assert!(!restored.undo_sidebar(NOW));
+        assert!(!restored.redo_sidebar(NOW));
+        assert!(browser.undo_sidebar(NOW));
+        assert!(!browser.undo_sidebar(NOW));
     }
 
     #[test]
@@ -302,8 +320,8 @@ mod tests {
         let tab = browser.new_tab("https://loading", NOW);
         browser.toggle_pin(tab);
         browser.set_title(tab, "Finished loading");
-        assert!(browser.undo_sidebar());
-        assert!(browser.redo_sidebar());
+        assert!(browser.undo_sidebar(NOW));
+        assert!(browser.redo_sidebar(NOW));
         assert_eq!(browser.space().pinned[0].pinned_title.as_deref(), Some("Finished loading"));
     }
 
@@ -313,8 +331,8 @@ mod tests {
         let a = browser.new_tab("https://a", NOW);
         browser.toggle_pin(a);
         browser.toggle_pin(a);
-        browser.close_tab(a, NOW);
-        assert!(!browser.undo_sidebar());
+        browser.close_tab_unrecorded(a, NOW);
+        assert!(!browser.undo_sidebar(NOW));
         assert_eq!(browser.archive.len(), 1);
         assert_eq!(browser.all_tabs().count(), 0);
         let a = browser.new_tab("https://a", NOW);
@@ -322,7 +340,7 @@ mod tests {
         browser.toggle_pin(a);
         browser.toggle_pin(b);
         browser.add_split(a, b, Placement::Right, NOW).unwrap();
-        assert!(!browser.undo_sidebar());
+        assert!(!browser.undo_sidebar(NOW));
         assert_eq!(browser.space().pinned.len(), 2);
         assert_eq!(browser.split_for(a).unwrap().panes.len(), 2);
     }
@@ -334,7 +352,7 @@ mod tests {
         browser.toggle_pin(target);
         let folder = browser.create_folder(browser.space().id, None, "Moved later").unwrap();
         browser.move_item_to_folder(target, folder);
-        assert!(!browser.undo_sidebar());
+        assert!(!browser.undo_sidebar(NOW));
         assert_eq!(browser.folder_tabs(folder), vec![target]);
         browser.favorite_tab(target);
         browser.toggle_pin(target);
@@ -342,7 +360,7 @@ mod tests {
             let tab = browser.new_tab(format!("https://favorite-{index}"), NOW);
             assert!(browser.favorite_tab(tab));
         }
-        assert!(!browser.undo_sidebar());
+        assert!(!browser.undo_sidebar(NOW));
         assert_eq!(browser.favorite_count(), crate::favorites::MAX_FAVORITES);
         assert!(browser.space().today.iter().any(|tab| tab.id == target));
     }

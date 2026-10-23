@@ -421,13 +421,14 @@ fn cmd_w_archives_and_cmd_shift_t_restores(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn cmd_shift_k_clears_today(cx: &mut TestAppContext) {
+fn cmd_shift_k_clears_background_today_and_preserves_the_selected_page(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let count = today_urls(&view, cx).len();
+    let active = active_url(&view, cx);
     cx.simulate_keystrokes("cmd-shift-k");
-    assert!(today_urls(&view, cx).is_empty());
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), count);
-    assert_eq!(active_url(&view, cx).as_deref(), Some("https://github.com"));
+    assert_eq!(today_urls(&view, cx), vec![active.clone().unwrap()]);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), count - 1);
+    assert_eq!(active_url(&view, cx), active);
 }
 
 #[gpui::test]
@@ -1085,11 +1086,11 @@ fn unavailable_command_is_not_offered_and_escape_does_not_execute(cx: &mut TestA
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("clear today");
     bar(&view, cx).simulate_keystrokes("enter");
-    assert!(today_urls(&view, cx).is_empty());
+    assert_eq!(today_urls(&view, cx).len(), 1);
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("reopen closed tab");
     bar(&view, cx).simulate_keystrokes("enter");
-    assert_eq!(today_urls(&view, cx).len(), 1);
+    assert_eq!(today_urls(&view, cx).len(), 2);
 }
 
 
@@ -1119,7 +1120,7 @@ fn page_controls_are_available_by_name(cx: &mut TestAppContext) {
 
 
 #[gpui::test]
-fn clear_button_archives_today_without_touching_pinned_or_other_spaces(cx: &mut TestAppContext) {
+fn clear_button_archives_background_today_without_touching_the_active_page_or_pins(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     // Tidy and Clear appear only while the pointer is over the sidebar.
     move_mouse(cx, 600., 400.);
@@ -1129,12 +1130,12 @@ fn clear_button_archives_today_without_touching_pinned_or_other_spaces(cx: &mut 
     assert!(view.read_with(cx, |w, _| w.sidebar_hovered));
     assert!(cx.debug_bounds("tidy-today").is_some());
     click(cx, "clear-today");
-    assert!(today_urls(&view, cx).is_empty());
+    assert_eq!(today_urls(&view, cx), vec!["https://www.chromium.org".to_string()]);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 2);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 3);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 2);
 
     cx.simulate_keystrokes("cmd-shift-t");
-    assert_eq!(today_urls(&view, cx).len(), 1);
+    assert_eq!(today_urls(&view, cx).len(), 2);
     cx.run_until_parked();
     assert!(cx.debug_bounds("clear-today").is_some());
 }
@@ -5461,4 +5462,104 @@ fn command_bar_undo_does_not_consume_sidebar_history(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-z");
     assert!(view.read_with(cx, |w, _| w.browser.space().today.iter().any(|tab| tab.id.get() == 8)));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Undo(..))));
+}
+
+#[gpui::test]
+fn archive_undo_and_redo_restore_tab_identity_order_and_engine_views_through_keys_and_menus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = today_urls(&view, cx);
+    let closed = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-w");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    assert!(fake.take_calls().contains(&Call::Close(1)));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(today_urls(&view, cx), before);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), closed);
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://www.chromium.org")));
+    dispatch_menu(cx, "Edit", "Redo");
+    assert_eq!(today_urls(&view, cx).len(), before.len() - 1);
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(today_urls(&view, cx), before);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), closed);
+}
+
+#[gpui::test]
+fn clear_today_undo_is_atomic_and_never_reloads_the_selected_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = today_urls(&view, cx);
+    fake.take_calls();
+    dispatch_menu(cx, "Tabs", "Clear Today");
+    assert_eq!(today_urls(&view, cx), vec!["https://www.chromium.org".to_string()]);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 2);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(today_urls(&view, cx), before);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 0);
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(today_urls(&view, cx).len(), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 2);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn whole_split_archive_undo_restores_all_panes_and_redo_closes_the_group(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let group = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
+    right_click(cx, "tab-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    assert!(view.read_with(cx, |w, _| w.browser.all_tabs().next().is_none()));
+    fake.take_calls();
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().id), group);
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout().len()), 2);
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 2);
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert!(view.read_with(cx, |w, _| w.browser.all_tabs().next().is_none()));
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Close(..))).count(), 2);
+}
+
+#[gpui::test]
+fn clear_today_keeps_the_focused_split_and_undo_restores_background_items(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        w.browser.new_tab("https://background.example", std::time::SystemTime::now());
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-shift-k");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 2);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 2);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 3);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 2);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn empty_history_search_owns_undo_instead_of_restoring_an_archived_tab(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-w cmd-y");
+    let archived = view.read_with(cx, |w, _| w.browser.archive.len());
+    cx.simulate_keystrokes("cmd-z");
+    dispatch_menu(cx, "Edit", "Undo");
+    assert!(view.read_with(cx, |w, _| w.history_is_open()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), archived);
+    assert_eq!(view.read_with(cx, |w, cx| w.history_page.input.read(cx).text().to_string()), "");
+}
+
+#[gpui::test]
+fn archive_undo_from_another_space_restores_the_source_space_and_settles_its_sidebar(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-w ctrl-2 cmd-z");
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 0);
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
+    assert!(cx.debug_bounds("tab-8").is_some());
 }

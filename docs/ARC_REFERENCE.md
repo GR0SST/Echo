@@ -334,3 +334,46 @@ data-URL `srcdoc` attempts stayed blank with loading=true and did not accept
 composed text, so they are not counted as edit-focus verification. That load
 failure remains to investigate separately. All 356 workspace tests passed
 (259 browser, 95 core, 2 engine).
+
+### Clear Today and archive Undo — 2026-10-23
+
+A disposable Arc Blank Window with three test tabs established the batch
+policy: Tabs → Clear Today removed the two background Today tabs and retained
+the selected page. A single Edit → Undo restored both background tabs in their
+previous order without changing the selected page. The restored sidebar and
+page were inspected in a screenshot. This corrects Echo's earlier behavior,
+which incorrectly cleared the active Today item too. The disposable Arc window
+was closed after the check; no existing user tabs were cleared.
+
+Echo now records manual Today archives in the same transient journal as pin
+operations. Single tabs, whole sidebar Split View items, Clear Today and the
+relative archive commands restore their identities, physical order, split
+weights/name/pane focus, and original Space selection. Clear Today retains
+all panes of an active split. Background auto-archiving creates no undo entry.
+Undo reads payloads from the actual archive; deleting or separately restoring
+an entry invalidates its transaction instead of resurrecting or duplicating
+pages. Redo validates the whole batch before archiving any item and retains
+subsequent navigation and other live page changes. Time is passed into Undo
+and Redo, so restored pages get a fresh activity timestamp. Closed engine views
+are recreated when restored pages become visible.
+
+Undo from another Space settles the sidebar back to the source Space. An empty
+GPUI editor now consumes text Undo/Redo rather than bubbling it to a sidebar
+action; the History search field has dedicated regression coverage. Redo
+remains inert while an IME composition is active.
+
+Native verification used a separate seeded profile with a two-pane split, a
+single Today tab and a foreground page. ⌘W → ⌘Z restored the single tab in its
+original position; ⇧⌘Z and native Edit → Undo repeated the archive/restore.
+Native Tabs → Clear Today preserved the foreground page while archiving the
+split and single tab as two entries. One native Edit → Undo restored both;
+selecting the split showed its two rendered CEF pages. Edit → Redo removed
+both items again, and a second Undo rendered the complete split again. All
+five screenshots were inspected; window inventory confirmed key=true and
+onScreen=true. No system cursor movement or clipboard operation was used.
+All 369 workspace tests passed (265 browser, 102 core, 2 engine).
+
+Individual split-pane closure and Pinned/Favorite page unloading do not yet
+have undo entries. Other sidebar operations, Peek and action-specific command
+suggestions also remain unfinished; the overall Undo/Redo parity row stays
+partial.

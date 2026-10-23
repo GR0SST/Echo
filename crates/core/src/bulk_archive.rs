@@ -23,11 +23,13 @@ impl Browser {
     /// Split Views are archived as one item. If the focused item is removed,
     /// focus returns to the reference item; otherwise the current page stays.
     pub fn archive_relative(&mut self, reference: TabId, relative: Relative, now: SystemTime) -> usize {
+        let capture = crate::undo::ArchiveCapture::new(self);
         let tabs = self.tabs_to_archive(reference, relative);
         let active_removed = self.space().active_tab.is_some_and(|active| tabs.contains(&self.item_anchor(active)));
         let mut count = 0;
-        for id in tabs { if self.close_tab(id, now) == Some(Closed::Archived) { count += 1; } }
+        for id in tabs { if self.close_tab_unrecorded(id, now) == Some(Closed::Archived) { count += 1; } }
         if active_removed { self.activate_sidebar_item(reference, now); }
+        capture.record(self);
         count
     }
 }

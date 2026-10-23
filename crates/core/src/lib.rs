@@ -361,6 +361,13 @@ impl Browser {
     /// Closes a tab like Arc's ⌘W: Today tabs go to the archive, pinned
     /// tabs stay pinned and return to their pinned page.
     pub fn close_tab(&mut self, id: TabId, now: SystemTime) -> Option<Closed> {
+        let capture = undo::ArchiveCapture::new(self);
+        let closed = self.close_tab_unrecorded(id, now);
+        capture.record(self);
+        closed
+    }
+
+    pub(crate) fn close_tab_unrecorded(&mut self, id: TabId, now: SystemTime) -> Option<Closed> {
         if self.split_for(id).is_some() { return self.close_split_item(id, now); }
         if self.is_favorite(id) {
             self.close_favorite(id);
@@ -391,25 +398,18 @@ impl Browser {
         }
     }
 
-    /// Archives every Today tab of the active space (Arc's "Clear", ⇧⌘K).
+    /// Archives background Today items of the active space (Arc's "Clear", ⇧⌘K).
+    /// The selected tab, including its entire Split View, stays open.
     /// Returns how many were archived.
     pub fn clear_today(&mut self, now: SystemTime) -> usize {
-        if !self.space().splits.is_empty() { return self.clear_split_today(now); }
-        let space = self.space_mut();
-        let space_id = space.id;
-        let cleared: Vec<Tab> = space.today.drain(..).collect();
-        if space.active_tab.is_some_and(|id| cleared.iter().any(|t| t.id == id)) {
-            space.active_tab = space.pinned.first().map(|t| t.id);
-        }
-        let count = cleared.len();
-        self.archive.extend(cleared.into_iter().map(|tab| ArchivedTab {
-            tab,
-            space: space_id,
-            archived_at: now,
-            reason: ArchiveReason::Manual,
-            split: None,
-        }));
+        let capture = undo::ArchiveCapture::new(self);
+        let count = self.clear_today_unrecorded(now);
+        capture.record(self);
         count
+    }
+
+    fn clear_today_unrecorded(&mut self, now: SystemTime) -> usize {
+        self.clear_split_today(now)
     }
 
     /// Brings back the most recently archived tab at the top of Today in
@@ -755,16 +755,17 @@ mod tests {
     }
 
     #[test]
-    fn clear_archives_today_and_focuses_pinned() {
+    fn clear_archives_background_today_and_keeps_the_selected_page() {
         let mut b = Browser::new();
         let p = b.new_tab("p", t0());
         b.toggle_pin(p);
         b.new_tab("a", t0());
-        b.new_tab("c", t0());
-        assert_eq!(b.clear_today(t0()), 2);
-        assert!(b.space().today.is_empty());
-        assert_eq!(b.active_tab().unwrap().id, p);
-        assert_eq!(b.archive.len(), 2);
+        let active = b.new_tab("c", t0());
+        assert_eq!(b.clear_today(t0()), 1);
+        assert_eq!(b.space().today.len(), 1);
+        assert_eq!(b.active_tab().unwrap().id, active);
+        assert_eq!(b.archive.len(), 1);
+        assert_eq!(b.clear_today(t0()), 0);
     }
 
     #[test]

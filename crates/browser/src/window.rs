@@ -783,7 +783,8 @@ impl BrowserWindow {
     fn edit_undo(&mut self, redo: bool, cx: &mut Context<Self>) {
         let editable = self.browser.active_tab().is_some_and(|tab|
             self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
-        if !editable && if redo { self.browser.redo_sidebar() } else { self.browser.undo_sidebar() } {
+        if !editable && if redo { self.browser.redo_sidebar(SystemTime::now()) } else { self.browser.undo_sidebar(SystemTime::now()) } {
+            self.settle_pager(cx);
             cx.notify();
         } else {
             self.with_active_page(|pages, tab| if redo { pages.redo(tab) } else { pages.undo(tab) });
@@ -1046,7 +1047,7 @@ impl BrowserWindow {
                 (Command::UnmuteAllTabs, "Unmute All Tabs", "unmute all tabs|unmute all", self.browser.all_tabs().any(|tab| tab.muted && !omnibox::is_internal_url(&tab.url))),
                 (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned_items.is_empty()),
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
-                (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
+                (Command::ClearToday, "Clear Today", "clear unpinned tabs|clear today|archive background today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
                 (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),

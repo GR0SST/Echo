@@ -74,7 +74,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI text fields restore text, caret and selection, including paste/cut and committed IME input. Pin/unpin has a separate transient history for tabs and Split Views, restoring order and folder placement while retaining later page changes. Native DOM edit focus keeps web editor Undo/Redo in the focused frame; non-editable pages use sidebar history through shortcuts and Edit menus. Archive/close, other sidebar actions, Peek and action-specific command suggestions remain unfinished |
+| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI text fields restore text, caret and selection, including paste/cut and committed IME input. Sidebar history supports pin/unpin, Today tab and whole Split View archives, Clear Today and relative archive batches. Undo restores identities, order, split metadata and original selection without rewinding unrelated page changes; a batch is one step. Editable web frames and GPUI fields own their text history, even when empty. Shortcuts and native Edit menus verified. Undo of individual pane closure, Pinned/Favorite unloading, other sidebar actions, Peek and action-specific command suggestions remains unfinished |
 | Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in `TextInput`; Edit menu includes OS editing selectors for native page responders. Page editing through CEF still needs an unlocked visual check |
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
@@ -137,7 +137,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | done | Favorites (optional), Pinned, Today; Split Views count as one item. Include/Exclude Favorites in Ordering is persistent and available in the Command Bar and Tabs menu |
 | Switch to Split View 1–4 / next / previous | (?) | done | Command Bar actions |
 | Reveal Tab in Sidebar | — | done | Command Bar and Tabs menu show the sidebar, unfold Pinned and scroll to the active item; Split View pane focus and loaded pages are preserved |
-| Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
+| Clear Today | ⇧⌘K | done | Archives background Today items while retaining the selected page or entire active Split View, matching the installed Arc. One Undo restores the batch and order without reloading the retained page; Redo rearchives it |
 | Reset all tabs in this Space | — | done | Command Bar → Reset Space returns all Pinned tabs to their original URLs and unloads their pages; Today and other Spaces are preserved |
 | Reset Tab to Original URL (pinned) | hidden | done | Command Bar → Reset Tab to Original URL navigates modified pinned tabs back to their original page |
 
