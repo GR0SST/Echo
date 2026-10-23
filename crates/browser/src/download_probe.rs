@@ -32,7 +32,43 @@ impl Config {
                     .into(),
             );
         }
-        let origin = args[0];
+        let policy = match args[2] {
+            "baseline" => Policy::Baseline,
+            "continue-normal" => Policy::ContinueNormal,
+            _ => return Err("Unsupported probe policy".into()),
+        };
+        Self::new(args[0], PathBuf::from(args[1]), policy)
+    }
+    pub(crate) fn new(origin: &str, directory: PathBuf, policy: Policy) -> Result<Self, String> {
+        Self::validate_origin(origin)?;
+        if !directory.is_absolute() || !directory.is_dir() {
+            return Err("Output must be an existing absolute disposable directory".into());
+        }
+        let directory = directory
+            .canonicalize()
+            .map_err(|_| "Cannot resolve output directory")?;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let filename = format!(
+            "echo-download-probe-{}-{}.bin",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let output = directory.join(&filename);
+        // symlink_metadata also rejects dangling links, unlike exists().
+        match output.symlink_metadata() {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Ok(_) => return Err("Generated output already exists".into()),
+            Err(e) => return Err(format!("Generated output absence unknown: {e}")),
+        }
+        Ok(Self {
+            origin: origin.into(),
+            output,
+            filename,
+            policy,
+        })
+    }
+    pub(crate) fn validate_origin(origin: &str) -> Result<(), String> {
         let authority = origin
             .strip_prefix("http://")
             .ok_or("Only an HTTP loopback fixture origin is admitted")?;
@@ -46,36 +82,7 @@ impl Config {
         {
             return Err("Invalid loopback port or non-origin URL".into());
         }
-        let directory = PathBuf::from(args[1]);
-        if !directory.is_absolute() || !directory.is_dir() {
-            return Err("Output must be an existing absolute disposable directory".into());
-        }
-        let directory = directory
-            .canonicalize()
-            .map_err(|_| "Cannot resolve output directory")?;
-        let policy = match args[2] {
-            "baseline" => Policy::Baseline,
-            "continue-normal" => Policy::ContinueNormal,
-            _ => return Err("Unsupported probe policy".into()),
-        };
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let filename = format!(
-            "echo-download-probe-{}-{}.bin",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        let output = directory.join(&filename);
-        // symlink_metadata also rejects dangling links, unlike exists().
-        if output.symlink_metadata().is_ok() {
-            return Err("Generated output already exists".into());
-        }
-        Ok(Self {
-            origin: origin.into(),
-            output,
-            filename,
-            policy,
-        })
+        Ok(())
     }
     pub(crate) fn fixture_url(&self) -> String {
         format!("{}/download/{}", self.origin, self.filename)
@@ -154,8 +161,14 @@ struct State {
 struct Probe(Rc<RefCell<State>>);
 impl Global for Probe {}
 
+pub(crate) fn idle_for_app_downloads(cx: &App) -> bool {
+    cx.try_global::<Probe>().is_none_or(|probe| {
+        let state = probe.0.borrow();
+        state.run.is_none() && state.unclaimed.is_empty()
+    })
+}
 pub(crate) fn can_arm(cx: &App) -> bool {
-    !cx.has_global::<crate::downloads::AppDownloads>() && cx.try_global::<Probe>()
+    !cx.has_global::<crate::downloads::AppDownloads>() && !admission::occupied() && cx.try_global::<Probe>()
         .is_some_and(|probe| probe.0.borrow().run.is_none())
 }
 
@@ -167,7 +180,7 @@ pub(crate) fn arm(config: Config, source: admission::Source, cx: &mut App) -> Re
     // Separate opaque process-local namespace: never derive owner from core IDs.
     static NEXT_OWNER: AtomicU64 = AtomicU64::new(1 << 63);
     let owner = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
-    let descriptor = admission::install(config.clone(), source, owner);
+    let descriptor = admission::try_install(config.clone(), source, owner)?;
     eprintln!(
         "[download-probe] owner={owner} output={} filename={} policy={:?}",
         config.output.display(),
@@ -494,5 +507,33 @@ fn installed_download_service_excludes_probe_without_waking_or_creating_service(
         assert!(!can_arm(cx));
         assert!(cx.global::<Probe>().0.borrow().run.is_none());
         crate::quit::reset_for_test(cx);
+    });
+}
+
+#[cfg(test)]
+#[gpui::test]
+fn used_legacy_probe_stays_ineligible_even_without_descriptor(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::quit::reset_for_test(cx);
+        admission::reset();
+        assert!(idle_for_app_downloads(cx));
+        let mut browser = browser_core::Browser::new();
+        let config = Config::parse(&format!("http://127.0.0.1:18473 {} continue-normal", std::env::temp_dir().display())).unwrap();
+        let tab = browser.new_tab(config.fixture_url(), std::time::SystemTime::UNIX_EPOCH);
+        let source = admission::Source {
+            identity: crate::pages::PageIdentity { tab, profile: browser.active_user_profile_id(), generation: 1 },
+            space: browser.space().id,
+            storage: crate::pages::StorageSelection::for_profile(browser.active_user_profile_id()), parent: 1,
+        };
+        let descriptor = admission::try_install(config.clone(), source.clone(), 90).unwrap();
+        assert!(admission::try_install(config.clone(), source, 91).is_err());
+        admission::fail(&descriptor);
+        cx.set_global(Probe(Rc::new(RefCell::new(State { run: Some(Run {
+            config, admission: descriptor, owner: 90, provenance: None, items: Vec::new(), resolved: HashSet::new(), controls: Vec::new(), failure: Some("previous failed run".into()), sequence: 0, retirement_failed: true,
+        }), unclaimed: Vec::new() }))));
+        admission::reset(); // Only test code can remove a descriptor.
+        assert!(!idle_for_app_downloads(cx));
+        assert!(crate::download_acceptance::preflight(cx).is_err());
+        assert!(!cx.has_global::<crate::downloads::AppDownloads>());
     });
 }

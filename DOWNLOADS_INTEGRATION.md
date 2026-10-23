@@ -435,5 +435,60 @@ The merged workspace passed 921 tests (654 browser, 165 core, 102 engine).
 The production service remains dormant: no owner registration, default
 destination, production admission, service startup or Downloads route is enabled
 by this change. A preinstalled service excludes the independent disposable probe.
-Native installed-service persistence requires the planned one-consumer fixture;
-the generic tests do not manufacture engine-issued tokens.
+The opt-in [one-consumer fixture](crates/browser/DOWNLOAD_ACCEPTANCE.md) now
+exercises installed-service persistence without manufacturing engine-issued
+tokens. Production startup and admission remain disabled.
+
+## Installed-service acceptance — October 24, 2026
+
+The R6 workspace passed 949 tests (682 browser, 165 core, 102 engine). Its
+immutable macOS bundle binary SHA-256 was
+`5a088a1d859bbab2556ad45d026ffff9b26e093ec43c281d1b317c0a22d94baf`.
+
+A real fixture delayed response headers by three seconds. After a single arm,
+status showed sequence zero with admission Claimed, `running=true` and legacy
+consumer exclusion, before the first download callback. The initial status had
+admission Waiting; this demonstrates the observed readiness transition rather
+than a synthetic test-only retry.
+
+The source used named application profile 2, independently bound to opaque
+engine owner 1. After genuine nonzero progress, automation selected the second
+Space and closed the captured source tab. The same consumer received genuine
+Complete at 33,554,432 bytes, acknowledged canonical record `(profile 2,
+sequence 1)`, and reported inventory agreement with no failures or service
+errors. The output SHA-256 was
+`46a3eca34e6d0d965224144558ccf51a14916a0075a09089f08da4868a020644`.
+After process exit 0 and CEF Complete, the core session loader found one record
+in profile 2 and zero in default profile 1. The screenshot was inspected.
+Evidence: `/tmp/echo-appdownloads-native-r6.{log,json,png}` and
+`/tmp/echo-appdownloads-native-r6-driver.log`.
+
+Earlier R2/R5 fixture runs failed: the engine's authorized Resolved snapshot
+retained an empty previous item path, which the audit rejected. R6 accepts that
+nonterminal transition only for the bound request and exact destination. It
+preserves Info and still requires a genuine exact item path for active and
+completed acceptance. Wrong paths and terminal conflicts remain failures.
+
+This is bounded named-profile/source-tab evidence. It does not establish
+source-window loss through AppDownloads, a final-poll completion race, delayed
+sibling admission, a full native request fence, production no-clobber
+publication, or Windows/Linux acceptance.
+
+The R7 workspace passed 952 tests (685 browser, 165 core, 102 engine). Native
+active quit passed with bundle binary SHA-256
+`121e7c2aa9520460d0824c62c3a2276ac547f2467041b8326701a5e338661f0b`:
+the installed consumer accepted genuine progress at 393,216 bytes, then the
+native terminate gate delivered quit through normal shutdown. CEF reached
+Complete with zero owners, browsers and cookie flushes; the original terminate
+ran once and the process exited 0. Reload found zero completed records in both
+profiles. The screenshot was inspected, and no owned helper remained afterward.
+Evidence: `/tmp/echo-appdownloads-native-active-quit-r7.{log,json,png}` and its
+driver log.
+
+The preceding R6b active-quit run was not accepted: a genuine Canceled snapshot
+cleared its item path, which the fixture misclassified as a sticky conflict.
+That disposable process required exact-PID/executable-checked SIGTERM cleanup.
+R7 recognizes bound cancellation separately from completion; empty/wrong-path
+Complete still fails. A separate R6 launch hit a CEF/libdispatch SIGTRAP before
+automation or arm; it is recorded as a startup failure, not fixed by the audit
+change. The successful R7 run does not establish a final-poll completion race.

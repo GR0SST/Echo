@@ -327,6 +327,7 @@ pub(crate) type DestinationPolicy =
 pub(crate) struct DownloadService<T = DownloadToken, H = ProfileHandle> {
     router: DownloadRouter<T, H>,
     policy: Option<DestinationPolicy>,
+    fixture: Option<Rc<RefCell<crate::download_acceptance::FixtureAudit<T>>>>,
     pub errors: Vec<String>,
 }
 impl<T, H> Default for DownloadService<T, H> {
@@ -334,8 +335,50 @@ impl<T, H> Default for DownloadService<T, H> {
         Self {
             router: DownloadRouter::default(),
             policy: None,
+            fixture: None,
             errors: Vec::new(),
         }
+    }
+}
+impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
+    /// Both running and shutdown copied ingress use this pure filter.
+    fn prepare_fixture_events(&mut self, events: impl IntoIterator<Item = TransferEvent<T>>) -> (Vec<TransferEvent<T>>, Vec<String>) {
+        use crate::download_acceptance::FixtureVerdict;
+        let mut accepted = Vec::new();
+        let mut errors = Vec::new();
+        for event in events {
+            let verdict = self.fixture.as_ref().map(|a| a.borrow_mut().inspect(&event));
+            match verdict {
+                None | Some(FixtureVerdict::Forward) => accepted.push(event),
+                Some(FixtureVerdict::ForwardWithFailure(error)) => { accepted.push(event); errors.push(error); },
+                Some(FixtureVerdict::Quarantine(error)) => errors.push(error),
+            }
+        }
+        (accepted, errors)
+    }
+    pub(crate) fn attach_fixture(&mut self, audit: Rc<RefCell<crate::download_acceptance::FixtureAudit<T>>>) -> Result<(), String> {
+        if self.fixture.is_some() || self.policy.is_some() || !self.router.ledger.is_empty() || !self.errors.is_empty() || self.router.owners.len() != 1 {
+            return Err("Fixture service is occupied".into());
+        }
+        {
+            let a = audit.borrow();
+            let owner = self.router.owners.get(&a.owner).ok_or("Fixture owner not registered")?;
+            if owner.profile != a.profile || owner.kind != SourceKind::Normal { return Err("Fixture captured owner mismatch".into()); }
+        }
+        self.fixture = Some(audit);
+        Ok(())
+    }
+    fn receive_copied(&mut self, events: impl IntoIterator<Item = TransferEvent<T>>) -> Vec<DownloadEffect<T>> {
+        let (events, errors) = self.prepare_fixture_events(events);
+        self.errors.extend(errors);
+        let fixture = self.fixture.clone();
+        let policy = self.policy.clone();
+        let (effects, errors) = self.router.reduce(events, |profile, request| {
+            if let Some(audit) = &fixture { audit.borrow_mut().decide(profile, request) }
+            else { policy.as_ref().map_or(DestinationDecision::Defer, |p| p(profile, request)) }
+        });
+        self.errors.extend(errors);
+        effects
     }
 }
 impl DownloadService {
@@ -372,17 +415,27 @@ impl DownloadService {
         self.policy = Some(policy);
     }
     fn receive(&mut self, events: Vec<DownloadEvent>) -> Vec<DownloadEffect<DownloadToken>> {
-        let policy = self.policy.clone();
-        let (effects, errors) = self.router.reduce(
-            events.into_iter().map(TransferEvent::from),
-            |profile, request| {
-                policy
-                    .as_ref()
-                    .map_or(DestinationDecision::Defer, |p| p(profile, request))
-            },
-        );
-        self.errors.extend(errors);
-        effects
+        self.receive_copied(events.into_iter().map(TransferEvent::from))
+    }
+    pub(crate) fn fixture_status(&self) -> Option<crate::download_acceptance::FixtureTransferStatus> {
+        use crate::download_acceptance::FixtureTransferStatus;
+        let a = self.fixture.as_ref()?.borrow();
+        let transfer = a.token.and_then(|token| self.router.ledger.get(&token));
+        let canonical_id = transfer.and_then(|t| t.committed);
+        let inventory_match = canonical_id.and_then(|id| {
+            let owner = self.router.owners.get(&a.owner)?;
+            let (_, records) = owner.handle.download_inventory()?;
+            let t = transfer?;
+            records.iter().find(|r| r.id() == id).map(|r| {
+                id.profile() == a.profile && r.final_path() == a.config.output.as_path()
+                    && r.source_url() == a.config.fixture_url() && r.original_url() == a.config.fixture_url()
+                    && r.mime_type() == t.info.mime_type && r.finished_at() == DownloadTime::from_cef_basetime(t.info.end_time)
+            })
+        }).unwrap_or(false);
+        Some(FixtureTransferStatus { captured_profile: a.profile, owner: a.owner, sequence: a.sequence, provenance: a.provenance, phase: a.phase, received_bytes: a.received_bytes,
+            requested_name_match: a.requested_name_match, resolved_path_match: a.resolved_path_match,
+            canonical_id, terminal_updated_seen: a.terminal_updated_seen, failure: a.failure.clone(), service_errors: self.errors.len(),
+            effect_ok: a.effect_ok, inventory_match, output: a.config.output.clone(), source: None, admission: None, consumer: None })
     }
     fn persist(&mut self) -> Result<(), String> {
         let errors = self.router.persist(|handle, profile, completion| {
@@ -416,16 +469,107 @@ pub(crate) fn execute_effects<T: Copy>(
         .collect()
 }
 
+/// Copied observations from one turn of the sole running consumer. Quiet fixture
+/// startup/context Pending and gaps between callbacks are still unfinished work.
+#[derive(Default)]
+struct RunningTurn {
+    drained_empty: bool,
+    effects_empty: bool,
+    records_pending: bool,
+    retirement_pending: bool,
+    engine_pending: bool,
+}
+impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
+    fn fixture_unfinished(&self) -> bool {
+        self.errors.is_empty() && self.fixture.as_ref().is_some_and(|audit| {
+            let audit = audit.borrow();
+            audit.failure.is_none() && !audit.phase.is_some_and(|phase| phase.is_terminal())
+                && audit.admission.as_ref().is_none_or(|d| d.borrow().phase != crate::window::download_probe::admission::Phase::Failed)
+        })
+    }
+    fn fixture_failed(&self) -> bool {
+        self.fixture.as_ref().is_some_and(|audit| {
+            let audit = audit.borrow();
+            !self.errors.is_empty() || audit.failure.is_some()
+                || audit.admission.as_ref().is_some_and(|d| d.borrow().phase == crate::window::download_probe::admission::Phase::Failed)
+        })
+    }
+    fn continue_running(&self, turn: RunningTurn) -> bool {
+        // Fail closed rather than automatically retrying genuine fixture failures.
+        if self.fixture_failed() { return false; }
+        let fixture_unfinished = self.fixture_unfinished();
+        fixture_unfinished || !turn.drained_empty || !turn.effects_empty
+            || turn.records_pending || turn.retirement_pending || turn.engine_pending
+    }
+}
+
+fn continue_running<T: Copy + Eq + Hash, H: Clone>(gate: &ConsumerGate, quitting: bool, service: &DownloadService<T, H>, turn: RunningTurn) -> bool {
+    !quitting && gate.is_running() && service.continue_running(turn)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConsumerStatus {
+    pub owner: shutdown::ConsumerOwner,
+    pub busy: bool,
+    pub scheduled: bool,
+    pub running: bool,
+    pub legacy_consumer_excluded: bool,
+}
+
+/// Replace only the native boundary in task-loop tests. Scheduling, the pump
+/// predicate, lease, reducer, persistence, continuation and timer remain real.
+#[cfg(test)]
+trait RunningEngineDriver {
+    fn download_work_pending(&self) -> bool;
+    fn pump(&self);
+    fn take_download_events(&self) -> Result<Vec<DownloadEvent>, String>;
+    fn prepare_download_retirements(&self) -> Result<engine::DownloadRetirementPreparation, String>;
+}
+
 /// Retain as ONE app global, not in BrowserWindow or Pages. Starting is explicit;
 /// no owner, admission, destination or UI route is enabled by construction.
 #[derive(Clone, Default)]
 pub(crate) struct AppDownloads {
     pub service: Rc<RefCell<DownloadService>>,
     running: Rc<Cell<bool>>,
+    task_started: Rc<Cell<bool>>,
     consumer: ConsumerGate,
+    retirement_failed: Rc<Cell<bool>>,
+    #[cfg(test)]
+    test_driver: Option<Rc<dyn RunningEngineDriver>>,
 }
 impl Global for AppDownloads {}
 impl AppDownloads {
+    fn download_work_pending(&self) -> bool {
+        #[cfg(test)]
+        if let Some(driver) = &self.test_driver { return driver.download_work_pending(); }
+        Engine::download_work_pending()
+    }
+    fn pump(&self) {
+        #[cfg(test)]
+        if let Some(driver) = &self.test_driver { return driver.pump(); }
+        Engine::pump();
+    }
+    fn take_download_events(&self) -> Result<Vec<DownloadEvent>, String> {
+        #[cfg(test)]
+        if let Some(driver) = &self.test_driver { return driver.take_download_events(); }
+        Engine::take_download_events()
+    }
+    fn prepare_download_retirements(&self) -> Result<engine::DownloadRetirementPreparation, String> {
+        #[cfg(test)]
+        if let Some(driver) = &self.test_driver { return driver.prepare_download_retirements(); }
+        Engine::prepare_download_retirements()
+    }
+    pub(crate) fn consumer_status(&self, cx: &App) -> ConsumerStatus {
+        let (owner, busy) = self.consumer.snapshot();
+        ConsumerStatus {
+            owner, busy, scheduled: self.running.get() && !self.task_started.get(),
+            running: self.task_started.get(),
+            // This is the exact installed-global guard used by the legacy loop
+            // before and after pumping; never call probe init/can_arm here.
+            legacy_consumer_excluded: cx.try_global::<Self>().is_some_and(|installed| Rc::ptr_eq(&installed.service, &self.service)),
+        }
+    }
     /// Transfers the sole event-consumer capability to quit, even after the app
     /// seal. Existing in-flight ingestion must finish before shutdown can drain.
     pub(crate) fn begin_shutdown(&self) -> Result<ShutdownDownloads, String> {
@@ -439,13 +583,15 @@ impl AppDownloads {
         }
         let this = self.clone();
         cx.spawn(async move |cx| {
-            struct Running(Rc<Cell<bool>>);
+            struct Running(Rc<Cell<bool>>, Rc<Cell<bool>>);
             impl Drop for Running {
                 fn drop(&mut self) {
                     self.0.set(false);
+                    self.1.set(false);
                 }
             }
-            let _running = Running(this.running.clone());
+            let _running = Running(this.running.clone(), this.task_started.clone());
+            this.task_started.set(true);
             loop {
                 // Each check and CEF operation is outside App/model/engine borrows.
                 // Quit owns CEF from this point; it must perform its final drain
@@ -453,8 +599,14 @@ impl AppDownloads {
                 if crate::quit::is_quitting() || !this.consumer.is_running() {
                     break;
                 }
-                if Engine::download_work_pending() {
-                    Engine::pump();
+                if this.retirement_failed.get() || this.service.borrow().fixture_failed() {
+                    break;
+                }
+                // The engine hint can be quiet before the first callback. Keep
+                // progressing the armed run on this same awaited consumer task.
+                let fixture_unfinished = { this.service.borrow().fixture_unfinished() };
+                if this.download_work_pending() || fixture_unfinished {
+                    this.pump();
                 }
                 // Always drain once on wake and once before sleeping the task:
                 // a terminal event can outlive engine retirement work.
@@ -465,7 +617,7 @@ impl AppDownloads {
                     Ok(lease) => lease,
                     Err(_) => break,
                 };
-                let events = match Engine::take_download_events() {
+                let events = match this.take_download_events() {
                     Ok(events) => events,
                     Err(error) => {
                         lease.record_errors([error.clone()]);
@@ -495,7 +647,20 @@ impl AppDownloads {
                         if crate::quit::is_quitting() || !this.consumer.is_running() {
                             return Ok(()); // Intentional suppression is not a native failure.
                         }
-                        Engine::resolve_download_destination(token, path)
+                        let audit = { this.service.borrow().fixture.clone() };
+                        let check = if let Some(audit) = &audit {
+                            let reservation = { audit.borrow().effect_check(token, &path) };
+                            reservation.and_then(|output| output.validate_target_absent(&path))
+                        } else { Ok(()) };
+                        // Filesystem validation ran with no App/service/audit borrow.
+                        if crate::quit::is_quitting() || !this.consumer.is_running() { return Ok(()); }
+                        let result = check.and_then(|()| Engine::resolve_download_destination(token, path));
+                        if let Some(audit) = audit {
+                            let mut a = audit.borrow_mut();
+                            a.effect_ok = result.is_ok();
+                            if let Err(error) = &result { a.fail(error); }
+                        }
+                        result
                     },
                     |token, command| {
                         if crate::quit::is_quitting() || !this.consumer.is_running() {
@@ -512,18 +677,32 @@ impl AppDownloads {
                         service.errors.push(error);
                     }
                 }
+                // Native parking must not run under App/service/model/audit borrows.
+                // Keep THIS batch's lease until any reentrant quit sees its errors.
+                if crate::quit::is_quitting() || !this.consumer.is_running() { break; }
+                if this.retirement_failed.get() { break; }
+                let retirement = this.prepare_download_retirements();
+                if let Err(error) = &retirement {
+                    this.retirement_failed.set(true);
+                    lease.record_errors([error.clone()]);
+                    this.service.borrow_mut().errors.push(error.clone());
+                }
+                if crate::quit::is_quitting() || !this.consumer.is_running() { break; }
+                if retirement.is_err() { break; }
+                let retirement_pending = retirement == Ok(engine::DownloadRetirementPreparation::Pending);
                 drop(lease); // No old batch/effect can overtake the final drain/flush.
                 if saved.is_err() {
                     break;
                 } // Retain pending metadata; explicit wake retries.
-                let records_pending = this.service.borrow().router.has_pending_records();
-                if drained_empty
-                    && effects_empty
-                    && !records_pending
-                    && !Engine::download_work_pending()
-                {
-                    break;
-                }
+                let engine_pending = this.download_work_pending();
+                let keep_running = {
+                    let service = this.service.borrow();
+                    continue_running(&this.consumer, crate::quit::is_quitting(), &service, RunningTurn {
+                        drained_empty, effects_empty, retirement_pending, engine_pending,
+                        records_pending: service.router.has_pending_records(),
+                    })
+                };
+                if !keep_running { break; }
                 cx.background_executor()
                     .timer(Duration::from_millis(8))
                     .await;

@@ -40,6 +40,16 @@ pub(crate) fn install(config: Config, source: Source, owner: u64) -> Shared {
     ADMISSION.with(|slot| *slot.borrow_mut() = Some(descriptor.clone()));
     descriptor
 }
+pub(crate) fn occupied() -> bool { ADMISSION.with(|slot| slot.borrow().is_some()) }
+pub(crate) fn try_install(config: Config, source: Source, owner: u64) -> Result<Shared, String> {
+    ADMISSION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() { return Err("Download admission already occupied".into()); }
+        let shared = Rc::new(RefCell::new(Descriptor { config, source, owner, phase: Phase::Waiting, generation: None }));
+        *slot = Some(shared.clone());
+        Ok(shared)
+    })
+}
 pub(crate) enum Decision {
     Ordinary,
     Rejected,

@@ -207,7 +207,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             // Input and screenshots still require focus after the wait.
             // Explicit window selection/activation also remains usable after
             // a deliberate window switch or Close Window.
-            let after_close = matches!(name, "wait" | "windows" | "reopen" | "window" | "activate" | "quit" | "download-probe-status" | "download-probe-control" | "download-probe-wait-active");
+            let after_close = matches!(name, "wait" | "windows" | "reopen" | "window" | "activate" | "quit" | "download-probe-status" | "download-probe-control" | "download-probe-wait-active" | "app-download-status" | "app-download-wait-active" | "app-download-wait-complete");
             if !after_close {
                 let Some(focused) = with_live_source(&view, ns_view, cx, |native| !require_focus || unsafe { has_browser_focus(native) }) else {
                     eprintln!("[automation] rejected: source root is closed");
@@ -220,6 +220,39 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 }
             }
             match name {
+                "app-download-arm" => {
+                    // Reservation and Config filesystem work must be outside App updates.
+                    let ready = cx.update(|cx| crate::download_acceptance::preflight(cx)).ok().is_some_and(|r| r.is_ok());
+                    if !ready { eprintln!("[app-download] fresh process preflight rejected"); return; }
+                    let result = match crate::download_acceptance::PreparedArm::parse(arg) {
+                        Ok(arm) => view.update(cx, |view, cx| view.arm_app_download_fixture(arm, cx)).map_err(|e| e.to_string()).and_then(|r| r),
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = result { eprintln!("[app-download] arm rejected: {error}"); return; }
+                    let _ = cx.update(|cx| eprintln!("[app-download] {:?}", crate::download_acceptance::status(cx)));
+                }
+                "app-download-close-source" if arg.is_empty() => {
+                    if !view.update(cx, |view, cx| view.close_app_download_source(cx)).ok().is_some_and(|r| r.is_ok()) {
+                        eprintln!("[app-download] exact source close rejected"); return;
+                    }
+                }
+                "app-download-status" if arg.is_empty() => {
+                    let _ = cx.update(|cx| eprintln!("[app-download] {:?}", crate::download_acceptance::status(cx)));
+                }
+                "app-download-wait-active" | "app-download-wait-complete" => {
+                    let Some(seconds) = arg.parse::<u64>().ok().filter(|s| (1..=30).contains(s)) else {
+                        eprintln!("[app-download] wait requires 1..30 seconds"); return;
+                    };
+                    let deadline = std::time::Instant::now() + Duration::from_secs(seconds);
+                    let accepted = loop {
+                        let ready = cx.update(|cx| if name == "app-download-wait-active" { crate::download_acceptance::active(cx) } else { crate::download_acceptance::completed(cx) }).unwrap_or(false);
+                        if ready { break true; }
+                        if crate::quit::is_quitting() || std::time::Instant::now() >= deadline { break false; }
+                        cx.background_executor().timer(Duration::from_millis(20)).await;
+                    };
+                    let _ = cx.update(|cx| eprintln!("[app-download] barrier={name} accepted={accepted} status={:?}", crate::download_acceptance::status(cx)));
+                    if !accepted { return; }
+                }
                 "download-probe-arm" => {
                     match crate::window::download_probe::Config::parse(arg) {
                         Ok(config) => {

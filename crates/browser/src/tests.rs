@@ -7140,3 +7140,175 @@ mod download_probe_page_tests;
 
 #[path = "library_live_page_tests.rs"]
 mod library_live_page_tests;
+
+#[gpui::test]
+fn app_download_fixture_normal_arm_is_once_identity_scoped_and_status_is_app_owned(cx: &mut TestAppContext) {
+    use crate::{download_acceptance::{self, PreparedArm, AppDownloadAcceptance}, downloads::AppDownloads, window::download_probe::admission};
+    admission::reset();
+    let fake = FakeEngine::default();
+    let (view, visual) = open_with(cx, Some(Box::new(fake.clone())));
+    let arm = PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap();
+    let url = arm.config.fixture_url();
+    let before = view.read_with(visual, |v, _| v.browser.space().today.len());
+    view.update(visual, |v, cx| {
+        crate::quit::reset_for_test(cx);
+        v.pages.as_ref().unwrap().borrow_mut().set_parent(1usize as *mut std::ffi::c_void);
+        let captured = v.browser.active_user_profile_id();
+        v.arm_app_download_fixture(arm, cx).unwrap();
+        let descriptor = cx.global::<AppDownloadAcceptance>().descriptor.clone().unwrap();
+        assert_eq!(descriptor.borrow().source.identity.profile, captured);
+        assert_eq!(descriptor.borrow().config.fixture_url(), url);
+        assert!(cx.has_global::<AppDownloads>());
+        assert!(v.arm_download_probe(descriptor.borrow().config.clone(), cx).is_err());
+        let status = download_acceptance::status(cx).unwrap();
+        assert_eq!(status.source.as_ref().unwrap(), &descriptor.borrow().source);
+        assert!(!status.completed());
+        assert_eq!(v.browser.space().today.len(), before + 1);
+    });
+    let second = PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap();
+    view.update(visual, |v, cx| {
+        assert!(v.arm_app_download_fixture(second, cx).is_err());
+        assert_eq!(v.browser.space().today.len(), before + 1);
+        v.pages.as_ref().unwrap().borrow_mut().set_parent(2usize as *mut std::ffi::c_void);
+        assert!(v.close_app_download_source(cx).is_err());
+        assert_eq!(v.browser.space().today.len(), before + 1);
+        v.pages.as_ref().unwrap().borrow_mut().set_parent(1usize as *mut std::ffi::c_void);
+        v.close_app_download_source(cx).unwrap();
+        assert!(download_acceptance::status(cx).is_ok()); // No source Entity in accessor.
+    });
+    assert!(fake.0.borrow().identity_attempts.iter().any(|attempt| attempt.3 == url));
+    visual.cx.update(|cx| {
+        // FakeEngine covers Pages only. Hand off after all assertions so the
+        // scheduled AppDownloads task cannot enter real CEF during teardown.
+        cx.global::<AppDownloads>().begin_shutdown().unwrap();
+    });
+    admission::reset();
+}
+#[gpui::test]
+fn app_download_fixture_non_native_arm_fails_before_tab_or_global(cx: &mut TestAppContext) {
+    use crate::{download_acceptance::PreparedArm, downloads::AppDownloads, window::download_probe::admission};
+    admission::reset();
+    let (view, visual) = open(cx);
+    let arm = PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap();
+    view.update(visual, |v, cx| {
+        crate::quit::reset_for_test(cx);
+        let before = v.browser.space().today.len();
+        assert!(v.arm_app_download_fixture(arm, cx).is_err());
+        assert_eq!(v.browser.space().today.len(), before);
+        assert!(!cx.has_global::<AppDownloads>());
+        assert!(!admission::occupied());
+    });
+}
+
+
+#[gpui::test]
+fn app_download_fixture_pending_creation_retry_keeps_same_consumer_and_read_only_status(cx: &mut TestAppContext) {
+    use crate::{download_acceptance::{self, PreparedArm}, downloads::AppDownloads, window::download_probe::admission};
+    use crate::pages::StorageSelection;
+    admission::reset();
+    let fake = FakeEngine::default();
+    let (view, visual) = open_with(cx, Some(Box::new(fake.clone())));
+    view.update(visual, |v, cx| {
+        crate::quit::reset_for_test(cx);
+        fake.0.borrow_mut().pending_storage.insert(StorageSelection::Default);
+        v.pages.as_ref().unwrap().borrow_mut().set_parent(1usize as *mut _);
+        v.arm_app_download_fixture(PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap(), cx).unwrap();
+        let service = cx.global::<AppDownloads>().service.clone();
+        let status = download_acceptance::status(cx).unwrap();
+        assert!(v.pages.as_ref().unwrap().borrow().creation_retry_pending());
+        assert_eq!(status.admission, Some(admission::Phase::Waiting));
+        assert_eq!(status.sequence, 0);
+        let consumer = status.consumer.unwrap();
+        assert!(consumer.scheduled && !consumer.running && !consumer.busy);
+        assert!(consumer.legacy_consumer_excluded);
+        fake.0.borrow_mut().pending_storage.clear();
+        // No second wake: ordinary Pages retry succeeds after Pending.
+        assert!(v.pages.as_ref().unwrap().borrow_mut().retry_pending_creation(&v.browser));
+        let after = download_acceptance::status(cx).unwrap();
+        assert_eq!(after.sequence, 0); // Delayed first callback remains quiet.
+        assert_eq!(after.consumer.unwrap(), consumer);
+        assert!(Rc::ptr_eq(&cx.global::<AppDownloads>().service, &service));
+        // Preserve the scheduling/status assertions above, then prevent the
+        // real service task from entering CEF behind the Pages-only FakeEngine.
+        cx.global::<AppDownloads>().begin_shutdown().unwrap();
+    });
+    admission::reset();
+}
+#[gpui::test]
+fn app_download_fixture_private_blank_and_quit_refuse_before_tab_creation(cx: &mut TestAppContext) {
+    use crate::{download_acceptance::PreparedArm, downloads::AppDownloads, window::download_probe::admission};
+    admission::reset();
+    cx.update(init);
+    for browser in [browser_core::Browser::new_private(), browser_core::Browser::new_blank(), demo_browser()] {
+        let normal = !browser.is_private() && !browser.is_blank();
+        let (view, visual) = cx.add_window_view(|window, cx| BrowserWindow::new(browser, None, window, cx));
+        view.update(visual, |v, cx| {
+            crate::quit::reset_for_test(cx);
+            if normal { crate::quit::seal(); }
+            let before = v.browser.all_tabs().count();
+            assert!(v.arm_app_download_fixture(PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap(), cx).is_err());
+            assert_eq!(v.browser.all_tabs().count(), before);
+            assert!(!cx.has_global::<AppDownloads>());
+            assert!(!admission::occupied());
+            crate::quit::reset_for_test(cx);
+        });
+    }
+}
+#[gpui::test]
+fn app_download_fixture_captures_named_profile_across_selection_change(cx: &mut TestAppContext) {
+    use crate::{download_acceptance::{self, PreparedArm}, window::download_probe::admission};
+    admission::reset();
+    let (view, visual) = open_with(cx, Some(Box::new(FakeEngine::default())));
+    view.update(visual, |v, cx| {
+        crate::quit::reset_for_test(cx);
+        let captured = v.edit_browser(|browser| {
+            let named = browser.create_user_profile("Fixture named owner").unwrap();
+            browser.assign_space_user_profile(browser.space().id, named).unwrap();
+            named
+        });
+        v.pages.as_ref().unwrap().borrow_mut().set_parent(1usize as *mut _);
+        v.arm_app_download_fixture(PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap(), cx).unwrap();
+        v.edit_browser(|browser| {
+            let alternate = browser.add_space("Fixture alternate selection", 120.);
+            browser.assign_space_user_profile(alternate, browser.default_user_profile_id()).unwrap();
+            browser.switch_space(browser.spaces.len() - 1);
+        });
+        assert_ne!(v.browser.active_user_profile_id(), captured);
+        let status = download_acceptance::status(cx).unwrap();
+        assert_eq!(status.captured_profile, captured);
+        assert_eq!(status.source.unwrap().identity.profile, captured);
+        // This host test has no CEF runtime; the real-task regression supplies
+        // its own per-service driver when testing pump/timer/drain behavior.
+        cx.global::<crate::downloads::AppDownloads>().begin_shutdown().unwrap();
+    });
+    admission::reset();
+}
+
+#[gpui::test]
+fn app_download_fixture_status_survives_source_entity_drop_with_retained_canonical_owner(cx: &mut TestAppContext) {
+    use crate::{download_acceptance::{self, PreparedArm}, downloads::AppDownloads, window::download_probe::admission};
+    admission::reset();
+    let (source, visual) = open_with(cx, Some(Box::new(FakeEngine::default())));
+    let weak = source.downgrade();
+    let shutdown = source.update(visual, |v, cx| {
+        crate::quit::reset_for_test(cx);
+        v.pages.as_ref().unwrap().borrow_mut().set_parent(1usize as *mut _);
+        v.arm_app_download_fixture(PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap(), cx).unwrap();
+        // Transfer ownership before the scheduled task can enter the engine.
+        // This test proves Entity lifetime/status, not native window retirement.
+        cx.global::<AppDownloads>().begin_shutdown().unwrap()
+    });
+    visual.update(|window, _| window.remove_window());
+    drop(source);
+    visual.run_until_parked();
+    assert!(weak.upgrade().is_none());
+    visual.cx.update(|cx| {
+        let status = download_acceptance::status(cx).unwrap();
+        assert!(status.source.is_some());
+        assert_eq!(format!("{:?}", status.consumer.unwrap().owner), "Shutdown");
+        shutdown.flush_retained_with(crate::profile::ProfileHandle::same_workspace, |_| Ok(())).unwrap();
+        shutdown.finish().unwrap();
+        assert_eq!(format!("{:?}", download_acceptance::status(cx).unwrap().consumer.unwrap().owner), "Finished");
+    });
+    admission::reset();
+}

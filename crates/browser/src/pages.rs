@@ -732,6 +732,13 @@ impl Pages {
         self.store.borrow_mut().prune();
     }
 
+    pub(crate) fn has_native_parent(&self) -> bool { !self.parent.is_null() }
+    pub(crate) fn owns_download_fixture_source(&self, source: &crate::window::download_probe::admission::Source) -> bool {
+        self.parent as usize == source.parent && self.store.borrow().pages.get(&source.identity.tab)
+            .is_some_and(|page| page.owner == self.host && page.identity == source.identity)
+    }
+
+
     /// Pure source capture after inventory reconciliation and before creation.
     /// Only the explicitly created Today fixture is eligible; no existing page
     /// receives a capability and no storage/profile identifier is reconstructed.

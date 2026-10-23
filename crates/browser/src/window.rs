@@ -852,6 +852,7 @@ impl BrowserWindow {
         // Parent remains alive. release_host only queues retirement; the
         // engine's native handoff must run in the task, outside this update.
         if let Some(pages) = &self.pages { pages.borrow_mut().release_host(); }
+        if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>().cloned() { downloads.wake(cx); }
         self.remove_child_windows(cx);
         window_close::prepare(self.main_window, cx);
     }
@@ -859,6 +860,9 @@ impl BrowserWindow {
     /// Automation-only explicit admission. Ordinary creators remain denied.
     pub(crate) fn arm_download_probe(&mut self, config: download_probe::Config,
         cx: &mut Context<Self>) -> Result<(), String> {
+        if cx.has_global::<crate::downloads::AppDownloads>() || download_probe::admission::occupied() {
+            return Err("Download consumer/admission occupied".into());
+        }
         download_probe::init(cx);
         if crate::quit::is_quitting() || self.browser.is_private() || self.browser.is_blank() {
             return Err("Probe requires a normal workspace".into());
@@ -877,6 +881,65 @@ impl BrowserWindow {
         download_probe::arm(config, source, cx)?;
         pages.borrow_mut().sync(&self.browser, self.page_content_visible());
         cx.notify();
+        Ok(())
+    }
+
+    /// Prepared filesystem work is detached; only normal canonical identity is captured here.
+    pub(crate) fn arm_app_download_fixture(&mut self, arm: crate::download_acceptance::PreparedArm,
+        cx: &mut Context<Self>) -> Result<(), String> {
+        use crate::{download_acceptance::{self, AppDownloadAcceptance, FixtureAudit}, downloads::AppDownloads};
+        download_acceptance::preflight(cx)?;
+        self.refresh_profile_projection();
+        if self.browser.is_private() || self.browser.is_blank() { return Err("Fixture requires a normal workspace".into()); }
+        let pages = self.pages.clone().ok_or("Fixture requires native pages")?;
+        if !pages.borrow().has_native_parent() { return Err("Fixture requires a native parent".into()); }
+        let captured = self.browser.active_user_profile_id();
+        let handle = self.profile.handle.clone();
+        let (normal, id, blank) = handle.download_normal_owner(captured).ok_or("Canonical owner unavailable")?;
+        if blank || id != captured || !normal.same_workspace(&handle) { return Err("Canonical owner mismatch".into()); }
+        let downloads = AppDownloads::default();
+        let owner = downloads.service.borrow_mut().register_source(&handle, captured)?;
+        let config = arm.config.clone();
+        let audit = Rc::new(RefCell::new(FixtureAudit::new(arm, captured, owner)));
+        downloads.service.borrow_mut().attach_fixture(audit.clone())?;
+        // Claim once before model edits. Any subsequent failure stays observable;
+        // never reset, adopt an existing descriptor or start a replacement run.
+        cx.set_global(AppDownloadAcceptance::default());
+        cx.set_global(downloads.clone());
+        let result: Result<(), String> = (|| {
+            let tab = self.edit_browser(|browser| browser.new_tab(&config.fixture_url(), SystemTime::now()));
+            let source = {
+                let mut pages = pages.borrow_mut();
+                pages.reconcile_inventory(&self.browser);
+                pages.download_probe_source(&self.browser, tab, &config)?
+            };
+            if source.identity.profile != captured { return Err("Fixture source profile changed".into()); }
+            let descriptor = download_probe::admission::try_install(config, source, owner)?;
+            audit.borrow_mut().admission = Some(descriptor.clone());
+            cx.global_mut::<AppDownloadAcceptance>().descriptor = Some(descriptor);
+            pages.borrow_mut().sync(&self.browser, self.page_content_visible());
+            Ok(())
+        })();
+        if let Err(error) = &result { audit.borrow_mut().fail(error); }
+        downloads.wake(cx);
+        cx.notify();
+        result
+    }
+
+    /// Automation closes only the retained fixture, even after selection changes.
+    pub(crate) fn close_app_download_source(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if crate::quit::is_quitting() { return Err("Quit sealed".into()); }
+        let descriptor = cx.try_global::<crate::download_acceptance::AppDownloadAcceptance>()
+            .and_then(|run| run.descriptor.clone()).ok_or("Fixture source unavailable")?;
+        let (source, url) = { let d = descriptor.borrow(); (d.source.clone(), d.config.fixture_url()) };
+        self.refresh_profile_projection();
+        let scoped = !self.browser.is_private() && !self.browser.is_blank() && self.browser.spaces.iter().any(|space|
+            space.id == source.space && space.user_profile_id == source.identity.profile
+                && space.today.iter().any(|tab| tab.id == source.identity.tab && tab.url == url));
+        if !scoped || !self.pages.as_ref().is_some_and(|p| p.borrow().owns_download_fixture_source(&source)) {
+            return Err("Fixture source identity/host changed".into());
+        }
+        self.close_tab(source.identity.tab, cx);
         Ok(())
     }
 
@@ -1949,6 +2012,7 @@ impl BrowserWindow {
                 pages.sync(&self.browser, self.page_content_visible());
             }
             self.after_tab_removal(cx);
+            if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>().cloned() { downloads.wake(cx); }
         }
         cx.notify();
     }

@@ -10,7 +10,7 @@ pub(crate) enum ShutdownDownloadError {
     Failure(String),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ConsumerOwner {
+pub(crate) enum ConsumerOwner {
     Running,
     Shutdown,
     Finished,
@@ -64,6 +64,9 @@ impl Drop for ConsumerLease {
     }
 }
 impl ConsumerGate {
+    pub(super) fn snapshot(&self) -> (ConsumerOwner, bool) {
+        (self.owner.get(), self.busy.get())
+    }
     pub(super) fn is_running(&self) -> bool {
         self.owner.get() == ConsumerOwner::Running
     }
@@ -133,7 +136,8 @@ impl<T: Copy + Eq + Hash, H: Clone> ShutdownDownloads<T, H> {
     ) -> Result<(), ShutdownDownloadError> {
         self.needs_flush.set(true);
         let mut service = self.service.borrow_mut();
-        let errors = ingest_shutdown(&mut service.router, events, writer);
+        let (events, mut errors) = service.prepare_fixture_events(events);
+        errors.extend(ingest_shutdown(&mut service.router, events, writer));
         if errors.is_empty() {
             Ok(())
         } else {

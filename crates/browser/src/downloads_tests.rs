@@ -1489,3 +1489,454 @@ fn historical_errors_and_intentionally_suppressed_effects_do_not_poison_handoff(
     shutdown.flush_retained_with(Rc::ptr_eq, |_| panic!("no handles")).unwrap();
     shutdown.finish().unwrap();
 }
+
+// Controlled service fixture tests use fictional u64 keys, never native tokens.
+fn acceptance_service() -> (DownloadService<u64, Model>, Rc<RefCell<crate::download_acceptance::FixtureAudit<u64>>>, Model) {
+    let model = Rc::new(RefCell::new(Browser::new()));
+    let profile = model.borrow().default_user_profile_id();
+    let mut service = DownloadService::default();
+    let owner = service.router.register_normal(profile, model.clone(), SourceKind::Normal).unwrap();
+    let arm = crate::download_acceptance::PreparedArm::parse("http://127.0.0.1:18473 continue-normal").unwrap();
+    let audit = Rc::new(RefCell::new(crate::download_acceptance::FixtureAudit::new(arm, profile, owner)));
+    service.attach_fixture(audit.clone()).unwrap();
+    (service, audit, model)
+}
+fn acceptance_event(audit: &crate::download_acceptance::FixtureAudit<u64>, requested: bool, phase: DownloadPhase) -> TransferEvent<u64> {
+    let mut e = event(100, audit.owner, phase);
+    e.info.url = audit.config.fixture_url();
+    e.info.original_url = audit.config.fixture_url();
+    e.info.full_path = audit.config.output.clone();
+    e.info.suggested_file_name = "different-item-name.bin".into();
+    e.destination_requested = requested;
+    e.destination = if requested { DownloadDestination::Requested { suggested_name: audit.config.filename.clone() } } else { DownloadDestination::Resolved(audit.config.output.clone()) };
+    e
+}
+#[test]
+fn acceptance_real_router_ack_shutdown_ingress_and_replay_use_one_canonical_writer() {
+    use super::shutdown::ConsumerGate;
+    let (mut service, audit, model) = acceptance_service();
+    let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+    assert!(matches!(service.receive_copied([request]).as_slice(), [DownloadEffect::Destination(100, _)]));
+    let terminal = acceptance_event(&audit.borrow(), false, DownloadPhase::Complete);
+    let profile = audit.borrow().profile;
+    let service = Rc::new(RefCell::new(service));
+    let shutdown = ShutdownDownloads::take(service.clone(), ConsumerGate::default()).unwrap();
+    for _ in 0..2 {
+        shutdown.ingest_copied_and_persist_with([terminal.clone()], |model, id, completion| {
+            model.borrow_mut().record_completed_download(id, completion).map_err(|e| format!("{e:?}"))
+        }).unwrap();
+    }
+    let id = service.borrow().router.ledger[&100].committed.unwrap();
+    assert_eq!(id.profile(), profile);
+    assert!(audit.borrow().terminal_updated_seen);
+    assert_eq!(audit.borrow().phase, Some(DownloadPhase::Complete));
+    assert_eq!(model.borrow().completed_downloads(profile).unwrap().len(), 1);
+    shutdown.flush_retained_with(Rc::ptr_eq, |_| Ok(())).unwrap();
+    shutdown.finish().unwrap();
+    assert!(shutdown.ingest_copied_and_persist_with([terminal], |_, _, _| panic!("after finish")).is_err());
+}
+#[test]
+fn acceptance_late_conflicting_terminal_persists_before_returning_audit_failure() {
+    use super::shutdown::ConsumerGate;
+    let (mut service, audit, model) = acceptance_service();
+    let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+    service.receive_copied([request]);
+    let mut terminal = acceptance_event(&audit.borrow(), false, DownloadPhase::Complete);
+    terminal.destination = DownloadDestination::Requested { suggested_name: "conflict.bin".into() };
+    let service = Rc::new(RefCell::new(service));
+    let shutdown = ShutdownDownloads::take(service.clone(), ConsumerGate::default()).unwrap();
+    assert!(shutdown.ingest_copied_and_persist_with([terminal], |m, id, c| m.borrow_mut().record_completed_download(id, c).map_err(|e| format!("{e:?}"))).is_err());
+    assert!(service.borrow().router.ledger[&100].committed.is_some());
+    assert_eq!(model.borrow().completed_downloads(audit.borrow().profile).unwrap().len(), 1);
+    assert!(audit.borrow().failure.is_some());
+}
+#[test]
+fn acceptance_quarantine_in_relinquishing_batch_is_sticky_without_pending_record() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner};
+    let (service, audit, _) = acceptance_service();
+    let service = Rc::new(RefCell::new(service));
+    let gate = ConsumerGate::default();
+    let lease = gate.acquire(ConsumerOwner::Running).unwrap();
+    let shutdown = ShutdownDownloads::take(service.clone(), gate).unwrap();
+    let unbound_terminal = acceptance_event(&audit.borrow(), false, DownloadPhase::Complete);
+    lease.with_service_errors(&mut service.borrow_mut(), |s| { assert!(s.receive_copied([unbound_terminal]).is_empty()); });
+    assert!(service.borrow().router.ledger.is_empty());
+    drop(lease);
+    assert!(matches!(shutdown.flush_retained_with(Rc::ptr_eq, |_| Ok(())), Err(ShutdownDownloadError::Failure(_))));
+}
+#[test]
+fn acceptance_only_genuine_requested_name_authorizes_and_second_token_cannot_share_target() {
+    for bad_kind in 0..4 {
+        let (mut s, audit, _) = acceptance_service();
+        let mut e = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+        match bad_kind {
+            0 => e.destination_requested = false,
+            1 => e.destination = DownloadDestination::Requested { suggested_name: "wrong.bin".into() },
+            2 => e.provenance = DownloadProvenance::new(audit.borrow().owner, 83, 97, true),
+            _ => e.info.phase = DownloadPhase::Complete,
+        }
+        assert!(s.receive_copied([e]).is_empty());
+        assert!(s.router.ledger.is_empty());
+        assert!(audit.borrow().token.is_none());
+    }
+    let (mut s, audit, _) = acceptance_service();
+    let mut early = acceptance_event(&audit.borrow(), false, DownloadPhase::InProgress);
+    early.destination = DownloadDestination::Unrequested;
+    assert!(s.receive_copied([early]).is_empty());
+    assert_eq!(audit.borrow().token, Some(100));
+    let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+    assert!(matches!(s.receive_copied([request.clone()]).as_slice(), [DownloadEffect::Destination(100, _)]));
+    let mut other = request;
+    other.token = 101;
+    assert!(s.receive_copied([other]).is_empty());
+    assert_eq!(s.router.ledger.len(), 1);
+    assert!(audit.borrow().failure.is_some());
+}
+#[test]
+fn acceptance_writer_failure_never_acknowledges_and_attachment_cannot_replace_policy() {
+    use super::shutdown::ConsumerGate;
+    let (mut s, audit, _) = acceptance_service();
+    assert!(s.attach_fixture(audit.clone()).is_err());
+    let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+    s.receive_copied([request]);
+    let terminal = acceptance_event(&audit.borrow(), false, DownloadPhase::Complete);
+    let s = Rc::new(RefCell::new(s));
+    let shutdown = ShutdownDownloads::take(s.clone(), ConsumerGate::default()).unwrap();
+    assert!(shutdown.ingest_copied_and_persist_with([terminal], |_, _, _| Err("writer unavailable".into())).is_err());
+    assert!(s.borrow().router.ledger[&100].committed.is_none());
+    assert!(s.borrow().router.has_pending_records());
+}
+#[test]
+fn acceptance_detached_output_check_rejects_collision_marker_change_and_symlink() {
+    use crate::download_acceptance::FixtureOutput;
+    let output = FixtureOutput::reserve_in_tmp().unwrap();
+    let target = output.directory().join("fixture.bin");
+    assert!(output.validate_target_absent(&target).is_ok());
+    std::fs::write(&target, b"existing").unwrap();
+    assert!(output.validate_target_absent(&target).is_err());
+    // Disposable fixture paths only; retain them for inspection (no cleanup).
+    let output = FixtureOutput::reserve_in_tmp().unwrap();
+    std::fs::write(output.directory().join(".echo-owner"), b"changed").unwrap();
+    assert!(output.validate_target_absent(&output.directory().join("fixture.bin")).is_err());
+    #[cfg(unix)] {
+        let output = FixtureOutput::reserve_in_tmp().unwrap();
+        let target = output.directory().join("fixture.bin");
+        std::os::unix::fs::symlink(output.directory().join("missing"), &target).unwrap();
+        assert!(output.validate_target_absent(&target).is_err());
+    }
+}
+#[test]
+fn acceptance_arm_grammar_has_no_external_output_or_nonloopback_mode() {
+    use crate::download_acceptance::PreparedArm;
+    for arg in [
+        "http://127.0.0.1:18473 /tmp continue-normal",
+        "http://127.0.0.1:18473 baseline",
+        "http://localhost:18473 continue-normal",
+        "http://127.0.0.1:0 continue-normal",
+        "http://127.0.0.1:18473/path continue-normal",
+        "http://user@127.0.0.1:18473 continue-normal",
+        "http://[::1]:18473?x continue-normal",
+    ] { assert!(PreparedArm::parse(arg).is_err()); }
+}
+#[test]
+fn acceptance_quarantine_payloads_are_bounded_and_never_enter_router() {
+    let (mut service, audit, _) = acceptance_service();
+    let rejected = acceptance_event(&audit.borrow(), false, DownloadPhase::Complete);
+    for _ in 0..100 {
+        assert!(service.receive_copied([rejected.clone()]).is_empty());
+    }
+    assert!(service.router.ledger.is_empty());
+    assert_eq!(audit.borrow().sequence, 100);
+    assert!(service.errors.iter().any(|e| e.contains("retention stops")));
+    assert!(audit.borrow().token.is_none());
+}
+
+
+fn quiet_acceptance_turn() -> RunningTurn {
+    RunningTurn { drained_empty: true, effects_empty: true, ..Default::default() }
+}
+#[test]
+fn acceptance_running_driver_survives_pending_and_delayed_first_callback_then_terminal() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner};
+    let (mut service, audit, model) = acceptance_service();
+    let gate = ConsumerGate::default();
+    // The SAME production continuation seam is driven with no engine-work hint,
+    // no effects, no records and an empty drain, before any callback exists.
+    // Each continued turn corresponds to the existing 8ms awaited task timer.
+    for _ in 0..12 {
+        let lease = gate.acquire(ConsumerOwner::Running).unwrap();
+        assert!(service.receive_copied([]).is_empty());
+        drop(lease);
+        assert!(continue_running(&gate, false, &service, quiet_acceptance_turn()));
+    }
+    assert!(service.fixture_unfinished()); // Also drives pumping when the engine hint is false.
+    let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+    assert!(matches!(service.receive_copied([request]).as_slice(), [DownloadEffect::Destination(100, _)]));
+    for _ in 0..12 { assert!(continue_running(&gate, false, &service, quiet_acceptance_turn())); }
+    let terminal = acceptance_event(&audit.borrow(), false, DownloadPhase::Complete);
+    service.receive_copied([terminal]);
+    assert!(continue_running(&gate, false, &service, RunningTurn { records_pending: true, ..quiet_acceptance_turn() }));
+    let errors = service.router.persist(|model, profile, completion| model.borrow_mut().record_completed_download(profile, completion).map_err(|e| format!("{e:?}")));
+    assert!(errors.is_empty());
+    assert_eq!(model.borrow().completed_downloads(audit.borrow().profile).unwrap().len(), 1);
+    assert!(!continue_running(&gate, false, &service, quiet_acceptance_turn()));
+}
+#[test]
+fn acceptance_running_driver_stops_failure_quit_shutdown_and_finished() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner};
+    let (service, audit, _) = acceptance_service();
+    let gate = ConsumerGate::default();
+    assert!(continue_running(&gate, false, &service, quiet_acceptance_turn()));
+    assert!(!continue_running(&gate, true, &service, quiet_acceptance_turn()));
+    audit.borrow_mut().fail("creation failed");
+    assert!(!continue_running(&gate, false, &service, RunningTurn { engine_pending: true, ..quiet_acceptance_turn() }));
+    let (mut service, _, _) = acceptance_service();
+    service.errors.push("native dispatch failed".into());
+    assert!(!continue_running(&gate, false, &service, quiet_acceptance_turn()));
+    let (service, _, _) = acceptance_service();
+    let service = Rc::new(RefCell::new(service));
+    let shutdown = ShutdownDownloads::take(service.clone(), gate.clone()).unwrap();
+    assert_eq!(gate.snapshot(), (ConsumerOwner::Shutdown, false));
+    assert!(!continue_running(&gate, false, &service.borrow(), quiet_acceptance_turn()));
+    shutdown.flush_retained_with(Rc::ptr_eq, |_| Ok(())).unwrap();
+    shutdown.finish().unwrap();
+    assert_eq!(gate.snapshot(), (ConsumerOwner::Finished, false));
+    assert!(!continue_running(&gate, false, &service.borrow(), quiet_acceptance_turn()));
+}
+#[gpui::test]
+fn acceptance_consumer_status_reads_actual_gate_and_task_without_acquiring(cx: &mut gpui::TestAppContext) {
+    use super::shutdown::ConsumerOwner;
+    cx.update(|cx| {
+        let app = AppDownloads::default();
+        cx.set_global(app.clone());
+        let before = app.consumer_status(cx);
+        assert_eq!(before.owner, ConsumerOwner::Running);
+        assert!(!before.busy && !before.scheduled && !before.running);
+        assert!(before.legacy_consumer_excluded);
+        assert_eq!(before, app.consumer_status(cx));
+        // Scheduling is established by the actual wake call, not by status.
+        app.wake(cx);
+        app.wake(cx); // Duplicate wake retains the same task reservation.
+        let scheduled = app.consumer_status(cx);
+        assert!(scheduled.scheduled && !scheduled.running);
+        assert_eq!(scheduled, app.consumer_status(cx));
+        let lease = app.consumer.acquire(ConsumerOwner::Running).unwrap();
+        assert!(app.consumer_status(cx).busy);
+        let shutdown = app.begin_shutdown().unwrap();
+        let handing_off = app.consumer_status(cx);
+        assert_eq!(handing_off.owner, ConsumerOwner::Shutdown);
+        assert!(handing_off.busy);
+        assert_eq!(handing_off, app.consumer_status(cx));
+        drop(lease);
+        assert!(!app.consumer_status(cx).busy);
+        shutdown.flush_retained_with(ProfileHandle::same_workspace, |_| Ok(())).unwrap();
+        shutdown.finish().unwrap();
+        assert_eq!(app.consumer_status(cx).owner, ConsumerOwner::Finished);
+    });
+}
+
+#[test]
+fn acceptance_canceled_stops_waiting_without_claiming_complete_or_writing_record() {
+    use super::shutdown::ConsumerGate;
+    let (mut service, audit, model) = acceptance_service();
+    let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+    service.receive_copied([request]);
+    let canceled = acceptance_event(&audit.borrow(), false, DownloadPhase::Canceled);
+    service.receive_copied([canceled]);
+    assert!(!audit.borrow().terminal_updated_seen);
+    assert!(!service.fixture_unfinished());
+    assert!(!continue_running(&ConsumerGate::default(), false, &service, quiet_acceptance_turn()));
+    assert!(!service.router.has_pending_records());
+    assert!(model.borrow().completed_downloads(audit.borrow().profile).unwrap().is_empty());
+}
+#[test]
+fn acceptance_descriptor_pending_claimed_failed_drive_actual_continuation_seam() {
+    use crate::{pages::{PageIdentity, StorageSelection}, window::download_probe::admission};
+    use super::shutdown::ConsumerGate;
+    let (service, audit, model) = acceptance_service();
+    let tab = model.borrow_mut().new_tab(audit.borrow().config.fixture_url(), std::time::SystemTime::UNIX_EPOCH);
+    let descriptor = Rc::new(RefCell::new(admission::Descriptor {
+        source: admission::Source {
+            identity: PageIdentity { tab, profile: audit.borrow().profile, generation: 1 },
+            space: model.borrow().space().id,
+            storage: StorageSelection::for_profile(audit.borrow().profile), parent: 1,
+        },
+        owner: audit.borrow().owner, config: audit.borrow().config.clone(),
+        phase: admission::Phase::Waiting, generation: None,
+    }));
+    audit.borrow_mut().admission = Some(descriptor.clone());
+    let gate = ConsumerGate::default();
+    for phase in [admission::Phase::Waiting, admission::Phase::Creating, admission::Phase::Claimed] {
+        descriptor.borrow_mut().phase = phase;
+        assert!(service.fixture_unfinished());
+        assert!(continue_running(&gate, false, &service, quiet_acceptance_turn()));
+    }
+    descriptor.borrow_mut().phase = admission::Phase::Failed;
+    assert!(!service.fixture_unfinished());
+    assert!(!continue_running(&gate, false, &service, RunningTurn { engine_pending: true, ..quiet_acceptance_turn() }));
+}
+
+/// Models the quiet interval before CEF delivers its first callback. No native
+/// token, admission transition, destination acceptance or completion is invented.
+#[derive(Default)]
+struct QuietFirstCallbackDriver {
+    calls: RefCell<Vec<&'static str>>,
+}
+impl RunningEngineDriver for QuietFirstCallbackDriver {
+    fn download_work_pending(&self) -> bool {
+        self.calls.borrow_mut().push("hint");
+        false
+    }
+    fn pump(&self) {
+        self.calls.borrow_mut().push("pump");
+    }
+    fn take_download_events(&self) -> Result<Vec<DownloadEvent>, String> {
+        self.calls.borrow_mut().push("drain");
+        Ok(Vec::new())
+    }
+    fn prepare_download_retirements(&self) -> Result<engine::DownloadRetirementPreparation, String> {
+        self.calls.borrow_mut().push("retire");
+        Ok(engine::DownloadRetirementPreparation::Ready)
+    }
+}
+
+#[gpui::test]
+fn acceptance_actual_task_pumps_and_drains_while_first_callback_is_delayed_without_another_wake(
+    cx: &mut gpui::TestAppContext,
+) {
+    let driver = Rc::new(QuietFirstCallbackDriver::default());
+    let app = AppDownloads {
+        test_driver: Some(driver.clone()),
+        ..AppDownloads::default()
+    };
+    let audit = cx.update(|cx| {
+        crate::quit::reset_for_test(cx);
+        let browser = Browser::new();
+        let profile = browser.default_user_profile_id();
+        let normal = ProfileHandle::new(browser, cx);
+        let owner = app.service.borrow_mut().register_source(&normal, profile).unwrap();
+        let arm = crate::download_acceptance::PreparedArm::parse(
+            "http://127.0.0.1:18473 continue-normal",
+        ).unwrap();
+        let audit = Rc::new(RefCell::new(crate::download_acceptance::FixtureAudit::new(
+            arm, profile, owner,
+        )));
+        app.service.borrow_mut().attach_fixture(audit.clone()).unwrap();
+        cx.set_global(app.clone());
+        app.wake(cx); // The only wake in this regression.
+        let status = app.consumer_status(cx);
+        assert!(status.scheduled && !status.running);
+        audit
+    });
+
+    cx.run_until_parked(); // Start the actual detached task and park at its timer.
+    for turn in 1..=4 {
+        // The actual pump predicate must call pump despite a false engine hint.
+        // Reverting it to hint-only leaves "pump" absent on the very first turn.
+        let expected: Vec<_> = (0..turn)
+            .flat_map(|_| ["hint", "pump", "drain", "retire", "hint"])
+            .collect();
+        assert_eq!(*driver.calls.borrow(), expected);
+        cx.update(|cx| {
+            let status = app.consumer_status(cx);
+            assert_eq!(status.owner, ConsumerOwner::Running);
+            assert!(status.running && !status.scheduled && !status.busy);
+            assert!(status.legacy_consumer_excluded);
+            assert_eq!(status, app.consumer_status(cx));
+            assert!(Rc::ptr_eq(&app.service, &cx.global::<AppDownloads>().service));
+            let service = app.service.borrow();
+            assert!(service.errors.is_empty());
+            assert!(service.router.ledger.is_empty());
+            assert!(!service.router.has_pending_records());
+        });
+        let audit = audit.borrow();
+        assert_eq!(audit.sequence, 0);
+        assert!(audit.token.is_none() && audit.phase.is_none());
+        assert!(audit.failure.is_none());
+        drop(audit);
+
+        if turn < 4 {
+            // No wake, Pages retry or service mutation: only the existing 8ms
+            // timer can start another pump/drain turn. Also catch a busy loop.
+            cx.executor().advance_clock(Duration::from_millis(7));
+            cx.run_until_parked();
+            assert_eq!(*driver.calls.borrow(), expected);
+            cx.executor().advance_clock(Duration::from_millis(1));
+            cx.run_until_parked();
+        }
+    }
+
+    // Exercise the task guard's real exit after handoff, without a native drain.
+    let shutdown = app.begin_shutdown().unwrap();
+    cx.executor().advance_clock(Duration::from_millis(8));
+    cx.run_until_parked();
+    assert_eq!(driver.calls.borrow().len(), 20);
+    cx.update(|cx| {
+        let status = app.consumer_status(cx);
+        assert_eq!(status.owner, ConsumerOwner::Shutdown);
+        assert!(!status.running && !status.scheduled && !status.busy);
+    });
+    shutdown.flush_retained_with(ProfileHandle::same_workspace, |_| Ok(())).unwrap();
+    shutdown.finish().unwrap();
+}
+
+#[test]
+fn acceptance_shutdown_canceled_empty_path_never_writes_or_adds_failure_and_preserves_real_errors() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner};
+    // Cover a shutdown-owned batch, an old batch finishing after handoff, and
+    // that same old batch carrying an independent genuine failure.
+    for (in_flight, genuine_error) in [(false, false), (true, false), (true, true)] {
+        let (mut service, audit, model) = acceptance_service();
+        let request = acceptance_event(&audit.borrow(), true, DownloadPhase::InProgress);
+        assert!(matches!(service.receive_copied([request]).as_slice(), [DownloadEffect::Destination(100, _)]));
+        let mut active = acceptance_event(&audit.borrow(), false, DownloadPhase::InProgress);
+        active.info.received_bytes = 5;
+        assert!(service.receive_copied([active]).is_empty());
+        assert!(audit.borrow().resolved_path_match);
+        let mut canceled = acceptance_event(&audit.borrow(), false, DownloadPhase::Canceled);
+        canceled.info.full_path = PathBuf::new();
+        canceled.info.received_bytes = canceled.info.total_bytes; // Bytes are not completion.
+        if genuine_error { service.errors.push("historical diagnostic".into()); }
+        let service = Rc::new(RefCell::new(service));
+        let gate = ConsumerGate::default();
+        let old = in_flight.then(|| gate.acquire(ConsumerOwner::Running).unwrap());
+        let shutdown = ShutdownDownloads::take(service.clone(), gate).unwrap();
+        if let Some(old) = old {
+            old.with_service_errors(&mut service.borrow_mut(), |service| {
+                if genuine_error { service.errors.push("genuine preceding batch failure".into()); }
+                assert!(service.receive_copied([canceled.clone()]).is_empty());
+            });
+            drop(old);
+        }
+        if genuine_error {
+            assert_eq!(service.borrow().errors, ["historical diagnostic", "genuine preceding batch failure"]);
+            assert!(matches!(shutdown.drain_copied_and_persist_with(
+                || panic!("sticky genuine failure must block before drain"),
+                |_, _, _| panic!("cancellation cannot create a record"),
+            ), Err(ShutdownDownloadError::Failure(error)) if error.contains("genuine preceding batch failure")));
+            assert!(matches!(shutdown.finish(), Err(ShutdownDownloadError::Failure(_))));
+        } else {
+            // Exact production shutdown ingress; replay also must stay harmless.
+            shutdown.drain_copied_and_persist_with(
+                || Ok(vec![canceled.clone()]),
+                |_, _, _| panic!("cancellation cannot create a record"),
+            ).unwrap();
+            shutdown.ingest_copied_and_persist_with([canceled],
+                |_, _, _| panic!("cancellation replay cannot create a record"),
+            ).unwrap();
+            assert!(service.borrow().errors.is_empty());
+            let flushes = Cell::new(0);
+            shutdown.flush_retained_with(Rc::ptr_eq, |_| { flushes.set(flushes.get() + 1); Ok(()) }).unwrap();
+            assert_eq!(flushes.get(), 1);
+            shutdown.finish().unwrap();
+        }
+        let audit = audit.borrow();
+        assert_eq!(audit.phase, Some(DownloadPhase::Canceled));
+        assert!(audit.failure.is_none());
+        assert!(!audit.resolved_path_match && !audit.terminal_updated_seen);
+        assert!(service.borrow().router.ledger[&100].completion.is_none());
+        assert!(service.borrow().router.ledger[&100].committed.is_none());
+        assert!(!service.borrow().router.has_pending_records());
+        assert!(model.borrow().completed_downloads(audit.profile).unwrap().is_empty());
+    }
+}
