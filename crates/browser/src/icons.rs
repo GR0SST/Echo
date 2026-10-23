@@ -218,12 +218,13 @@ pub(crate) fn scaled(icon: Icon, scale: f32) -> AnyElement {
 }
 
 /// The plus as two strokes turned by `angle` radians: open menus show it as a cross.
-pub(crate) fn plus(angle: f32) -> AnyElement {
+pub(crate) fn plus(angle: f32, scale: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let center = bounds.center();
         let (sin, cos) = angle.sin_cos();
         let color = window.text_style().color;
-        for (dx, dy) in [(5.5f32, 0.), (0., 5.5f32)] {
+        let arm = 5.5 * scale;
+        for (dx, dy) in [(arm, 0.), (0., arm)] {
             let (x, y) = (dx * cos - dy * sin, dx * sin + dy * cos);
             let mut path = gpui::PathBuilder::stroke(px(1.5));
             path.move_to(center - gpui::point(px(x), px(y)));

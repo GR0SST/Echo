@@ -4832,7 +4832,7 @@ fn sidebar_controls_animate_feedback_without_changing_layout(cx: &mut TestAppCon
     let (view, cx, _) = open_pages(cx);
     let copy = cx.debug_bounds("address-copy-link").unwrap();
     click(cx, "address-copy-link");
-    assert_eq!(view.read_with(cx, |w, _| w.copy_feedback), Some(0));
+    assert_eq!(view.read_with(cx, |w, _| w.copy_feedback.map(|(count, _)| count)), Some(0));
     assert_eq!(cx.debug_bounds("address-copy-link").unwrap(), copy);
     cx.executor().advance_clock(Duration::from_millis(1400));
     cx.run_until_parked();
@@ -4845,4 +4845,19 @@ fn sidebar_controls_animate_feedback_without_changing_layout(cx: &mut TestAppCon
     assert_eq!(view.read_with(cx, |w, _| w.new_menu_toggles), 2);
     cx.run_until_parked();
     assert_eq!(cx.debug_bounds("new-space").unwrap(), plus);
+}
+
+#[gpui::test]
+fn finished_copy_feedback_does_not_replay_when_the_controls_reappear(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    click(cx, "address-copy-link");
+    assert!(cx.debug_bounds("copy-check").is_some());
+    // Feedback that already ran out stays finished across hover changes.
+    view.update(cx, |w, cx| { w.copy_feedback = w.copy_feedback.map(|(count, _)| (count, std::time::Instant::now() - Duration::from_secs(5))); cx.notify(); });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("copy-check").is_none());
+    move_mouse(cx, 600., 400.);
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    move_mouse(cx, f32::from(sidebar.center().x), f32::from(sidebar.center().y));
+    assert!(cx.debug_bounds("copy-check").is_none());
 }
