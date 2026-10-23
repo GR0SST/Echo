@@ -703,6 +703,18 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    /// Repeating the opening shortcut dismisses the bar; a different mode
+    /// replaces the query without creating another overlay window.
+    fn toggle_command_target(&mut self, target: Target, text: &str, cx: &mut Context<Self>) -> bool {
+        let Some(bar) = &self.command_bar else { return false; };
+        if bar.target == target {
+            self.close_command_bar(cx);
+        } else {
+            self.reset_command_bar(target, text, cx);
+        }
+        true
+    }
+
     pub(crate) fn close_command_bar(&mut self, cx: &mut Context<Self>) {
         let Some(bar) = self.command_bar.take() else {
             return;
@@ -882,6 +894,13 @@ impl BrowserWindow {
         let now = SystemTime::now();
         match suggestion {
             Suggestion::Load(resolved) => {
+                if let Target::Tab(id) = target {
+                    if self.browser.all_tabs().any(|tab| tab.id == id && tab.url == resolved.url()) {
+                        if let Some(pages) = &self.pages { pages.borrow_mut().reload(id); }
+                        self.close_command_bar(cx);
+                        return;
+                    }
+                }
                 let title = match &resolved {
                     Resolved::Search { query, .. } => query.clone(),
                     Resolved::Url(url) if url.eq_ignore_ascii_case(crate::history::HISTORY_URL) => "History".into(),
@@ -1070,13 +1089,16 @@ impl BrowserWindow {
     // Window actions.
 
     fn on_open_command_bar(&mut self, _: &OpenCommandBar, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_command_bar(Target::NewTab, "", window, cx);
+        if !self.toggle_command_target(Target::NewTab, "", cx) {
+            self.open_command_bar(Target::NewTab, "", window, cx);
+        }
     }
 
     fn on_edit_current_url(&mut self, _: &EditCurrentUrl, window: &mut Window, cx: &mut Context<Self>) {
-        match self.browser.active_tab().map(|tab| (tab.id, tab.url.clone())) {
-            Some((id, url)) => self.open_command_bar(Target::Tab(id), &url, window, cx),
-            None => self.open_command_bar(Target::NewTab, "", window, cx),
+        let (target, text) = self.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone()))
+            .unwrap_or((Target::NewTab, String::new()));
+        if !self.toggle_command_target(target, &text, cx) {
+            self.open_command_bar(target, &text, window, cx);
         }
     }
 
@@ -1833,10 +1855,10 @@ impl BrowserWindow {
                     .id("command-bar")
                     .debug_selector(|| "command-bar".into())
                     .key_context(COMMAND_BAR_CONTEXT)
-                    .on_action(cx.listener(|this, _: &OpenCommandBar, _, cx| this.reset_command_bar(Target::NewTab, "", cx)))
+                    .on_action(cx.listener(|this, _: &OpenCommandBar, _, cx| { this.toggle_command_target(Target::NewTab, "", cx); }))
                     .on_action(cx.listener(|this, _: &EditCurrentUrl, _, cx| {
                         let (target, text) = this.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone())).unwrap_or((Target::NewTab, String::new()));
-                        this.reset_command_bar(target, &text, cx);
+                        this.toggle_command_target(target, &text, cx);
                     }))
                     .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select(1, cx)))
                     .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select(-1, cx)))

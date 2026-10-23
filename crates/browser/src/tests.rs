@@ -1613,17 +1613,56 @@ fn history_actions_work_from_the_command_bar_and_menu(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn native_menu_new_tab_replaces_an_existing_overlay_without_leaking_windows(cx: &mut TestAppContext) {
+fn native_menu_new_tab_toggles_an_existing_overlay_without_leaking_windows(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("old query");
     for _ in 0..3 {
         // macOS menu dispatch may target the main window while a child is key.
         dispatch_menu(cx, "File", "New Tab…");
+        assert_eq!(bar_text(&view, cx), None);
+        assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
+        dispatch_menu(cx, "File", "New Tab…");
         assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
         assert!(bar_input_focused(&view, cx));
         assert_eq!(cx.cx.update(|cx| cx.windows().len()), 2);
     }
+}
+
+#[gpui::test]
+fn repeating_command_bar_shortcuts_dismisses_and_different_shortcuts_switch_mode(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = today_urls(&view, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("unfinished query");
+    bar(&view, cx).simulate_keystrokes("cmd-t");
+    assert_eq!(bar_text(&view, cx), None);
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_keystrokes("cmd-l");
+    assert_eq!(bar_text(&view, cx), None);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_keystrokes("cmd-l");
+    assert_eq!(bar_text(&view, cx), active_url(&view, cx));
+    bar(&view, cx).simulate_keystrokes("cmd-t");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    assert!(bar_input_focused(&view, cx));
+    assert_eq!(today_urls(&view, cx), before);
+}
+
+#[gpui::test]
+fn confirming_the_current_url_reloads_without_replacing_the_title(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::TitleChanged { view: page(1), title: "Page title".into() });
+    fake.take_calls();
+    let before = today_urls(&view, cx);
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_keystrokes("enter");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Reload(1)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Navigate(..) | Call::Create(..))));
+    assert_eq!(today_urls(&view, cx), before);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Page title");
+    assert_eq!(bar_text(&view, cx), None);
 }
 
 #[gpui::test]

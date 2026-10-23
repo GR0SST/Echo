@@ -16,7 +16,8 @@ a shortcut that isn't in the nib and is assigned in code, or a string whose
 exact place in the UI is unknown.
 
 Command Bar behavior is also cross-checked against [Arc's public action
-reference](https://start.arc.net/command-bar-actions).
+reference](https://start.arc.net/command-bar-actions) and [release notes](https://start.arc.net/release-notes)
+(repeated Command Bar shortcuts dismiss it; confirming the current URL reloads it).
 
 Easels are left out of the comparison by the owner's decision. Notes (Arc's
 documents) are mentioned once.
@@ -233,8 +234,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 |---|---|---|---|
 | Popup over the page | ⌘T | done | Uses the full browser window bounds, including when opened from the floating sidebar |
 | Entering a URL or searching ("Search or Enter URL…") | — | done | The search engine is hardcoded (Google). Arc lets you pick it in profile settings |
-| Editing the current URL | ⌘L | done | — |
-| Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | — |
+| Editing the current URL | ⌘L | done | Enter on an unchanged URL reloads the page and preserves its title |
+| Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | Repeating ⌘T or ⌘L dismisses its mode; switching between them replaces the input in the same overlay |
 | Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View remains missing |
 | Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | missing | Also needs the suggestions privacy screen |
 | History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | partial | Local browsing history matches title/URL in ⌘T and ⌘L, with keyboard/click selection; open tabs match original page titles and suppress duplicate history rows. Bookmark/folder sources remain missing |
