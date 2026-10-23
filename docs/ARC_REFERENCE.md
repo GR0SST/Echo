@@ -1068,3 +1068,20 @@ The floating panel appeared, but its resize probe used root-window automation
 and an inner-edge coordinate that missed the child handle. It is unverified,
 not a demonstrated product failure. The test process exited normally after CEF
 Complete with zero owners, browsers and cookie flushes. No Space was deleted.
+
+
+### Media list/preview presentation correction
+
+The owner's supplied image showed a narrow Media search/list column and a
+separate large empty preview on its right. Echo's full-width centered placeholder
+was incorrect. The new presenter keeps the existing shared Library rail, a
+provisional 284-unit list width and independent preview. The source raster's
+106/284 pixel measurements are not established logical-point dimensions.
+
+The immutable combined Media/material/drag r1 bundle was inspected directly.
+Clicking the search icon accepted a query; switching to Spaces and back retained
+it. The empty group stayed centered in the list rather than the preview. Theme
+colors still use the existing host palette. File enumeration, result matching,
+file actions and the Learn more target remain unimplemented. Material foundation
+registration introduces no palette or visible opacity change by itself.
+Full workspace tests passed 765 cases. No Space was deleted.

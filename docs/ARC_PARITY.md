@@ -412,7 +412,7 @@ rows marked partial expose the setting from the Command Bar instead.
 | Spaces (Space Manager: order of Spaces, folders, tabs) | partial | Interactive cards, horizontal reachability, existing tab/folder/split controls, profile switching and creation. Theme/overflow controls, Back navigation and exact visual parity remain incomplete |
 | Archive (see section 7) | partial | Available in the Command Bar; dedicated Library page remains missing |
 | Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | missing | — |
-| Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | missing | — |
+| Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | partial | Separate search/list column and blank preview, retained window-local query, reference empty presentation. File discovery, results/actions, Learn more destination, calibrated geometry and theme/material parity remain unfinished |
 | Boosts: list, on/off, rename, delete | missing | — |
 | Easels & Notes | — | Out of scope (Easels). Notes are low priority |
 

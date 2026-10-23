@@ -241,7 +241,7 @@ pub(crate) fn render_library(
                                 .top(px(16.))
                                 .size(px(24.))
                                 .flex_none()
-                                .child(navigation_icon(item)),
+                                .child(navigation_icon(item, 1.)),
                         )
                         .child(
                             div()
@@ -338,7 +338,7 @@ pub(crate) fn render_library(
 }
 
 /// Unbranded, fixed 24 px section artwork. No font-dependent control glyphs.
-fn navigation_icon(section: LibrarySection) -> AnyElement {
+fn navigation_icon(section: LibrarySection, scale: f32) -> AnyElement {
     let contours = match section {
         LibrarySection::Media => vec![
             vec![
@@ -412,9 +412,9 @@ fn navigation_icon(section: LibrarySection) -> AnyElement {
         |_, _, _| (),
         move |bounds, _, window, _| {
             for points in &contours {
-                let mut path = gpui::PathBuilder::stroke(px(1.4));
+                let mut path = gpui::PathBuilder::stroke(px(1.4 * scale));
                 for (index, &(x, y)) in points.iter().enumerate() {
-                    let point = bounds.origin + gpui::point(px(x), px(y));
+                    let point = bounds.origin + gpui::point(px(x * scale), px(y * scale));
                     if index == 0 {
                         path.move_to(point);
                     } else {
@@ -427,7 +427,7 @@ fn navigation_icon(section: LibrarySection) -> AnyElement {
             }
         },
     )
-    .size(px(24.))
+    .size(px(24. * scale))
     .flex_none()
     .into_any_element()
 }
@@ -608,3 +608,6 @@ fn render_card(
 #[cfg(test)]
 #[path = "library_tests.rs"]
 mod tests;
+
+#[path = "library_media.rs"]
+pub(crate) mod media;

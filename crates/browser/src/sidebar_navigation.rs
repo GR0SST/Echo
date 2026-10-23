@@ -18,6 +18,7 @@ pub(crate) struct SidebarNavigation {
     pub(crate) library_section: LibrarySection,
     pub(crate) library_origin: SpaceId,
     pub(crate) form: Option<Entity<SpaceCreationView>>,
+    media: Option<Entity<library::media::MediaView>>,
     events: Option<Subscription>,
     generation: u64,
 }
@@ -28,6 +29,7 @@ impl SidebarNavigation {
             library_section: LibrarySection::Media,
             library_origin: browser.space().id,
             form: None,
+            media: None,
             events: None,
             generation: 0,
         }
@@ -414,14 +416,26 @@ impl BrowserWindow {
         };
         let section = self.sidebar_navigation.library_section;
         let empty = (section == LibrarySection::Media).then(|| {
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(colors.muted)
-                .child("Nothing here yet!")
-                .into_any_element()
+            // Reuse existing host semantic surfaces; never change App appearance.
+            let media_colors = library::media::MediaColors {
+                column: colors.background,
+                preview: (colors.card_surface)(self.browser.space().hue),
+                text: colors.text,
+                muted: colors.muted,
+                control: colors.selected,
+                hover: colors.hover,
+            };
+            let media = self
+                .sidebar_navigation
+                .media
+                .get_or_insert_with(|| {
+                    cx.new(|cx| library::media::MediaView::new(media_colors, cx))
+                })
+                .clone();
+            media.update(cx, |media, cx| media.set_colors(media_colors, cx));
+            // LearnMoreRequested has no navigation subscriber until its exact
+            // target is verified. The input retains a window-local query.
+            media.into_any_element()
         });
         library::render_library(
             &projection,

@@ -169,3 +169,27 @@ unverified and account-related UI is outside scope. This correction is not a
 full rail/native visual-parity acceptance claim. Only rustfmt parsing/check
 and whitespace checks were performed here; Cargo/build/native/Git operations
 remain the parent's responsibility. The three Library files are frozen again.
+
+### Proposed Media correction (TMP only; awaiting root release)
+
+The subsequent user-supplied Media reference supersedes the full-content
+centered placeholder. See `MEDIA_REFERENCE_INTEGRATION.md` for its two-column
+layout, real window-local search input, exact Echo-substituted empty copy,
+Learn more target boundary and separate tiny host hook. This proposal exists
+only in disjoint TMP snapshots while the root resize work is frozen; it has
+not modified the checkout. Existing Spaces geometry and Downloads files are
+unchanged. Cargo/native visual acceptance remains the parent's responsibility.
+
+
+### Media release integration checkpoint
+
+The parent released Media integration after resize commit 67f0319. The corrected
+core was applied after a successful dry-run against matching Library baselines;
+only three host-hook hunks were merged into the current sidebar_navigation.rs.
+Resize render-width overrides and unrelated host fields/logic were preserved.
+The shared 112 px rail is invariant across sections; Media's provisional
+reference-width list is 284 with a 6 px search inset and separate blank preview.
+Exact manifest/checkpoint: `/tmp/echo-media-reference-correction-20261023/release-checkpoint`.
+See `MEDIA_REFERENCE_INTEGRATION.md` for the applied state and remaining gates.
+The integration is frozen for parent Cargo/native checks. Learn more remains
+an unwired, URL-free intent. Downloads and existing Library tests are unchanged.
