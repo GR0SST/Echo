@@ -4024,3 +4024,61 @@ fn dropping_an_inactive_today_tab_focuses_the_moved_page_and_keeps_the_previous_
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn dock_reopen_restores_a_closed_window_and_accepts_keyboard_input(cx: &mut TestAppContext) {
+    use gpui::AppContext;
+    cx.update(init);
+    let create = |cx: &mut gpui::App| {
+        cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+            cx.new(|cx| {
+                let view = BrowserWindow::new(demo_browser(), None, window, cx);
+                view.focus(window);
+                view
+            })
+        }).unwrap();
+    };
+    cx.update(|cx| crate::reopen_with(cx, create));
+    let first = cx.read(|cx| cx.windows()[0]);
+    let visual = VisualTestContext::from_window(first, cx);
+    visual.run_until_parked();
+    first.update(cx, |_, window, _| window.remove_window()).unwrap();
+    cx.run_until_parked();
+    assert!(cx.read(|cx| cx.windows().is_empty()));
+
+    cx.update(|cx| crate::reopen_with(cx, create));
+    let reopened = cx.read(|cx| {
+        assert_eq!(cx.windows().len(), 1);
+        cx.windows()[0]
+    });
+    assert_ne!(first.window_id(), reopened.window_id());
+    let mut visual = VisualTestContext::from_window(reopened, cx);
+    visual.run_until_parked();
+    visual.simulate_keystrokes("cmd-t");
+    let view = reopened.downcast::<BrowserWindow>().unwrap().root(cx).unwrap();
+    bar(&view, &mut visual).simulate_input("example.com");
+    bar(&view, &mut visual).simulate_keystrokes("enter");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://example.com");
+    });
+    cx.update(|cx| crate::reopen_with(cx, |_| panic!("must reuse the existing browser window")));
+    assert_eq!(cx.read(|cx| cx.windows().len()), 1);
+}
+
+#[gpui::test]
+fn closing_the_window_saves_changes_before_the_periodic_save(cx: &mut TestAppContext) {
+    let path = std::env::temp_dir().join(format!("browser-close-session-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let (view, visual) = open(cx);
+    view.update(visual, |view, cx| {
+        view.save_session_to(path.clone(), cx);
+        view.browser.new_tab("https://example.com/just-before-close", std::time::SystemTime::now());
+    });
+    visual.update(|window, _| window.remove_window());
+    drop(view);
+    visual.cx.update(|_| {});
+    visual.run_until_parked();
+    let restored = browser_core::session::load(&path).unwrap().unwrap();
+    assert_eq!(restored.active_tab().unwrap().url, "https://example.com/just-before-close");
+    std::fs::remove_file(path).unwrap();
+}

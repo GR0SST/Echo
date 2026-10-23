@@ -514,6 +514,9 @@ impl BrowserWindow {
             let pump = pages.borrow().pump_fn();
             cx.spawn_in(window, async move |this, cx| loop {
                 cx.background_executor().timer(ENGINE_PUMP_INTERVAL).await;
+                if this.upgrade().is_none() {
+                    break;
+                }
                 pump();
                 let Ok(events) = pages.try_borrow_mut().map(|mut pages| pages.take_events()) else {
                     continue;
@@ -588,6 +591,8 @@ impl BrowserWindow {
                 }
             }
         };
+        let on_release = save.clone();
+        cx.on_release(move |this, _| on_release(&this.browser)).detach();
         let on_quit = save.clone();
         self._save_on_quit = Some(cx.on_app_quit(move |this, _| {
             on_quit(&this.browser);

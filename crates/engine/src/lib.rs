@@ -91,14 +91,23 @@ struct View {
     needs_layout: bool,
 }
 
+// CEF is initialized once per process, including across closed/reopened windows.
+thread_local! {
+    static RUNTIME: std::cell::RefCell<Option<std::rc::Rc<Runtime>>> = const { std::cell::RefCell::new(None) };
+}
+
+struct Runtime {
+    #[cfg(target_os = "macos")]
+    _library: library_loader::LibraryLoader,
+}
+
 pub struct Engine {
     client: Client,
     events: EventQueue,
     views: HashMap<ViewId, View>,
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
-    #[cfg(target_os = "macos")]
-    _library: library_loader::LibraryLoader,
+    _runtime: std::rc::Rc<Runtime>,
 }
 
 
@@ -109,51 +118,63 @@ impl Engine {
     /// [`Event::Shortcut`]. Chromium keeps its data (cookies, cache) in
     /// `data_dir`.
     pub fn start(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-
-        #[cfg(target_os = "macos")]
-        let library = {
-            let framework = exe
-                .parent()
-                .map(|dir| dir.join("../Frameworks/Chromium Embedded Framework.framework"))
-                .filter(|path| path.exists());
-            if framework.is_none() {
-                return Err("Chromium Embedded Framework is missing; run the app bundle".into());
+        let runtime = RUNTIME.with(|slot| -> Result<std::rc::Rc<Runtime>, String> {
+            if let Some(runtime) = slot.borrow().as_ref() {
+                return Ok(runtime.clone());
             }
-            let loader = library_loader::LibraryLoader::new(&exe, false);
-            if !loader.load() {
-                return Err("cannot load Chromium Embedded Framework".into());
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+
+            #[cfg(target_os = "macos")]
+            let library = {
+                let framework = exe
+                    .parent()
+                    .map(|dir| dir.join("../Frameworks/Chromium Embedded Framework.framework"))
+                    .filter(|path| path.exists());
+                if framework.is_none() {
+                    return Err("Chromium Embedded Framework is missing; run the app bundle".into());
+                }
+                let loader = library_loader::LibraryLoader::new(&exe, false);
+                if !loader.load() {
+                    return Err("cannot load Chromium Embedded Framework".into());
+                }
+                loader
+            };
+
+            let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+
+            #[cfg(target_os = "macos")]
+            mac::install_app_protocols();
+
+            let root_cache = data_dir;
+            let settings = Settings {
+                no_sandbox: 0,
+                external_message_pump: 1,
+                multi_threaded_message_loop: 0,
+                root_cache_path: CefString::from(root_cache.to_string_lossy().as_ref()),
+                cache_path: CefString::from(root_cache.join("Default").to_string_lossy().as_ref()),
+                persist_session_cookies: 1,
+                log_severity: LogSeverity::WARNING,
+                ..Default::default()
+            };
+            let args = args::Args::new();
+            let mut app = EngineApp::new();
+            if initialize(
+                Some(args.as_main_args()),
+                Some(&settings),
+                Some(&mut app),
+                std::ptr::null_mut(),
+            ) != 1
+            {
+                return Err("CEF failed to initialize".into());
             }
-            loader
-        };
 
-        let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
-
-        #[cfg(target_os = "macos")]
-        mac::install_app_protocols();
-
-        let root_cache = data_dir;
-        let settings = Settings {
-            no_sandbox: 0,
-            external_message_pump: 1,
-            multi_threaded_message_loop: 0,
-            root_cache_path: CefString::from(root_cache.to_string_lossy().as_ref()),
-            cache_path: CefString::from(root_cache.join("Default").to_string_lossy().as_ref()),
-            persist_session_cookies: 1,
-            log_severity: LogSeverity::WARNING,
-            ..Default::default()
-        };
-        let args = args::Args::new();
-        let mut app = EngineApp::new();
-        if initialize(
-            Some(args.as_main_args()),
-            Some(&settings),
-            Some(&mut app),
-            std::ptr::null_mut(),
-        ) != 1
-        {
-            return Err("CEF failed to initialize".into());
-        }
+            let runtime = std::rc::Rc::new(Runtime {
+                #[cfg(target_os = "macos")]
+                _library: library,
+            });
+            *slot.borrow_mut() = Some(runtime.clone());
+            Ok(runtime)
+        })?;
 
         let events = EventQueue::default();
         Ok(Self {
@@ -162,8 +183,7 @@ impl Engine {
             views: HashMap::new(),
             by_browser_id: HashMap::new(),
             next_id: 1,
-            #[cfg(target_os = "macos")]
-            _library: library,
+            _runtime: runtime,
         })
     }
 
@@ -412,6 +432,14 @@ impl Engine {
             }
             #[cfg(target_os = "macos")]
             mac::remove_from_superview(view.host);
+        }
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        for id in self.views.keys().copied().collect::<Vec<_>>() {
+            self.close(id);
         }
     }
 }

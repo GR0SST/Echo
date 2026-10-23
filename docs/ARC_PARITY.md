@@ -174,6 +174,7 @@ Folder duplication follows the right-click action documented in the
 |---|---|---|---|
 | Vertical sidebar with tabs | — | done | CEF site favicons are cached for unloaded/restored tabs, with letter fallback. Width can't be changed (?) |
 | Window buttons (traffic lights) inside the sidebar | — | done | — |
+| Reopen after closing the last window | Dock | done | Restores the saved session in a new window; keeps CEF initialized across window lifetimes |
 | Address field at the top of the sidebar (click opens the Command Bar with the URL) | — | done | No back/forward/reload buttons, no Site Control Center button |
 | Hiding the sidebar and sliding it in when hovering the left edge | ⌘S | done | — |
 | "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | ⇧⌘D | missing | — |

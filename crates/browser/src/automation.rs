@@ -5,7 +5,7 @@
 //!
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
-//! Commands: `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
+//! Commands: `reopen` (Dock request), `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `compose <text>` (native IME/emoji text insertion into the focused responder),
 //! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
@@ -33,15 +33,35 @@ const OPTION: usize = 1 << 19;
 const COMMAND: usize = 1 << 20;
 const EVENT_GAP: Duration = Duration::from_millis(60);
 
-pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_void, cx: &mut App) {
+pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut c_void, cx: &mut App) {
     let ns_view = ns_view as usize;
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let ns_view = ns_view as *mut AnyObject;
+        let mut ns_view = ns_view as *mut AnyObject;
         unsafe { make_key(ns_view) };
         for command in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
             match name {
+                "reopen" => {
+                    // Deliver the same delegate request AppKit sends for a Dock click.
+                    unsafe {
+                        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+                        let delegate: *mut AnyObject = msg_send![app, delegate];
+                        let _: () = msg_send![delegate, applicationShouldHandleReopen: app, hasVisibleWindows: false];
+                    }
+                    if let Ok(Some((new_view, parent))) = cx.update(|cx| {
+                        cx.windows().into_iter().find_map(|handle| {
+                            let handle = handle.downcast::<BrowserWindow>()?;
+                            handle.update(cx, |_, window, cx| {
+                                crate::native::view_of(window).map(|parent| (cx.weak_entity(), parent))
+                            }).ok().flatten()
+                        })
+                    }) {
+                        view = new_view;
+                        ns_view = parent.cast();
+                    }
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                }
                 "activate" => {
                     unsafe { make_key(ns_view) };
                     cx.background_executor().timer(Duration::from_millis(300)).await;

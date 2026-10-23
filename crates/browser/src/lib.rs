@@ -115,39 +115,65 @@ fn start_engine(window: &gpui::Window, data_dir: &std::path::Path) -> Option<Box
 
 const APP_NAME: &str = "Browser";
 
-pub fn run() {
-    Application::new().run(|cx: &mut App| {
-        init(cx);
-
-        let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Browser".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))),
-                }),
-                ..Default::default()
-            },
-            |window, cx| {
-                let profile = profile_dir();
-                let session = profile.join("session.json");
-                let engine = start_engine(window, &profile.join("Chromium"));
-                let view = cx.new(|cx| {
-                    let mut view = BrowserWindow::new(load_session(&session), engine, window, cx);
-                    view.save_session_to(session, cx);
-                    view
-                });
-                #[cfg(target_os = "macos")]
-                if let (Ok(script), Some(ns_view)) = (std::env::var("BROWSER_SCRIPT"), native::view_of(window)) {
-                    automation::start(script, view.downgrade(), ns_view, cx);
-                }
-                view.read(cx).focus(window);
+/// Opens the main browser window, restoring the last saved session.
+fn open_browser_window(cx: &mut App) {
+    let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+    cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Browser".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))),
+            }),
+            ..Default::default()
+        },
+        |window, cx| {
+            let profile = profile_dir();
+            let session = profile.join("session.json");
+            let engine = start_engine(window, &profile.join("Chromium"));
+            let view = cx.new(|cx| {
+                let mut view = BrowserWindow::new(load_session(&session), engine, window, cx);
+                view.save_session_to(session, cx);
                 view
-            },
-        )
-        .unwrap();
+            });
+            view.read(cx).focus(window);
+            view
+        },
+    )
+    .unwrap();
+    cx.activate(true);
+}
+
+/// Handles platform reopen requests, including clicks on the macOS Dock icon.
+fn reopen(cx: &mut App) {
+    reopen_with(cx, open_browser_window);
+}
+
+fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
+    if let Some(handle) = cx.windows().into_iter().find(|handle| handle.downcast::<BrowserWindow>().is_some()) {
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
         cx.activate(true);
+    } else {
+        open(cx);
+    }
+}
+
+pub fn run() {
+    let app = Application::new();
+    app.on_reopen(reopen);
+    app.run(|cx: &mut App| {
+        init(cx);
+        open_browser_window(cx);
+        #[cfg(target_os = "macos")]
+        if let Ok(script) = std::env::var("BROWSER_SCRIPT") {
+            if let Some(handle) = cx.windows().into_iter().find_map(|handle| handle.downcast::<BrowserWindow>()) {
+                let _ = handle.update(cx, |_, window, cx| {
+                    if let Some(ns_view) = native::view_of(window) {
+                        automation::start(script, cx.weak_entity(), ns_view, cx);
+                    }
+                });
+            }
+        }
     });
 }
