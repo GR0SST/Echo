@@ -1131,3 +1131,24 @@ Reproduction anchors (arm64 unslid addresses): effect factory
 `0x1015401ec–0x1015401f0`, popover update `0x100a2a1f0–0x100a2ace8`.
 These compiled facts support independently configurable effect layers, not a
 single global opacity multiplier or an adopted reference palette.
+
+### Normal download continuation after source closure, 2026-10-23
+
+Native Arc 1.170.0 checks used an owned normal window and the existing test Space
+`Echo Enter Reference 20261023`. A local HTTP fixture streamed two independent
+32 MiB attachments. Closing the first source tab with Cmd+W and the second
+source window with Cmd+Shift+W did not cancel either transfer. Server byte counts
+continued increasing after each closure; both final files had the expected
+33,554,432 bytes and SHA256
+`46a3eca34e6d0d965224144558ccf51a14916a0075a09089f08da4868a020644`.
+Library Downloads showed each fixture after its source had closed.
+
+This establishes normal continuation while Arc remains running with other
+windows. It does not identify Arc's internal host lifetime or establish final
+private-window, Little Arc, Blank or application-quit policy. An unrelated
+private window was left untouched. The temporary owned windows were closed;
+no Space was deleted or reassigned. Detailed fixture/ownership evidence is in
+`/tmp/echo-download-lifetime-native-20261023.md`. Echo's existing explicit
+cancel-before-native-close capability must therefore not be adopted as normal
+browser parity; normal downloads need an independently verified continuing
+lifetime before that route is enabled.

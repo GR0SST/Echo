@@ -185,3 +185,14 @@ opened. Screenshots were inspected. Ordinary application quit exited with
 `CEF Complete`, zero owners, no browsers and zero pending cookie flushes.
 This checks the existing denied admission path and teardown only. It does not
 accept the explicit admitting API, file output, browser routing or Arc parity.
+
+## Normal Arc lifetime reference — October 23, 2026
+
+Native reference now establishes that normal transfers continue after closing
+the source tab or source normal window while Arc remains running. Both local
+32 MiB fixtures completed with exact expected bytes and hashes after closure;
+see `docs/ARC_REFERENCE.md` and the detailed temporary report referenced there.
+The existing cancel-before-native-close capability is consequently **not a
+normal-browser parity policy**. Normal caller adoption remains disabled until
+CEF continuation, callback routing and storage/host lifetime are implemented and
+verified against that requirement. Final private-window behavior is unobserved.
