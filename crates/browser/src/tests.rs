@@ -1853,7 +1853,10 @@ fn closing_a_favorite_unloads_it_and_clicking_it_reopens_the_original_url(cx: &m
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/favorite-navigation".into() });
     fake.take_calls();
     let archive = view.read_with(cx, |w, _| w.browser.archive.len());
-    click(cx, "close-favorite-8");
+    // Favorites have no hover close button; the context menu closes them.
+    assert!(cx.debug_bounds("close-favorite-8").is_none());
+    right_click(cx, "favorite-8");
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
     assert!(fake.take_calls().contains(&Call::Close(1)));
     assert!(active_url(&view, cx).is_none());
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), archive);

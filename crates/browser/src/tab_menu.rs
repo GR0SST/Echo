@@ -19,7 +19,8 @@ const PADDING: f32 = 5.0;
 /// Text starts here; a checkmark column moves it right.
 const TEXT_INSET: f32 = 16.0;
 const CHECK_INSET: f32 = 31.0;
-const SUBMENU_OVERLAP: f32 = 5.0;
+/// Gap between a menu and its submenu, so the submenu never covers it.
+const SUBMENU_GAP: f32 = 2.0;
 const MIN_WIDTH: f32 = 180.0;
 actions!(tab_menu, [Dismiss, Next, Previous, Confirm, OpenSubmenu, CloseSubmenu]);
 
@@ -488,8 +489,8 @@ impl BrowserWindow {
             let parent = menu.bounds.get()?;
             let row_top: f32 = PADDING + entries[..*index].iter().map(entry_height).sum::<f32>();
             let width = px(ESTIMATED_WIDTH);
-            let right = parent.right() - px(SUBMENU_OVERLAP);
-            let left = if right + width > menu.window_width - px(8.) { parent.left() - width + px(SUBMENU_OVERLAP) } else { right };
+            let right = parent.right() + px(SUBMENU_GAP);
+            let left = if right + width > menu.window_width - px(8.) { parent.left() - width - px(SUBMENU_GAP) } else { right };
             Some(self.render_menu_level(sub_entries, menu.sub_selected, None, true, cx)
                 .absolute().left(left).top(parent.top() + px(row_top - PADDING)))
         });

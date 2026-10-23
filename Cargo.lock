@@ -748,6 +748,7 @@ dependencies = [
  "core",
  "engine",
  "gpui",
+ "image",
  "objc2",
  "objc2-foundation",
  "raw-window-handle",

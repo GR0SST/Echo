@@ -5,7 +5,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use browser_core::omnibox::{self, Resolved};
@@ -519,6 +518,7 @@ pub struct BrowserWindow {
     /// hover styles alone repaint without a new layout.
     pub(crate) sidebar_hovered: bool,
     pub(crate) traffic_lights_hovered: bool,
+    favicon_styles: RefCell<crate::favicon_style::FaviconStyles>,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -611,6 +611,7 @@ impl BrowserWindow {
             hovered_row: None,
             sidebar_hovered: false,
             traffic_lights_hovered: false,
+            favicon_styles: Default::default(),
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -1930,9 +1931,12 @@ impl BrowserWindow {
         let key = id.get() as usize;
         let group = SharedString::from(format!("favorite-{key}"));
         let active = self.browser.space().active_tab.is_some_and(|active| self.browser.item_anchor(active) == id);
-        let title = self.browser.item_title(id);
-        let url = tab.url.clone();
         let browser = cx.entity().downgrade();
+        // The active Favorite stays translucent with an outline tinted by its
+        // icon, so light icons keep their contrast.
+        let outline = self.browser.favicon(&tab.url)
+            .and_then(|png| self.favicon_styles.borrow_mut().get(png).accent)
+            .map_or(hsla(0., 0., 1., 0.95), |accent| accent.opacity(0.85));
         div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
             .group(group.clone()).relative().flex().items_center().justify_center()
             .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
@@ -1942,14 +1946,14 @@ impl BrowserWindow {
             .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
             .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_at_favorite(drag, id, cx)))
             .w(px(width)).h(px(FAVORITE_HEIGHT)).rounded(px(SIDEBAR_ROW_RADIUS))
-            .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
-            .when(active, |this| this.shadow_sm())
-            .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.65)))
+            .bg(hsla(0.0, 0.0, 1.0, if active { 0.5 } else { 0.3 }))
+            .when(active, |this| this.border(px(1.5)).border_color(outline).shadow_sm())
+            .hover(move |s| s.bg(hsla(0.0, 0.0, 1.0, if active { 0.55 } else { 0.42 })))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 this.open_tab_menu(id, event.position, window, cx);
             }))
-            .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: title.clone(), url: display_url(&url) }).into())
+            // No tooltip: the page view covers the sidebar's popups.
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 this.browser.activate_sidebar_item(id, SystemTime::now());
                 if event.click_count() == 2 {
@@ -1960,14 +1964,6 @@ impl BrowserWindow {
             }))
             .child(self.render_item_icon(tab, self.accent()))
             .when(tab.muted, |this| this.child(self.render_mute_control(tab, true, cx)))
-            .child(div().id(("close-favorite", key)).debug_selector(move || format!("close-favorite-{key}"))
-                .absolute().right(px(2.0)).top(px(1.0)).px_1().rounded_sm().text_xs()
-                .invisible().group_hover(group, |s| s.visible())
-                .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.1)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.close_tab(id, cx);
-                })).child(crate::icons::control(crate::icons::Icon::Minus)))
     }
 
     fn render_mute_control(&self, tab: &Tab, favorite: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1990,7 +1986,7 @@ impl BrowserWindow {
         let icon = match self.browser.favicon(&tab.url) {
             Some(png) => {
                 let title = tab.title.clone();
-                gpui::img(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png.to_vec())))
+                gpui::img(self.favicon_styles.borrow_mut().get(png).image)
                     .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
                     .with_fallback(move || favicon(&title, hue).into_any_element())
                     .into_any_element()

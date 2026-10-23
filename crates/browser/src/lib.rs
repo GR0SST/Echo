@@ -9,6 +9,7 @@ mod history;
 mod tab_menu;
 mod site_controls;
 mod panel;
+mod favicon_style;
 mod new_menu;
 mod audio;
 mod split_layout;
