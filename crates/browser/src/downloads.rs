@@ -17,6 +17,7 @@ use engine::{
 use gpui::{App, Global};
 use shutdown::{ConsumerGate, ConsumerOwner};
 pub(crate) use shutdown::{ShutdownDownloadError, ShutdownDownloads};
+pub(crate) use staged::Plan as StagedDestination;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
@@ -41,6 +42,7 @@ struct Owner<H> {
 pub(crate) enum DestinationDecision {
     Defer,
     Path(PathBuf),
+    Staged(StagedDestination),
     Reject,
 }
 /// Frozen at DestinationRequested, independently of later mutable item updates.
@@ -54,6 +56,7 @@ pub(crate) struct DestinationRequest {
 #[derive(Clone, Debug)]
 pub(crate) enum DownloadEffect<T> {
     Destination(T, PathBuf),
+    Staging(T, StagedDestination),
     Control(T, DownloadControl),
 }
 #[derive(Clone, Debug)]
@@ -110,6 +113,7 @@ struct Transfer {
 /// ledger outlives the source/retired host and retains terminal tombstones.
 pub(crate) struct DownloadRouter<T, H> {
     last_owner: u64,
+    staged_only: bool,
     owners: HashMap<u64, Owner<H>>,
     ledger: HashMap<T, Transfer>,
 }
@@ -117,6 +121,7 @@ impl<T, H> Default for DownloadRouter<T, H> {
     fn default() -> Self {
         Self {
             last_owner: 0,
+            staged_only: false,
             owners: HashMap::new(),
             ledger: HashMap::new(),
         }
@@ -231,7 +236,21 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
                 let owner = &self.owners[&item.provenance.owner()];
                 match policy(owner.profile, item.destination_request.as_ref().unwrap()) {
                     DestinationDecision::Defer => (),
+                    DestinationDecision::Staged(plan) => {
+                        if !self.staged_only {
+                            item.destination_blocked = true;
+                            errors.push("Staged policy was not explicitly installed".into());
+                            continue;
+                        }
+                        item.destination_dispatched = true;
+                        effects.push(DownloadEffect::Staging(*token, plan));
+                    }
                     DestinationDecision::Path(path) => {
+                        if self.staged_only {
+                            item.destination_blocked = true;
+                            errors.push("Staged policy cannot dispatch a direct target".into());
+                            continue;
+                        }
                         item.destination_dispatched = true;
                         effects.push(DownloadEffect::Destination(*token, path));
                     }
@@ -259,6 +278,12 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
             let Some(completion) = transfer.completion.clone() else {
                 continue;
             };
+            if self.staged_only {
+                // A genuine terminal without a captured stage stays pending;
+                // never persist its engine/staging path or synthesize a proof.
+                errors.push("Completed download has no authorized publication".into());
+                continue;
+            }
             let owner = &self.owners[&transfer.provenance.owner()];
             match writer(&owner.handle, owner.profile, completion) {
                 Ok(id) if id.profile() == owner.profile => transfer.committed = Some(id),
@@ -382,21 +407,67 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
             let owner = self.router.owners.get(&a.owner).ok_or("Fixture owner not registered")?;
             if owner.profile != a.profile || owner.kind != SourceKind::Normal { return Err("Fixture captured owner mismatch".into()); }
         }
+        self.router.staged_only = audit.borrow().is_staged();
         self.fixture = Some(audit);
         Ok(())
+    }
+    /// Install only before the first transfer. Owners may already be captured;
+    /// no admission or default folder is enabled by this explicit policy seam.
+    pub(crate) fn set_staged_destination_policy(&mut self, policy: DestinationPolicy)
+        -> Result<(), String>
+    {
+        if self.fixture.is_some() || self.policy.is_some() || !self.router.ledger.is_empty()
+            || self.staged.has_pending() || !self.errors.is_empty()
+        { return Err("Staged policy requires an unused download service".into()); }
+        self.router.staged_only = true;
+        self.policy = Some(policy);
+        Ok(())
+    }
+    fn capture_staged_plans(&mut self, effects: Vec<DownloadEffect<T>>, direct: &mut Vec<DownloadEffect<T>>) {
+        for effect in effects {
+            if let DownloadEffect::Staging(token, plan) = effect {
+                let transfer = &self.router.ledger[&token];
+                let request = transfer.destination_request.as_ref().unwrap().clone();
+                let owner = self.router.owners[&transfer.provenance.owner()].clone();
+                if let Err(error) = self.staged.insert_planned(token, owner, request, plan) {
+                    self.errors.push(error);
+                }
+            } else { direct.push(effect); }
+        }
     }
     fn receive_copied(&mut self, events: impl IntoIterator<Item = TransferEvent<T>>) -> Vec<DownloadEffect<T>> {
         let (events, errors) = self.prepare_fixture_events(events);
         self.errors.extend(errors);
         let fixture = self.fixture.clone();
         let policy = self.policy.clone();
-        let (effects, errors) = self.router.reduce(events, |profile, request| {
+        let mut decide = |profile, request: &DestinationRequest| {
             if let Some(audit) = &fixture { audit.borrow_mut().decide(profile, request) }
             else { policy.as_ref().map_or(DestinationDecision::Defer, |p| p(profile, request)) }
-        });
+        };
+        let mut effects = Vec::new();
+        // Capture a plan immediately after its exact Requested event, before
+        // reducing later observations in this same copied batch. No I/O occurs.
+        for event in events {
+            let event = match self.staged.ingest(event) {
+                Ok(errors) => { self.errors.extend(errors); continue; },
+                Err(event) => event,
+            };
+            let (next, errors) = self.router.reduce([event], &mut decide);
+            self.errors.extend(errors);
+            self.capture_staged_plans(next, &mut effects);
+        }
+        let (next, errors) = self.router.reduce([], &mut decide);
         self.errors.extend(errors);
+        self.capture_staged_plans(next, &mut effects);
+        // Preserve batch coalescing for legacy effects: a later terminal must
+        // suppress a previously planned Continue/Cancel before any native call.
+        effects.retain(|effect| {
+            let token = match effect { DownloadEffect::Destination(t, _) | DownloadEffect::Control(t, _) | DownloadEffect::Staging(t, _) => t };
+            self.router.ledger.get(token).is_some_and(|transfer| !transfer.info.phase.is_terminal())
+        });
         effects
     }
+
 }
 impl DownloadService {
     /// Pass the captured source ID before changing any Space/profile. Blank
@@ -438,21 +509,31 @@ impl DownloadService {
         use crate::download_acceptance::FixtureTransferStatus;
         let a = self.fixture.as_ref()?.borrow();
         let transfer = a.token.and_then(|token| self.router.ledger.get(&token));
-        let canonical_id = transfer.and_then(|t| t.committed);
+        let staged_snapshot = if a.is_staged() {
+            a.token.and_then(|token| self.staged.completed_snapshot(token))
+        } else { None };
+        let canonical_id = staged_snapshot.as_ref().map(|(id, _)| *id)
+            .or_else(|| transfer.and_then(|t| t.committed));
         let inventory_match = canonical_id.and_then(|id| {
             let owner = self.router.owners.get(&a.owner)?;
             let (_, records) = owner.handle.download_inventory()?;
-            let t = transfer?;
+            let info = staged_snapshot.as_ref().map(|(_, info)| info)
+                .or_else(|| transfer.map(|t| &t.info))?;
+            let final_path = a.published_path.as_deref().unwrap_or(&a.config.output);
             records.iter().find(|r| r.id() == id).map(|r| {
-                id.profile() == a.profile && r.final_path() == a.config.output.as_path()
+                id.profile() == a.profile && r.final_path().as_os_str() == final_path.as_os_str()
                     && r.source_url() == a.config.fixture_url() && r.original_url() == a.config.fixture_url()
-                    && r.mime_type() == t.info.mime_type && r.finished_at() == DownloadTime::from_cef_basetime(t.info.end_time)
+                    && r.mime_type() == info.mime_type && r.finished_at() == DownloadTime::from_cef_basetime(info.end_time)
             })
         }).unwrap_or(false);
         Some(FixtureTransferStatus { captured_profile: a.profile, owner: a.owner, sequence: a.sequence, provenance: a.provenance, phase: a.phase, received_bytes: a.received_bytes,
             requested_name_match: a.requested_name_match, resolved_path_match: a.resolved_path_match,
             canonical_id, terminal_updated_seen: a.terminal_updated_seen, failure: a.failure.clone(), service_errors: self.errors.len(),
-            effect_ok: a.effect_ok, inventory_match, output: a.config.output.clone(), source: None, admission: None, consumer: None })
+            effect_ok: a.effect_ok, inventory_match, output: a.published_path.clone().unwrap_or_else(|| a.config.output.clone()),
+            staged: a.is_staged(), transfer_path: a.stage_path.clone(), published_path: a.published_path.clone(),
+            collision_preserved: a.collision_preserved,
+            collision_required: a.mode == crate::download_acceptance::FixtureMode::StagedCollision,
+            source: None, admission: None, consumer: None })
     }
     fn persist(&mut self) -> Result<(), String> {
         let errors = self.router.persist(|handle, profile, completion| {
@@ -479,6 +560,8 @@ pub(crate) fn execute_effects<T: Copy>(
         .filter_map(|effect| {
             let (token, result) = match effect {
                 DownloadEffect::Destination(token, path) => (token, destination(token, path)),
+                DownloadEffect::Staging(token, _) => (token,
+                    Err("Staging reservation requires the service consumer lease".into())),
                 DownloadEffect::Control(token, command) => (token, control(token, command)),
             };
             result.err().map(|error| (token, error))

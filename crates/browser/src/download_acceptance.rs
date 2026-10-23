@@ -17,7 +17,7 @@ use std::{
 };
 
 #[derive(Clone, PartialEq, Eq)]
-struct FileIdentity {
+pub(crate) struct FileIdentity {
     created: SystemTime,
     #[cfg(unix)]
     device: u64,
@@ -97,11 +97,8 @@ impl FixtureOutput {
     pub(crate) fn directory(&self) -> &Path {
         &self.directory
     }
-    pub(crate) fn validate_target_absent(&self, path: &Path) -> Result<(), String> {
-        if self.directory.parent() != Some(self.root.as_path())
-            || path.parent() != Some(self.directory.as_path())
-            || path.file_name().is_none()
-        {
+    pub(crate) fn validate_directory(&self) -> Result<(), String> {
+        if self.directory.parent() != Some(self.root.as_path()) {
             return Err("Fixture target escaped reservation".into());
         }
         if FileIdentity::read(&self.directory, true)? != self.directory_identity
@@ -122,6 +119,16 @@ impl FixtureOutput {
         if contents != self.nonce {
             return Err("Fixture marker changed".into());
         }
+        Ok(())
+    }
+    pub(crate) fn validate_target_absent(&self, path: &Path) -> Result<(), String> {
+        if self.directory.parent() != Some(self.root.as_path())
+            || path.parent() != Some(self.directory.as_path())
+            || path.file_name().is_none()
+        {
+            return Err("Fixture target escaped reservation".into());
+        }
+        self.validate_directory()?;
         match fs::symlink_metadata(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Ok(_) => Err("Fixture target already exists".into()),
@@ -131,25 +138,49 @@ impl FixtureOutput {
 }
 
 /// Construct outside any App/entity/service borrow, before the window transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FixtureMode { Direct, Staged, StagedCollision }
+impl FixtureMode { fn staged(self) -> bool { self != Self::Direct } }
+const COLLISION_BYTES: &[u8] = b"Echo owned collision sentinel\n";
+struct CollisionWitness { identity: FileIdentity, path: PathBuf }
+
 pub(crate) struct PreparedArm {
     pub config: Config,
     pub output: Rc<FixtureOutput>,
+    mode: FixtureMode,
+    collision: Option<CollisionWitness>,
 }
 impl PreparedArm {
     pub(crate) fn parse(arg: &str) -> Result<Self, String> {
         let args: Vec<_> = arg.split_whitespace().collect();
-        if args.len() != 2 || args[1] != "continue-normal" {
-            return Err("Expected numeric-loopback-origin continue-normal".into());
+        if args.len() != 2 {
+            return Err("Expected numeric-loopback-origin fixture-mode".into());
         }
+        let mode = match args[1] {
+            "continue-normal" => FixtureMode::Direct,
+            "stage-normal" => FixtureMode::Staged,
+            "stage-collision-normal" => FixtureMode::StagedCollision,
+            _ => return Err("Unknown app download fixture mode".into()),
+        };
         // Validate origin before any filesystem side effect; reuse Config grammar.
         Config::validate_origin(args[0])?;
         let output = Rc::new(FixtureOutput::reserve_in_tmp()?);
-        Self::with_output(args[0], output)
+        Self::with_output_mode(args[0], output, mode)
     }
     fn with_output(origin: &str, output: Rc<FixtureOutput>) -> Result<Self, String> {
+        Self::with_output_mode(origin, output, FixtureMode::Direct)
+    }
+    fn with_output_mode(origin: &str, output: Rc<FixtureOutput>, mode: FixtureMode) -> Result<Self, String> {
         let config = Config::new(origin, output.directory().to_path_buf(), download_probe::Policy::ContinueNormal)?;
         output.validate_target_absent(&config.output)?;
-        Ok(Self { config, output })
+        let collision = if mode == FixtureMode::StagedCollision {
+            let mut file = OpenOptions::new().write(true).create_new(true).open(&config.output)
+                .map_err(|error| error.to_string())?;
+            file.write_all(COLLISION_BYTES).map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+            Some(CollisionWitness { identity: FileIdentity::read(&config.output, false)?, path: config.output.clone() })
+        } else { None };
+        Ok(Self { config, output, mode, collision })
     }
 }
 
@@ -174,6 +205,11 @@ pub(crate) struct FixtureAudit<T> {
     pub failure: Option<String>,
     pub effect_ok: bool,
     pub admission: Option<admission::Shared>,
+    pub mode: FixtureMode,
+    pub stage_path: Option<PathBuf>,
+    pub published_path: Option<PathBuf>,
+    pub collision_preserved: bool,
+    collision: Option<CollisionWitness>,
     quarantined: Vec<TransferEvent<T>>,
 }
 impl<T: Copy + Eq> FixtureAudit<T> {
@@ -181,6 +217,11 @@ impl<T: Copy + Eq> FixtureAudit<T> {
         Self {
             config: arm.config,
             output: arm.output,
+            mode: arm.mode,
+            collision: arm.collision,
+            stage_path: None,
+            published_path: None,
+            collision_preserved: false,
             profile,
             owner,
             token: None,
@@ -196,6 +237,63 @@ impl<T: Copy + Eq> FixtureAudit<T> {
             admission: None,
             quarantined: Vec::new(),
         }
+    }
+    pub(crate) fn is_staged(&self) -> bool { self.mode.staged() }
+    fn transfer_path(&self) -> &Path {
+        self.stage_path.as_deref().unwrap_or(&self.config.output)
+    }
+    fn transfer_matches(&self, path: &Path) -> bool {
+        path.as_os_str() == self.transfer_path().as_os_str()
+    }
+    fn candidates(&self) -> Result<Vec<PathBuf>, String> {
+        let mut paths = vec![self.config.output.clone()];
+        if self.mode == FixtureMode::StagedCollision {
+            // This disposable fixture always mints one ASCII .bin filename.
+            // It is not the production filename/suffix policy.
+            let stem = self.config.filename.strip_suffix(".bin").ok_or("Fixture filename is not .bin")?;
+            paths.push(self.output.directory().join(format!("{stem} (1).bin")));
+        }
+        Ok(paths)
+    }
+    /// Called only from the service's validated staged handoff preflight.
+    /// Returns an owned guard; all filesystem checks run after this borrow ends.
+    pub(crate) fn bind_stage(&mut self, token: T, path: &Path) -> Result<Rc<FixtureOutput>, String> {
+        if !self.is_staged() || self.failure.is_some() || self.token != Some(token)
+            || !self.requested_name_match || self.provenance.is_none()
+            || path.file_name() != Some(std::ffi::OsStr::new("payload"))
+            || path.parent().and_then(Path::parent) != Some(self.output.directory())
+        { return Err("Fixture stage lacks captured request authority".into()); }
+        if self.stage_path.as_ref().is_some_and(|old| old.as_os_str() != path.as_os_str()) {
+            return Err("Fixture stage identity changed".into());
+        }
+        self.stage_path = Some(path.to_owned());
+        Ok(self.output.clone())
+    }
+    pub(crate) fn publication_guard(&self, token: T, profile: UserProfileId, path: &Path)
+        -> Result<Rc<FixtureOutput>, String>
+    {
+        if !self.is_staged() || self.failure.is_some() || self.token != Some(token)
+            || self.profile != profile || self.stage_path.is_none()
+            || self.phase != Some(DownloadPhase::Complete) || !self.terminal_updated_seen
+            || !self.resolved_path_match
+            || !self.candidates()?.iter().any(|candidate| candidate.as_os_str() == path.as_os_str())
+            || self.published_path.as_ref().is_some_and(|old| old.as_os_str() != path.as_os_str())
+        { return Err("Fixture publication lacks genuine bound Complete".into()); }
+        Ok(self.output.clone())
+    }
+    /// Filesystem observation, invoked only outside every state borrow.
+    pub(crate) fn collision_check(&self) -> Option<(PathBuf, FileIdentity)> {
+        self.collision.as_ref().map(|witness| (witness.path.clone(), witness.identity.clone()))
+    }
+    pub(crate) fn verify_collision(witness: &(PathBuf, FileIdentity)) -> Result<(), String> {
+        if FileIdentity::read(&witness.0, false)? != witness.1
+            || fs::read(&witness.0).map_err(|error| error.to_string())? != COLLISION_BYTES
+        { return Err("Owned collision sentinel changed".into()); }
+        Ok(())
+    }
+    pub(crate) fn published(&mut self, path: &Path, collision_preserved: bool) {
+        self.published_path = Some(path.to_owned());
+        self.collision_preserved = collision_preserved;
     }
     pub(crate) fn fail(&mut self, error: &str) {
         if self.failure.is_none() {
@@ -261,8 +359,8 @@ impl<T: Copy + Eq> FixtureAudit<T> {
                 // cancellation fact without claiming a path or completion.
                 let canceled_without_path = authorized_empty_path
                     && event.info.phase == DownloadPhase::Canceled;
-                path == &self.config.output
-                    && (event.info.full_path == self.config.output || awaiting_item_path || canceled_without_path)
+                self.transfer_matches(path)
+                    && (self.transfer_matches(&event.info.full_path) || awaiting_item_path || canceled_without_path)
             }
             DownloadDestination::Unrequested => !event.destination_requested,
             DownloadDestination::Rejected => {
@@ -300,8 +398,8 @@ impl<T: Copy + Eq> FixtureAudit<T> {
         if !self.phase.is_some_and(|p| p.is_terminal()) {
             self.phase = Some(event.info.phase);
             self.received_bytes = event.info.received_bytes;
-            self.resolved_path_match = matches!(&event.destination, DownloadDestination::Resolved(p) if p == &self.config.output)
-                && event.info.full_path == self.config.output;
+            self.resolved_path_match = matches!(&event.destination, DownloadDestination::Resolved(p) if self.transfer_matches(p))
+                && self.transfer_matches(&event.info.full_path);
         }
         self.requested_name_match |= request;
         self.terminal_updated_seen |=
@@ -327,7 +425,14 @@ impl<T: Copy + Eq> FixtureAudit<T> {
             && request.info.url == self.config.fixture_url()
             && request.info.original_url == self.config.fixture_url()
         {
-            DestinationDecision::Path(self.config.output.clone())
+            if self.is_staged() {
+                match self.candidates() {
+                    Ok(candidates) => DestinationDecision::Staged(crate::downloads::StagedDestination {
+                        folder: self.output.directory().to_owned(), candidates,
+                    }),
+                    Err(error) => { self.fail(&error); DestinationDecision::Reject },
+                }
+            } else { DestinationDecision::Path(self.config.output.clone()) }
         } else {
             DestinationDecision::Reject
         }
@@ -362,6 +467,11 @@ pub(crate) struct FixtureTransferStatus {
     pub effect_ok: bool,
     pub inventory_match: bool,
     pub output: PathBuf,
+    pub staged: bool,
+    pub transfer_path: Option<PathBuf>,
+    pub published_path: Option<PathBuf>,
+    pub collision_preserved: bool,
+    pub collision_required: bool,
     pub source: Option<admission::Source>,
     pub admission: Option<admission::Phase>,
     pub consumer: Option<crate::downloads::ConsumerStatus>,
@@ -385,6 +495,8 @@ impl FixtureTransferStatus {
             && self.resolved_path_match
             && self.canonical_id.is_some()
             && self.inventory_match
+            && (!self.staged || self.published_path.is_some())
+            && (!self.collision_required || self.collision_preserved)
     }
 }
 #[derive(Clone, Default)]
@@ -490,6 +602,9 @@ mod conflict_diagnostic_tests {
             // Isolate the path/phase predicate with the effect-success input
             // satisfied. This pure status test asserts no native acceptance.
             effect_ok: true, inventory_match: false, output: audit.config.output.clone(),
+            staged: audit.is_staged(), transfer_path: audit.stage_path.clone(),
+            published_path: audit.published_path.clone(), collision_preserved: audit.collision_preserved,
+            collision_required: audit.mode == FixtureMode::StagedCollision,
             source: None, admission: None, consumer: None,
         }
     }
@@ -683,4 +798,64 @@ mod conflict_diagnostic_tests {
         assert_eq!(audit.phase, Some(DownloadPhase::Complete));
         assert!(audit.quarantined.is_empty());
     }
+
+    fn staged_audit_and_request(collision: bool) -> (FixtureAudit<u64>, TransferEvent<u64>) {
+        let profile = browser_core::Browser::new().default_user_profile_id();
+        let mode = if collision { "stage-collision-normal" } else { "stage-normal" };
+        let arm = PreparedArm::parse(&format!("http://127.0.0.1:18473 {mode}")).unwrap();
+        let audit = FixtureAudit::new(arm, profile, 1);
+        let event = TransferEvent { token: 7, provenance: DownloadProvenance::new(1, 3, 5, false),
+            destination_requested: true,
+            destination: DownloadDestination::Requested { suggested_name: audit.config.filename.clone() },
+            info: engine::DownloadInfo { phase: DownloadPhase::InProgress, interrupt_reason: 0,
+                current_speed: 0, percent_complete: 0, total_bytes: 8, received_bytes: 0,
+                start_time: 0, end_time: 0, full_path: PathBuf::new(),
+                url: audit.config.fixture_url(), original_url: audit.config.fixture_url(),
+                suggested_file_name: String::new(), content_disposition: String::new(),
+                mime_type: "application/octet-stream".into() } };
+        (audit, event)
+    }
+
+    #[test]
+    fn staged_transfer_facts_require_the_actual_stage_not_the_existing_final_file() {
+        let (mut audit, mut event) = staged_audit_and_request(true);
+        assert!(audit.config.output.is_file()); // sentinel is never completion
+        assert!(matches!(audit.inspect(&event), FixtureVerdict::Forward));
+        let plan = match audit.decide(audit.profile, &DestinationRequest {
+            provenance: event.provenance, suggested_name: audit.config.filename.clone(), info: event.info.clone(),
+        }) { DestinationDecision::Staged(plan) => plan, _ => panic!("staged mode did not plan") };
+        let stage = crate::downloads_publication::Staging::reserve((event.token, event.provenance), &plan.folder, plan.candidates).unwrap();
+        let path = stage.validate_handoff().unwrap().to_owned();
+        audit.bind_stage(event.token, &path).unwrap().validate_directory().unwrap();
+        event.destination_requested = false;
+        event.destination = DownloadDestination::Resolved(path.clone());
+        assert!(matches!(audit.inspect(&event), FixtureVerdict::Forward));
+        assert!(!audit.resolved_path_match);
+        assert!(!transfer_status(&audit).active());
+        assert!(!transfer_status(&audit).completed());
+        event.info.full_path = path;
+        event.info.received_bytes = 3;
+        assert!(matches!(audit.inspect(&event), FixtureVerdict::Forward));
+        assert!(transfer_status(&audit).active());
+        assert!(!transfer_status(&audit).completed());
+        assert!(audit.published_path.is_none());
+        FixtureAudit::<u64>::verify_collision(&audit.collision_check().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn staged_binding_rejects_replacement_targets_and_publication_without_complete() {
+        let (mut audit, event) = staged_audit_and_request(false);
+        assert!(matches!(audit.inspect(&event), FixtureVerdict::Forward));
+        let stage = crate::downloads_publication::Staging::reserve((event.token, event.provenance),
+            audit.output.directory(), vec![audit.config.output.clone()]).unwrap();
+        let path = stage.validate_handoff().unwrap().to_owned();
+        audit.bind_stage(event.token, &path).unwrap();
+        assert!(audit.bind_stage(event.token + 1, &path).is_err());
+        assert!(audit.bind_stage(event.token, &audit.config.output.clone()).is_err());
+        let replacement = audit.output.directory().join("another-stage/payload");
+        assert!(audit.bind_stage(event.token, &replacement).is_err());
+        assert!(audit.publication_guard(event.token, audit.profile, &audit.config.output).is_err());
+        assert!(audit.published_path.is_none());
+    }
+
 }

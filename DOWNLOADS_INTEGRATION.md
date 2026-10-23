@@ -527,11 +527,27 @@ writer uncertain before entry. A definite writer failure requires explicit retry
 and revalidates the same retained proof; uncertain native/filesystem/writer outcomes
 block replay. Historical diagnostics and genuine quit handoff failures remain.
 
-Reservation and policy integration are still open: production must create and
-retain staging outside all borrows under the existing batch capability, preserving
-ownership through reserve failure, cancellation and quit. Stage-aware active
-projection/control/retry/scheduling and a separately audited staged native fixture
-remain necessary. The direct fixture does not establish native staged acceptance.
+An explicit staged-only policy may now be installed before the first transfer.
+Pure plans are captured at their exact Requested event before later observations
+in the copied batch. Work reserves outside borrows under the current lease, retains
+the owned result before reducing queued cancellation/quit, and rechecks before
+Continue. Failed/unknown reservation cannot automatically repeat. Genuine terminal
+metadata without an authorized stage is retained and blocks legacy persistence;
+a staged-only policy cannot choose a direct final target.
+
+Disposable automation accepts stage-normal and stage-collision-normal in addition
+to the original continue-normal mode. These create only owned TMP destinations.
+Collision mode records a newly created sentinel's identity/bytes; CEF receives an
+absent stage payload, never that final target. Audit distinguishes actual native
+transfer path from validated published path, and canonical inventory uses the
+latter. Publication/witness checks run outside all borrows before the real writer.
+Status/wait commands still read only; the same sole service owns every event.
+This fixture introduces no default Downloads policy or normal startup admission.
+
+Production folder/preferences and filename rules, stage-aware active projection,
+control/retry surfaces, crash recovery and remaining platform qualification remain
+open. Native acceptance of each new staged fixture flow must be recorded separately;
+the original direct fixture cannot establish it.
 
 Filesystem gates remain as documented in crates/browser/DOWNLOAD_PUBLICATION.md:
 crash recovery, durability, hostile concurrent path replacement, platform filesystem
@@ -550,3 +566,43 @@ verified the exact file hash, reloaded one canonical record under the captured
 named profile and none under Default, and exited normally after CEF Complete.
 The screenshot was inspected. This direct-fixture run is regression evidence;
 it does not establish native staged publication or a full admission fence.
+
+
+Completed staged Jobs keep their genuine metadata/ID tombstone but release folder,
+stage and final-file pins after canonical acknowledgement, outside state borrows.
+Failures retain their original publication/proof for reconciliation; cancellation
+retains owned partial-stage state. A macOS/Linux descriptor-path regression checks
+actual OS descriptors in the owned fixture directory, plus idempotent record replay.
+
+
+The staged-policy/collision fixture update passed 1,011 root workspace tests on
+macOS (744 browser, 165 core, 102 engine). Bundled Echo then received a genuine
+32 MiB Complete after source-tab closure, published the second explicit `.bin`
+candidate without changing the original sentinel, verified the expected file hash,
+and reloaded one canonical final-path record in the captured named profile and
+none in Default. The final binary includes completed-pin release. Its screenshot
+was inspected. This establishes that controlled known-ID fixture only; it does
+not establish arbitrary sibling admission, a full CEF fence, default Downloads
+policy, crash recovery, or remaining platform qualification.
+
+
+The R6 active-quit fixture exposed a separate shutdown ordering gate: CEF reached
+Complete, but staged state still blocked the final writer barrier. That run timed
+out; its process was later absent without a verified exit cause, and is not a pass.
+No partial was recorded as completed. R7 therefore holds native close submission
+for known resolved InProgress writers until an exact genuine terminal copy arrives.
+The Cancel command/closing flag, silence and unrelated metadata do not release it.
+This preserves the CEF browser association while asynchronous cancellation runs.
+No-ack/interrupted outcomes still require separately accepted recovery policy;
+this change does not synthesize cancellation or weaken final persistence barriers.
+
+
+The integrated R7 root workspace passed 1,014 tests (744 browser, 165 core,
+105 engine). Its final immutable bundle repeated the 32 MiB staged-collision /
+source-tab-close / captured-profile reload check successfully. Separate staged
+and direct active-quit runs both returned exit 0, invoked original native terminate
+once after CEF Complete, and reloaded zero completed records in both profiles.
+The staged sentinel stayed unchanged; all screenshots were inspected and no owned
+helper remained. These do not claim a native final-poll Complete race, interrupted
+shutdown recovery, general admission fence, default destination or remaining
+cross-platform acceptance.

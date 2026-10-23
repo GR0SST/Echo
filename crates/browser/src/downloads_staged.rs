@@ -15,7 +15,8 @@ type Key<T> = (T, DownloadProvenance);
 /// Pure injected policy output. No default directory or candidate generation.
 /// Reserve with Staging::reserve((token, request.provenance), ...) OUTSIDE borrows,
 /// then install the owned result with DownloadService::retain_staging.
-pub(super) struct Plan {
+#[derive(Clone, Debug)]
+pub(crate) struct Plan {
     pub folder: PathBuf,
     pub candidates: Vec<PathBuf>,
 }
@@ -54,8 +55,9 @@ struct Job<T, H> {
     key: Key<T>,
     owner: Owner<H>,
     request: DestinationRequest,
-    stage: Staging<Key<T>>,
-    registration: Registration<Key<T>>,
+    stage: Option<Staging<Key<T>>>,
+    registration: Option<Registration<Key<T>>>,
+    plan: Option<Plan>,
     handoff: Handoff,
     canceled: bool,
     publication: Option<Publication>,
@@ -103,12 +105,15 @@ impl<T: Copy + Eq, H> Job<T, H> {
         if event.info.phase != DownloadPhase::Complete {
             return;
         }
+        // Preserve the genuine terminal even when its ordering/path cannot
+        // authorize publication. It must not become retry permission.
+        self.complete = Some(event.info.clone());
         if self.handoff != Handoff::Accepted {
             self.fail("Staged Complete preceded an acknowledged handoff".into());
             return;
         }
-        match self.stage.observe(
-            &self.registration,
+        match self.stage.as_mut().unwrap().observe(
+            self.registration.as_ref().unwrap(),
             &self.key,
             Observation::UpdatedComplete,
             &event.info.full_path,
@@ -157,22 +162,45 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
         token: T,
         owner: Owner<H>,
         request: DestinationRequest,
-        mut stage: Staging<Key<T>>,
+        stage: Staging<Key<T>>,
+    ) -> Result<(), String> {
+        self.insert_owned(token, owner, request, Some(stage), None)
+    }
+    pub(super) fn insert_planned(
+        &mut self,
+        token: T,
+        owner: Owner<H>,
+        request: DestinationRequest,
+        plan: Plan,
+    ) -> Result<(), String> {
+        self.insert_owned(token, owner, request, None, Some(plan))
+    }
+    fn insert_owned(
+        &mut self,
+        token: T,
+        owner: Owner<H>,
+        request: DestinationRequest,
+        mut stage: Option<Staging<Key<T>>>,
+        plan: Option<Plan>,
     ) -> Result<(), String> {
         if self.slots.contains_key(&token) {
             return Err("Staging already retained".into());
         }
         let key = (token, request.provenance);
-        let registration = stage.registration();
-        // Pure identity check; NOT filesystem validation or a native observation.
-        stage
-            .observe(
-                &registration,
-                &key,
-                Observation::UpdatedPending,
-                Path::new(""),
-            )
-            .map_err(|e| format!("Staging registration: {e:?}"))?;
+        let registration = if let Some(stage) = stage.as_mut() {
+            let registration = stage.registration();
+            stage
+                .observe(
+                    &registration,
+                    &key,
+                    Observation::UpdatedPending,
+                    Path::new(""),
+                )
+                .map_err(|error| format!("Staging registration: {error:?}"))?;
+            Some(registration)
+        } else {
+            None
+        };
         self.slots.insert(
             token,
             Slot {
@@ -182,6 +210,7 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
                     request,
                     stage,
                     registration,
+                    plan,
                     handoff: Handoff::Pending,
                     canceled: false,
                     publication: None,
@@ -217,6 +246,16 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
         }
         Ok(errors)
     }
+    pub(super) fn completed_snapshot(
+        &self,
+        token: T,
+    ) -> Option<(CompletedDownloadId, DownloadInfo)> {
+        let slot = self.slots.get(&token)?;
+        let job = slot.job.take()?;
+        let snapshot = job.committed.zip(job.complete.clone());
+        slot.job.set(Some(job));
+        snapshot
+    }
     pub(super) fn has_pending(&self) -> bool {
         self.slots.values().any(|slot| {
             let Some(job) = slot.job.take() else {
@@ -236,6 +275,7 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
             || job.handoff == Handoff::Uncertain
             || job.writer == WriteState::Uncertain
             || job.filesystem_unacknowledged
+            || (job.complete.is_some() && job.publication.is_none())
         {
             Err("No safely retryable staged failure".into())
         } else {
@@ -321,6 +361,41 @@ impl<T: Copy + Eq, H> Work<T, H> {
         &mut self,
         destination: impl FnOnce(T, PathBuf) -> Result<(), String>,
     ) -> Result<(), String> {
+        self.handoff_with_reservation(
+            |plan, key| {
+                plan.reserve(key.0, key.1)
+                    .map_err(|error| format!("Staged reservation: {error:?}"))
+            },
+            destination,
+        )
+    }
+    fn handoff_with_reservation(
+        &mut self,
+        reserve: impl FnOnce(Plan, Key<T>) -> Result<Staging<Key<T>>, String>,
+        destination: impl FnOnce(T, PathBuf) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.handoff_with_checks(reserve, |_, _| Ok(()), destination)
+    }
+    fn handoff_with_preflight(
+        &mut self,
+        preflight: impl FnOnce(T, &Path) -> Result<(), String>,
+        destination: impl FnOnce(T, PathBuf) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.handoff_with_checks(
+            |plan, key| {
+                plan.reserve(key.0, key.1)
+                    .map_err(|error| format!("Staged reservation: {error:?}"))
+            },
+            preflight,
+            destination,
+        )
+    }
+    fn handoff_with_checks(
+        &mut self,
+        reserve: impl FnOnce(Plan, Key<T>) -> Result<Staging<Key<T>>, String>,
+        preflight: impl FnOnce(T, &Path) -> Result<(), String>,
+        destination: impl FnOnce(T, PathBuf) -> Result<(), String>,
+    ) -> Result<(), String> {
         self.authorize_effect()?;
         let job = self.job.as_mut().unwrap();
         if job.handoff != Handoff::Pending {
@@ -329,13 +404,44 @@ impl<T: Copy + Eq, H> Work<T, H> {
         if crate::quit::is_quitting() || !self.lease.as_ref().unwrap().allows_destination() {
             return Err("Staged destination suppressed after consumer handoff".into());
         }
+        if job.stage.is_none() {
+            let Some(plan) = job.plan.take() else {
+                return Err(job.fail("Staged reservation has no remaining plan".into()));
+            };
+            // Set BEFORE filesystem work. Error/unwind cannot silently reserve
+            // again; any unreturned directory requires explicit reconciliation.
+            job.filesystem_unacknowledged = true;
+            match reserve(plan, job.key) {
+                Ok(stage) => {
+                    job.registration = Some(stage.registration());
+                    job.stage = Some(stage);
+                    job.filesystem_unacknowledged = false;
+                }
+                Err(error) => return Err(job.fail(error)),
+            }
+        }
+        // Reservation can be reentered by cancellation/quit. Retain its owned
+        // result before reducing observations or authorizing Continue.
+        self.authorize_effect()?;
+        if crate::quit::is_quitting() || !self.lease.as_ref().unwrap().allows_destination() {
+            return Err("Staged destination suppressed after consumer handoff".into());
+        }
+        let job = self.job.as_mut().unwrap();
         job.filesystem_unacknowledged = true;
-        let handoff_validation = job.stage.validate_handoff().map(Path::to_owned);
+        let handoff_validation = job
+            .stage
+            .as_ref()
+            .unwrap()
+            .validate_handoff()
+            .map(Path::to_owned);
         job.filesystem_unacknowledged = false;
         let path = match handoff_validation {
             Ok(path) => path,
             Err(error) => return Err(job.fail(format!("Staged handoff validation: {error:?}"))),
         };
+        if let Err(error) = preflight(job.key.0, &path) {
+            return Err(job.fail(error));
+        }
         // Validation was an external effect. Reduce any observations queued
         // during it before authorizing Continue against the current job/gate.
         self.authorize_effect()?;
@@ -415,6 +521,12 @@ impl<T: Copy + Eq, H> Work<T, H> {
             WriteOutcome::Recorded(id) if id.profile() == job.owner.profile => {
                 job.committed = Some(id);
                 job.writer = WriteState::Ready;
+                // Canonical acknowledgement is final for this token. Keep its
+                // metadata tombstone, but release filesystem pins outside every
+                // service/model/App borrow instead of retaining FDs for the app lifetime.
+                drop(job.publication.take());
+                drop(job.stage.take());
+                drop(job.proof.take());
                 Ok(id)
             }
             WriteOutcome::Recorded(_) => {
@@ -481,9 +593,38 @@ pub(super) fn drive<T: Copy + Eq + Hash, H: Clone>(
             Ok(work) => work,
             Err(lease) => return (lease, Ok(())),
         };
+        let audit = {
+            service
+                .borrow()
+                .fixture
+                .clone()
+                .filter(|audit| audit.borrow().is_staged())
+        };
+        let token = work.job.as_ref().unwrap().key.0;
         let mut result = Ok(());
         if work.job.as_ref().unwrap().handoff == Handoff::Pending {
-            result = work.handoff(&mut destination);
+            result = work.handoff_with_preflight(
+                |token, path| {
+                    if let Some(audit) = &audit {
+                        let guard = { audit.borrow_mut().bind_stage(token, path) }?;
+                        // The audit borrow ended before filesystem work. Work then
+                        // rechecks queued observations and quit before Continue.
+                        guard.validate_directory()?;
+                    }
+                    Ok(())
+                },
+                |token, path| {
+                    let result = destination(token, path);
+                    if let Some(audit) = &audit {
+                        let mut audit = audit.borrow_mut();
+                        audit.effect_ok = result.is_ok();
+                        if let Err(error) = &result {
+                            audit.fail(error);
+                        }
+                    }
+                    result
+                },
+            );
         }
         // Continue can synchronously enqueue Complete. Apply those observations
         // before deciding whether this same owned Work can publish and record.
@@ -491,7 +632,45 @@ pub(super) fn drive<T: Copy + Eq + Hash, H: Clone>(
             result = work.authorize_effect();
         }
         if result.is_ok() && work.job.as_ref().unwrap().publication.is_some() {
-            result = work.publish_and_write(&mut writer).map(|_| ());
+            result = work
+                .publish_and_write(|handle, profile, completion, proof| {
+                    let mut collision_preserved = false;
+                    if let Some(audit) = &audit {
+                        let check = (|| {
+                            let (guard, collision) = {
+                                let audit = audit.borrow();
+                                (
+                                    audit.publication_guard(token, profile, proof.path())?,
+                                    audit.collision_check(),
+                                )
+                            };
+                            guard.validate_directory()?;
+                            if let Some(witness) = collision {
+                                crate::download_acceptance::FixtureAudit::<T>::verify_collision(
+                                    &witness,
+                                )?;
+                                collision_preserved = true;
+                            }
+                            Ok::<(), String>(())
+                        })();
+                        if let Err(error) = check {
+                            audit.borrow_mut().fail(&error);
+                            return WriteOutcome::NotWritten(error);
+                        }
+                    }
+                    let outcome = writer(handle, profile, completion, proof);
+                    if let WriteOutcome::Recorded(id) = &outcome {
+                        if id.profile() == profile {
+                            if let Some(audit) = &audit {
+                                audit
+                                    .borrow_mut()
+                                    .published(proof.path(), collision_preserved);
+                            }
+                        }
+                    }
+                    outcome
+                })
+                .map(|_| ());
         }
         // A genuine cancellation is successful disposal, not a sticky failure.
         // It retains staged bytes and never authorizes a later effect.

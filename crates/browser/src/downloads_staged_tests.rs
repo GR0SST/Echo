@@ -4,7 +4,7 @@ use super::*;
 use browser_core::Browser;
 use std::{
     fs,
-    panic::{AssertUnwindSafe, catch_unwind},
+    panic::{catch_unwind, AssertUnwindSafe},
 };
 
 type Model = Rc<RefCell<Browser>>;
@@ -205,26 +205,22 @@ fn unknown_writer_or_unwind_blocks_retry_and_preserves_return_slot() {
         f.complete();
         let mut work = f.work(ConsumerOwner::Running);
         if unwind {
-            assert!(
-                catch_unwind(AssertUnwindSafe(|| {
-                    let _ = work.publish_and_write(|_, _, _, _| panic!("injected writer unwind"));
-                }))
-                .is_err()
-            );
+            assert!(catch_unwind(AssertUnwindSafe(|| {
+                let _ = work.publish_and_write(|_, _, _, _| panic!("injected writer unwind"));
+            }))
+            .is_err());
         } else {
-            assert!(
-                work.publish_and_write(|_, _, _, _| WriteOutcome::Unknown("ack lost".into()))
-                    .is_err()
-            );
+            assert!(work
+                .publish_and_write(|_, _, _, _| WriteOutcome::Unknown("ack lost".into()))
+                .is_err());
         }
         drop(work);
         assert!(f.service.borrow().staged.retry(400, f.profile).is_err());
         assert!(f.service.borrow().has_pending_records());
         let mut work = f.work(ConsumerOwner::Running);
-        assert!(
-            work.publish_and_write(|_, _, _, _| panic!("duplicate uncertain write"))
-                .is_err()
-        );
+        assert!(work
+            .publish_and_write(|_, _, _, _| panic!("duplicate uncertain write"))
+            .is_err());
         assert_eq!(fs::read(f.folder.join("existing")).unwrap(), b"download");
         assert!(!f.folder.join("chosen").exists());
     }
@@ -243,19 +239,17 @@ fn only_exact_updated_complete_publishes_and_cancellation_is_a_tombstone() {
     }
     f.ingest(f.event(DownloadPhase::Complete, true));
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| panic!("not Complete"))
-            .is_err()
-    );
+    assert!(work
+        .publish_and_write(|_, _, _, _| panic!("not Complete"))
+        .is_err());
     drop(work);
     f.ingest(f.event(DownloadPhase::Canceled, false));
     f.complete();
     assert!(!f.service.borrow().has_pending_records());
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| panic!("canceled"))
-            .is_err()
-    );
+    assert!(work
+        .publish_and_write(|_, _, _, _| panic!("canceled"))
+        .is_err());
     assert_eq!(fs::read(&f.path).unwrap(), b"download");
     assert!(!f.folder.join("existing").exists());
 }
@@ -274,10 +268,9 @@ fn identity_and_path_conflicts_cannot_publish_or_fall_into_direct_writer() {
         assert!(!f.service.borrow().router.has_pending_records());
         assert!(!f.service.borrow().errors.is_empty());
         let mut work = f.work(ConsumerOwner::Running);
-        assert!(
-            work.publish_and_write(|_, _, _, _| panic!("conflicted Complete"))
-                .is_err()
-        );
+        assert!(work
+            .publish_and_write(|_, _, _, _| panic!("conflicted Complete"))
+            .is_err());
         assert_eq!(fs::read(&f.path).unwrap(), b"download");
         assert!(!f.folder.join("existing").exists());
     }
@@ -288,8 +281,8 @@ fn reentrant_quit_sees_inflight_then_sticky_writer_failure() {
     f.handoff();
     f.complete();
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| {
+    assert!(work
+        .publish_and_write(|_, _, _, _| {
             f.gate.handoff().unwrap();
             assert!(matches!(
                 f.gate.acquire(ConsumerOwner::Shutdown),
@@ -298,8 +291,7 @@ fn reentrant_quit_sees_inflight_then_sticky_writer_failure() {
             assert!(f.service.try_borrow_mut().is_ok());
             WriteOutcome::NotWritten("in-flight write failed".into())
         })
-        .is_err()
-    );
+        .is_err());
     drop(work);
     assert!(
         matches!(f.gate.acquire(ConsumerOwner::Shutdown), Err(ShutdownDownloadError::Failure(e)) if e == "in-flight write failed")
@@ -337,11 +329,9 @@ fn shutdown_ingress_uses_same_state_and_blocks_flush_until_recorded() {
             panic!("stage sent to legacy writer")
         })
         .unwrap();
-    assert!(
-        shutdown
-            .flush_retained_with(Rc::ptr_eq, |_| panic!("premature flush"))
-            .is_err()
-    );
+    assert!(shutdown
+        .flush_retained_with(Rc::ptr_eq, |_| panic!("premature flush"))
+        .is_err());
     assert!(shutdown.finish().is_err());
     let mut work = shutdown.detach_staged_work(400).unwrap();
     f.record(&mut work);
@@ -356,10 +346,9 @@ fn shutdown_cannot_continue_a_new_stage_and_publication_failure_retains_bytes() 
     let f = Fixture::new();
     f.gate.handoff().unwrap();
     let mut work = f.work(ConsumerOwner::Shutdown);
-    assert!(
-        work.handoff(|_, _| panic!("post-seal native effect"))
-            .is_err()
-    );
+    assert!(work
+        .handoff(|_, _| panic!("post-seal native effect"))
+        .is_err());
     drop(work);
     let f = Fixture::new();
     f.handoff();
@@ -368,18 +357,16 @@ fn shutdown_cannot_continue_a_new_stage_and_publication_failure_retains_bytes() 
         fs::write(f.folder.join(name), b"user").unwrap();
     }
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| panic!("failed publication"))
-            .is_err()
-    );
+    assert!(work
+        .publish_and_write(|_, _, _, _| panic!("failed publication"))
+        .is_err());
     drop(work);
     assert!(f.service.borrow().has_pending_records());
     f.service.borrow().staged.retry(400, f.profile).unwrap();
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| panic!("exhaustion retry"))
-            .is_err()
-    );
+    assert!(work
+        .publish_and_write(|_, _, _, _| panic!("exhaustion retry"))
+        .is_err());
     assert_eq!(fs::read(&f.path).unwrap(), b"download");
     for name in ["existing", "chosen", "never"] {
         assert_eq!(fs::read(f.folder.join(name)).unwrap(), b"user");
@@ -410,13 +397,12 @@ fn captured_profile_survives_source_drop_and_space_reassignment() {
             .len(),
         1
     );
-    assert!(
-        f.model
-            .borrow()
-            .completed_downloads(other)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(f
+        .model
+        .borrow()
+        .completed_downloads(other)
+        .unwrap()
+        .is_empty());
 }
 #[test]
 fn replaced_published_file_blocks_writer_retry_without_creating_another_link() {
@@ -424,19 +410,17 @@ fn replaced_published_file_blocks_writer_retry_without_creating_another_link() {
     f.handoff();
     f.complete();
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| WriteOutcome::NotWritten("offline".into()))
-            .is_err()
-    );
+    assert!(work
+        .publish_and_write(|_, _, _, _| WriteOutcome::NotWritten("offline".into()))
+        .is_err());
     drop(work);
     fs::rename(f.folder.join("existing"), f.folder.join("saved-original")).unwrap();
     fs::write(f.folder.join("existing"), b"replacement").unwrap();
     f.service.borrow().staged.retry(400, f.profile).unwrap();
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.publish_and_write(|_, _, _, _| panic!("invalid proof reached writer"))
-            .is_err()
-    );
+    assert!(work
+        .publish_and_write(|_, _, _, _| panic!("invalid proof reached writer"))
+        .is_err());
     assert_eq!(fs::read(f.folder.join("existing")).unwrap(), b"replacement");
     assert_eq!(
         fs::read(f.folder.join("saved-original")).unwrap(),
@@ -448,16 +432,15 @@ fn replaced_published_file_blocks_writer_retry_without_creating_another_link() {
 fn native_handoff_unknown_and_queued_identity_failure_survive_quit() {
     let f = Fixture::new();
     let mut work = f.work(ConsumerOwner::Running);
-    assert!(
-        work.handoff(|_, _| {
+    assert!(work
+        .handoff(|_, _| {
             f.gate.handoff().unwrap();
             let mut bad = f.event(DownloadPhase::Complete, false);
             bad.provenance = DownloadProvenance::new(f.provenance.owner(), 999, 97, false);
             f.ingest(bad);
             Err("native acknowledgment lost".into())
         })
-        .is_err()
-    );
+        .is_err());
     drop(work);
     assert!(f.service.borrow().staged.retry(400, f.profile).is_err());
     assert!(
@@ -573,13 +556,12 @@ fn queued_identity_failure_blocks_publication_before_any_writer_or_filesystem_va
     assert!(f.service.borrow().has_pending_records());
     assert_eq!(fs::read(retained.join("payload")).unwrap(), b"download");
     assert!(!f.folder.join("existing").exists());
-    assert!(
-        f.model
-            .borrow()
-            .completed_downloads(f.profile)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(f
+        .model
+        .borrow()
+        .completed_downloads(f.profile)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -864,4 +846,384 @@ fn production_profile_adapter_records_only_final_proof_and_keeps_definite_errors
         fs::read(records[0].final_path()).unwrap(),
         b"actual owned bytes"
     );
+}
+
+impl Fixture {
+    fn planned() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().canonicalize().unwrap();
+        let model = Rc::new(RefCell::new(Browser::new()));
+        let profile = model.borrow().default_user_profile_id();
+        let service = Rc::new(RefCell::new(DownloadService::default()));
+        let owner = service
+            .borrow_mut()
+            .router
+            .register_normal(profile, model.clone(), SourceKind::Normal)
+            .unwrap();
+        let provenance = DownloadProvenance::new(owner, 83, 97, false);
+        let policy_folder = folder.clone();
+        service
+            .borrow_mut()
+            .set_staged_destination_policy(Rc::new(move |captured, request| {
+                assert_eq!(captured, profile);
+                assert_eq!(request.provenance, provenance);
+                assert_eq!(request.suggested_name, "callback.bin");
+                DestinationDecision::Staged(Plan {
+                    folder: policy_folder.clone(),
+                    candidates: vec!["existing".into(), "chosen".into()],
+                })
+            }))
+            .unwrap();
+        Self {
+            _tmp: tmp,
+            folder,
+            path: PathBuf::new(),
+            service,
+            gate: ConsumerGate::default(),
+            model,
+            profile,
+            provenance,
+        }
+    }
+    fn request_plan(&self) {
+        let effects = self
+            .service
+            .borrow_mut()
+            .receive_copied([self.event(DownloadPhase::Pending, true)]);
+        assert!(effects.is_empty());
+        assert!(self.service.borrow().staged.has_pending());
+    }
+}
+
+#[test]
+fn staged_policy_captures_pure_plan_then_reserves_and_publishes_under_one_lease() {
+    let f = Fixture::planned();
+    fs::write(f.folder.join("existing"), b"sentinel").unwrap();
+    let before = fs::read_dir(&f.folder).unwrap().count();
+    f.request_plan();
+    assert_eq!(fs::read_dir(&f.folder).unwrap().count(), before); // pure policy
+    let lease = f.gate.acquire(ConsumerOwner::Running).unwrap();
+    let observed_stage = RefCell::new(None);
+    let (lease, result) = drive(
+        &f.service,
+        lease,
+        |token, path| {
+            assert!(f.service.try_borrow_mut().is_ok());
+            assert_eq!(token, 400);
+            assert!(path.is_absolute());
+            assert!(!path.exists());
+            assert_ne!(path.parent().unwrap(), f.folder);
+            assert!(matches!(
+                f.gate.acquire(ConsumerOwner::Running),
+                Err(ShutdownDownloadError::InFlight)
+            ));
+            fs::write(&path, b"download").unwrap();
+            *observed_stage.borrow_mut() = Some(path.clone());
+            let mut complete = f.event(DownloadPhase::Complete, false);
+            complete.info.full_path = path;
+            f.ingest(complete);
+            Ok(())
+        },
+        |model, profile, completion, proof| {
+            assert_eq!(completion.final_path, f.folder.join("chosen"));
+            assert_eq!(proof.path(), completion.final_path);
+            WriteOutcome::Recorded(
+                model
+                    .borrow_mut()
+                    .record_completed_download(profile, completion)
+                    .unwrap(),
+            )
+        },
+    );
+    assert!(result.is_ok());
+    drop(lease);
+    assert_eq!(fs::read(f.folder.join("existing")).unwrap(), b"sentinel");
+    assert_eq!(fs::read(f.folder.join("chosen")).unwrap(), b"download");
+    let model = f.model.borrow();
+    let records = model.completed_downloads(f.profile).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_ne!(
+        records[0].final_path(),
+        observed_stage.borrow().as_ref().unwrap()
+    );
+    assert!(!f.service.borrow().has_pending_records());
+}
+
+#[test]
+fn cancellation_in_the_requested_batch_prevents_reservation_and_continue() {
+    let f = Fixture::planned();
+    let effects = f.service.borrow_mut().receive_copied([
+        f.event(DownloadPhase::Pending, true),
+        f.event(DownloadPhase::Canceled, false),
+    ]);
+    assert!(effects.is_empty());
+    let lease = f.gate.acquire(ConsumerOwner::Running).unwrap();
+    let (lease, result) = drive(
+        &f.service,
+        lease,
+        |_, _| panic!("canceled plan reached Continue"),
+        |_, _, _, _| panic!("canceled plan recorded"),
+    );
+    assert!(result.is_ok());
+    drop(lease);
+    assert_eq!(fs::read_dir(&f.folder).unwrap().count(), 0);
+    assert!(!f.service.borrow().has_pending_records());
+}
+
+#[test]
+fn reservation_reentry_retains_the_stage_before_cancellation_and_quit_suppression() {
+    let f = Fixture::planned();
+    f.request_plan();
+    let mut work = f.work(ConsumerOwner::Running);
+    let reserved = RefCell::new(None);
+    let result = work.handoff_with_reservation(
+        |plan, key| {
+            assert!(f.service.try_borrow_mut().is_ok());
+            assert!(matches!(
+                f.gate.acquire(ConsumerOwner::Running),
+                Err(ShutdownDownloadError::InFlight)
+            ));
+            let stage = plan.reserve(key.0, key.1).unwrap();
+            *reserved.borrow_mut() = Some(stage.stage_path().unwrap().to_owned());
+            f.ingest(f.event(DownloadPhase::Canceled, false));
+            f.gate.handoff().unwrap();
+            Ok(stage)
+        },
+        |_, _| panic!("quit/cancellation overtaken by Continue"),
+    );
+    assert_eq!(result, Err("Staged transfer is canceled".into()));
+    drop(work);
+    drop(f.gate.acquire(ConsumerOwner::Shutdown).unwrap());
+    assert!(f.service.borrow().errors.is_empty());
+    assert!(!f.service.borrow().has_pending_records());
+    let retained = reserved.borrow().clone().unwrap();
+    assert!(retained.parent().unwrap().is_dir());
+    let service = f.service.borrow();
+    let slot = &service.staged.slots[&400];
+    let job = slot.job.take().unwrap();
+    assert_eq!(job.stage.as_ref().unwrap().stage_path().unwrap(), retained);
+    assert!(job.canceled);
+    slot.job.set(Some(job));
+}
+
+#[test]
+fn reservation_failure_never_automatically_repeats_or_reaches_continue() {
+    let f = Fixture::planned();
+    f.request_plan();
+    let mut work = f.work(ConsumerOwner::Running);
+    assert_eq!(
+        work.handoff_with_reservation(
+            |_, _| Err("injected reservation failure".into()),
+            |_, _| panic!("failed reservation continued")
+        ),
+        Err("injected reservation failure".into())
+    );
+    drop(work);
+    assert!(f.service.borrow().staged.retry(400, f.profile).is_err());
+    let lease = f.gate.acquire(ConsumerOwner::Running).unwrap();
+    let (lease, result) = drive(
+        &f.service,
+        lease,
+        |_, _| panic!("failed plan silently retried"),
+        |_, _, _, _| panic!("failed reservation recorded"),
+    );
+    assert!(result.is_ok());
+    drop(lease);
+    assert!(f.service.borrow().has_pending_records());
+    assert_eq!(fs::read_dir(&f.folder).unwrap().count(), 0);
+}
+
+#[test]
+fn staged_only_unrequested_complete_stays_pending_without_a_legacy_record() {
+    let f = Fixture::planned();
+    let effects = f
+        .service
+        .borrow_mut()
+        .receive_copied([f.event(DownloadPhase::Complete, false)]);
+    assert!(effects.is_empty());
+    let errors = f
+        .service
+        .borrow_mut()
+        .router
+        .persist(|_, _, _| panic!("unpublished Complete persisted"));
+    assert_eq!(errors, ["Completed download has no authorized publication"]);
+    assert!(f.service.borrow().has_pending_records());
+    let shutdown = shutdown::ShutdownDownloads::take(f.service.clone(), f.gate.clone()).unwrap();
+    assert!(shutdown
+        .ingest_copied_and_persist_with([], |_, _, _| panic!("shutdown bypassed publication"))
+        .is_err());
+    assert!(shutdown
+        .flush_retained_with(Rc::ptr_eq, |_| Ok(()))
+        .is_err());
+    assert!(shutdown.finish().is_err());
+}
+
+#[test]
+fn complete_before_handoff_in_the_same_batch_is_retained_and_cannot_authorize_retry() {
+    let f = Fixture::planned();
+    f.service.borrow_mut().receive_copied([
+        f.event(DownloadPhase::Pending, true),
+        f.event(DownloadPhase::Complete, false),
+    ]);
+    assert!(!f.service.borrow().router.has_pending_records());
+    assert!(f.service.borrow().has_pending_records());
+    let service = f.service.borrow();
+    let slot = &service.staged.slots[&400];
+    let job = slot.job.take().unwrap();
+    assert_eq!(
+        job.complete.as_ref().unwrap().phase,
+        DownloadPhase::Complete
+    );
+    assert!(job.publication.is_none());
+    slot.job.set(Some(job));
+    drop(service);
+    assert!(f.service.borrow().staged.retry(400, f.profile).is_err());
+    let lease = f.gate.acquire(ConsumerOwner::Running).unwrap();
+    let (lease, result) = drive(
+        &f.service,
+        lease,
+        |_, _| panic!("terminal plan continued"),
+        |_, _, _, _| panic!("unpublished Complete recorded"),
+    );
+    assert!(result.is_ok());
+    drop(lease);
+    assert_eq!(fs::read_dir(&f.folder).unwrap().count(), 0);
+}
+
+#[test]
+fn staged_only_policy_rejects_direct_paths_and_late_installation() {
+    let f = Fixture::planned();
+    f.service.borrow_mut().policy = Some(Rc::new(|_, _| {
+        DestinationDecision::Path("/must-not-continue".into())
+    }));
+    assert!(f
+        .service
+        .borrow_mut()
+        .receive_copied([f.event(DownloadPhase::Pending, true)])
+        .is_empty());
+    assert_eq!(
+        f.service.borrow().errors,
+        ["Staged policy cannot dispatch a direct target"]
+    );
+    assert!(f
+        .service
+        .borrow_mut()
+        .set_staged_destination_policy(Rc::new(|_, _| DestinationDecision::Defer))
+        .is_err());
+    assert_eq!(fs::read_dir(&f.folder).unwrap().count(), 0);
+}
+
+#[test]
+fn legacy_requested_then_canceled_batch_still_suppresses_its_native_effect() {
+    let f = Fixture::new();
+    let service = Rc::new(RefCell::new(DownloadService::<u64, Model>::default()));
+    service
+        .borrow_mut()
+        .router
+        .register_normal(f.profile, f.model.clone(), SourceKind::Normal)
+        .unwrap();
+    service.borrow_mut().policy = Some(Rc::new(|_, _| {
+        DestinationDecision::Path("/unused-legacy-target".into())
+    }));
+    assert!(service
+        .borrow_mut()
+        .receive_copied([
+            f.event(DownloadPhase::Pending, true),
+            f.event(DownloadPhase::Canceled, false),
+        ])
+        .is_empty());
+}
+
+#[test]
+fn staged_fixture_service_publishes_collision_and_records_proof_path_once() {
+    use crate::download_acceptance::{FixtureAudit, PreparedArm};
+    let f = Fixture::new();
+    let arm = PreparedArm::parse("http://127.0.0.1:18473 stage-collision-normal").unwrap();
+    let audit = Rc::new(RefCell::new(FixtureAudit::<u64>::new(arm, f.profile, f.provenance.owner())));
+    let original = audit.borrow().config.output.clone();
+    let original_bytes = fs::read(&original).unwrap();
+    let mut event = f.event(DownloadPhase::InProgress, true);
+    event.info.full_path = PathBuf::new();
+    event.info.url = audit.borrow().config.fixture_url();
+    event.info.original_url = event.info.url.clone();
+    event.destination = DownloadDestination::Requested { suggested_name: audit.borrow().config.filename.clone() };
+    let service = Rc::new(RefCell::new(DownloadService::<u64, _>::default()));
+    assert_eq!(service.borrow_mut().router.register_normal(f.profile, f.model.clone(), SourceKind::Normal).unwrap(), f.provenance.owner());
+    service.borrow_mut().attach_fixture(audit.clone()).unwrap();
+    assert!(service.borrow_mut().receive_copied([event.clone()]).is_empty());
+    let gate = ConsumerGate::default();
+    let lease = gate.acquire(ConsumerOwner::Running).unwrap();
+    let (lease, result) = drive(&service, lease, |token, path| {
+        assert!(service.try_borrow_mut().is_ok());
+        assert_eq!(token, event.token);
+        fs::write(&path, b"download").unwrap();
+        event.destination_requested = false;
+        event.destination = DownloadDestination::Resolved(path.clone());
+        event.info.full_path = path;
+        event.info.phase = DownloadPhase::Complete;
+        event.info.received_bytes = 8;
+        event.info.end_time = 13_400_000_000_000_001;
+        assert!(service.borrow_mut().receive_copied([event.clone()]).is_empty());
+        Ok(())
+    }, |model, captured, completion, proof| {
+        assert!(service.try_borrow_mut().is_ok());
+        assert_ne!(completion.final_path, original);
+        assert_eq!(completion.final_path.as_os_str(), proof.path().as_os_str());
+        WriteOutcome::Recorded(model.borrow_mut().record_completed_download(captured, completion).unwrap())
+    });
+    assert!(result.is_ok());drop(lease);
+    let audit = audit.borrow();
+    assert!(audit.is_staged() && audit.effect_ok && audit.collision_preserved);
+    assert_eq!(fs::read(&original).unwrap(), original_bytes);
+    let final_path = audit.published_path.as_ref().unwrap();
+    assert_eq!(fs::read(final_path).unwrap(), b"download");
+    assert_ne!(final_path, audit.stage_path.as_ref().unwrap());
+    assert_eq!(f.model.borrow().completed_downloads(f.profile).unwrap().len(), 1);
+    assert_eq!(f.model.borrow().completed_downloads(f.profile).unwrap()[0].final_path(), final_path);
+    assert!(service.borrow().staged.completed_snapshot(event.token).is_some());
+    assert!(!service.borrow().has_pending_records());
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn filesystem_pins_in(folder: &std::path::Path) -> usize {
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(target_os = "macos")]
+    fn descriptor_path(fd: i32) -> Option<PathBuf> {
+        // Local macOS SDK: F_GETPATH=50, PATH_MAX=1024. Test-only OS observation.
+        unsafe extern "C" { fn fcntl(fd: i32, command: i32, ...) -> i32; }
+        let mut buffer = [0u8; 1024];
+        if unsafe { fcntl(fd, 50, buffer.as_mut_ptr()) } != 0 { return None; }
+        let len = buffer.iter().position(|byte| *byte == 0)?;
+        Some(std::path::Path::new(std::ffi::OsStr::from_bytes(&buffer[..len])).to_owned())
+    }
+    #[cfg(target_os = "linux")]
+    fn descriptor_path(fd: i32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    let directory = "/dev/fd";
+    #[cfg(target_os = "linux")]
+    let directory = "/proc/self/fd";
+    fs::read_dir(directory).unwrap().filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+        .filter_map(descriptor_path)
+        .filter(|path| path.starts_with(folder)).count()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn canonical_acknowledgement_releases_filesystem_pins_but_keeps_idempotent_metadata() {
+    let f = Fixture::new();
+    f.handoff();f.complete();
+    assert!(filesystem_pins_in(&f.folder) >= 2);
+    let mut work = f.work(ConsumerOwner::Running);
+    let id = f.record(&mut work);
+    assert_eq!(filesystem_pins_in(&f.folder), 0,
+        "completed tombstones must not retain folder, stage or final-file descriptors");
+    assert_eq!(work.publish_and_write(|_, _, _, _| panic!("duplicate writer")), Ok(id));
+    drop(work);
+    f.complete();
+    assert_eq!(filesystem_pins_in(&f.folder), 0);
+    assert_eq!(fs::read(f.folder.join("existing")).unwrap(), b"download");
+    assert_eq!(f.model.borrow().completed_downloads(f.profile).unwrap().len(), 1);
 }
