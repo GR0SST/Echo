@@ -374,7 +374,8 @@ impl BrowserWindow {
                     let active = focus.is_some();
                     let group = gpui::SharedString::from(format!("folder-{key}"));
                     Some(div().pl(px(indent)).flex_none().min_w_0().child(div().id(("folder", key)).debug_selector(move || format!("folder-{key}"))
-                        .group(group.clone()).flex().items_center().h(px(34.)).px_2().gap_2().rounded_lg().text_sm()
+                        .group(group.clone()).flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
+                        .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(|this| this.bg(hsla(0., 0., 1., 0.35)))
                         .on_click(cx.listener(move |this, _, _, cx| { if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.browser.set_folder_collapsed(id, collapsed); } cx.notify(); }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_folder_menu(id, event.position, window, cx); }))
@@ -404,7 +405,8 @@ impl BrowserWindow {
                     let id = self.browser.pinned_item_tab(space, item)?;
                     let tab = self.browser.all_tabs().find(|tab| tab.id == id)?;
                     let active = self.browser.spaces.iter().find(|entry| entry.id == space).and_then(|space| space.active_tab).is_some_and(|active| self.browser.item_anchor(active) == id);
-                    Some(div().pl(px(indent)).flex_none().min_w_0().child(self.render_tab(tab, Section::Pinned, active, hue, cx)).into_any_element())
+                    // Indent the row itself: a wrapper makes ellipsized titles measure too narrow.
+                    Some(self.render_tab(tab, Section::Pinned, active, hue, cx).ml(px(indent)).into_any_element())
                 }
             }
         }).collect()

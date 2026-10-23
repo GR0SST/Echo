@@ -24,6 +24,15 @@ use crate::pages::{Pages, WebEngine, CONTENT_CORNER_RADIUS, CONTENT_INSET, WINDO
 use crate::text_input::{self, TextInput};
 
 const SIDEBAR_WIDTH: f32 = 240.0;
+/// Sidebar metrics measured from the reference at 1x.
+const SIDEBAR_INSET: f32 = 7.0;
+const SIDEBAR_TOOLBAR_HEIGHT: f32 = 47.0;
+pub(crate) const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
+pub(crate) const SIDEBAR_ROW_GAP: f32 = 3.0;
+pub(crate) const SIDEBAR_ROW_RADIUS: f32 = 10.0;
+const FAVORITE_HEIGHT: f32 = 46.0;
+const FAVORITE_GAP: f32 = 8.0;
+const FAVORITE_COLUMNS: usize = 4;
 const COMMAND_BAR_WIDTH: f32 = 620.0;
 const MAX_TAB_SUGGESTIONS: usize = 6;
 const MAX_HISTORY_SUGGESTIONS: usize = 4;
@@ -53,8 +62,8 @@ const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
 const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
 /// How long a revealed sidebar waits for the pointer before hiding.
 const FLOATING_SIDEBAR_GRACE: Duration = Duration::from_millis(800);
-pub const TRAFFIC_LIGHT_X: f32 = 14.0;
-pub const TRAFFIC_LIGHT_Y: f32 = 14.0;
+pub const TRAFFIC_LIGHT_X: f32 = 12.5;
+pub const TRAFFIC_LIGHT_Y: f32 = 17.0;
 /// Share of the remaining distance covered per frame when settling (ease-out).
 const PAGER_SETTLE_RATE: f32 = 0.28;
 
@@ -499,6 +508,7 @@ pub struct BrowserWindow {
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub(crate) hovered_split_row: Option<TabId>,
+    pub(crate) traffic_lights_hovered: bool,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -577,6 +587,7 @@ impl BrowserWindow {
             space_drag_hover: None,
             split_draft: None,
             hovered_split_row: None,
+            traffic_lights_hovered: false,
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -1800,10 +1811,11 @@ impl BrowserWindow {
         active: bool,
         hue: f32,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::Stateful<gpui::Div> {
         let id = tab.id;
         let key = id.get() as usize;
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
+        let reserve_close = !segmented && !tab.muted;
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
@@ -1825,18 +1837,27 @@ impl BrowserWindow {
             .flex_none()
             .flex()
             .items_center()
-            .gap_2()
-            .h(px(34.0))
-            .px_2()
-            .when(segmented, |this| this.relative().px_1().gap_0()
+            .gap(px(9.))
+            .h(px(SIDEBAR_ROW_HEIGHT))
+            .relative()
+            .pl(px(9.))
+            // Titles run to the edge; the close control takes room only on
+            // hover. A mute control keeps its place left of it.
+            .pr(px(if tab.muted { 34. } else { 6. }))
+            .text_size(px(14.))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .when(segmented, |this| this.px_1().gap_0()
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered { this.hovered_split_row = Some(id); }
                     else if this.hovered_split_row == Some(id) { this.hovered_split_row = None; }
                     cx.notify();
                 })))
-            .rounded_lg()
+            .rounded(px(SIDEBAR_ROW_RADIUS))
             .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
-            .when(!active, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3))))
+            .hover(move |style| {
+                let style = if active { style } else { style.bg(hsla(0.0, 0.0, 1.0, 0.3)) };
+                if reserve_close { style.pr(px(34.)) } else { style }
+            })
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 this.open_tab_menu(id, event.position, window, cx);
@@ -1855,7 +1876,7 @@ impl BrowserWindow {
                 div()
                     .id(("close", key))
                     .debug_selector(|| format!("close-{key}"))
-                    .when(segmented, |this| this.absolute().right(px(4.)).top(px(8.)))
+                    .absolute().top(px(10.)).right(px(if segmented { 4. } else { 6. }))
                     .flex_none()
                     .px_1()
                     .rounded_sm()
@@ -1875,7 +1896,7 @@ impl BrowserWindow {
             )
     }
 
-    fn render_favorite(&self, tab: &Tab, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_favorite(&self, tab: &Tab, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let id = tab.id;
         let key = id.get() as usize;
         let group = SharedString::from(format!("favorite-{key}"));
@@ -1891,7 +1912,7 @@ impl BrowserWindow {
             }))
             .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
             .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_at_favorite(drag, id, cx)))
-            .w(px(68.0)).h(px(48.0)).rounded_lg()
+            .w(px(width)).h(px(FAVORITE_HEIGHT)).rounded(px(SIDEBAR_ROW_RADIUS))
             .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
             .when(active, |this| this.shadow_sm())
             .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.65)))
@@ -1937,23 +1958,25 @@ impl BrowserWindow {
 
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
         if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
-        match self.browser.favicon(&tab.url) {
+        let icon = match self.browser.favicon(&tab.url) {
             Some(png) => {
                 let title = tab.title.clone();
                 gpui::img(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png.to_vec())))
-                    .size(px(18.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
+                    .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
                     .with_fallback(move || favicon(&title, hue).into_any_element())
                     .into_any_element()
             }
             None => favicon(&tab.title, hue).into_any_element(),
-        }
+        };
+        // Favicons are 16 px, centered in the 18 px slot shared with symbols.
+        div().size(px(18.)).flex_none().flex().items_center().justify_center().child(icon).into_any_element()
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let url = self
             .browser
             .active_tab()
-            .map(|t| if t.url == crate::split::EMPTY_PANE_URL { "Search or Enter URL…".into() } else { display_url(&t.url) })
+            .map(|t| if t.url == crate::split::EMPTY_PANE_URL { "Search or Enter URL…".into() } else { address_host(&t.url) })
             .unwrap_or_default();
         let pages: Vec<_> = (0..self.browser.spaces.len())
             .map(|index| self.render_space_page(index, cx).into_any_element())
@@ -1963,9 +1986,16 @@ impl BrowserWindow {
         let state = self.browser.space().active_tab.and_then(|id| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(id))).unwrap_or_default();
 
         let loading = state.loading;
+        let control = |id: &'static str| div().id(id).debug_selector(move || id.into()).flex_none().size(px(28.)).rounded_md()
+            .flex().items_center().justify_center().text_color(hsla(0., 0., 0., 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
+        let favorites: Vec<_> = self.browser.favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).collect();
+        // Favorites stretch to fill each row, as in the reference.
+        let columns = favorites.len().clamp(1, FAVORITE_COLUMNS) as f32;
+        let favorite_width = ((SIDEBAR_WIDTH - 2. * SIDEBAR_INSET - FAVORITE_GAP * (columns - 1.)) / columns).floor();
         div()
             .id("sidebar")
             .debug_selector(|| "sidebar".into())
+            .group("sidebar")
             .relative()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .flex()
@@ -1973,62 +2003,68 @@ impl BrowserWindow {
             .flex_none()
             .w(px(SIDEBAR_WIDTH))
             .h_full()
-            .pt(px(38.0))
+            .pt(px(SIDEBAR_TOOLBAR_HEIGHT - 1.))
             .pb_2()
-            .gap_1()
+            .gap(px(8.))
             .text_color(hsla(0.0, 0.0, 0.1, 1.0))
-            .child(div().absolute().top_0().left(px(78.)).right(px(8.)).h(px(38.)).flex().items_center().gap_1()
-                .child(div().id("toggle-sidebar").debug_selector(|| "toggle-sidebar".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+            .child(div().absolute().top_0().left_0().right(px(8.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).flex().items_center().gap(px(6.))
+                .child(self.render_traffic_lights(cx))
+                .child(control("toggle-sidebar").ml(px(-2.))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
                     .child(crate::icons::control(crate::icons::Icon::Sidebar)))
                 .child(div().flex_1())
-                .child(div().id("go-back").debug_selector(|| "go-back".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
-                    .text_color(hsla(0., 0., 0., if state.can_go_back { 0.65 } else { 0.25 }))
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                .child(control("go-back")
+                    .text_color(hsla(0., 0., 0., if state.can_go_back { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_back(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Back)))
-                .child(div().id("go-forward").debug_selector(|| "go-forward".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
-                    .text_color(hsla(0., 0., 0., if state.can_go_forward { 0.65 } else { 0.25 }))
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                .child(control("go-forward")
+                    .text_color(hsla(0., 0., 0., if state.can_go_forward { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_forward(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Forward)))
-                .child(div().id("reload-page").debug_selector(|| "reload-page".into()).size(px(24.)).rounded_md().flex().items_center().justify_center()
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.25)))
+                .child(control("reload-page")
                     .on_click(cx.listener(move |this, _, _, _| { this.with_active_page(|pages, tab| { if loading { pages.stop_loading(tab); } else { pages.reload(tab); } }); }))
                     .child(crate::icons::control(if state.loading { crate::icons::Icon::Close } else { crate::icons::Icon::Reload }))))
             .child(
-                div().px_2().child(
+                div().px(px(SIDEBAR_INSET)).child(
                     div()
                         .id("address")
                         .debug_selector(|| "address".into())
-                        .h(px(32.0))
-                        .px_3()
-                        .mb_2()
+                        .h(px(36.0))
+                        .pl(px(13.))
+                        .pr(px(9.))
                         .flex()
                         .items_center()
-                        .rounded_lg()
+                        .gap_2()
+                        .rounded(px(SIDEBAR_ROW_RADIUS))
                         .bg(hsla(0.0, 0.0, 1.0, 0.35))
                         .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.5)))
-                        .text_sm()
+                        .text_size(px(14.))
                         .text_color(hsla(0.0, 0.0, 0.0, 0.6))
-                        .overflow_hidden()
                         .whitespace_nowrap()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_edit_current_url(&EditCurrentUrl, window, cx)
                         }))
-                        .child(url),
+                        .child(div().flex_1().min_w_0().overflow_hidden().child(url))
+                        // Page actions appear only while the pointer is over the sidebar.
+                        .when(self.browser.active_tab().is_some(), |this| this.child(
+                            div().id("address-copy-link").debug_selector(|| "address-copy-link".into())
+                                .flex_none().size(px(24.)).rounded_md().flex().items_center().justify_center()
+                                .invisible().group_hover("sidebar", |style| style.visible())
+                                .hover(|style| style.bg(hsla(0., 0., 0., 0.08)))
+                                .tooltip(|_, cx| cx.new(|_| TabTooltip { title: "Copy URL".into(), url: String::new() }).into())
+                                .on_click(cx.listener(|this, _, _, cx| { cx.stop_propagation(); this.copy_url(false, cx); }))
+                                .child(crate::icons::control(crate::icons::Icon::Link)))),
                 ),
             )
-            .when(!self.browser.favorites.is_empty(), |this| this.child(
+            .when(!favorites.is_empty(), |this| this.child(
                 div().id("favorites").debug_selector(|| "favorites".into())
-                    .flex().flex_wrap().gap_2().px_2().pb_2()
+                    .flex().flex_wrap().gap(px(FAVORITE_GAP)).px(px(SIDEBAR_INSET))
                     .rounded_lg().drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.3)))
                     .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
                         browser.read_with(cx, |this, _| !this.browser.is_favorite(drag.id) && this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES).unwrap_or(false)
                     }))
                     .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_favorites(drag, cx)))
-                    .children(self.browser.favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| self.render_favorite(tab, cx))),
+                    .children(favorites.iter().map(|tab| self.render_favorite(tab, favorite_width, cx))),
             ))
             // Spaces side by side, shifted to the pager position.
             .child(
@@ -2043,6 +2079,30 @@ impl BrowserWindow {
                 ),
             )
             .child(self.render_space_switcher(cx))
+    }
+
+    /// Window controls stay native for their behavior, but idle as neutral
+    /// dots and show their colors only while the pointer is over them.
+    fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let hovered = self.traffic_lights_hovered;
+        div().id("traffic-lights").debug_selector(|| "traffic-lights".into()).flex_none().w(px(74.)).h_full()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.traffic_lights_hovered != *hovered {
+                    this.traffic_lights_hovered = *hovered;
+                    cx.notify();
+                }
+            }))
+            .child(canvas(|_, _, _| (), move |_, _, window, _| {
+                let Some(view) = crate::native::view_of(window) else { return; };
+                crate::native::set_traffic_lights_alpha(view, if hovered { 1. } else { 0. });
+                let Some(frames) = crate::native::traffic_light_frames(view).filter(|_| !hovered) else { return; };
+                for (frame, rim) in frames.iter().zip([0xff5f57, 0xfebc2e, 0x28c840]) {
+                    let diameter = frame[2].min(frame[3]);
+                    let origin = point(px(frame[0] + (frame[2] - diameter) / 2.), px(frame[1] + (frame[3] - diameter) / 2.));
+                    window.paint_quad(gpui::quad(Bounds::new(origin, size(px(diameter), px(diameter))), px(diameter / 2.),
+                        hsla(0., 0., 0.47, 1.), px(1.), Hsla::from(gpui::rgb(rim)).opacity(0.45), gpui::BorderStyle::Solid));
+                }
+            }).size_full())
     }
 
     fn sidebar_list(&self, space: SpaceId, section: Section, cx: &mut Context<Self>) -> gpui::Div {
@@ -2082,7 +2142,7 @@ impl BrowserWindow {
         let reveal = self.pinned_reveals.get(&space.id)
             .filter(|reveal| reveal.collapsed == space.pinned_collapsed)
             .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
-        let pinned_height = pinned.len() as f32 * 34.;
+        let pinned_height = pinned.len() as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
         let header_group = SharedString::from(format!("space-header-{index}"));
         let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
 
@@ -2092,12 +2152,12 @@ impl BrowserWindow {
             .flex_none()
             .w(px(SIDEBAR_WIDTH))
             .h_full()
-            .px_2()
-            .gap_1()
+            .px(px(SIDEBAR_INSET))
+            .gap(px(SIDEBAR_ROW_GAP))
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
                     .group(header_group.clone())
-                    .flex().items_center().gap_2().h(px(36.)).px_3().rounded(px(12.))
+                    .flex().items_center().gap(px(9.)).h(px(SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).rounded(px(SIDEBAR_ROW_RADIUS))
                     .when(header_menu_open, |style| style.bg(hsla(0., 0., 1., 0.15)))
                     .hover(|style| style.bg(hsla(0., 0., 1., 0.15)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_pinned_section(index, cx)))
@@ -2140,29 +2200,32 @@ impl BrowserWindow {
                     .flex_none().h(px(pinned_height * reveal)).max_h(gpui::relative(0.45 * reveal))
                     .mb(px(-4. * (1. - reveal))).overflow_hidden()
                     .child(self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| "pinned-list".into()))
-                        .relative().top(px(-12. * (1. - reveal))).size_full().flex().flex_col().overflow_y_scroll()
+                        .relative().top(px(-12. * (1. - reveal))).size_full().flex().flex_col().gap(px(SIDEBAR_ROW_GAP)).overflow_y_scroll()
                         .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
                         .children(pinned)),
             ))
-            .child(div().h(px(1.0)).mx_2().my_2().bg(hsla(0.0, 0.0, 0.0, 0.12)))
-            .when(!space.today.is_empty(), |this| {
-                this.child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| "today-header".into())).flex().items_center().justify_between().px_2().h(px(24.0))
-                    .rounded_md().drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
-                    .text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5))
-                    .child("Today")
-                    .child(div().id(("clear-today", index))
-                        .when(current, |this| this.debug_selector(|| "clear-today".into()))
-                        .px_2().py_1().rounded_md()
-                        .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.browser.switch_space(index);
-                            this.browser.clear_today(SystemTime::now());
-                            this.settle_pager(cx);
-                            cx.notify();
-                        }))
-                        .child("Clear")))
-            })
+            // The divider doubles as the Today drop target; Clear shows on sidebar hover.
+            .child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| "today-header".into()))
+                .relative().flex_none().h(px(22.)).px(px(10.)).flex().items_center().rounded_md()
+                .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
+                .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
+                .child(div().flex_1().h(px(1.)).bg(hsla(0.0, 0.0, 0.0, 0.12))
+                    .when(!space.today.is_empty(), |this| this.group_hover("sidebar", |style| style.mr(px(54.)))))
+                .when(!space.today.is_empty(), |this| this.child(div().id(("clear-today", index))
+                    .when(current, |this| this.debug_selector(|| "clear-today".into()))
+                    .absolute().right(px(6.)).top(px(2.)).h(px(18.)).px(px(4.)).rounded_md()
+                    .flex().items_center().gap(px(2.))
+                    .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0.0, 0.0, 0.0, 0.35))
+                    .invisible().group_hover("sidebar", |style| style.visible())
+                    .hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.browser.switch_space(index);
+                        this.browser.clear_today(SystemTime::now());
+                        this.settle_pager(cx);
+                        cx.notify();
+                    }))
+                    .child(crate::icons::control_sized(crate::icons::Icon::Down, 12.))
+                    .child("Clear"))))
             .child(
                 div()
                     .id(("new-tab", index))
@@ -2171,12 +2234,12 @@ impl BrowserWindow {
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .h(px(34.0))
-                    .px_2()
-                    .rounded_lg()
-                    .text_sm()
-                    .text_color(hsla(0.0, 0.0, 0.0, 0.55))
+                    .gap(px(9.))
+                    .h(px(SIDEBAR_ROW_HEIGHT))
+                    .pl(px(9.))
+                    .rounded(px(SIDEBAR_ROW_RADIUS))
+                    .text_size(px(14.))
+                    .text_color(hsla(0.0, 0.0, 0.0, 0.45))
                     .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.on_open_command_bar(&OpenCommandBar, window, cx)
@@ -2189,7 +2252,7 @@ impl BrowserWindow {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .gap_1()
+                    .gap(px(SIDEBAR_ROW_GAP))
                     .overflow_y_scroll()
                     .when(current, |this| this.debug_selector(|| "today-list".into()))
                     .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.today))
@@ -2707,7 +2770,7 @@ fn favicon(title: &str, hue: f32) -> impl IntoElement {
         .flex_none()
         .items_center()
         .justify_center()
-        .size(px(18.0))
+        .size(px(16.0))
         .rounded_sm()
         .bg(hsla(hue, 0.5, 0.45, 1.0))
         .text_color(gpui::white())
@@ -2717,6 +2780,14 @@ fn favicon(title: &str, hue: f32) -> impl IntoElement {
 
 fn tint(hue: f32, lightness: f32) -> Hsla {
     hsla(hue, 0.45, lightness, 1.0)
+}
+
+/// The sidebar address field shows only the site, as in the reference.
+pub fn address_host(url: &str) -> String {
+    let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) else { return display_url(url); };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit('@').next().unwrap_or(host);
+    host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 
 pub fn display_url(url: &str) -> String {

@@ -160,29 +160,32 @@ impl BrowserWindow {
     pub(crate) fn render_sidebar_item_contents(&self, tab: &Tab, hue: f32, cx: &mut Context<Self>) -> AnyElement {
         let anchor = tab.id.get();
         if let Some(split) = self.browser.split_for(tab.id).filter(|split| split.title.is_none()) {
-            return div().debug_selector(move || format!("sidebar-split-{anchor}")).flex_1().min_w_0().flex().gap(px(4.)).children(split.panes.iter().filter_map(|id| {
+            let count = split.panes.len();
+            return div().debug_selector(move || format!("sidebar-split-{anchor}")).flex_1().min_w_0().flex().items_center().children(split.panes.iter().enumerate().filter_map(|(index, id)| {
                 let tab = self.browser.all_tabs().find(|tab| tab.id == *id)?;
                 let id = *id;
                 let active = self.browser.space().active_tab == Some(id);
                 let close_visible = split.panes.last() == Some(&id) && self.hovered_split_row == Some(self.browser.item_anchor(id));
                 Some(div().id(("sidebar-pane", id.get() as usize)).debug_selector(move || format!("sidebar-pane-{}", id.get()))
-                    .flex_1().flex_basis(px(0.)).min_w_0().h(px(28.)).px_1().rounded_md().flex().items_center().gap_1()
+                    .relative().flex_1().flex_basis(px(0.)).min_w_0().h(px(30.)).pl(px(7.)).pr(px(4.)).rounded(px(8.)).flex().items_center().gap(px(11.))
                     .overflow_hidden()
-                    .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.2 }))
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.55)))
+                    .when(active, |this| this.bg(hsla(0., 0., 1., 0.65)))
+                    .hover(|style| style.bg(hsla(0., 0., 1., 0.45)))
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                         cx.stop_propagation();
                         this.browser.activate_tab(id, SystemTime::now());
                         if event.click_count() == 2 { this.open_command_bar(Target::RenameTab(id), &this.browser.item_title(id), window, cx); }
                         cx.notify();
                     }))
+                    // Panes are separated by a hairline, not by individual pills.
+                    .when(index + 1 < count, |this| this.child(div().absolute().right_0().top(px(6.)).h(px(18.)).w(px(1.)).bg(hsla(0., 0., 0., 0.15))))
                     .child(self.render_favicon(tab, hue))
-                    .child(div().debug_selector(move || format!("sidebar-pane-title-{}", id.get())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(24.))).overflow_hidden().text_ellipsis().line_clamp(1).text_sm().child(tab.title.clone())))
+                    .child(div().debug_selector(move || format!("sidebar-pane-title-{}", id.get())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(24.))).overflow_hidden().text_ellipsis().line_clamp(1).child(tab.title.clone())))
             })).into_any_element();
         }
-        div().flex_1().min_w_0().flex().items_center().gap_2()
+        div().flex_1().min_w_0().flex().items_center().gap(px(9.))
             .child(self.render_item_icon(tab, hue))
-            .child(div().flex_1().min_w_0().truncate().text_sm().child(self.browser.item_title(tab.id))).into_any_element()
+            .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().line_clamp(1).child(self.browser.item_title(tab.id))).into_any_element()
     }
 
     pub(crate) fn render_split(&self, cx: &mut Context<Self>) -> AnyElement {

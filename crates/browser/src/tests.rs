@@ -3776,9 +3776,10 @@ fn dragging_into_the_favorites_dock_and_back_to_today_reuses_the_live_page(cx: &
     });
     cx.run_until_parked();
     fake.take_calls();
+    // A lone favorite fills the row, so the drop lands on its tile.
     drag_between(cx, "tab-8", "favorites");
     view.read_with(cx, |w, _| {
-        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 8]);
+        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
     });
     drag_between(cx, "favorite-8", "new-tab");
@@ -4581,7 +4582,9 @@ fn space_header_matches_reference_control_positions_and_more_does_not_toggle_pin
     let header = cx.debug_bounds("space-header-0").unwrap();
     let icon = cx.debug_bounds("space-header-icon-0").unwrap();
     let name = cx.debug_bounds("space-header-name-0").unwrap();
-    assert_eq!(header.size.height, gpui::px(36.));
+    assert_eq!(header.size.height, gpui::px(38.));
+    assert_eq!(icon.origin.x, header.origin.x + gpui::px(9.));
+    assert_eq!(name.origin.x, icon.right() + gpui::px(9.));
     assert!(icon.right() < name.origin.x);
     let original = active_url(&view, cx);
     fake.take_calls();
@@ -4711,12 +4714,54 @@ fn folder_hover_replaces_its_icon_without_shifting_the_title(cx: &mut TestAppCon
     let name = cx.debug_bounds(test_selector(format!("folder-name-{key}"))).unwrap();
     let icon = cx.debug_bounds(test_selector(format!("folder-icon-{key}"))).unwrap();
     let row = cx.debug_bounds(test_selector(format!("folder-{key}"))).unwrap();
-    assert_eq!(icon.origin.x, row.origin.x + gpui::px(8.));
-    assert_eq!(name.origin.x, icon.right() + gpui::px(8.));
+    assert_eq!(icon.origin.x, row.origin.x + gpui::px(9.));
+    assert_eq!(name.origin.x, icon.right() + gpui::px(9.));
     move_mouse(cx, f32::from(row.center().x), f32::from(row.center().y));
     assert_eq!(cx.debug_bounds(test_selector(format!("folder-chevron-{key}"))).unwrap(), icon);
     assert_eq!(cx.debug_bounds(test_selector(format!("folder-name-{key}"))).unwrap(), name);
     let was_collapsed = view.read_with(cx, |w, _| w.browser.folder(folder).unwrap().collapsed);
     click(cx, test_selector(format!("folder-menu-{key}")));
     assert_eq!(view.read_with(cx, |w, _| w.browser.folder(folder).unwrap().collapsed), was_collapsed);
+}
+
+#[gpui::test]
+fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://www.youtube.com/watch?v=1".into() });
+    view.update(cx, |w, cx| {
+        for tab in w.browser.space().pinned.iter().map(|tab| tab.id).collect::<Vec<_>>() { w.browser.favorite_tab(tab); }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // The address shows only the site.
+    assert_eq!(crate::window::address_host("https://www.youtube.com/watch?v=1"), "youtube.com");
+    assert_eq!(crate::window::address_host("about:blank"), "about:blank");
+    let address = cx.debug_bounds("address").unwrap();
+    assert_eq!(address.size.height, gpui::px(36.));
+    // Favorites stretch across the row with equal tiles.
+    let first = cx.debug_bounds("favorite-4").unwrap();
+    let second = cx.debug_bounds("favorite-5").unwrap();
+    assert_eq!(first.size, second.size);
+    assert_eq!(first.size.height, gpui::px(46.));
+    assert_eq!(first.origin.x, address.origin.x);
+    assert!(address.right() - second.right() < gpui::px(1.));
+    // Rows are 38 px with a 3 px gap.
+    let today = view.read_with(cx, |w, _| w.browser.space().today[0].id.get());
+    let tab = cx.debug_bounds(test_selector(format!("tab-{today}"))).unwrap();
+    assert_eq!(tab.size.height, gpui::px(38.));
+    let new_tab = cx.debug_bounds("new-tab").unwrap();
+    assert_eq!(new_tab.size.height, gpui::px(38.));
+    // Traffic lights light up only while the pointer is over them.
+    move_mouse(cx, 400., 400.);
+    assert!(!view.read_with(cx, |w, _| w.traffic_lights_hovered));
+    let lights = cx.debug_bounds("traffic-lights").unwrap();
+    move_mouse(cx, f32::from(lights.center().x), f32::from(lights.center().y));
+    assert!(view.read_with(cx, |w, _| w.traffic_lights_hovered));
+    move_mouse(cx, 400., 400.);
+    assert!(!view.read_with(cx, |w, _| w.traffic_lights_hovered));
+    // The hover-only copy link button copies the page URL.
+    click(cx, "address-copy-link");
+    let clipboard = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(clipboard, active_url(&view, cx));
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none()));
 }

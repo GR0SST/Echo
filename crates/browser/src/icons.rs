@@ -47,7 +47,7 @@ pub(crate) fn more() -> AnyElement {
 #[derive(Clone, Copy)]
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
-    Search, External, History, Enter, Restore, Up, Down, Check, Mute, Command,
+    Search, External, History, Enter, Restore, Up, Down, Check, Mute, Command, Link,
 }
 
 fn arc(x: f32, y: f32, radius: f32, from: f32, to: f32) -> Vec<(f32, f32)> {
@@ -74,7 +74,7 @@ static IONICONS: std::sync::LazyLock<IconContours> = std::sync::LazyLock::new(||
     serde_json::from_str(include_str!("../assets/ionicons/paths.json")).expect("embedded Ionicons geometry is valid")
 });
 
-fn ionicon(name: &'static str) -> AnyElement {
+fn ionicon(name: &'static str, size: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let Some(commands) = IONICONS.get(name) else { return; };
         let scale = f32::from(bounds.size.width) / 512.;
@@ -91,10 +91,13 @@ fn ionicon(name: &'static str) -> AnyElement {
             }
         }
         if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
-    }).size(px(18.)).flex_none().into_any_element()
+    }).size(px(size)).flex_none().into_any_element()
 }
 
-pub(crate) fn control(icon: Icon) -> AnyElement {
+pub(crate) fn control(icon: Icon) -> AnyElement { control_sized(icon, 18.) }
+
+/// A catalog-backed control scaled to `size`; frame controls keep the 18 px grid.
+pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement {
     let name = match icon {
         Icon::Back => "arrow-back-outline", Icon::Forward => "arrow-forward-outline",
         Icon::Reload => "reload-outline", Icon::Close => "close-outline",
@@ -104,9 +107,10 @@ pub(crate) fn control(icon: Icon) -> AnyElement {
         Icon::Enter => "return-down-back-outline", Icon::Restore => "arrow-undo-outline",
         Icon::Up => "arrow-up-outline", Icon::Down => "arrow-down-outline",
         Icon::Check => "checkmark-outline", Icon::Mute => "volume-mute-outline",
+        Icon::Link => "link-outline",
         Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
     };
-    ionicon(name)
+    ionicon(name, size)
 }
 
 /// Reference-specific frame/key controls absent from the Ionicons catalog.
@@ -137,7 +141,7 @@ mod catalog_tests {
     #[test]
     fn bundled_ionicons_preserve_valid_curves_and_exclude_brand_glyphs() {
         assert_eq!(IONICONS.len(), 1108);
-        for name in ["pizza-outline", "folder-outline", "arrow-back-outline", "close-outline", "volume-mute-outline"] {
+        for name in ["pizza-outline", "link-outline", "folder-outline", "arrow-back-outline", "close-outline", "volume-mute-outline"] {
             assert!(IONICONS.contains_key(name), "{name}");
         }
         for (name, commands) in IONICONS.iter() {

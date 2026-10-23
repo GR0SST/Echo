@@ -81,6 +81,39 @@ mod mac {
         }
     }
 
+    pub fn set_traffic_lights_alpha(view: *mut c_void, alpha: f32) {
+        let window = window(view);
+        if window.is_null() { return; }
+        // Fade the buttons' shared container: changing the buttons themselves
+        // makes AppKit lay them out again at their default position.
+        let button = button(window, CLOSE);
+        if button.is_null() { return; }
+        unsafe {
+            let container: *mut AnyObject = msg_send![button, superview];
+            if !container.is_null() { let _: () = msg_send![container, setAlphaValue: f64::from(alpha)]; }
+        }
+    }
+
+    pub fn traffic_light_frames(view: *mut c_void) -> Option<[[f32; 4]; 3]> {
+        use objc2_foundation::NSRect;
+        let window = window(view);
+        if window.is_null() { return None; }
+        unsafe {
+            let content: *mut AnyObject = msg_send![window, contentView];
+            let bounds: NSRect = msg_send![content, bounds];
+            let mut frames = [[0.; 4]; 3];
+            for (index, kind) in [CLOSE, MINIATURIZE, ZOOM].into_iter().enumerate() {
+                let button = button(window, kind);
+                if button.is_null() { return None; }
+                let frame: NSRect = msg_send![button, bounds];
+                let nil: *mut AnyObject = std::ptr::null_mut();
+                let frame: NSRect = msg_send![button, convertRect: frame, toView: nil];
+                frames[index] = [frame.origin.x as f32, (bounds.size.height - frame.origin.y - frame.size.height) as f32, frame.size.width as f32, frame.size.height as f32];
+            }
+            Some(frames)
+        }
+    }
+
     pub fn pointer_position(view: *mut c_void) -> Option<[f32; 2]> {
         use objc2_foundation::{NSPoint, NSRect};
         let window = window(view);
@@ -179,6 +212,23 @@ pub fn position_traffic_lights(view: *mut c_void, left: f32) {
     mac::position_traffic_lights(view, left);
     #[cfg(not(target_os = "macos"))]
     let _ = (view, left);
+}
+
+/// Fades the native window controls without removing them from hit testing,
+/// so a drawn idle state can show through until the pointer reaches them.
+pub fn set_traffic_lights_alpha(view: *mut c_void, alpha: f32) {
+    #[cfg(target_os = "macos")]
+    mac::set_traffic_lights_alpha(view, alpha);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (view, alpha);
+}
+
+/// Window control frames (x, y, width, height; top-left window coordinates).
+pub fn traffic_light_frames(view: *mut c_void) -> Option<[[f32; 4]; 3]> {
+    #[cfg(target_os = "macos")]
+    { mac::traffic_light_frames(view) }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = view; None }
 }
 
 /// Pointer in window coordinates, including positions over native web pages.
