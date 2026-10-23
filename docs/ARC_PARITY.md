@@ -231,7 +231,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Popup over the page | ⌘T | done | — |
+| Popup over the page | ⌘T | done | Uses the full browser window bounds, including when opened from the floating sidebar |
 | Entering a URL or searching ("Search or Enter URL…") | — | done | The search engine is hardcoded (Google). Arc lets you pick it in profile settings |
 | Editing the current URL | ⌘L | done | — |
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | — |

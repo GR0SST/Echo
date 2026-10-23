@@ -649,7 +649,8 @@ impl BrowserWindow {
 
         // Opened after this update: the overlay renders from this view.
         let browser = cx.entity().downgrade();
-        let bounds = window.bounds();
+        let fallback_bounds = window.bounds();
+        let main = self.main_window;
         let parent = self.native_view;
         cx.defer(move |cx| {
             let still_open = browser
@@ -660,6 +661,9 @@ impl BrowserWindow {
             if !still_open {
                 return;
             }
+            // A click can arrive from the narrow floating sidebar. Size the
+            // popup against the browser window rather than that child window.
+            let bounds = main.update(cx, |_, window, _| window.bounds()).unwrap_or(fallback_bounds);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: None,

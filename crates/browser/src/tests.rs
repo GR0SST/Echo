@@ -827,6 +827,27 @@ fn a_revealed_sidebar_hides_if_never_entered(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn new_tab_from_the_floating_sidebar_uses_the_browser_window_bounds(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-s");
+    move_mouse(cx, 2.0, 300.0);
+    let mut sidebar = floating(&view, cx).unwrap();
+    // GPUI's element Animation uses std::time::Instant, not the test clock.
+    std::thread::sleep(Duration::from_millis(200));
+    sidebar.update(|_, cx| cx.refresh_windows());
+    sidebar.run_until_parked();
+    move_mouse(&mut sidebar, 100.0, 300.0);
+    click(&mut sidebar, "new-tab");
+    let mut popup = bar(&view, cx);
+    let panel = popup.debug_bounds("command-bar").unwrap();
+    assert!(panel.size.width > gpui::px(500.), "popup should fit the full browser window: {panel:?}");
+    assert!(panel.origin.x >= gpui::px(0.));
+    popup.simulate_input("example.com/from-floating-sidebar");
+    popup.simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/from-floating-sidebar"));
+}
+
+#[gpui::test]
 fn showing_the_sidebar_again_removes_the_floating_one(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-s");
