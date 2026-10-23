@@ -39,6 +39,7 @@ mod sidebar_navigation;
 mod library;
 mod downloads_view;
 mod downloads;
+mod downloads_publication;
 mod download_acceptance;
 mod library_downloads_host;
 mod user_profile_dialog;

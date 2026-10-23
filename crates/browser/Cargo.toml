@@ -22,6 +22,8 @@ gpui = { version = "0.2", features = ["runtime_shaders"] }
 raw-window-handle = "0.6"
 unicode-segmentation = "1"
 serde_json = "1"
+# Filesystem publication is dormant until explicitly integrated.
+tempfile = "=3.27.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
@@ -31,3 +33,6 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 
 [dev-dependencies]
 gpui = { version = "0.2", features = ["runtime_shaders", "test-support"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
