@@ -2352,8 +2352,11 @@ impl BrowserWindow {
             }))
             .child(canvas(|_, _, _| (), move |_, _, window, _| {
                 let Some(view) = crate::native::view_of(window) else { return; };
-                crate::native::set_traffic_lights_alpha(view, if hovered { 1. } else { 0. });
-                let Some(frames) = crate::native::traffic_light_frames(view).filter(|_| !hovered) else { return; };
+                // Fullscreen AppKit owns a separate toolbar window. Its
+                // buttons cannot be projected into this content view.
+                let native_controls = hovered || window.is_fullscreen();
+                crate::native::set_traffic_lights_alpha(view, if native_controls { 1. } else { 0. });
+                let Some(frames) = crate::native::traffic_light_frames(view).filter(|_| !native_controls) else { return; };
                 for (frame, rim) in frames.iter().zip([0xff5f57, 0xfebc2e, 0x28c840]) {
                     let diameter = frame[2].min(frame[3]);
                     let origin = point(px(frame[0] + (frame[2] - diameter) / 2.), px(frame[1] + (frame[3] - diameter) / 2.));

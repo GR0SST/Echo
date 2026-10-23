@@ -131,9 +131,11 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
             if name == "require-focus" { require_focus = true; }
-            // Explicit window selection/activation remains usable after a
-            // deliberate window switch or Close Window. Input still requires focus.
-            let after_close = matches!(name, "windows" | "reopen" | "window" | "activate" | "quit");
+            // Read-only waits let native fullscreen/Spaces transitions settle.
+            // Input and screenshots still require focus after the wait.
+            // Explicit window selection/activation also remains usable after
+            // a deliberate window switch or Close Window.
+            let after_close = matches!(name, "wait" | "windows" | "reopen" | "window" | "activate" | "quit");
             if require_focus && !after_close && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
                 eprintln!("[automation] aborted: browser lost focus or is not on screen");
                 let _ = cx.update(|cx| cx.quit());

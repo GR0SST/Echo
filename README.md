@@ -64,6 +64,8 @@ The driver then stops before the next input command (and between typed character
 if another app takes focus or the browser becomes occluded. Command Bar and
 menu child windows count as browser focus. An aborted run exits with status 1
 and must be repeated before using its screenshots as evidence.
+Read-only `wait` also remains usable during fullscreen/Spaces transitions;
+the next input or screenshot still checks focus and visibility.
 `windows`, `window`, `reopen` and `quit` remain available after deliberately closing the
 window, so a guarded script can inspect closure and test Dock restoration.
 `window <index>` or `window last` binds subsequent commands to another browser
