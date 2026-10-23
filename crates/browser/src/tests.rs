@@ -486,6 +486,97 @@ fn the_active_tab_gets_a_visible_focused_page(cx: &mut TestAppContext) {
     );
 }
 
+fn active_page_status(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> String {
+    view.read_with(cx, |w, _| {
+        w.pages.as_ref().unwrap().borrow().state(w.browser.active_tab().unwrap().id).status
+    })
+}
+
+#[gpui::test]
+fn hovered_link_events_preserve_the_exact_target_and_do_not_change_page_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    let target = "https://example.com/a?utm_source=hover&token=a%2Fb#section";
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target.into() });
+    assert_eq!(active_page_status(&view, cx), target);
+    assert!(fake.take_calls().is_empty());
+    fake.send(cx, Event::StatusChanged { view: page(1), text: String::new() });
+    assert!(active_page_status(&view, cx).is_empty());
+    assert!(fake.take_calls().is_empty());
+}
+
+#[gpui::test]
+fn hovered_links_are_cleared_on_navigation_and_cannot_leak_from_hidden_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let target = "https://example.com/target";
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target.into() });
+    fake.send(cx, Event::LoadingChanged { view: page(1), loading: true, can_go_back: false, can_go_forward: false });
+    assert!(active_page_status(&view, cx).is_empty());
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target.into() });
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/new".into() });
+    assert!(active_page_status(&view, cx).is_empty());
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target.into() });
+    click(cx, "tab-7");
+    assert!(active_page_status(&view, cx).is_empty());
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target.into() });
+    fake.send(cx, Event::StatusChanged { view: page(999), text: target.into() });
+    assert!(active_page_status(&view, cx).is_empty());
+    click(cx, "tab-8");
+    assert!(active_page_status(&view, cx).is_empty(), "returning to a tab needs a fresh pointer event");
+}
+
+#[gpui::test]
+fn link_status_expands_after_a_dwell_and_restarts_the_timer_for_a_new_target(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    let target = format!("https://example.com/{}", "long-path/".repeat(50));
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target.clone() });
+    let overlay = view.read_with(cx, |w, _| w.link_status.as_ref().unwrap().overlay.unwrap());
+    let frame = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_bounds()[0]);
+    let mut status_window = VisualTestContext::from_window(overlay.into(), cx);
+    let preview = status_window.debug_bounds("link-status").unwrap();
+    assert!(preview.size.width <= gpui::px(360.));
+    assert!(preview.origin.x >= gpui::px(frame.x as f32) && preview.bottom_right().y <= gpui::px((frame.y + frame.height) as f32), "{preview:?}, page {frame:?}");
+    cx.executor().advance_clock(Duration::from_millis(1000));
+    cx.run_until_parked();
+    fake.send(cx, Event::StatusChanged { view: page(1), text: format!("{target}next") });
+    cx.executor().advance_clock(Duration::from_millis(600));
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |w, _| w.link_status.as_ref().unwrap().expanded));
+    cx.executor().advance_clock(Duration::from_millis(1000));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.link_status.as_ref().unwrap().expanded));
+    let expanded = status_window.debug_bounds("link-status").unwrap();
+    assert!(expanded.size.width > preview.size.width);
+    assert!(expanded.bottom_right().x <= gpui::px((frame.x + frame.width) as f32));
+    assert!(fake.take_calls().is_empty(), "passive status must not affect the page or its focus");
+    cx.simulate_keystrokes("cmd-t");
+    assert!(view.read_with(cx, |w, _| w.link_status.is_none()));
+    assert!(bar_input_focused(&view, cx));
+    fake.send(cx, Event::StatusChanged { view: page(1), text: target });
+    assert!(view.read_with(cx, |w, _| w.link_status.is_none()));
+}
+
+#[gpui::test]
+fn link_status_uses_the_hovered_split_pane_without_activating_it(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    fake.send(cx, Event::StatusChanged { view: page(1), text: "https://example.com/left".into() });
+    assert_eq!(active_url(&view, cx), active);
+    let overlay = view.read_with(cx, |w, _| w.link_status.as_ref().unwrap().overlay.unwrap());
+    let mut status_window = VisualTestContext::from_window(overlay.into(), cx);
+    let bounds = status_window.debug_bounds("link-status").unwrap();
+    let first = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_bounds()[0]);
+    assert!(bounds.origin.x >= gpui::px(first.x as f32) && bounds.bottom_right().x <= gpui::px((first.x + first.width) as f32));
+    fake.send(cx, Event::StatusChanged { view: page(2), text: String::new() });
+    assert!(view.read_with(cx, |w, _| w.link_status.is_some()), "another pane's empty status cannot clear this target");
+    assert!(fake.take_calls().is_empty());
+    cx.simulate_mouse_move(gpui::point(gpui::px(30.), gpui::px(200.)), None, Modifiers::none());
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.link_status.is_none()));
+}
+
 #[gpui::test]
 fn the_page_stays_visible_under_the_command_bar(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);

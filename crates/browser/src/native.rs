@@ -275,6 +275,21 @@ mod mac {
             let _: () = msg_send![parent, addChildWindow: overlay, ordered: WINDOW_ABOVE];
         }
     }
+
+    pub fn set_overlay_passthrough(view: *mut c_void) {
+        let overlay = window(view);
+        if !overlay.is_null() {
+            unsafe { let _: () = msg_send![overlay, setIgnoresMouseEvents: Bool::YES]; }
+        }
+    }
+}
+
+/// Passive overlays must let the page receive pointer events through them.
+pub fn set_overlay_passthrough(view: *mut c_void) {
+    #[cfg(target_os = "macos")]
+    mac::set_overlay_passthrough(view);
+    #[cfg(not(target_os = "macos"))]
+    let _ = view;
 }
 
 /// Makes `overlay_view`'s window a borderless child of `parent_view`'s

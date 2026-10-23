@@ -444,6 +444,7 @@ pub enum OverlayKind {
     CommandBar,
     Find,
     Toast,
+    LinkStatus,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
     TabMenu,
@@ -482,6 +483,7 @@ impl Render for Overlay {
                     OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast => browser.render_toast(),
+                    OverlayKind::LinkStatus => browser.render_link_status(),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(cx),
                     OverlayKind::SiteControls => browser.render_site_controls(cx),
@@ -535,6 +537,8 @@ pub struct BrowserWindow {
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
+    pub(crate) link_status: Option<crate::link_status::LinkStatus>,
+    pub(crate) link_status_generation: u64,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
@@ -607,6 +611,11 @@ impl BrowserWindow {
         .detach();
 
         let position = browser.active_space as f32;
+        cx.on_release(|this, cx| {
+            if let Some(overlay) = this.link_status.as_ref().and_then(|status| status.overlay) {
+                cx.defer(move |cx| { let _ = overlay.update(cx, |_, window, _| window.remove_window()); });
+            }
+        }).detach();
         Self {
             pager: Pager {
                 position,
@@ -631,6 +640,8 @@ impl BrowserWindow {
             find_bar: None,
             toast: None,
             toast_generation: 0,
+            link_status: None,
+            link_status_generation: 0,
             history_page: crate::history::HistoryPage::new(cx),
             pages,
             floating_sidebar: None,
@@ -724,6 +735,7 @@ impl BrowserWindow {
                         if let Some(title) = title { self.browser.update_history_title(&url, &title); }
                     }
                 }
+                Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
                 Event::OpenInNewTab { url, .. } => {
                     let id = self.browser.new_tab(url.clone(), SystemTime::now());
                     self.browser.set_title(id, display_url(&url));
@@ -794,6 +806,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         self.finish_tab_rename(true, cx);
+        self.close_link_status(cx);
         self.close_command_bar(cx);
         self.close_tab_menu(cx);
         self.close_find(cx);
@@ -2884,6 +2897,7 @@ impl Render for BrowserWindow {
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),
             }
         }
+        self.sync_link_status(window, cx);
         let hue = self.pager_hue();
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = SIDEBAR_WIDTH * (sidebar_amount - 1.);
@@ -2895,6 +2909,7 @@ impl Render for BrowserWindow {
             .key_context(WINDOW_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.close_link_status(cx);
                 this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);
                 if !this.sidebar_visible && event.position.x < px(SIDEBAR_REVEAL_EDGE) {
                     this.reveal_sidebar(window, cx);

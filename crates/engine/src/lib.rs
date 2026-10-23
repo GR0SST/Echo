@@ -52,6 +52,8 @@ pub enum Event {
     Focused { view: ViewId },
     FindResult { view: ViewId, count: i32, active: i32, final_update: bool },
     UrlChanged { view: ViewId, url: String },
+    /// Link target under the pointer; an empty value clears the status.
+    StatusChanged { view: ViewId, text: String },
     LoadingChanged {
         view: ViewId,
         loading: bool,
@@ -72,6 +74,7 @@ enum RawEvent {
     Focused,
     Find(i32, i32, bool),
     Url(String),
+    Status(String),
     Loading(bool, bool, bool),
     Popup(String),
     Shortcut(Shortcut),
@@ -228,6 +231,7 @@ impl Engine {
                     RawEvent::Focused => Event::Focused { view },
                     RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
                     RawEvent::Url(url) => Event::UrlChanged { view, url },
+                    RawEvent::Status(text) => Event::StatusChanged { view, text },
                     RawEvent::Loading(loading, can_go_back, can_go_forward) => {
                         Event::LoadingChanged {
                             view,
@@ -532,6 +536,10 @@ wrap_display_handler! {
         fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
             let title = title.map(CefString::to_string).unwrap_or_default();
             push(&self.events, browser, RawEvent::Title(title));
+        }
+
+        fn on_status_message(&self, browser: Option<&mut Browser>, value: Option<&CefString>) {
+            push(&self.events, browser, RawEvent::Status(value.map(CefString::to_string).unwrap_or_default()));
         }
 
         fn on_address_change(

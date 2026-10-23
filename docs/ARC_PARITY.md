@@ -4,7 +4,7 @@ Comparison with Arc for macOS version 1.169.0 (`/Applications/Arc.app`).
 Our code: `crates/core`, `crates/browser`, `crates/engine` as of this
 document's date.
 
-**Where the data comes from.** Arc was never launched. The initial inventory comes from
+**Where the data comes from.** The initial inventory was assembled without launching Arc, from
 the bundle's files: the main menu in `Base.lproj/MainMenu.nib` (items,
 shortcuts, Command Bar synonyms), the AppleScript dictionary `Arc.sdef`,
 interface strings and translator comments in the binary
@@ -419,7 +419,7 @@ rows marked partial expose the setting from the Command Bar instead.
 | The page sits in an inset "card" with rounded corners | done | — |
 | Loading indicator (glowing progress, `GlowProgressLoadingIndicator`) | missing | The engine reports loading, but it isn't shown |
 | Site Control Center: security icon, Copy URL, Capture / Full Page / Portrait, Share, Boosts, extensions (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | partial | Panel opens from the address field with Share/Boost/Capture/Screenshot tiles, Extensions with Add, Secure / Not Secure and More. Share copies the URL; the other tiles, per-site Settings rows, extensions and the More menu do nothing yet |
-| Status bar with the URL when hovering a link (`StatusTextView`) | missing | — |
+| Status bar with the URL when hovering a link (`StatusTextView`) | partial | CEF link targets appear in a passive GPUI pill above the page, preserving query strings and fragments. A short preview expands after 1.5 seconds. Moving into browser chrome, navigation and hiding a page clear it; hidden pages cannot revive stale targets. Split targets retain their pane and do not change focus. Exact theme, transition and long-URL presentation fidelity remain |
 | Find in Page ("No results found"), Find and Replace | partial | Small GPUI panel above CEF, live search, result counts, next/previous, close and focus restoration. Find and Replace remains missing |
 | Page translation: "Translate this page to %@?", Use Original, Choose Another Language, Never Translate This Site | missing | — |
 | Crashed tab page (Sad Tab) | missing | — |
@@ -524,8 +524,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 71
-- **partial**: 48
-- **missing**: 182
+- **partial**: 49
+- **missing**: 181
 
 ### Biggest gaps (by importance for parity)
 

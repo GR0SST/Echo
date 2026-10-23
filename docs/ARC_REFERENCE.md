@@ -194,3 +194,31 @@ Command Bar's Rename action saved a new name on a page click. A modified HTML
 input retained `Native-state-kept` throughout, confirming the page was not
 reloaded. Both editor and saved-state screenshots were inspected; the final
 window report was key, main and on-screen. All 328 workspace tests passed.
+
+## Link status — 2026-10-23
+
+Reference: the installed Arc in a disposable Blank Window on example.com.
+Focusing its Learn more link with Tab displays `iana.org/help/example-domains`
+in a small rounded pill at the lower left inside the page. The pill uses the
+Space's tint, omits the HTTPS scheme, and does not reserve page layout space.
+The test window was closed after inspection. This observation used keyboard
+link focus; pointer hover is checked separately in Echo.
+
+Arc's [April 20, 2023 release notes](https://start.arc.net/release-notes)
+document a short preview followed by the complete URL after 1.5 seconds.
+Echo retains the exact CEF target in transient page state; it does not apply
+the tracking-parameter cleanup used when copying links. Hiding a page or
+starting navigation clears that state, and callbacks from hidden pages are
+ignored. A passive GPUI child window presents the status above CEF without
+moving or reloading the page. Native pointer passthrough is isolated in the
+platform interface. Exact colors, transitions and long-URL layout remain
+partial pending closer reference comparison.
+
+Native Echo verification used an isolated data-URL page with a long link and
+an input under the status position. The inspected screenshots show the short
+preview and wider delayed state. The target's query and fragment remain in
+the event state. The window report confirms the overlay ignores mouse events
+and is not key, while the browser remains key/main. Clicking the covered input
+and typing `Through-overlay` succeeds, and the status disappears. All 332
+workspace tests passed. The expanded pill still truncates targets wider than
+the page; complete long-URL presentation remains unfinished.

@@ -104,6 +104,7 @@ pub struct PageState {
     pub loading: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
+    pub status: String,
 }
 
 struct Page {
@@ -253,7 +254,10 @@ impl Pages {
         let ids: HashSet<_> = wanted.iter().map(|(intent, _)| intent.tab).collect();
         let hidden: Vec<_> = self.visible.difference(&ids).copied().collect();
         for tab in hidden {
-            if let Some(page) = self.pages.get(&tab) { self.engine.set_visible(page.view, false); }
+            if let Some(page) = self.pages.get_mut(&tab) {
+                page.state.status.clear();
+                self.engine.set_visible(page.view, false);
+            }
             self.visible.remove(&tab);
         }
         let focused = self.wanted_focus.filter(|id| ids.contains(id));
@@ -270,6 +274,7 @@ impl Pages {
                         page.muted = muted;
                     }
                     if page.url != url {
+                        page.state.status.clear();
                         self.engine.navigate(page.view, &url);
                         page.url = url;
                     }
@@ -389,6 +394,14 @@ impl Pages {
             Event::UrlChanged { view, url } => {
                 if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) {
                     page.url = url.clone();
+                    page.state.status.clear();
+                }
+            }
+            Event::StatusChanged { view, text } => {
+                // Hidden pages can still deliver callbacks queued before they
+                // were hidden. Never revive their old hover state.
+                if let Some(tab) = self.tab_for(*view).filter(|tab| self.visible.contains(tab)) {
+                    self.pages.get_mut(&tab).unwrap().state.status = text.clone();
                 }
             }
             Event::LoadingChanged {
@@ -398,11 +411,10 @@ impl Pages {
                 can_go_forward,
             } => {
                 if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) {
-                    page.state = PageState {
-                        loading: *loading,
-                        can_go_back: *can_go_back,
-                        can_go_forward: *can_go_forward,
-                    };
+                    page.state.loading = *loading;
+                    page.state.can_go_back = *can_go_back;
+                    page.state.can_go_forward = *can_go_forward;
+                    if *loading { page.state.status.clear(); }
                 }
             }
             Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
