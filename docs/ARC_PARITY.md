@@ -43,7 +43,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Import from Another Browser… | — | missing | See "Onboarding and import" |
 | Check for Updates… | — | missing | Auto-update |
 | Privacy Policy | — | missing | — |
-| Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. macOS bundle entry/exit verified with guarded input, native fullscreen state and inspected screenshots; native toolbar buttons stay under AppKit control. Other platforms and exact Arc transition presentation remain unverified |
+| Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
 | Sign Out | — | missing | No account |
 | Quit | ⌘Q | done | No "Warn before quitting" confirmation |
 
