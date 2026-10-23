@@ -1,117 +1,96 @@
 # Echo
 
-The Browser Company is shutting down the Arc browser on December 22, 2026.
-This project is a cross-platform browser that recreates Arc one to one:
-its features, behavior and feel.
+Echo is a browser in development that aims to recreate Arc's interface and
+browsing experience. It uses Rust and [GPUI](https://www.gpui.rs/) for
+the interface, with Chromium embedded through
+[CEF](https://bitbucket.org/chromiumembedded/cef) to render web pages.
 
-Echo is local-only. There is no Echo account, unified browser login, or
-cross-device sync. Profiles and browsing data stay on the device; signing
-in to websites works normally.
+Echo is local-only: there is no Echo account, unified browser login or
+cross-device sync. Profiles, sessions and browsing data stay on your device;
+you can still sign in to websites normally.
 
-**Deadline: December 22, 2026.** Until then the only goal is parity with Arc.
-New features of our own come after that.
+Echo is independent of The Browser Company.
 
-Not affiliated with The Browser Company. We copy Arc's functionality and UX,
-not its name, logos or assets.
+## Current status
 
-## Status
+Echo is an early development build, not a complete replacement for Arc.
+Existing functionality includes a vertical sidebar, Pinned and Today tabs,
+Spaces, a Command Bar, tab auto-archiving and saved sessions. Features and
+interaction details are still being developed. The
+[Arc comparison](docs/ARC_PARITY.md) tracks what is done, partial or missing.
 
-What Arc has and what we already have is tracked in
-[`docs/ARC_PARITY.md`](docs/ARC_PARITY.md), built from the
-Arc 1.169.0 app bundle. Each item is marked done, partial or missing.
+The current app bundle and development instructions target **macOS**.
+Windows and Linux are intended targets, but working builds on those platforms
+are not established by the current setup.
 
-Working so far: the vertical sidebar with Pinned and Today tabs, Spaces that
-follow two-finger swipes, the Command Bar (⌘T / ⌘L), auto-archiving,
-Arc's keyboard shortcuts for tabs and Spaces, and sessions that survive
-a restart.
+## Build and run on macOS
 
-## Stack
+You need Git, a current Rust toolchain with Cargo, Apple's Xcode Command Line
+Tools, and an internet connection for dependencies and the initial CEF download.
+Install the command-line tools with `xcode-select --install` if needed.
 
-- **Rust** for all our code, so the browser runs on macOS, Windows and Linux.
-  Platform-specific code stays small and behind shared interfaces.
-- **[GPUI](https://www.gpui.rs/)** (the UI framework behind Zed) for the
-  whole interface: sidebar, Spaces, Command Bar, settings, everything.
-- **Chromium** only as the engine that renders web pages, embedded through
-  [CEF](https://bitbucket.org/chromiumembedded/cef) (the `cef` crate).
-  Chromium's own UI is not used.
+```sh
+git clone https://github.com/GR0SST/Echo
+cd Echo
+cargo run -p bundle
+open target/bundle/Echo.app
+```
 
-## Layout
+The first build downloads CEF binaries into `third_party/cef` and may take a
+while. Building Echo with these prebuilt binaries does not require a Chromium
+source checkout.
 
-| Path | What |
+Press **⌘T** to open the Command Bar and enter a URL or search query.
+**⌘L** opens it for the current page.
+
+## Contributing
+
+Source and issue tracking: [GR0SST/Echo](https://github.com/GR0SST/Echo).
+See the [Arc comparison](docs/ARC_PARITY.md) for known gaps and
+[reference notes](docs/ARC_REFERENCE.md) for observed behavior.
+[AGENTS.md](AGENTS.md) contains the repository's implementation and testing
+guidance.
+
+```sh
+cargo test                 # unit and UI tests
+cargo run -p browser       # interface only; pages are placeholders
+```
+
+The Rust workspace is organized as follows:
+
+| Directory | Purpose |
 |---|---|
-| `crates/browser` | GPUI app: windows, views, input |
-| `crates/core` | Browser model without UI or engine: Spaces, tabs, pinning, archiving, sessions |
-| `crates/engine` | CEF wrapper; the rest of the code talks to the engine only through it. Also `browser_helper`, Chromium's subprocesses |
-| `crates/bundle` | Builds the macOS `.app` (CEF only runs from a bundle there) |
-| `docs/` | Parity list and other notes |
-| `scripts/` | Automation driver and Chromium checkout helpers |
-| `src/` | Chromium fork ([GR0SST/chromium](https://github.com/GR0SST/chromium), branch `browser/main`), a separate repository, only for engine changes CEF can't do |
+| [crates/browser](crates/browser) | GPUI interface and input handling |
+| [crates/core](crates/core) | Tabs, Spaces, archiving and session model |
+| [crates/engine](crates/engine) | CEF integration and browser subprocess helper |
+| [crates/bundle](crates/bundle) | macOS app packaging |
 
-## Development
+### Optional: build the Chromium fork
 
-```sh
-cargo test                       # unit and UI tests
-cargo run -p bundle              # build target/bundle/Echo.app
-open target/bundle/Echo.app      # run with the engine
-cargo run -p browser             # UI only; pages are placeholders
-```
+Engine work can require the separate
+[GR0SST/chromium](https://github.com/GR0SST/chromium) repository on branch
+`browser/main`. The helpers expect that checkout in `src/` and Chromium's
+`depot_tools/` beside it. Neither is included when cloning Echo.
 
-CEF binaries are downloaded to `third_party/cef` on the first build.
-
-`scripts/drive.sh "<script>"` runs a copy of the app with a separate profile
-and replays real input, e.g. `scripts/drive.sh "key cmd-t; type example.com;
-key enter; wait 3; shot /tmp/a.png; quit"`. Commands are listed in
-`crates/browser/src/automation.rs`.
-
-For focus-sensitive checks, start the script with `activate; require-focus;`.
-The driver then stops before the next input command (and between typed characters)
-if another app takes focus or the browser becomes occluded. Command Bar and
-menu child windows count as browser focus. An aborted run exits with status 1
-and must be repeated before using its screenshots as evidence.
-Read-only `wait` also remains usable during fullscreen/Spaces transitions;
-the next input or screenshot still checks focus and visibility.
-`windows`, `window`, `reopen` and `quit` remain available after deliberately closing the
-window, so a guarded script can inspect closure and test Dock restoration.
-`window <index>` or `window last` binds subsequent commands to another browser
-root without changing focus; use `activate` explicitly when needed. Child
-panels are excluded from this index.
-
-For native page-lifetime checks, `transfer-new-host` moves the loaded standalone
-page into a temporary GPUI host. `transfer-back` restores the original host and
-closes the temporary window. Use `shotstack` to capture the temporary host.
-Transfers wait for the source viewport capture before reparenting. `snapshot
-<file.png>` saves the active page's PNG through the local CEF capture API.
-`position <x> <y>` places the current test window in native screen coordinates
-without moving the pointer; `shotall <prefix>` captures every app window.
-
-`inspector-open`, `inspector-status`, `inspector-eval` and `inspector-close`
-probe the bundled Alloy DevTools frontend and local protocol. Evaluation uses
-a fixed document URL/lifetime identifier expression; protocol responses are
-logged asynchronously. These diagnostics do not assert that frontend panels
-are connected. Closing the probe restores page bounds and intended focus.
-
-`menu Edit > Undo` invokes an enabled native menu item without moving the
-system pointer. Keyboard events follow the focused browser child window,
-including the Command Bar; point coordinates remain relative to the main window.
-
-Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md).
-In short: match Arc, write Rust, build the UI in GPUI, cover
-UI behavior with tests, and commit each finished change to `main`.
-
-### Chromium fork
-
-Only needed for engine patches. The Chromium checkout lives in `src/` with
-`depot_tools/` next to it, both ignored by this repository:
+Follow Chromium's
+[macOS build instructions](https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md)
+for checkout prerequisites. With the checkout and tools prepared, use
+[Bun](https://bun.sh/) to run the repository scripts:
 
 ```sh
-bun run sync     # fetch Chromium dependencies (slow)
-bun run build    # GN + Ninja build of src/out/Default
+bun run sync               # fetch Chromium dependencies and run hooks
+bun run configure          # generate build files; also run by build
+bun run build              # build Chromium in src/out/Default
+bun run browser            # launch that Chromium build, not Echo
 ```
 
-See the official
-[macOS build instructions](https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md).
+The supplied [build configuration](config/args.gn) targets Apple Silicon.
+These commands build the standalone Chromium fork; they do not replace the
+prebuilt CEF used by Echo.
 
 ## License
 
-Chromium and CEF are distributed under their own licenses; keep their
-LICENSE files and third-party notices when redistributing.
+This repository does not currently include a top-level license for Echo's
+own code. Chromium, CEF and other dependencies retain their own licenses;
+their license files and third-party notices must accompany redistribution.
+Bundled Ionicons include their [license](crates/browser/assets/ionicons/LICENSE).
