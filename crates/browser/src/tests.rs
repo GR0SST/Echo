@@ -1604,3 +1604,52 @@ fn native_menu_new_tab_replaces_an_existing_overlay_without_leaking_windows(cx: 
         assert_eq!(cx.cx.update(|cx| cx.windows().len()), 2);
     }
 }
+
+#[gpui::test]
+fn command_bar_finds_closed_pages_in_history_and_opens_them(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-w cmd-t");
+    bar(&view, cx).simulate_input("first page");
+    let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert!(matches!(&suggestions[1], Suggestion::History { title, url } if title == "First page" && url == "https://example.com/one"));
+    bar(&view, cx).simulate_keystrokes("down enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/one"));
+    assert_eq!(bar_text(&view, cx), None);
+}
+
+#[gpui::test]
+fn history_completion_in_cmd_l_navigates_the_current_tab_and_keeps_its_custom_name(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-w cmd-t");
+    bar(&view, cx).simulate_input("rename tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("Custom label");
+    bar(&view, cx).simulate_keystrokes("enter");
+    let before = today_urls(&view, cx).len();
+    let id = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_input("first page");
+    click(&mut bar(&view, cx), "suggestion-1");
+    assert_eq!(today_urls(&view, cx).len(), before);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), id);
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/one"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Custom label");
+}
+
+#[gpui::test]
+fn open_tabs_match_their_page_titles_without_duplicate_history_rows(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rename tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("Renamed tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("second page");
+    let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert!(suggestions.iter().any(|suggestion| matches!(suggestion, Suggestion::SwitchToTab { title, .. } if title == "Renamed tab")));
+    assert!(!suggestions.iter().any(|suggestion| matches!(suggestion, Suggestion::History { url, .. } if url == "https://example.com/two")));
+}

@@ -23,6 +23,8 @@ use crate::text_input::{self, TextInput};
 const SIDEBAR_WIDTH: f32 = 240.0;
 const COMMAND_BAR_WIDTH: f32 = 620.0;
 const MAX_TAB_SUGGESTIONS: usize = 6;
+const MAX_HISTORY_SUGGESTIONS: usize = 4;
+const MAX_COMMAND_SUGGESTIONS: usize = 12;
 const ARCHIVE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -269,6 +271,7 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
     Load(Resolved),
+    History { title: String, url: String },
     SwitchToTab { id: TabId, title: String, url: String, space: String },
     Action { command: Command, label: String },
     SaveSpace { name: String },
@@ -836,12 +839,22 @@ impl BrowserWindow {
             );
             suggestions.extend(spaces.flat_map(|space| {
                 space.pinned.iter().chain(&space.today).map(move |tab| (space, tab))
-            }).filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query))
+            }).filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
+                || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
                 .take(MAX_TAB_SUGGESTIONS)
                 .map(|(space, tab)| Suggestion::SwitchToTab {
                     id: tab.id, title: tab.title.clone(), url: tab.url.clone(), space: space.name.clone(),
                 }));
         }
+        if !query.is_empty() {
+            let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.url.as_str()).collect();
+            suggestions.extend(self.browser.history.iter()
+                .filter(|entry| !open.contains(entry.url.as_str()))
+                .filter(|entry| entry.title.to_lowercase().contains(&query) || entry.url.to_lowercase().contains(&query))
+                .take(MAX_HISTORY_SUGGESTIONS)
+                .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
+        }
+        suggestions.truncate(MAX_COMMAND_SUGGESTIONS);
         suggestions
     }
 
@@ -877,6 +890,14 @@ impl BrowserWindow {
                         id
                     }
                     Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
+                };
+                self.browser.set_title(id, title);
+            }
+            Suggestion::History { title, url } => {
+                let id = match target {
+                    Target::NewTab => self.browser.new_tab(&url, now),
+                    Target::Tab(id) => { self.browser.navigate(id, &url); id }
+                    _ => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -1719,6 +1740,7 @@ impl BrowserWindow {
                         ("⌕", query, "Google Search".into())
                     }
                     Suggestion::Load(Resolved::Url(url)) => ("↗", display_url(&url), "Open".into()),
+                    Suggestion::History { title, url } => ("◷", title, format!("History · {}", display_url(&url))),
                     Suggestion::SwitchToTab { title, space, .. } => {
                         ("⇥", title, format!("Switch to Tab · {space}"))
                     }

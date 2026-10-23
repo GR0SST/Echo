@@ -237,7 +237,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | — |
 | Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View remains missing |
 | Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | missing | Also needs the suggestions privacy screen |
-| History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | missing | — |
+| History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | partial | Local browsing history matches title/URL in ⌘T and ⌘L, with keyboard/click selection; open tabs match original page titles and suppress duplicate history rows. Bookmark/folder sources remain missing |
 | Calculator (Search Calculator Answer) | — | missing | — |
 | Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
 | Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
@@ -499,8 +499,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 49
-- **partial**: 30
-- **missing**: 216
+- **partial**: 31
+- **missing**: 215
 
 ### Biggest gaps (by importance for parity)
 
