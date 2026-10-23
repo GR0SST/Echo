@@ -278,6 +278,12 @@ impl Drag {
     }
 }
 
+struct PinnedReveal {
+    amount: f32,
+    collapsed: bool,
+    _task: Task<()>,
+}
+
 /// Where a command bar URL is loaded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -483,6 +489,7 @@ pub struct BrowserWindow {
     pub browser: Browser,
     pub sidebar_visible: bool,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
+    pinned_reveals: HashMap<SpaceId, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
@@ -558,6 +565,7 @@ impl BrowserWindow {
             browser,
             sidebar_visible: true,
             sidebar_scrolls: HashMap::new(),
+            pinned_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
             space_drag_hover: None,
             split_draft: None,
@@ -1414,10 +1422,30 @@ impl BrowserWindow {
     }
 
     fn toggle_pinned_section(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(space) = self.browser.spaces.get_mut(index) {
-            space.pinned_collapsed = !space.pinned_collapsed;
-            cx.notify();
+        let Some(space) = self.browser.spaces.get_mut(index) else { return; };
+        let id = space.id;
+        let was_collapsed = space.pinned_collapsed;
+        let from = self.pinned_reveals.remove(&id)
+            .filter(|reveal| reveal.collapsed == was_collapsed)
+            .map_or(if was_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
+        let collapsed = !was_collapsed;
+        space.pinned_collapsed = collapsed;
+        let to = if collapsed { 0. } else { 1. };
+        if !crate::native::prefers_reduced_motion() {
+            let started = cx.background_executor().now();
+            let task = cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+                let elapsed = cx.background_executor().now().duration_since(started).as_secs_f32();
+                let progress = (elapsed / 0.18).clamp(0., 1.);
+                let amount = from + (to - from) * (1. - (1. - progress).powi(3));
+                if this.update(cx, |this, cx| {
+                    if let Some(reveal) = this.pinned_reveals.get_mut(&id) { reveal.amount = amount; }
+                    cx.notify();
+                }).is_err() || progress >= 1. { break; }
+            });
+            self.pinned_reveals.insert(id, PinnedReveal { amount: from, collapsed, _task: task });
         }
+        cx.notify();
     }
 
     fn on_toggle_pin(&mut self, _: &TogglePin, _: &mut Window, cx: &mut Context<Self>) {
@@ -1981,6 +2009,11 @@ impl BrowserWindow {
         };
         let pinned = self.render_folder_rows(space.id, hue, cx);
         let today = tabs(&space.today, Section::Today, cx);
+        let reveal = self.pinned_reveals.get(&space.id)
+            .filter(|reveal| reveal.collapsed == space.pinned_collapsed)
+            .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
+        let pinned_height = pinned.len() as f32 * 34.;
+        let header_group = SharedString::from(format!("space-header-{index}"));
 
         div()
             .flex()
@@ -1992,39 +2025,34 @@ impl BrowserWindow {
             .gap_1()
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
-                    .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Pinned, cx)))
-                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.open_space_menu(space_id, event.position, window, cx);
-                    }))
-                    .px_2()
-                    .pb_1()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(hsla(0.0, 0.0, 0.0, 0.5))
-                    .child(space.name.clone()),
-            ))
-            .when(!space.pinned_items.is_empty(), |this| {
-                this.child(div()
-                    .id(("pinned-section", index))
-                    .when(current, |this| this.debug_selector(|| "pinned-section".into()))
-                    .flex().items_center().gap_2().h(px(24.0)).px_2().rounded_md()
-                    .text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5))
-                    .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.2)))
+                    .group(header_group.clone())
+                    .flex().items_center().gap_2().h(px(28.)).px_2().rounded_md()
+                    .hover(|style| style.bg(hsla(0., 0., 1., 0.15)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_pinned_section(index, cx)))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Pinned, cx)))
                     .drag_over::<crate::folder_drag::FolderDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                     .on_drop(cx.listener(move |this, drag: &crate::folder_drag::FolderDrag, _, cx| this.drop_folder_to(drag, space_id, None, cx)))
-                    .child(if space.pinned_collapsed { "›" } else { "⌄" })
-                    .child("Pinned"))
-            })
-            .when(!space.pinned_collapsed && !pinned.is_empty(), |this| this.child(
-                self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| "pinned-list".into()))
-                    .flex().flex_col().flex_none().max_h(gpui::relative(0.45)).overflow_y_scroll()
-                    .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
-                    .children(pinned),
+                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.open_space_menu(space_id, event.position, window, cx);
+                    }))
+                    .text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(hsla(0., 0., 0., 0.5))
+                    .children(space.custom_icon.as_deref().map(crate::icons::glyph))
+                    .child(div().flex_1().min_w_0().truncate().child(space.name.clone()))
+                    .child(div().invisible().group_hover(header_group, |style| style.visible())
+                        .when(space.pinned_collapsed, |this| this.visible())
+                        .child(if space.pinned_collapsed { "›" } else { "⌄" })),
+            ))
+            .when(!pinned.is_empty(), |this| this.child(
+                div().id(("pinned-reveal", index)).when(current, |this| this.debug_selector(|| "pinned-reveal".into()))
+                    .flex_none().h(px(pinned_height * reveal)).max_h(gpui::relative(0.45 * reveal))
+                    .mb(px(-4. * (1. - reveal))).overflow_hidden()
+                    .child(self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| "pinned-list".into()))
+                        .relative().top(px(-12. * (1. - reveal))).size_full().flex().flex_col().overflow_y_scroll()
+                        .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
+                        .children(pinned)),
             ))
             .child(div().h(px(1.0)).mx_2().my_2().bg(hsla(0.0, 0.0, 0.0, 0.12)))
             .when(!space.today.is_empty(), |this| {

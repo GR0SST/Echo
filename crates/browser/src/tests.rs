@@ -1031,7 +1031,9 @@ fn clear_button_archives_today_without_touching_pinned_or_other_spaces(cx: &mut 
 fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let expanded_y = cx.debug_bounds("new-tab").unwrap().origin.y;
-    click(cx, "pinned-section");
+    click(cx, "space-header-0");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
     // GPUI retains old debug bounds, so check the actual layout movement.
     cx.update(|window, cx| { let _ = window.draw(cx); });
@@ -1044,6 +1046,8 @@ fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut Te
     bar(&view, cx).simulate_input("expand pinned section");
     bar(&view, cx).simulate_keystrokes("enter");
     assert!(!view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
     assert_eq!(cx.debug_bounds("new-tab").unwrap().origin.y, expanded_y);
 }
 
@@ -2802,10 +2806,10 @@ fn archive_show_more_reaches_older_entries_and_scrolls_inside_a_short_window(cx:
 fn space_header_visibility_changes_only_the_current_space_and_survives_sessions(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
-    let before = cx.debug_bounds("pinned-section").unwrap().origin.y;
+    let before = cx.debug_bounds("pinned-list").unwrap().origin.y;
     fake.take_calls();
     run_named_command(&view, cx, "hide space header");
-    let after = cx.debug_bounds("pinned-section").unwrap().origin.y;
+    let after = cx.debug_bounds("pinned-list").unwrap().origin.y;
     assert!(after < before);
     assert_eq!(active_url(&view, cx), active);
     view.read_with(cx, |w, _| {
@@ -3402,19 +3406,19 @@ fn inactive_space_context_actions_change_only_the_clicked_spaces_name_and_icon(c
 fn space_context_menu_remains_available_in_the_dock_after_hiding_its_header(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
-    let pinned_top = cx.debug_bounds("pinned-section").unwrap().top();
+    let pinned_top = cx.debug_bounds("pinned-list").unwrap().top();
     fake.take_calls();
     right_click(cx, "space-header-0");
     click(&mut tab_menu(&view, cx), "tab-menu-space-header");
     cx.run_until_parked();
     assert!(!view.read_with(cx, |w, _| w.browser.space().show_header));
-    assert!(cx.debug_bounds("pinned-section").unwrap().top() < pinned_top);
+    assert!(cx.debug_bounds("pinned-list").unwrap().top() < pinned_top);
     right_click(cx, "space-0");
     assert!(view.read_with(cx, |w, _| w.space_menu_commands(w.browser.space().id).iter().any(|(label, _)| *label == "Show Space Header")));
     click(&mut tab_menu(&view, cx), "tab-menu-space-header");
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.browser.space().show_header));
-    assert_eq!(cx.debug_bounds("pinned-section").unwrap().top(), pinned_top);
+    assert_eq!(cx.debug_bounds("pinned-list").unwrap().top(), pinned_top);
     assert_eq!(active_url(&view, cx), active);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
@@ -3694,7 +3698,7 @@ fn dragging_between_pinned_and_today_keeps_page_identity_and_does_not_trigger_he
     let (view, cx, fake) = open_pages(cx);
     let original = active_url(&view, cx);
     fake.take_calls();
-    drag_between(cx, "tab-8", "pinned-section");
+    drag_between(cx, "tab-8", "space-header-0");
     view.read_with(cx, |w, _| {
         assert!(!w.browser.space().pinned_collapsed);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
@@ -3716,14 +3720,14 @@ fn pinned_root_drop_targets_extract_split_items_and_nested_folders_without_reloa
     let (view, cx, fake) = open_folder_pages(cx);
     let split = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
     fake.take_calls();
-    drag_between(cx, "tab-4", "pinned-section");
+    drag_between(cx, "tab-4", "space-header-0");
     view.read_with(cx, |w, _| {
         assert!(w.browser.folder_ancestors(w.browser.space().active_tab.unwrap()).is_empty());
         assert_eq!(w.browser.active_split().unwrap().id, split);
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
         assert!(w.browser.space().folders[1].items.is_empty());
     });
-    drag_between(cx, "folder-3", "pinned-section");
+    drag_between(cx, "folder-3", "space-header-0");
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.folder_path(w.browser.space().folders[1].id), "Research");
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
@@ -3753,7 +3757,7 @@ fn dropping_on_a_space_header_creates_the_first_pin_without_creating_a_new_page(
         assert_eq!(w.browser.space().active_tab.unwrap().get(), 2);
         assert!(w.command_bar.is_none());
     });
-    assert!(cx.debug_bounds("pinned-section").is_some());
+    assert!(cx.debug_bounds("pinned-list").is_some());
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
 
@@ -4519,4 +4523,47 @@ fn split_headers_and_pages_share_one_outer_corner_contour_without_recreating_vie
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::TopCorners(1, true)));
     assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn space_name_retracts_pins_progressively_and_reverses_mid_animation_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    assert!(cx.debug_bounds("pinned-section").is_none());
+    let expanded = cx.debug_bounds("new-tab").unwrap().origin.y;
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    click(cx, "space-header-0");
+    cx.executor().advance_clock(Duration::from_millis(48));
+    cx.run_until_parked();
+    let intermediate = cx.debug_bounds("new-tab").unwrap().origin.y;
+    assert!(intermediate < expanded);
+    assert!(cx.debug_bounds("pinned-reveal").unwrap().size.height > gpui::px(0.));
+    click(cx, "space-header-0");
+    assert_eq!(cx.debug_bounds("new-tab").unwrap().origin.y, intermediate);
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("new-tab").unwrap().origin.y, expanded);
+    assert!(!view.read_with(cx, |w, _| w.browser.space().pinned_collapsed));
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::FocusPage(..))));
+}
+
+#[gpui::test]
+fn dropping_on_a_collapsed_space_name_reveals_the_moved_pin(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "space-header-0");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "tab-8", "space-header-0");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(!w.browser.space().pinned_collapsed);
+        assert!(w.browser.space().pinned.iter().any(|tab| tab.id.get() == 8));
+    });
+    let pin = cx.debug_bounds("tab-8").unwrap();
+    let header = cx.debug_bounds("space-header-0").unwrap();
+    assert!(pin.origin.y >= header.bottom());
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }

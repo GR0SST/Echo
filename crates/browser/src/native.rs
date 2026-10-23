@@ -36,6 +36,15 @@ mod mac {
         unsafe { msg_send![window, standardWindowButton: kind] }
     }
 
+    #[cfg(not(test))]
+    pub fn prefers_reduced_motion() -> bool {
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![objc2::runtime::AnyClass::get(c"NSWorkspace").expect("AppKit is loaded"), sharedWorkspace];
+            let reduced: Bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+            reduced.as_bool()
+        }
+    }
+
     pub fn set_traffic_lights_hidden(view: *mut c_void, hidden: bool) {
         let window = window(view);
         if window.is_null() {
@@ -184,6 +193,14 @@ mod tracking_tests {
     }
 }
 
+
+/// Platform motion preference, isolated from sidebar interaction logic.
+pub fn prefers_reduced_motion() -> bool {
+    #[cfg(all(target_os = "macos", not(test)))]
+    { mac::prefers_reduced_motion() }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { false }
+}
 
 /// App-wide visibility is a native menu convention supported by macOS.
 /// GPUI's Windows implementation of Hide Others currently panics.

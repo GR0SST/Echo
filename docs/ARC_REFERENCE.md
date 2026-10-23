@@ -58,3 +58,16 @@ Implementation checks:
 Remaining pixel and menu-state differences are tracked as partial in
 `ARC_PARITY.md`; this record does not claim that every menu or the complete
 browser now matches Arc visually.
+
+## Space header and Pinned reveal — 2026-10-23
+
+Reference: the user's Arc sidebar screenshot and explicit interaction brief.
+Pinned folders and pages sit immediately below the Space name/icon. There is
+no additional Pinned caption between the name and those items. Clicking the
+name retracts the items into the header or reveals them below it.
+
+Our Space header now owns that interaction, including mid-animation reversal,
+per-Space persisted collapse state, and tab/folder drops at the Pinned root.
+The transition clips the list under the header and moves subsequent sidebar
+content with its height. macOS Reduce Motion bypasses the slide. Existing
+right-click Space actions and the optional hidden-header preference remain.
