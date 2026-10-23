@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use browser_core::omnibox::{self, Resolved};
@@ -543,6 +544,9 @@ impl BrowserWindow {
                             if let Some(url) = url { self.browser.update_history_title(&url, &title); }
                         }
                     }
+                }
+                Event::Favicon { view, page_url, png } => {
+                    if pages.borrow().tab_for(view).is_some() { self.browser.cache_favicon(&page_url, png); }
                 }
                 Event::UrlChanged { view, url } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
@@ -1417,7 +1421,7 @@ impl BrowserWindow {
                 }
                 cx.notify();
             }))
-            .child(favicon(&tab.title, hue))
+            .child(self.render_favicon(tab, hue))
             .child(
                 div()
                     .flex_1()
@@ -1472,7 +1476,7 @@ impl BrowserWindow {
                 }
                 cx.notify();
             }))
-            .child(favicon(&tab.title, self.accent()))
+            .child(self.render_favicon(tab, self.accent()))
             .child(div().id(("close-favorite", key)).debug_selector(move || format!("close-favorite-{key}"))
                 .absolute().right(px(2.0)).top(px(1.0)).px_1().rounded_sm().text_xs()
                 .invisible().group_hover(group, |s| s.visible())
@@ -1481,6 +1485,19 @@ impl BrowserWindow {
                     cx.stop_propagation();
                     this.close_tab(id, cx);
                 })).child("−"))
+    }
+
+    fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
+        match self.browser.favicon(&tab.url) {
+            Some(png) => {
+                let title = tab.title.clone();
+                gpui::img(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png.to_vec())))
+                    .size(px(18.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
+                    .with_fallback(move || favicon(&title, hue).into_any_element())
+                    .into_any_element()
+            }
+            None => favicon(&tab.title, hue).into_any_element(),
+        }
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {

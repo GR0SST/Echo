@@ -48,6 +48,7 @@ pub struct Shortcut {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     TitleChanged { view: ViewId, title: String },
+    Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     FindResult { view: ViewId, count: i32, active: i32, final_update: bool },
     UrlChanged { view: ViewId, url: String },
     LoadingChanged {
@@ -66,6 +67,7 @@ pub enum Event {
 #[derive(Debug)]
 enum RawEvent {
     Title(String),
+    Favicon(String, Vec<u8>),
     Find(i32, i32, bool),
     Url(String),
     Loading(bool, bool, bool),
@@ -199,6 +201,7 @@ impl Engine {
                 Some(match event {
                     RawEvent::Shortcut(_) => unreachable!(),
                     RawEvent::Title(title) => Event::TitleChanged { view, title },
+                    RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
                     RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
                     RawEvent::Url(url) => Event::UrlChanged { view, url },
                     RawEvent::Loading(loading, can_go_back, can_go_forward) => {
@@ -461,6 +464,17 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
+            let (Some(browser), Some(urls)) = (browser, icon_urls) else { return; };
+            // clone() produces an immutable borrowed wrapper, whose consuming
+            // iterator is empty. Move the callback's mutable wrapper instead.
+            let Some(url) = std::mem::take(urls).into_iter().next() else { return; };
+            let Some(host) = browser.host() else { return; };
+            let Some(frame) = browser.main_frame() else { return; };
+            let mut callback = FaviconDownload::new(self.events.clone(), browser.identifier(), CefString::from(&frame.url()).to_string());
+            host.download_image(Some(&CefString::from(url.as_str())), 1, 64, 0, Some(&mut callback));
+        }
+
         fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
             let title = title.map(CefString::to_string).unwrap_or_default();
             push(&self.events, browser, RawEvent::Title(title));
@@ -476,6 +490,26 @@ wrap_display_handler! {
                 let url = url.map(CefString::to_string).unwrap_or_default();
                 push(&self.events, browser, RawEvent::Url(url));
             }
+        }
+    }
+}
+
+wrap_download_image_callback! {
+    struct FaviconDownload {
+        events: EventQueue,
+        browser_id: i32,
+        page_url: String,
+    }
+
+    impl DownloadImageCallback {
+        fn on_download_image_finished(&self, _image_url: Option<&CefString>, _http_status_code: i32, image: Option<&mut Image>) {
+            let Some(image) = image.filter(|image| image.is_empty() == 0) else { return; };
+            let (mut width, mut height) = (0, 0);
+            let Some(data) = image.as_png(1.0, 1, Some(&mut width), Some(&mut height)) else { return; };
+            if width <= 0 || height <= 0 || width > 128 || height > 128 || data.size() > 64 * 1024 { return; }
+            let mut png = vec![0; data.size()];
+            if data.data(Some(&mut png), 0) != png.len() { return; }
+            self.events.lock().unwrap().push((self.browser_id, RawEvent::Favicon(self.page_url.clone(), png)));
         }
     }
 }

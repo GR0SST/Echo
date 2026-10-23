@@ -246,13 +246,14 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 .map(|pages| pages.borrow().state(tab.id))
                 .unwrap_or_default();
             out += &format!(
-                "[dump] {section:6} {}{} {:?} {} loading={} back={}\n",
+                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={}\n",
                 if active { "*" } else { " " },
                 if shown == Some(tab.id) { "shown" } else { "     " },
                 tab.title,
                 tab.url,
                 state.loading,
                 state.can_go_back,
+                this.browser.favicon(&tab.url).map_or(0, |png| png.len()),
             );
         }
     }

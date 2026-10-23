@@ -314,7 +314,7 @@ impl Pages {
                     };
                 }
             }
-            Event::TitleChanged { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
+            Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
         }
     }
 }

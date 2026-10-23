@@ -167,12 +167,12 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
-| Vertical sidebar with tabs | — | done | Width can't be changed (?) |
+| Vertical sidebar with tabs | — | done | CEF site favicons are cached for unloaded/restored tabs, with letter fallback. Width can't be changed (?) |
 | Window buttons (traffic lights) inside the sidebar | — | done | — |
 | Address field at the top of the sidebar (click opens the Command Bar with the URL) | — | done | No back/forward/reload buttons, no Site Control Center button |
 | Hiding the sidebar and sliding it in when hovering the left edge | ⌘S | done | — |
 | "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | ⇧⌘D | missing | — |
-| **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | partial | Shared persistent dock (up to 12), click/keyboard activation, title/URL tooltips, Close unloads and resets the original URL, Favorite/Unfavorite and moves preserve the live page. Uses letter icons; site favicons, drag/drop, unread badges, calendar captions and profile isolation remain missing. Fresh visual check awaits an unlocked desktop |
+| **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | partial | Shared persistent dock (up to 12) with cached site favicons, click/keyboard activation and title/URL tooltips. Close unloads and resets the original URL; Favorite/Unfavorite and moves preserve the live page. Drag/drop, unread badges, calendar captions and profile isolation remain missing. Fresh visual check awaits an unlocked desktop |
 | Hover previews for Favorites, Pinned and folders (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | hover | missing | Configured in "Previews Settings…" |
 | **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL). Reset to Original URL and Replace Pinned URL with Current are available in the Command Bar; section can be collapsed |
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |

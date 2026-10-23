@@ -9,6 +9,7 @@ pub mod omnibox;
 pub mod links;
 pub mod history;
 pub mod favorites;
+pub mod favicons;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
@@ -137,6 +138,8 @@ pub struct Browser {
     /// Shared by all Spaces in the current profile.
     #[serde(default)]
     pub favorites: Vec<Tab>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub favicon_cache: Vec<favicons::SiteIcon>,
     /// `None` disables auto-archiving.
     pub archive_after: Option<Duration>,
     next_id: u64,
@@ -156,6 +159,7 @@ impl Browser {
             archive: Vec::new(),
             history: Vec::new(),
             favorites: Vec::new(),
+            favicon_cache: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
             next_id: 1,
         };

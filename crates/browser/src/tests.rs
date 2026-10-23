@@ -1824,3 +1824,23 @@ fn a_favorite_can_move_to_the_current_spaces_pinned_section(cx: &mut TestAppCont
     });
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn engine_favicons_follow_tabs_into_favorites_and_survive_closing_and_sessions(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx).unwrap();
+    let png = include_bytes!("../testdata/favicon.png").to_vec();
+    fake.send(cx, Event::Favicon { view: page(1), page_url: original.clone(), png: png.clone() });
+    assert_eq!(view.read_with(cx, |w, _| w.browser.favicon(&original).map(Vec::from)), Some(png.clone()));
+    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.simulate_keystrokes("ctrl-2 cmd-1");
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://elsewhere.example/page".into() });
+    cx.simulate_keystrokes("cmd-w");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorites[0].url, original);
+        let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(restored.favicon(&original), Some(png.as_slice()));
+    });
+    click(cx, "favorite-8");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+}
