@@ -383,11 +383,14 @@ metadata copied before or during cancellation survives native-handle release.
 Eight production-seam regressions passed in the 102-test engine run.
 
 The browser service exposes an exclusive `ShutdownDownloads` capability for
-ingestion, canonical persistence and unique retained-writer flushing. Its actual
-quit-coordinator hookup is still pending. Registration alone does not create a
-second consumer or claim terminal-race persistence acceptance. Final ordering
-must be Complete, final owned drain, persist, writer flush, service finish, then
-the existing native exit continuation.
+ingestion, canonical persistence and unique retained-writer flushing. The quit
+coordinator now takes this capability only when AppDownloads already exists.
+It does not install or wake a service. After the in-flight Running batch releases
+its lease, the coordinator drains once before engine shutdown and uses only the
+shutdown-safe drain during polling and after Complete. Final ordering is
+Complete, final owned drain, persist, unique writer flush, service finish, then
+the existing native exit continuation. Installed-service terminal-race native
+persistence acceptance remains pending; absent-global probe behavior is separate.
 
 
 ## Authoritative destination metadata
@@ -410,3 +413,27 @@ explicit retry. The pre-quit-integration workspace checkpoint passed 912 tests
 (645 browser, 165 core, 102 engine). These tests use fictional keys through the
 same conversion helper, not fabricated engine-issued DownloadTokens; actual
 service-owned native persistence acceptance remains separate.
+
+
+## Exclusive quit handoff — October 24, 2026
+
+The coordinator waits on InFlight before saving/detaching source models or
+beginning engine shutdown. Each relinquishing Running batch publishes its own
+genuine ingestion, persistence, drain and native-effect errors before releasing
+the lease. Those errors remain sticky across successful write retries. Historical
+diagnostics are not reclassified, and intentionally suppressed post-seal effects
+are not reported as native failures.
+
+Shared production orchestration tests inject reentrant handoff and actual
+generic reducer/writer failures. They assert zero engine begin/poll/exit calls
+after failure, ordered successful final ingestion, deduplicated canonical
+flushes and one exit authorization. InFlight retries retain successful final
+steps rather than redraining after a successful flush. Native event/sender replay
+remains owned by the existing termination shim.
+
+The merged workspace passed 921 tests (654 browser, 165 core, 102 engine).
+The production service remains dormant: no owner registration, default
+destination, production admission, service startup or Downloads route is enabled
+by this change. A preinstalled service excludes the independent disposable probe.
+Native installed-service persistence requires the planned one-consumer fixture;
+the generic tests do not manufacture engine-issued tokens.

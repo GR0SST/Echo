@@ -155,7 +155,7 @@ struct Probe(Rc<RefCell<State>>);
 impl Global for Probe {}
 
 pub(crate) fn can_arm(cx: &App) -> bool {
-    cx.try_global::<Probe>()
+    !cx.has_global::<crate::downloads::AppDownloads>() && cx.try_global::<Probe>()
         .is_some_and(|probe| probe.0.borrow().run.is_none())
 }
 
@@ -221,10 +221,15 @@ pub(crate) fn init(cx: &mut App) {
         loop {
             cx.background_executor().timer(Duration::from_millis(8)).await;
             if crate::quit::is_quitting() { break; }
+            // A preinstalled app service owns the ONE running event queue.
+            // Inspection only: do not create or wake it from the probe.
+            if cx.update(|cx| cx.has_global::<crate::downloads::AppDownloads>()).unwrap_or(true) { break; }
             let armed = state.borrow().run.is_some();
             if !armed { continue; }
             if Engine::download_work_pending() && while_running(Engine::pump).is_none() { break; }
             if crate::quit::is_quitting() { break; }
+            // pump can dispatch app work reentrantly; check ownership again.
+            if cx.update(|cx| cx.has_global::<crate::downloads::AppDownloads>()).unwrap_or(true) { break; }
             let Some(drained) = while_running(Engine::take_download_events) else { break; };
             // Draining can run CEF/native effects and seal quit reentrantly.
             // Preserve copied events without entering the next native stage.
@@ -474,3 +479,20 @@ mod quit_tests;
 #[cfg(test)]
 #[path = "download_probe_filename_tests.rs"]
 mod filename_tests;
+
+
+#[cfg(test)]
+#[gpui::test]
+fn installed_download_service_excludes_probe_without_waking_or_creating_service(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        crate::quit::reset_for_test(cx);
+        // A synthetic idle probe global avoids starting any task in this test.
+        cx.set_global(Probe(Rc::new(RefCell::new(State::default()))));
+        assert!(can_arm(cx));
+        assert!(!cx.has_global::<crate::downloads::AppDownloads>());
+        cx.set_global(crate::downloads::AppDownloads::default());
+        assert!(!can_arm(cx));
+        assert!(cx.global::<Probe>().0.borrow().run.is_none());
+        crate::quit::reset_for_test(cx);
+    });
+}

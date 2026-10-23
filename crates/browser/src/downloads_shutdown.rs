@@ -1,6 +1,6 @@
-//! Exclusive quit ingestion of supplied COPIED events. No engine shutdown drain
-//! is invented here. The normal Engine drain requires Running and sealed native
-//! inboxes currently drop later callbacks; parent/engine must close that race.
+//! Exclusive quit ingestion of copied events through the canonical reducer.
+//! quit.rs selects the Running or shutdown-owned engine drain outside state
+//! borrows, then performs the final persist/flush/finish barrier before exit.
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,19 +19,48 @@ pub(super) enum ConsumerOwner {
 pub(super) struct ConsumerGate {
     owner: Rc<Cell<ConsumerOwner>>,
     busy: Rc<Cell<bool>>,
+    handoff_failure: Rc<RefCell<Option<String>>>,
 }
 impl Default for ConsumerGate {
     fn default() -> Self {
         Self {
             owner: Rc::new(Cell::new(ConsumerOwner::Running)),
             busy: Rc::new(Cell::new(false)),
+            handoff_failure: Rc::new(RefCell::new(None)),
         }
     }
 }
-pub(super) struct ConsumerLease(Rc<Cell<bool>>);
+pub(super) struct ConsumerLease {
+    gate: ConsumerGate,
+    failures: RefCell<Vec<String>>,
+}
+impl ConsumerLease {
+    /// Only genuine errors from THIS batch, never historical service diagnostics
+    /// or effects intentionally suppressed by the quit seal.
+    pub(super) fn with_service_errors<T: Copy + Eq + Hash, H: Clone, R>(
+        &self,
+        service: &mut DownloadService<T, H>,
+        operation: impl FnOnce(&mut DownloadService<T, H>) -> R,
+    ) -> R {
+        let before = service.errors.len();
+        let result = operation(service);
+        self.record_errors(service.errors[before..].iter().cloned());
+        result
+    }
+    pub(super) fn record_errors(&self, errors: impl IntoIterator<Item = String>) {
+        self.failures.borrow_mut().extend(errors);
+    }
+}
 impl Drop for ConsumerLease {
     fn drop(&mut self) {
-        self.0.set(false);
+        if self.gate.owner.get() == ConsumerOwner::Shutdown {
+            let failures = self.failures.borrow();
+            if !failures.is_empty() {
+                let mut sticky = self.gate.handoff_failure.borrow_mut();
+                if sticky.is_none() { *sticky = Some(failures.join("; ")); }
+            }
+        }
+        self.gate.busy.set(false);
     }
 }
 impl ConsumerGate {
@@ -55,7 +84,13 @@ impl ConsumerGate {
         if self.busy.replace(true) {
             return Err(ShutdownDownloadError::InFlight);
         }
-        Ok(ConsumerLease(self.busy.clone()))
+        if owner == ConsumerOwner::Shutdown {
+            if let Some(error) = self.handoff_failure.borrow().as_ref() {
+                self.busy.set(false);
+                return Err(ShutdownDownloadError::Failure(error.clone()));
+            }
+        }
+        Ok(ConsumerLease { gate: self.clone(), failures: RefCell::new(Vec::new()) })
     }
 }
 

@@ -2,6 +2,7 @@
 use std::{cell::{Cell, RefCell}, rc::Rc, time::Duration};
 use gpui::{prelude::*, App, Global};
 use engine::{Engine, ShutdownPhase, ShutdownStatus};
+use crate::downloads::{AppDownloads, ShutdownDownloadError, ShutdownDownloads};
 
 thread_local! { static SEALED: Cell<bool> = const { Cell::new(false) }; }
 #[cfg(any(target_os = "macos", test))]
@@ -15,20 +16,26 @@ pub(crate) fn is_quitting() -> bool { SEALED.with(Cell::get) }
 pub(crate) fn seal() { SEALED.with(|value| value.set(true)); }
 
 #[derive(Default)]
-struct Coordinator {
+pub(crate) struct Coordinator {
     requested: bool,
     started: bool,
+    engine_complete: bool,
     finalized: bool,
     failure: Option<String>,
     diagnostic: String,
     last_status: Option<ShutdownStatus>,
 }
 impl Coordinator {
-    fn request(&mut self) -> bool {
+    pub(crate) fn request(&mut self) -> bool {
         if self.requested { return false; }
         self.requested = true;
         eprintln!("[quit] Requested; saving sessions before engine teardown");
         self.diagnostic = "Saving your browsing session…".into();
+        true
+    }
+    pub(crate) fn start(&mut self) -> bool {
+        if !self.requested || self.started || self.failure.is_some() { return false; }
+        self.started = true;
         true
     }
     fn fail(&mut self, error: String) {
@@ -36,7 +43,7 @@ impl Coordinator {
         self.diagnostic = "Quit is paused. Echo could not finish saving or closing browsing data. Keep Echo open; details are in the diagnostic log.".into();
     }
     fn observe(&mut self, result: Result<ShutdownStatus, String>) -> bool {
-        if !self.requested || !self.started || self.failure.is_some() || self.finalized { return false; }
+        if !self.requested || !self.started || self.failure.is_some() || self.engine_complete || self.finalized { return false; }
         match result {
             Err(error) => self.fail(error),
             Ok(status) => {
@@ -52,12 +59,64 @@ impl Coordinator {
                 if status.phase == ShutdownPhase::Failed || !status.failures.is_empty() {
                     self.fail(format!("{status:?}"));
                 } else if status.phase == ShutdownPhase::Complete {
-                    self.finalized = true;
+                    self.engine_complete = true;
                     return true;
                 }
             }
         }
         false
+    }
+    fn finalize(&mut self) -> bool {
+        if !self.engine_complete || self.failure.is_some() || self.finalized { return false; }
+        self.finalized = true;
+        true
+    }
+}
+
+/// Only inspect an existing global. Quit never installs, admits or wakes Downloads.
+fn take_installed_downloads(cx: &App) -> Result<Option<ShutdownDownloads>, String> {
+    cx.try_global::<AppDownloads>().map(AppDownloads::begin_shutdown).transpose()
+}
+
+/// An older normal batch owns its lease through ingestion/effects, even if quit
+/// was requested from its native call. Yield an app turn; never spin or bypass it.
+pub(crate) fn download_ready(result: Result<(), ShutdownDownloadError>) -> Result<bool, String> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(ShutdownDownloadError::InFlight) => Ok(false),
+        Err(ShutdownDownloadError::Inactive) => Err("Quit download consumer is inactive".into()),
+        Err(ShutdownDownloadError::Failure(error)) => Err(error),
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct FinalDownloadBarrier {
+    drained: bool,
+    flushed: bool,
+    finished: bool,
+}
+impl FinalDownloadBarrier {
+    /// Called only after CEF Complete. Remember successful steps when a later
+    /// lease is busy: repeating the final drain would dirty the flush barrier.
+    pub(crate) fn advance(
+        &mut self,
+        drain: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+        flush: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+        finish: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+    ) -> Result<bool, String> {
+        if !self.drained {
+            if !download_ready(drain())? { return Ok(false); }
+            self.drained = true;
+        }
+        if !self.flushed {
+            if !download_ready(flush())? { return Ok(false); }
+            self.flushed = true;
+        }
+        if !self.finished {
+            if !download_ready(finish())? { return Ok(false); }
+            self.finished = true;
+        }
+        Ok(true)
     }
 }
 /// Pure native-intent bookkeeping; no AppKit call or user state borrow lives here.
@@ -216,10 +275,76 @@ pub(crate) fn dispatch_original_quit_event(
     finish_live_reply(returned)
 }
 
-trait ShutdownDriver {
+pub(crate) trait ShutdownDriver {
     fn begin(&mut self) -> Result<ShutdownStatus, String>;
     fn poll(&mut self) -> Result<ShutdownStatus, String>;
 }
+/// The same ordering seam is exercised without a live CEF runtime in tests.
+fn poll_after_downloads(
+    driver: &mut impl ShutdownDriver,
+    drain: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+) -> Result<Option<ShutdownStatus>, String> {
+    if !download_ready(drain())? { return Ok(None); }
+    driver.poll().map(Some)
+}
+/// Shared production preparation gate. Every callback/native call runs with no
+/// coordinator borrow. Failure is sticky before any owner detach or engine begin.
+pub(crate) fn begin_after_downloads<O>(
+    state: &Rc<RefCell<Coordinator>>,
+    driver: &mut impl ShutdownDriver,
+    drain: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+    prepare: impl FnOnce() -> Result<O, String>,
+) -> bool {
+    if state.borrow().failure.is_some() { return false; }
+    let result = (|| {
+        if !download_ready(drain())? { return Ok(false); }
+        let owners = prepare()?;
+        let begun = driver.begin();
+        drop(owners); // Native polling owns the queued close work.
+        begun?;
+        Ok(true)
+    })();
+    match result {
+        Ok(ready) => ready,
+        Err(error) => { state.borrow_mut().fail(error); false }
+    }
+}
+
+/// Production poll/final-drain/flush/finish/exit authorization, shared with the
+/// injected driver tests. Complete is observed only from the actual driver seam.
+pub(crate) fn advance_shutdown(
+    state: &Rc<RefCell<Coordinator>>,
+    driver: &mut impl ShutdownDriver,
+    barrier: &mut FinalDownloadBarrier,
+    drain: impl Fn() -> Result<(), ShutdownDownloadError>,
+    flush: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+    finish: impl FnOnce() -> Result<(), ShutdownDownloadError>,
+    original_exit: impl FnOnce() -> Result<(), String>,
+) {
+    {
+        let state = state.borrow();
+        if !state.started || state.failure.is_some() || state.finalized { return; }
+    }
+    if !state.borrow().engine_complete {
+        match poll_after_downloads(driver, &drain) {
+            Ok(None) => return,
+            Err(error) => { state.borrow_mut().fail(error); return; }
+            Ok(Some(status)) => { state.borrow_mut().observe(Ok(status)); }
+        }
+    }
+    if !state.borrow().engine_complete || state.borrow().failure.is_some() { return; }
+    match barrier.advance(drain, flush, finish) {
+        Ok(true) => {
+            let finalized = state.borrow_mut().finalize();
+            if finalized {
+                if let Err(error) = original_exit() { state.borrow_mut().fail(error); }
+            }
+        }
+        Ok(false) => {}
+        Err(error) => state.borrow_mut().fail(error),
+    }
+}
+
 struct EngineDriver;
 impl ShutdownDriver for EngineDriver {
     fn begin(&mut self) -> Result<ShutdownStatus, String> { Engine::begin_shutdown() }
@@ -279,6 +404,10 @@ pub(crate) fn init(cx: &mut App) {
     if let Err(error) = crate::native::termination::install() { eprintln!("Native quit deferral unavailable: {error}"); }
     cx.spawn(async move |cx| {
         let mut driver = EngineDriver;
+        // Retain the non-Clone capability independently of every source window.
+        let mut downloads = None;
+        let mut preparing = false;
+        let mut final_downloads = FinalDownloadBarrier::default();
         loop {
             cx.background_executor().timer(Duration::from_millis(10)).await;
             #[cfg(all(target_os = "macos", not(test)))]
@@ -296,11 +425,28 @@ pub(crate) fn init(cx: &mut App) {
             }
             let prepare = {
                 let mut state = state.borrow_mut();
-                if state.requested && !state.started && state.failure.is_none() { state.started = true; true } else { false }
+                state.start()
             };
             if prepare {
+                match cx.update(|cx| take_installed_downloads(cx)) {
+                    Ok(Ok(capability)) => { downloads = capability; preparing = true; }
+                    Ok(Err(error)) => state.borrow_mut().fail(error),
+                    Err(error) => state.borrow_mut().fail(error.to_string()),
+                }
+                // Keep the existing diagnostic visible even while an older
+                // download batch owns its lease or the handoff fails.
+                let _ = cx.update(show_progress);
+            }
+            if preparing && state.borrow().failure.is_none() {
+                // Exactly one running drain under the SHUTDOWN consumer lease,
+                // before detachment/begin_shutdown. No service means no drain:
+                // the disposable probe remains the sole running consumer.
+                let begun = begin_after_downloads(&state, &mut driver,
+                    || downloads.as_ref().map_or(Ok(()), |downloads|
+                        downloads.drain_and_persist_with(Engine::take_download_events)),
+                    || {
                 // Save every model before removing any native page metadata.
-                let prepared = cx.update(|cx| -> Result<Vec<Box<dyn crate::pages::WebEngine>>, String> {
+                cx.update(|cx| -> Result<Vec<Box<dyn crate::pages::WebEngine>>, String> {
                     for handle in cx.windows() {
                         if let Some(handle) = handle.downcast::<crate::window::BrowserWindow>() {
                             handle.update(cx, |view, _, cx| view.prepare_quit(cx)).map_err(|e| e.to_string())??;
@@ -321,43 +467,37 @@ pub(crate) fn init(cx: &mut App) {
                         drop(cx.remove_global::<crate::new_window::NormalProfile>());
                     }
                     Ok(owners)
-                });
-                match prepared {
-                    Ok(Ok(owners)) => {
-                        let begun = driver.begin();
-                        // Dropping pools queues native close; polling does the work.
-                        drop(owners);
-                        if let Err(error) = begun { state.borrow_mut().fail(error); }
-                    }
-                    Ok(Err(error)) => state.borrow_mut().fail(error),
-                    Err(error) => state.borrow_mut().fail(error.to_string()),
-                }
-                let _ = cx.update(show_progress);
+                })
+                    .map_err(|error| error.to_string())?
+                    });
+                if !begun { continue; }
+                preparing = false;
             }
-            let poll = { let state = state.borrow(); state.started && state.failure.is_none() && !state.finalized };
+            let poll = { let state = state.borrow(); state.started && !preparing && state.failure.is_none() && !state.finalized };
             if poll {
-                let result = driver.poll();
-                let finish = state.borrow_mut().observe(result);
-                let _ = cx.update(|cx| cx.refresh_windows());
-                if finish {
-                    // Original native terminate may invoke applicationWillTerminate
-                    // synchronously. No GPUI/coordinator borrow may cross it.
-                    #[cfg(all(target_os = "macos", not(test)))]
-                    {
-                        let completed = state.borrow().last_status.clone().expect("completed engine status");
-                        if let Err(error) = crate::native::termination::complete(&completed) {
-                            state.borrow_mut().fail(error);
+                let app = RefCell::new(&mut *cx);
+                advance_shutdown(&state, &mut driver, &mut final_downloads,
+                    || downloads.as_ref().map_or(Ok(()), |downloads|
+                        downloads.drain_and_persist_with(Engine::take_shutdown_download_events)),
+                    || match downloads.as_ref() {
+                        None => Ok(()),
+                        Some(downloads) => app.borrow_mut().update(|cx| downloads.flush_retained(cx))
+                            .map_err(|error| ShutdownDownloadError::Failure(error.to_string()))?,
+                    },
+                    || downloads.as_ref().map_or(Ok(()), ShutdownDownloads::finish),
+                    || {
+                        #[cfg(all(target_os = "macos", not(test)))]
+                        {
+                            let completed = state.borrow().last_status.clone().expect("completed engine status");
+                            crate::native::termination::complete(&completed)
                         }
-                        // A successful AppleEvent can await its own queued native
-                        // continuation. Never invent a second quit API/IMP call.
-                        continue;
-                    }
-                    #[cfg(any(not(target_os = "macos"), test))]
-                    {
-                        let _ = cx.update(|cx| cx.quit());
-                        break;
-                    }
-                }
+                        #[cfg(any(not(target_os = "macos"), test))]
+                        { app.borrow_mut().update(|cx| cx.quit()).map_err(|error| error.to_string()) }
+                    });
+                drop(app);
+                let _ = cx.update(|cx| cx.refresh_windows());
+                #[cfg(any(not(target_os = "macos"), test))]
+                if state.borrow().finalized && state.borrow().failure.is_none() { break; }
             } else if state.borrow().failure.is_some() {
                 let _ = cx.update(|cx| cx.refresh_windows());
             }

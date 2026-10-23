@@ -54,6 +54,9 @@ fn repeated_intents_join_owner_and_callback_gates_and_finalize_once() {
     assert!(!coordinator.observe(Ok(status(ShutdownPhase::Complete))));
     assert!(!coordinator.request());
     assert_eq!(driver.begins, 1);
+    assert!(!coordinator.finalized); // CEF alone cannot authorize native exit.
+    assert!(coordinator.finalize()); // Caller has completed the Downloads barrier.
+    assert!(!coordinator.finalize());
 }
 
 #[test]
@@ -354,4 +357,160 @@ fn primary_resume_rejection_remains_tracked_and_cleanup_never_resumes_it_again()
     assert_eq!(host.primary_resume_calls, 1);
     assert_eq!(host.original_dispatches, 0);
     assert!(host.primary_tracked);
+}
+
+
+#[test]
+fn download_lease_waits_without_poll_and_ingestion_precedes_each_poll() {
+    struct Driver<'a>(&'a RefCell<Vec<&'static str>>);
+    impl ShutdownDriver for Driver<'_> {
+        fn begin(&mut self) -> Result<ShutdownStatus, String> { panic!("already begun") }
+        fn poll(&mut self) -> Result<ShutdownStatus, String> {
+            self.0.borrow_mut().push("poll");
+            Ok(status(ShutdownPhase::ClosingBrowsers))
+        }
+    }
+    let log = RefCell::new(Vec::new());
+    let mut driver = Driver(&log);
+    for _ in 0..3 {
+        assert!(poll_after_downloads(&mut driver, || Err(ShutdownDownloadError::InFlight)).unwrap().is_none());
+    }
+    assert!(log.borrow().is_empty());
+    for _ in 0..2 {
+        assert!(poll_after_downloads(&mut driver, || {
+            log.borrow_mut().push("ingest/persist");
+            Ok(())
+        }).unwrap().is_some());
+    }
+    assert_eq!(*log.borrow(), ["ingest/persist", "poll", "ingest/persist", "poll"]);
+    assert!(poll_after_downloads(&mut driver, || Err(ShutdownDownloadError::Failure("writer failed".into()))).is_err());
+    assert_eq!(log.borrow().len(), 4); // A real error cannot advance CEF either.
+}
+
+#[test]
+fn final_download_barrier_remembers_each_success_across_legitimate_lease_waits() {
+    for busy_step in 0..3 {
+        let mut barrier = FinalDownloadBarrier::default();
+        let calls = RefCell::new(Vec::new());
+        let step = |name, index| {
+            calls.borrow_mut().push(name);
+            if index == busy_step { Err(ShutdownDownloadError::InFlight) } else { Ok(()) }
+        };
+        assert_eq!(barrier.advance(|| step("drain", 0), || step("flush", 1), || step("finish", 2)), Ok(false));
+        assert_eq!(calls.borrow().len(), busy_step + 1);
+        calls.borrow_mut().clear();
+        assert_eq!(barrier.advance(
+            || { calls.borrow_mut().push("drain"); Ok(()) },
+            || { calls.borrow_mut().push("flush"); Ok(()) },
+            || { calls.borrow_mut().push("finish"); Ok(()) },
+        ), Ok(true));
+        assert_eq!(*calls.borrow(), ["drain", "flush", "finish"][busy_step..]);
+        assert_eq!(barrier.advance(|| panic!("drain replay"), || panic!("flush replay"), || panic!("finish replay")), Ok(true));
+    }
+}
+
+#[test]
+fn final_download_errors_are_sticky_and_never_authorize_original_native_exit() {
+    for failed_step in 0..3 {
+        let mut coordinator = Coordinator::default();
+        coordinator.request();
+        coordinator.started = true;
+        assert!(coordinator.observe(Ok(status(ShutdownPhase::Complete))));
+        assert!(!coordinator.finalized);
+        let mut barrier = FinalDownloadBarrier::default();
+        let calls = RefCell::new(Vec::new());
+        let step = |index| {
+            calls.borrow_mut().push(index);
+            if index == failed_step { Err(ShutdownDownloadError::Failure("disk/drain/order failure".into())) } else { Ok(()) }
+        };
+        let error = barrier.advance(|| step(0), || step(1), || step(2)).unwrap_err();
+        coordinator.fail(error.clone());
+        assert_eq!(calls.borrow().len(), failed_step + 1);
+        assert!(!coordinator.finalize());
+        assert!(!coordinator.observe(Ok(status(ShutdownPhase::Complete))));
+        coordinator.fail("later error must not replace first".into());
+        assert_eq!(coordinator.failure, Some(error));
+        assert!(!coordinator.finalized);
+    }
+    assert!(download_ready(Err(ShutdownDownloadError::Inactive)).is_err());
+    assert!(!Coordinator::default().finalize());
+}
+
+#[gpui::test]
+fn quit_only_hands_off_a_preinstalled_service_and_never_constructs_or_wakes_one(cx: &mut gpui::TestAppContext) {
+    let _reset = GateReset;
+    cx.update(|cx| {
+        seal();
+        for _ in 0..2 {
+            assert!(take_installed_downloads(cx).unwrap().is_none());
+            assert!(!cx.has_global::<AppDownloads>());
+        }
+        let app = AppDownloads::default();
+        cx.set_global(app.clone()); // Test setup only, never production quit.
+        let shutdown = take_installed_downloads(cx).unwrap().unwrap();
+        assert!(take_installed_downloads(cx).is_err()); // One non-Clone consumer.
+        assert!(app.begin_shutdown().is_err());
+        assert!(shutdown.retained_normal_handles().unwrap().is_empty());
+        let mut barrier = FinalDownloadBarrier::default();
+        assert!(barrier.advance(
+            || shutdown.drain_and_persist_with(|| Ok(Vec::new())),
+            || shutdown.flush_retained(cx),
+            || shutdown.finish(),
+        ).unwrap());
+        assert!(shutdown.ingest_and_persist(Vec::new()).is_err());
+    });
+}
+
+#[gpui::test]
+fn final_quit_barrier_flushes_retained_canonical_profile_after_sources_are_gone(cx: &mut gpui::TestAppContext) {
+    use crate::profile::ProfileHandle;
+    use browser_core::{Browser, downloads::{DownloadCompletion, DownloadTime}, session};
+    let _reset = GateReset;
+    let path = std::env::temp_dir().join(format!("echo-quit-final-download-{}-{}.json",
+        std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let (shutdown, profile, named) = cx.update(|cx| {
+        let mut browser = Browser::new();
+        let profile = browser.default_user_profile_id();
+        let named = browser.create_user_profile("Named").unwrap();
+        let normal = ProfileHandle::new(browser, cx);
+        normal.save_session_to(path.clone(), cx);
+        let blank = ProfileHandle::new_with_shared_history(normal.blank_browser(profile), &normal, cx);
+        let app = AppDownloads::default();
+        for (handle, id) in [(&normal, profile), (&normal, named), (&blank, profile)] {
+            app.service.borrow_mut().register_source(handle, id).unwrap();
+        }
+        cx.set_global(app);
+        seal();
+        let shutdown = take_installed_downloads(cx).unwrap().unwrap();
+        drop(blank);
+        drop(normal);
+        (shutdown, profile, named)
+    });
+    // These canonical model writes stand in for the real copied-event writer.
+    // Actual terminal ingestion/replay is covered by the generic service test;
+    // here we exercise GPUI's actual retained ProfileHandle and session writer.
+    let write = |name: &str, id| {
+        let writers = shutdown.retained_normal_handles().unwrap();
+        assert_eq!(writers.len(), 1);
+        writers[0].record_completed_download(id, DownloadCompletion {
+            final_path: std::env::temp_dir().join(name),
+            source_url: "https://fixture.test/completed".into(),
+            original_url: String::new(), mime_type: String::new(), finished_at: DownloadTime::Unknown,
+        }).unwrap();
+    };
+    write("before-final.bin", profile);
+    shutdown.drain_and_persist_with(|| Ok(Vec::new())).unwrap();
+    cx.update(|cx| shutdown.flush_retained(cx).unwrap());
+    write("at-cef-complete.bin", named); // No source window/global NormalProfile.
+    let mut barrier = FinalDownloadBarrier::default();
+    assert!(barrier.advance(
+        || shutdown.drain_and_persist_with(|| Ok(Vec::new())),
+        || cx.update(|cx| shutdown.flush_retained(cx)),
+        || shutdown.finish(),
+    ).unwrap());
+    let restored = session::load(&path).unwrap().unwrap();
+    assert_eq!(restored.completed_downloads(profile).unwrap().len(), 1);
+    assert_eq!(restored.completed_downloads(named).unwrap().len(), 1);
+    assert!(shutdown.retained_normal_handles().is_err()); // finish closed capability.
+    std::fs::remove_file(path).unwrap();
 }

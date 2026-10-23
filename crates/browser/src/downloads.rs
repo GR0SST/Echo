@@ -468,6 +468,7 @@ impl AppDownloads {
                 let events = match Engine::take_download_events() {
                     Ok(events) => events,
                     Err(error) => {
+                        lease.record_errors([error.clone()]);
                         this.service.borrow_mut().errors.push(error);
                         break;
                     }
@@ -478,9 +479,11 @@ impl AppDownloads {
                 // No App update is needed: canonical writes notify asynchronously.
                 let (effects, saved) = {
                     let mut service = this.service.borrow_mut();
-                    let effects = service.receive(events);
-                    let saved = service.persist();
-                    (effects, saved)
+                    lease.with_service_errors(&mut service, |service| {
+                        let effects = service.receive(events);
+                        let saved = service.persist();
+                        (effects, saved)
+                    })
                 };
                 if crate::quit::is_quitting() || !this.consumer.is_running() {
                     break;
@@ -490,13 +493,13 @@ impl AppDownloads {
                     effects,
                     |token, path| {
                         if crate::quit::is_quitting() || !this.consumer.is_running() {
-                            return Err("Download effects stopped for quit".into());
+                            return Ok(()); // Intentional suppression is not a native failure.
                         }
                         Engine::resolve_download_destination(token, path)
                     },
                     |token, command| {
                         if crate::quit::is_quitting() || !this.consumer.is_running() {
-                            return Err("Download effects stopped for quit".into());
+                            return Ok(()); // Intentional suppression is not a native failure.
                         }
                         Engine::control_download(token, command)
                     },
@@ -504,6 +507,7 @@ impl AppDownloads {
                 {
                     let mut service = this.service.borrow_mut();
                     for (token, error) in failures {
+                        lease.record_errors([error.clone()]);
                         service.router.destination_failed(token);
                         service.errors.push(error);
                     }

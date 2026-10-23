@@ -274,3 +274,54 @@ app commands. Parent owns full Cargo tests, native termination/reentrancy tests,
 and full-process persistence acceptance for Default and named profiles, normal,
 private, Blank, fork, inspector, removed/closing pages, repeated/native quit,
 last-window/Dock reopen, and cookies/localStorage/IndexedDB across restarts.
+
+
+## Optional Downloads consumer barrier
+
+Quit inspects an existing AppDownloads global without creating or waking one.
+It takes the exclusive ShutdownDownloads capability, waits for the relinquishing
+Running lease, then drains/ingests before the existing model-save and engine-begin
+steps. Every later engine drain uses take_shutdown_download_events outside App,
+coordinator and service borrows. CEF Complete does not yet permit native exit:
+the final owned drain, canonical ingestion, retained normal-writer flush and
+service finish must all succeed first. Successful final steps are remembered
+across an InFlight turn; native polling cannot continue after Complete.
+
+A genuine error from a Running batch that relinquishes ownership during quit
+becomes sticky before its lease is released. A later successful persistence retry
+cannot authorize exit past it. Intentional post-seal effect suppression is
+classified separately. Absent-global behavior performs no new download drain;
+the independent test probe remains its sole consumer. An installed service
+prevents probe arming and pumping, including a post-pump reentrant check. Hot
+replacement of an already-active probe with a service is not supported.
+
+All 921 merged workspace tests pass, including shared begin/poll/finalization
+helpers with actual generic reducer and canonical writers. Native installed-service
+terminal-race/session persistence acceptance remains pending. Production
+admission, destination policy and service creation remain disabled.
+
+
+### Merged-barrier native regression — October 24, 2026
+
+Immutable bundle binary SHA-256:
+`215d4a6a1715f326f927e0c54b13d969d318f9cb5047f17746378b3abfdb3ab6`.
+An actual loopback transfer was InProgress with 393,216 observed bytes when
+`native-quit` sent terminate:nil. The app exited 0 after CEF Complete with zero
+owners, browsers and cookie flushes. Its disposable output directory was empty,
+and saved profile downloads had last_sequence 0 and no completed records. No
+incomplete transfer was inferred complete. Screenshot inspected; local log:
+`/tmp/echo-download-quit-active-native-r1.log`.
+
+A separate normal instance then received a standard quit AppleEvent addressed
+by its exact PID after proc_pidpath matched the owned immutable executable.
+The sender used SDK CoreServices APIs, not global key input or bundle-ID lookup.
+The log shows raw suspension, coordinator request, CEF Complete, one preserved
+UPP/refcon replay, delegate Now, preserved noErr reply and one later original
+terminate continuation. Sender status 0, reply error 0 and process exit 0 were
+verified. Local evidence: `/tmp/echo-download-quit-ae-native-r1.log` and
+`/tmp/echo-download-quit-ae-sender-r1.log`; screenshot inspected. No force exit
+or Cancel/reterminate fallback was used.
+
+Both runs exercise absent-global behavior. They do not certify the still-pending
+installed-service terminal-race persistence fixture, OS logout or session-end
+semantics on other platforms.

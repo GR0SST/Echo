@@ -1298,3 +1298,194 @@ fn differing_nonempty_item_name_does_not_override_callback_or_cross_token_reques
         "second-callback.bin"
     );
 }
+
+#[test]
+fn quit_barrier_uses_real_service_lease_and_persists_complete_at_final_poll_once_per_workspace() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner, ingest_shutdown};
+    use crate::quit::{Coordinator, ShutdownDriver, FinalDownloadBarrier, download_ready,
+        begin_after_downloads, advance_shutdown};
+    struct Driver<'a> { complete: &'a Cell<bool>, begins: usize, polls: usize }
+    impl ShutdownDriver for Driver<'_> {
+        fn begin(&mut self) -> Result<engine::ShutdownStatus, String> {
+            self.begins += 1;
+            Ok(engine::ShutdownStatus { phase: engine::ShutdownPhase::WaitingForOwners,
+                pending_owners: 0, pending_browsers: vec![], pending_cookie_flushes: 0, failures: vec![] })
+        }
+        fn poll(&mut self) -> Result<engine::ShutdownStatus, String> {
+            self.polls += 1;
+            self.complete.set(true); // Terminal copy arrives during final native poll.
+            Ok(engine::ShutdownStatus { phase: engine::ShutdownPhase::Complete,
+                pending_owners: 0, pending_browsers: vec![], pending_cookie_flushes: 0, failures: vec![] })
+        }
+    }
+    let state = Rc::new(RefCell::new(Coordinator::default()));
+    state.borrow_mut().request();
+    assert!(state.borrow_mut().start());
+    let engine_complete = Cell::new(false);
+    let mut driver = Driver { complete: &engine_complete, begins: 0, polls: 0 };
+    let model = Rc::new(RefCell::new(Browser::new()));
+    let profile = model.borrow().default_user_profile_id();
+    let named = model.borrow_mut().create_user_profile("Named").unwrap();
+    let other = Rc::new(RefCell::new(Browser::new()));
+    let other_profile = other.borrow().default_user_profile_id();
+    let service = Rc::new(RefCell::new(DownloadService::<u64, Model>::default()));
+    let owner = register(&mut service.borrow_mut().router, &model, profile);
+    let named_owner = register(&mut service.borrow_mut().router, &model, named);
+    service.borrow_mut().router.register_normal(profile, model.clone(), SourceKind::Blank).unwrap();
+    let other_owner = register(&mut service.borrow_mut().router, &other, other_profile);
+    let writer = |model: &Model, profile, completion| model.borrow_mut()
+        .record_completed_download(profile, completion).map_err(|error| format!("{error:?}"));
+    let gate = ConsumerGate::default();
+    let old_batch = gate.acquire(ConsumerOwner::Running).unwrap();
+    let shutdown = ShutdownDownloads::take(service.clone(), gate.clone()).unwrap();
+    // Same shutdown consumer used by quit's pre-engine running drain; no drain
+    // and no flush may overtake a batch already copied by the normal pump.
+    assert_eq!(download_ready(shutdown.drain_copied_and_persist_with(
+        || panic!("running batch owns copied queue"), writer)), Ok(false));
+    assert_eq!(shutdown.flush_retained_with(Rc::ptr_eq, |_| panic!("early flush")), Err(ShutdownDownloadError::InFlight));
+    let errors = ingest_shutdown(&mut service.borrow_mut().router,
+        [event(100, owner, DownloadPhase::Complete)], writer);
+    assert!(errors.is_empty());
+    drop(old_batch);
+    assert!(gate.acquire(ConsumerOwner::Running).is_err());
+    assert!(download_ready(shutdown.drain_copied_and_persist_with(|| Ok(Vec::new()), writer)).unwrap());
+    assert!(begin_after_downloads(&state, &mut driver,
+        || shutdown.drain_copied_and_persist_with(|| Ok(Vec::new()), writer),
+        || Ok(())));
+    drop(model);
+    drop(other); // Every source is gone; only canonical service writers remain.
+
+    let mut barrier = FinalDownloadBarrier::default();
+    let durable = RefCell::new(Vec::new());
+    let order = RefCell::new(Vec::new());
+    let exits = Cell::new(0);
+    advance_shutdown(&state, &mut driver, &mut barrier,
+        || shutdown.drain_copied_and_persist_with(|| {
+            assert!(service.try_borrow_mut().is_ok());
+            if engine_complete.get() {
+                order.borrow_mut().push("post-Complete drain");
+                Ok(vec![event(102, other_owner, DownloadPhase::Complete),
+                    event(102, other_owner, DownloadPhase::Complete), event(100, owner, DownloadPhase::Complete)])
+            } else {
+                Ok(vec![event(101, named_owner, DownloadPhase::Complete)])
+            }
+        }, writer),
+        || shutdown.flush_retained_with(Rc::ptr_eq, |handle| {
+            assert!(service.try_borrow_mut().is_ok(), "flush under service borrow");
+            order.borrow_mut().push("canonical flush");
+            durable.borrow_mut().push(session::to_json(&handle.borrow()));
+            Ok(())
+        }),
+        || { order.borrow_mut().push("consumer finish"); shutdown.finish() },
+        || {
+            assert_eq!(durable.borrow().len(), 2);
+            exits.set(exits.get() + 1);
+            order.borrow_mut().push("original exit allowed");
+            Ok(())
+        });
+    assert_eq!((driver.begins, driver.polls, exits.get()), (1, 1, 1));
+    advance_shutdown(&state, &mut driver, &mut barrier,
+        || panic!("drain after exit"), || panic!("flush after exit"),
+        || panic!("finish after exit"), || panic!("duplicate exit"));
+    assert_eq!(*order.borrow(), ["post-Complete drain", "canonical flush", "canonical flush", "consumer finish", "original exit allowed"]);
+    assert_eq!(durable.borrow().len(), 2); // Normal/Blank/named share ONE writer.
+    let records: usize = durable.borrow().iter().map(|json| {
+        let restored = session::from_json(json).unwrap();
+        restored.user_profiles().map(|p| restored.completed_downloads(p.id()).unwrap().len()).sum::<usize>()
+    }).sum();
+    assert_eq!(records, 3); // Late final completion persisted, replays suppressed.
+    assert!(barrier.advance(|| panic!("late drain"), || panic!("late flush"), || panic!("late finish")).unwrap());
+    assert!(shutdown.drain_copied_and_persist_with(|| panic!("closed consumer"), writer).is_err());
+}
+
+
+#[test]
+fn relinquishing_batch_failure_blocks_production_quit_orchestration() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner, ingest_shutdown};
+    use crate::quit::{Coordinator, ShutdownDriver, FinalDownloadBarrier,
+        begin_after_downloads, advance_shutdown};
+    struct Driver { begins: usize, polls: usize }
+    impl ShutdownDriver for Driver {
+        fn begin(&mut self) -> Result<engine::ShutdownStatus, String> {
+            self.begins += 1;
+            panic!("engine begin after failed old batch")
+        }
+        fn poll(&mut self) -> Result<engine::ShutdownStatus, String> {
+            self.polls += 1;
+            panic!("engine poll after failed old batch")
+        }
+    }
+    // Rejected provenance leaves no pending record; a transient writer error
+    // can later succeed. Both must still block this quit attempt permanently.
+    for rejected in [true, false] {
+        let model = Rc::new(RefCell::new(Browser::new()));
+        let profile = model.borrow().default_user_profile_id();
+        let service = Rc::new(RefCell::new(DownloadService::<u64, Model>::default()));
+        let owner = register(&mut service.borrow_mut().router, &model, profile);
+        service.borrow_mut().errors.push("historical, unrelated".into());
+        let gate = ConsumerGate::default();
+        let old = gate.acquire(ConsumerOwner::Running).unwrap();
+        let state = Rc::new(RefCell::new(Coordinator::default()));
+        let mut driver = Driver { begins: 0, polls: 0 };
+        // Inject quit reentry inside the old copied-event source, with no
+        // service/coordinator borrow across the callback (as in production).
+        let mut shutdown = None;
+        let copied = (|| {
+            state.borrow_mut().request();
+            assert!(state.borrow_mut().start());
+            shutdown = Some(ShutdownDownloads::take(service.clone(), gate.clone()).unwrap());
+            vec![event(501, if rejected { owner + 99 } else { owner }, DownloadPhase::Complete)]
+        })();
+        let shutdown = shutdown.unwrap();
+        let writer = |model: &Model, profile, completion| model.borrow_mut()
+            .record_completed_download(profile, completion).map_err(|e| format!("{e:?}"));
+        assert!(!begin_after_downloads(&state, &mut driver,
+            || shutdown.drain_copied_and_persist_with(|| panic!("old lease busy"), writer),
+            || -> Result<(), String> { panic!("premature detach") }));
+        // Same per-batch diagnostic capture used by the normal production pump.
+        old.with_service_errors(&mut service.borrow_mut(), |service| {
+            let errors = ingest_shutdown(&mut service.router, copied,
+                |_, _, _| Err("transient old writer failure".into()));
+            assert!(!errors.is_empty());
+            service.errors.extend(errors);
+        });
+        drop(old); // Atomically publishes genuine failures before lease release.
+        if !rejected {
+            assert!(persist(&mut service.borrow_mut().router).is_empty());
+        }
+        assert!(!service.borrow().router.has_pending_records());
+        let exits = Cell::new(0);
+        let mut barrier = FinalDownloadBarrier::default();
+        for _ in 0..3 {
+            assert!(!begin_after_downloads(&state, &mut driver,
+                || shutdown.drain_copied_and_persist_with(|| panic!("sticky lease error before drain"), writer),
+                || -> Result<(), String> { panic!("detach after failure") }));
+            advance_shutdown(&state, &mut driver, &mut barrier,
+                || shutdown.drain_copied_and_persist_with(|| panic!("no shutdown drain"), writer),
+                || panic!("no final flush"), || panic!("no finish"),
+                || { exits.set(exits.get() + 1); Ok(()) });
+        }
+        assert_eq!((driver.begins, driver.polls, exits.get()), (0, 0, 0));
+        assert!(matches!(shutdown.finish(), Err(ShutdownDownloadError::Failure(_))));
+    }
+}
+
+#[test]
+fn historical_errors_and_intentionally_suppressed_effects_do_not_poison_handoff() {
+    use super::shutdown::{ConsumerGate, ConsumerOwner};
+    let service = Rc::new(RefCell::new(DownloadService::<u64, Model>::default()));
+    service.borrow_mut().errors.push("historical error".into());
+    let gate = ConsumerGate::default();
+    let old = gate.acquire(ConsumerOwner::Running).unwrap();
+    let shutdown = ShutdownDownloads::take(service.clone(), gate).unwrap();
+    old.with_service_errors(&mut service.borrow_mut(), |_| {
+        // Same intentional-success result as the sealed production dispatch.
+        let failures = execute_effects(vec![DownloadEffect::Control(9, DownloadControl::Cancel)],
+            |_, _| Ok(()), |_, _| Ok(()));
+        assert!(failures.is_empty());
+    });
+    drop(old);
+    shutdown.ingest_copied_and_persist_with([], |_, _, _| panic!("no records")).unwrap();
+    shutdown.flush_retained_with(Rc::ptr_eq, |_| panic!("no handles")).unwrap();
+    shutdown.finish().unwrap();
+}
