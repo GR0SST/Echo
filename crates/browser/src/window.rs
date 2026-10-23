@@ -308,6 +308,7 @@ pub enum Command {
     NextTab,
     PreviousTab,
     FocusSpace(SpaceId),
+    MoveTab { space: SpaceId, section: Section },
 }
 
 /// Exact command names win over abbreviated prefixes of longer actions.
@@ -778,6 +779,21 @@ impl BrowserWindow {
                     }));
                 }
             }
+            if let Some(tab) = active {
+                let source = if self.browser.space().pinned.iter().any(|pinned| pinned.id == tab.id) { Section::Pinned } else { Section::Today };
+                for space in &self.browser.spaces {
+                    for section in [Section::Pinned, Section::Today] {
+                        if space.id == self.browser.space().id && section == source { continue; }
+                        let section_name = if section == Section::Pinned { "Pinned" } else { "Today" };
+                        let label = format!("Move to {section_name} in {}", space.name);
+                        let mut names = format!("{label}|{} {}", if section == Section::Pinned { "pin to" } else { "move to today in" }, space.name);
+                        if section == source { names.push_str(&format!("|move to {}", space.name)); }
+                        if let Some(score) = command_match_score(&query, &names) {
+                            matches.push((score, Suggestion::Action { command: Command::MoveTab { space: space.id, section }, label }));
+                        }
+                    }
+                }
+            }
             matches.sort_by_key(|(score, _)| *score);
             suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
@@ -945,6 +961,17 @@ impl BrowserWindow {
             Command::GoForward => self.with_active_page(|pages, tab| pages.go_forward(tab)),
             Command::NextTab => self.cycle_tab(1, cx),
             Command::PreviousTab => self.cycle_tab(-1, cx),
+            Command::MoveTab { space, section } => {
+                if let Some(id) = self.browser.space().active_tab {
+                    if self.browser.move_tab(id, space, section) {
+                        if let Some(index) = self.browser.spaces.iter().position(|candidate| candidate.id == space) {
+                            self.switch_space(index, cx);
+                            self.browser.activate_tab(id, SystemTime::now());
+                            self.show_toast(format!("Moved tab to {}", self.browser.space().name), cx);
+                        }
+                    }
+                }
+            }
             Command::FocusSpace(id) => {
                 if let Some(index) = self.browser.spaces.iter().position(|space| space.id == id) { self.switch_space(index, cx); }
             }

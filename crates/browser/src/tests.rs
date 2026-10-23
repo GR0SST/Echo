@@ -1397,3 +1397,38 @@ fn rename_tab_command_keeps_focus_and_escape_does_not_change_the_name(cx: &mut T
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Chromium");
     assert!(bar_text(&view, cx).is_some());
 }
+
+#[gpui::test]
+fn move_commands_change_space_and_section_without_recreating_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let id = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    for (query, space, pinned) in [("move to pinned in work", 1, true), ("move to today in research", 2, false), ("move to work", 1, false)] {
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input(query);
+        bar(&view, cx).simulate_keystrokes("enter");
+        assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), space);
+        assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), id);
+        assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_some()), pinned);
+        assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
+        assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+    }
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, _) | Call::Close(_) | Call::Navigate(_, _))));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces[0].today.len()), 2);
+}
+
+#[gpui::test]
+fn pin_to_space_command_preserves_a_custom_tab_name(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rename tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("Engine notes");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("pin to work");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Work");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Engine notes");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 1);
+}

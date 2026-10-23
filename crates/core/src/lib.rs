@@ -395,6 +395,33 @@ impl Browser {
         }
     }
 
+    /// Moves an existing tab without cloning it. Source focus moves to a neighbor;
+    /// the caller chooses whether to focus the destination Space and tab.
+    pub fn move_tab(&mut self, id: TabId, destination: SpaceId, section: Section) -> bool {
+        let Some(target) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
+        let Some((source, old_section, index)) = self.spaces.iter().enumerate().find_map(|(index, space)| space.find(id).map(|(section, tab)| (index, section, tab))) else { return false; };
+        if source == target && old_section == section { return false; }
+        let source_space = &mut self.spaces[source];
+        let mut tab = source_space.section_mut(old_section).remove(index);
+        if source_space.active_tab == Some(id) { source_space.active_tab = neighbor(source_space, old_section, index); }
+        match section {
+            Section::Pinned => {
+                if old_section != Section::Pinned {
+                    tab.pinned_url = Some(tab.url.clone());
+                    tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
+                }
+                self.spaces[target].pinned.push(tab);
+                self.spaces[target].pinned_collapsed = false;
+            }
+            Section::Today => {
+                tab.pinned_url = None;
+                tab.pinned_title = None;
+                self.spaces[target].today.insert(0, tab);
+            }
+        }
+        true
+    }
+
     /// Returns a pinned tab to the URL it was pinned at, keeping its identity.
     pub fn reset_pinned_tab(&mut self, id: TabId) -> bool {
         for space in &mut self.spaces {
@@ -861,6 +888,31 @@ mod tests {
         assert!(restored.rename_tab(id, "Custom label"));
         assert!(restored.reset_tab_name(id));
         assert_eq!(restored.active_tab().unwrap().title, "Legacy page title");
+    }
+
+
+    #[test]
+    fn moving_tabs_preserves_identity_labels_and_original_pin_urls() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("https://original", t0());
+        browser.set_title(tab, "Original title");
+        browser.rename_tab(tab, "Custom title");
+        browser.toggle_pin(tab);
+        browser.navigate(tab, "https://elsewhere");
+        let today = browser.new_tab("https://today", t0());
+        let work = browser.add_space("Work", 200.0);
+        assert!(browser.move_tab(tab, work, Section::Pinned));
+        assert_eq!(browser.active_tab().unwrap().id, today);
+        assert_eq!(browser.spaces[1].pinned[0].id, tab);
+        assert_eq!(browser.spaces[1].pinned[0].url, "https://elsewhere");
+        assert_eq!(browser.spaces[1].pinned[0].pinned_url.as_deref(), Some("https://original"));
+        assert_eq!(browser.spaces[1].pinned[0].title, "Custom title");
+        assert!(!browser.move_tab(tab, work, Section::Pinned));
+        assert!(browser.move_tab(tab, work, Section::Today));
+        assert_eq!(browser.spaces[1].today[0].id, tab);
+        assert_eq!(browser.spaces[1].today[0].pinned_url, None);
+        assert_eq!(browser.spaces[1].today[0].title, "Custom title");
+        assert!(browser.archive.is_empty());
     }
 
 }

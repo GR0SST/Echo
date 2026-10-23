@@ -244,7 +244,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Removing a suggestion ("Delete Suggestion") | — | missing | — |
 | **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
-| Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | missing | — |
+| Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | partial | Move to Pinned/Today in any Space and Pin to <space> are implemented. Identity, custom name and loaded page are preserved; destination is focused. Move to Folder remains missing |
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
@@ -499,8 +499,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 49
-- **partial**: 25
-- **missing**: 221
+- **partial**: 26
+- **missing**: 220
 
 ### Biggest gaps (by importance for parity)
 
