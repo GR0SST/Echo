@@ -212,7 +212,7 @@ impl BrowserWindow {
         }
         div().flex_1().min_w_0().flex().items_center().gap(px(9.))
             .child(self.render_item_icon(tab, hue))
-            .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().line_clamp(1).child(self.browser.item_title(tab.id))).into_any_element()
+            .child(self.render_inline_tab_name(tab.id, cx).unwrap_or_else(|| div().flex_1().min_w_0().overflow_hidden().text_ellipsis().line_clamp(1).child(self.browser.item_title(tab.id)).into_any_element())).into_any_element()
     }
 
     pub(crate) fn render_split(&self, cx: &mut Context<Self>) -> AnyElement {

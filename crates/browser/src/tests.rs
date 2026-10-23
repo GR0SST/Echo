@@ -1459,14 +1459,26 @@ fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
 }
 
+fn inline_name(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Option<String> {
+    view.read_with(cx, |w, cx| w.tab_rename.as_ref().map(|editor| editor.input.read(cx).text().to_string()))
+}
+
+fn inline_name_focused(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| view.read(cx).tab_rename.as_ref().is_some_and(|editor| editor.input.read(cx).focus_handle(cx).is_focused(window)))
+}
+
 #[gpui::test]
 fn double_click_renames_a_tab_and_engine_titles_do_not_overwrite_it(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     double_click(cx, "tab-8");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some("Chromium"));
-    assert!(bar_input_focused(&view, cx));
-    bar(&view, cx).simulate_input("Engine research");
-    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(inline_name(&view, cx).as_deref(), Some("Chromium"));
+    assert!(inline_name_focused(&view, cx));
+    assert!(bar_text(&view, cx).is_none());
+    let row = cx.debug_bounds("tab-8").unwrap();
+    let editor = cx.debug_bounds("inline-tab-rename").unwrap();
+    assert!(row.contains(&editor.origin) && row.contains(&editor.bottom_right()));
+    cx.simulate_input("Engine research");
+    cx.simulate_keystrokes("enter");
     fake.send(cx, Event::TitleChanged { view: page(1), title: "Updated by website".into() });
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Engine research");
     let saved = view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser));
@@ -1483,16 +1495,114 @@ fn rename_tab_command_keeps_focus_and_escape_does_not_change_the_name(cx: &mut T
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("rename current tab");
     bar(&view, cx).simulate_keystrokes("enter");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some("Chromium"));
-    assert!(bar_input_focused(&view, cx));
-    bar(&view, cx).simulate_input("Cancelled name");
-    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(inline_name(&view, cx).as_deref(), Some("Chromium"));
+    assert!(inline_name_focused(&view, cx));
+    cx.simulate_input("Cancelled name");
+    cx.simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Chromium");
     double_click(cx, "tab-8");
-    bar(&view, cx).simulate_input("  ");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_input("  ");
+    cx.simulate_keystrokes("enter");
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Chromium");
-    assert!(bar_text(&view, cx).is_some());
+    assert!(inline_name(&view, cx).is_none());
+}
+
+#[gpui::test]
+fn clearing_an_inline_name_restores_the_latest_page_title(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    double_click(cx, "tab-8");
+    cx.simulate_input("Custom name");
+    cx.simulate_keystrokes("enter");
+    double_click(cx, "tab-8");
+    fake.send(cx, Event::TitleChanged { view: page(1), title: "Latest website title".into() });
+    assert_eq!(inline_name(&view, cx).as_deref(), Some("Custom name"));
+    cx.simulate_keystrokes("backspace enter");
+    assert!(inline_name(&view, cx).is_none());
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Latest website title");
+    assert!(!view.read_with(cx, |w, _| w.browser.item_has_custom_name(w.browser.active_tab().unwrap().id)));
+}
+
+#[gpui::test]
+fn leaving_an_inline_name_by_clicking_another_tab_commits_without_reloading_the_original(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    double_click(cx, "tab-8");
+    cx.simulate_input("Saved on click");
+    fake.take_calls();
+    click(cx, "tab-7");
+    assert!(inline_name(&view, cx).is_none());
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.gpui.rs"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id.get() == 8).unwrap().title.clone()), "Saved on click");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Close(1) | Call::Navigate(1, _) | Call::Reload(1))));
+}
+
+#[gpui::test]
+fn returning_native_focus_to_the_page_commits_its_inline_name(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    double_click(cx, "tab-8");
+    assert!(fake.take_calls().contains(&Call::FocusUi));
+    cx.simulate_input("Saved on native focus");
+    fake.send(cx, Event::Focused { view: page(1) });
+    assert!(inline_name(&view, cx).is_none());
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Saved on native focus");
+    assert!(fake.take_calls().is_empty());
+}
+
+#[gpui::test]
+fn opening_the_command_bar_commits_the_inline_name_and_restores_normal_input(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    double_click(cx, "tab-8");
+    cx.simulate_input("Saved before search");
+    cx.simulate_keystrokes("cmd-t");
+    assert!(inline_name(&view, cx).is_none());
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("independent query");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("independent query"));
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Saved before search");
+}
+
+#[gpui::test]
+fn hiding_the_sidebar_finishes_inline_editing_instead_of_leaving_an_invisible_input(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    double_click(cx, "tab-8");
+    cx.simulate_input("Saved before hiding");
+    cx.simulate_keystrokes("cmd-s");
+    assert!(inline_name(&view, cx).is_none());
+    assert!(!view.read_with(cx, |w, _| w.sidebar_visible));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Saved before hiding");
+}
+
+#[gpui::test]
+fn closing_a_tab_during_inline_editing_preserves_the_draft_in_the_archive(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    double_click(cx, "tab-8");
+    cx.simulate_input("Archived custom name");
+    cx.simulate_keystrokes("cmd-w");
+    assert!(inline_name(&view, cx).is_none());
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.last().unwrap().tab.title.clone()), "Archived custom name");
+    cx.simulate_keystrokes("cmd-shift-t");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Archived custom name");
+}
+
+#[gpui::test]
+fn renaming_a_hidden_pinned_tab_reveals_its_sidebar_row_without_recreating_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-d");
+    run_named_command(&view, cx, "collapse pinned section");
+    cx.simulate_keystrokes("cmd-s");
+    cx.run_until_parked();
+    fake.take_calls();
+    run_named_command(&view, cx, "rename current tab");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.sidebar_visible && !w.browser.space().pinned_collapsed));
+    assert!(inline_name_focused(&view, cx));
+    assert!(cx.debug_bounds("inline-tab-rename").is_some());
+    cx.simulate_input("Pinned name");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Pinned name");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
 }
 
 #[gpui::test]
@@ -1520,8 +1630,8 @@ fn pin_to_space_command_preserves_a_custom_tab_name(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("rename tab");
     bar(&view, cx).simulate_keystrokes("enter");
-    bar(&view, cx).simulate_input("Engine notes");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_input("Engine notes");
+    cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("pin to work");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -1825,8 +1935,8 @@ fn history_completion_in_cmd_l_navigates_the_current_tab_and_keeps_its_custom_na
     cx.simulate_keystrokes("cmd-w cmd-t");
     bar(&view, cx).simulate_input("rename tab");
     bar(&view, cx).simulate_keystrokes("enter");
-    bar(&view, cx).simulate_input("Custom label");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_input("Custom label");
+    cx.simulate_keystrokes("enter");
     let before = today_urls(&view, cx).len();
     let id = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
     cx.simulate_keystrokes("cmd-l");
@@ -1845,8 +1955,8 @@ fn open_tabs_match_their_page_titles_without_duplicate_history_rows(cx: &mut Tes
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("rename tab");
     bar(&view, cx).simulate_keystrokes("enter");
-    bar(&view, cx).simulate_input("Renamed tab");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_input("Renamed tab");
+    cx.simulate_keystrokes("enter");
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("second page");
     let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
@@ -2032,9 +2142,12 @@ fn context_pin_and_rename_do_not_activate_the_clicked_tab(cx: &mut TestAppContex
     assert_eq!(active_url(&view, cx), original);
     right_click(cx, "tab-7");
     click(&mut tab_menu(&view, cx), "tab-menu-rename");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some("GPUI"));
-    bar(&view, cx).simulate_input("Renamed from menu");
-    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(inline_name(&view, cx).as_deref(), Some("GPUI"));
+    click(cx, "inline-tab-rename");
+    assert_eq!(active_url(&view, cx), original);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Renamed from menu");
+    cx.simulate_keystrokes("enter");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id.get() == 7).unwrap().title.clone()), "Renamed from menu");
     assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);

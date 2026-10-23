@@ -240,6 +240,7 @@ fn keystroke_for(shortcut: engine::Shortcut) -> Keystroke {
 }
 
 pub fn bind_keys(cx: &mut App) {
+    crate::inline_rename::bind_keys(cx);
     bind_window_keys(cx);
     let bar = Some(COMMAND_BAR_CONTEXT);
     cx.bind_keys([
@@ -528,6 +529,9 @@ pub struct BrowserWindow {
     pub(crate) traffic_lights_hovered: bool,
     favicon_styles: RefCell<crate::favicon_style::FaviconStyles>,
     pub command_bar: Option<CommandBar>,
+    pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
+    pub(crate) tab_rename_pending: Option<TabId>,
+    pub(crate) tab_rename_generation: u64,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
@@ -621,6 +625,9 @@ impl BrowserWindow {
             traffic_lights_hovered: false,
             favicon_styles: Default::default(),
             command_bar: None,
+            tab_rename: None,
+            tab_rename_pending: None,
+            tab_rename_generation: 0,
             find_bar: None,
             toast: None,
             toast_generation: 0,
@@ -687,6 +694,7 @@ impl BrowserWindow {
             pages.borrow_mut().record(&event);
             match event {
                 Event::Focused { view } => {
+                    self.finish_tab_rename(true, cx);
                     let tab = pages.borrow().tab_for(view).filter(|tab| pages.borrow().is_visible(*tab));
                     if let Some(tab) = tab {
                         let active = self.browser.space().active_tab;
@@ -785,6 +793,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.finish_tab_rename(true, cx);
         self.close_command_bar(cx);
         self.close_tab_menu(cx);
         self.close_find(cx);
@@ -910,7 +919,7 @@ impl BrowserWindow {
             if let Some(overlay) = bar.overlay {
                 let _ = overlay.update(cx, |_, window, _| window.remove_window());
             }
-            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some()).unwrap_or(false) { return; }
+            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some() || this.tab_rename.is_some() || this.tab_rename_pending.is_some()).unwrap_or(false) { return; }
             let _ = main_window.update(cx, |_, window, _| {
                 window.activate_window();
                 focus.focus(window);
@@ -1281,7 +1290,8 @@ impl BrowserWindow {
             Command::RenameTab => {
                 if let Some(tab) = self.browser.active_tab() {
                     let (id, name) = (tab.id, self.browser.item_title(tab.id));
-                    if let Some(bar) = &mut self.command_bar {
+                    if self.can_rename_tab_inline(id) { self.rename_tab_inline(id, cx); }
+                    else if let Some(bar) = &mut self.command_bar {
                         bar.target = Target::RenameTab(id);
                         bar.selected = 0;
                         bar.input.update(cx, |input, cx| { input.set_placeholder("Rename Tab…", cx); input.set_text(name, cx); });
@@ -1465,8 +1475,10 @@ impl BrowserWindow {
         }
     }
 
-    fn on_close_tab(&mut self, _: &CloseTab, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        let editing_name = self.tab_rename.is_some();
         self.close_focused_tab(cx);
+        if editing_name { self.focus_handle.focus(window); }
     }
 
     fn close_focused_tab(&mut self, cx: &mut Context<Self>) {
@@ -1479,6 +1491,7 @@ impl BrowserWindow {
 
     /// Archives a Today tab or unloads a pinned one, as in Arc.
     pub(crate) fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
+        self.finish_tab_rename(true, cx);
         let related = self.browser.related_tabs(id);
         if self.browser.close_tab(id, SystemTime::now()).is_some() {
             if let Some(pages) = &self.pages {
@@ -1563,6 +1576,10 @@ impl BrowserWindow {
 
     fn reveal_active_tab(&mut self, cx: &mut Context<Self>) {
         let Some(active) = self.browser.space().active_tab else { return; };
+        self.reveal_tab_row(active, cx);
+    }
+
+    pub(crate) fn reveal_tab_row(&mut self, active: TabId, cx: &mut Context<Self>) {
         self.close_command_bar(cx);
         if !self.sidebar_visible { self.toggle_sidebar(cx); }
         self.close_floating_sidebar(cx);
@@ -1589,6 +1606,7 @@ impl BrowserWindow {
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.finish_tab_rename(true, cx);
         let from = self.sidebar_amount();
         self.sidebar_visible = !self.sidebar_visible;
         self.sidebar_reveal = None;
@@ -1824,6 +1842,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn switch_space(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.finish_tab_rename(true, cx);
         self.browser.switch_space(index);
         self.settle_pager(cx);
         cx.notify();
@@ -1877,7 +1896,8 @@ impl BrowserWindow {
         let id = tab.id;
         let key = id.get() as usize;
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
-        let reserve_close = !segmented && !tab.muted;
+        let renaming = self.tab_rename.as_ref().is_some_and(|editor| editor.tab == id);
+        let reserve_close = !segmented && !tab.muted && !renaming;
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
@@ -1925,8 +1945,7 @@ impl BrowserWindow {
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 this.browser.activate_sidebar_item(id, SystemTime::now());
                 if event.click_count() == 2 {
-                    let title = Some(this.browser.item_title(id));
-                    if let Some(title) = title { this.open_command_bar(Target::RenameTab(id), &title, window, cx); }
+                    this.open_tab_rename(id, window, cx);
                 }
                 cx.notify();
             }))
@@ -1943,7 +1962,7 @@ impl BrowserWindow {
                     .text_sm()
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .invisible()
-                    .group_hover(group, |s| s.visible())
+                    .when(!renaming, |this| this.group_hover(group, |s| s.visible()))
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -2845,6 +2864,9 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline(editor.tab)) {
+            self.finish_tab_rename(true, cx);
+        }
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }

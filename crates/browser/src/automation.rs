@@ -274,6 +274,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
     );
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
     out += &format!("[dump] history_count={}\n", browser.history.len());
+    out += &format!("[dump] inline_rename={:?}\n", this.tab_rename.as_ref().map(|editor| (editor.tab.get(), editor.input.read(cx).text().to_string())));
     if this.history_is_open() { out += &format!("[dump] history_query={:?}\n", this.history_page.input.read(cx).text()); }
 
     if let Some(bar) = &this.command_bar {

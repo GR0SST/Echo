@@ -190,7 +190,7 @@ Folder duplication follows the right-click action documented in the
 | Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | partial | Drag Today, Pinned or Favorite items onto folders, Pinned/Space headers, Today headers / New Tab, or a nonempty Favorites dock. Drop on a row's upper/lower half to insert before/after it and adopt its section/folder; an insertion line shows the edge. Space icon drops preserve Today/Pinned (Favorites become Pinned); hovering 500ms switches Spaces so the drag can continue to a folder or row. Leaving early cancels the hover. Complete Split Views stay atomic and keep their source pane even when the destination Space had another pane selected; loaded CEF views are reused. Closed folders stay closed. The Space name also accepts nested folders at the Pinned root. Favorites can be reordered or inserted at an icon; a full dock allows sorting but rejects new items. Drops outside targets cancel without activating an inactive tab. An empty Favorites drop target and edge auto-scroll remain missing |
 | Haptic feedback when reordering tabs | — | missing | Option in Advanced |
 | Multi-selecting tabs (⌘/⇧-click) | — | missing | — |
-| Renaming a tab by double-click ("Double-click to rename") | double-click | done | Double-click or Rename Current Tab… in the Command Bar. Custom names persist through navigation, archive and sessions; Reset Tab Name restores the page title. Unicode custom icons use their own editor |
+| Renaming a tab by double-click ("Double-click to rename") | double-click | partial | Today/Pinned single-page tabs use an inline sidebar field from double-click, Rename… and the Command Bar action. Enter or leaving the field saves; Escape cancels; an empty name restores the latest page title. Loaded pages and inactive-tab selection survive. Favorites and Split View group editor placement still differ; Unicode custom icons use their own editor |
 | Custom tab icon ("Customize Tab") | — | partial | One Unicode symbol/emoji for tabs and Split View groups, with grapheme validation and Reset Name and Icon. Persists through pinning, Favorites, moves, duplication, archive and sessions. Graphical icon catalog and uploaded images remain missing |
 | Close button on hover (× for Today, − for Pinned) | hover | done | — |
 | Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
@@ -523,8 +523,8 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 72
-- **partial**: 47
+- **done**: 71
+- **partial**: 48
 - **missing**: 182
 
 ### Biggest gaps (by importance for parity)

@@ -170,3 +170,27 @@ source shapes and MIT notice (`crates/browser/assets/ionicons`). Existing
 general-purpose controls now use those contours. Disclosure, ellipsis and
 reference-specific frame/key controls retain their fixed vector geometry.
 The graphical Space icon picker remains separate unfinished parity work.
+
+## Inline ordinary tab names — 2026-10-23
+
+Reference: installed Arc, inspected in a disposable Blank Window. Double-clicking
+an ordinary sidebar tab replaces its title with a selected inline text field.
+Enter commits, Escape cancels, and clicking the page commits. Clearing a custom
+name restores the website title; the empty field uses that title as its
+placeholder. The row's close control is hidden while editing.
+
+Echo now uses this placement for single-page Today and Pinned tabs, including
+Rename from the context menu and Command Bar. Editing an inactive item keeps
+the current page selected. Hidden Pinned items are revealed before editing.
+Regression coverage includes page-title updates, cancellation, focus returning
+to CEF, switching tabs, opening the Command Bar, hiding the sidebar, closing
+and restoring the edited tab, and session persistence. Favorites and Split
+groups retain their existing editor pending direct reference inspection;
+folder and Space name placement are separate unfinished work.
+
+Native CEF verification used the isolated drive profile: double-click selected
+the inline name, Enter saved it, Escape preserved that saved name, and the
+Command Bar's Rename action saved a new name on a page click. A modified HTML
+input retained `Native-state-kept` throughout, confirming the page was not
+reloaded. Both editor and saved-state screenshots were inspected; the final
+window report was key, main and on-screen. All 328 workspace tests passed.

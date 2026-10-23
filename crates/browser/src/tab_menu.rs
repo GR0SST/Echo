@@ -243,7 +243,7 @@ impl BrowserWindow {
             if let Some(overlay) = menu.overlay { let _ = overlay.update(cx, |_, window, _| window.remove_window()); }
             // A menu action can replace this overlay with an editor. Returning
             // native focus to Chromium here would steal its keyboard input.
-            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some()).unwrap_or(false) { return; }
+            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some() || this.tab_rename.is_some() || this.tab_rename_pending.is_some()).unwrap_or(false) { return; }
             let _ = main.update(cx, |_, window, _| { window.activate_window(); focus.focus(window); });
             if let Some(pages) = pages { pages.borrow_mut().focus_shown(); }
         });
@@ -455,8 +455,7 @@ impl BrowserWindow {
                 self.browser.spaces[self.browser.active_space].active_tab = active;
             }
             Command::Rename => {
-                let name = self.browser.item_title(id);
-                self.open_command_bar(Target::RenameTab(id), &name, window, cx);
+                self.open_tab_rename(id, window, cx);
             }
             Command::Reset => {
                 if self.browser.reset_pinned_tab(id) {

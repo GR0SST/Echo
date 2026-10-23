@@ -20,6 +20,7 @@ mod space_menu;
 mod space_drag;
 mod tab_drag;
 mod folder_drag;
+mod inline_rename;
 pub mod pages;
 pub mod text_input;
 pub mod window;

@@ -310,6 +310,11 @@ impl Pages {
 
     pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) }
 
+    /// Transfers the native responder to GPUI without hiding the page.
+    pub fn focus_ui(&mut self) {
+        self.engine.focus_ui();
+    }
+
     /// Gives keyboard focus back to the page on screen.
     pub fn focus_shown(&mut self) {
         if let Some(view) = self.shown.and_then(|tab| self.view(tab)) {
