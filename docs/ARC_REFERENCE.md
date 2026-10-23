@@ -637,3 +637,9 @@ Favorite. Its `favorite-live` input and document UUID
 reload. The resulting window and page PNGs were inspected. The full workspace
 passed 472 tests: 332 browser, 124 core and 16 engine. Exact drag-after-dismiss
 Arc states and theme-dependent contrast still need reference checks.
+
+The parent automation now exposes fixed inspector open/status/evaluate/close
+commands. A later native run verified close restores the inspected page's
+responder: `after-inspector` was typed into the retained fixture after closing,
+and a page PNG showed that input with the original fixture UUID. Diagnostic
+identifiers use getRandomValues rather than the secure-context-only randomUUID.

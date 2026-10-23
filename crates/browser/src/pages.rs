@@ -12,6 +12,13 @@ use engine::{Bounds, Engine, Event, ViewId};
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn open_inspector_probe(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> Result<engine::InspectorId, String> { Err("Inspector probe is unsupported".into()) }
+    fn inspector_status(&self, _id: engine::InspectorId) -> Option<engine::InspectorStatus> { None }
+    fn set_inspector_frame(&mut self, _id: engine::InspectorId, _bounds: Bounds) {}
+    fn set_inspector_visible(&mut self, _id: engine::InspectorId, _visible: bool) {}
+    fn send_inspector_probe_message(&mut self, _id: engine::InspectorId, _message: &str) -> bool { false }
+    fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { Vec::new() }
+    fn close_inspector(&mut self, _id: engine::InspectorId) {}
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId>;
     /// Whether transfers should wait briefly for an owner-viewport photograph.
     fn supports_snapshots(&self) -> bool { false }
@@ -62,6 +69,15 @@ pub const CONTENT_INSET: f32 = 8.0;
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
 impl WebEngine for Chromium {
+    fn open_inspector_probe(&mut self, view: ViewId, parent: *mut c_void, bounds: Bounds) -> Result<engine::InspectorId, String> {
+        self.engine.open_inspector_probe(view, parent, bounds, engine::InspectorPanel::Elements)
+    }
+    fn inspector_status(&self, id: engine::InspectorId) -> Option<engine::InspectorStatus> { self.engine.inspector_status(id) }
+    fn set_inspector_frame(&mut self, id: engine::InspectorId, bounds: Bounds) { self.engine.set_inspector_frame(id, bounds); }
+    fn set_inspector_visible(&mut self, id: engine::InspectorId, visible: bool) { self.engine.set_inspector_visible(id, visible); }
+    fn send_inspector_probe_message(&mut self, id: engine::InspectorId, message: &str) -> bool { self.engine.send_inspector_probe_message(id, message) }
+    fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { self.engine.take_inspector_events() }
+    fn close_inspector(&mut self, id: engine::InspectorId) { self.engine.close_inspector(id); }
     fn supports_snapshots(&self) -> bool { true }
     fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_snapshot(view, request) }
     fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { self.engine.take_snapshots() }
@@ -171,7 +187,18 @@ struct Handoff {
 
 const HANDOFF_TIMEOUT: Duration = Duration::from_millis(250);
 
+/// Temporary native diagnostic dock; never part of the browser model or session.
+#[derive(Clone, Copy)]
+struct InspectorProbe {
+    id: engine::InspectorId,
+    tab: TabId,
+    view: ViewId,
+    host: u64,
+}
+
 struct PageStore {
+    inspector_probe: Option<InspectorProbe>,
+    next_inspector_eval: u64,
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
     hosts: HashMap<u64, *mut c_void>,
@@ -205,7 +232,7 @@ pub struct Pages {
 impl Pages {
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
         Self {
-            store: Rc::new(RefCell::new(PageStore { engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+            store: Rc::new(RefCell::new(PageStore { inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
                 events: Vec::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             host: 1,
             parent: std::ptr::null_mut(),
@@ -259,6 +286,7 @@ impl Pages {
     /// parked, hidden, in another surviving host until selected there.
     pub fn release_host(&mut self) {
         let mut store = self.store.borrow_mut();
+        if store.inspector_probe.is_some_and(|probe| probe.host == self.host) { store.close_inspector_probe(); }
         if store.hosts.remove(&self.host).is_none() { return; }
         store.layouts.remove(&self.host);
         store.frozen.retain(|(host, _), _| *host != self.host);
@@ -494,6 +522,7 @@ impl Pages {
             store.cancel_handoff(tab);
             store.mirror_revision = store.mirror_revision.wrapping_add(1);
         }
+        store.layout_inspector_probe();
         self.seen_revision = store.mirror_revision;
     }
 
@@ -643,6 +672,69 @@ impl Pages {
         self.store.borrow().pages.get(&tab).is_some_and(|page| page.snapshot_pending == Some(request))
     }
 
+    /// Native-only diagnostic entry point: use this host's actual focused,
+    /// visible page, never a mirror or an arbitrary model tab.
+    pub fn open_inspector_probe(&mut self) -> Result<engine::InspectorStatus, String> {
+        let mut store = self.store.borrow_mut();
+        let tab = self.shown.filter(|tab| Some(*tab) == self.wanted_focus && self.visible.contains(tab))
+            .ok_or("No focused visible page")?;
+        let page = store.pages.get(&tab).filter(|page| page.owner == self.host && page.visible)
+            .ok_or("Focused page is not owned by this host")?;
+        if store.active_host != self.host { return Err("Inspector host is inactive".into()); }
+        let view = page.view;
+        let parent = store.hosts.get(&page.owner).copied().filter(|parent| !parent.is_null())
+            .ok_or("Focused page has no native GPUI parent")?;
+        let frame = store.layouts.get(&self.host).and_then(|layout| layout.get(&tab)).copied()
+            .ok_or("Focused page has no current layout")?;
+        if frame.width < 2. || frame.height < 1. { return Err("Page is too small for diagnostic dock".into()); }
+        if store.inspector_probe.is_some_and(|probe| probe.view != view || probe.host != self.host) { store.close_inspector_probe(); }
+        let (_, dock) = inspector_probe_frames(frame);
+        let id = store.engine.open_inspector_probe(view, parent, dock)?;
+        store.inspector_probe = Some(InspectorProbe { id, tab, view, host: self.host });
+        store.layout_inspector_probe();
+        store.engine.inspector_status(id).ok_or("Inspector closed during creation".into())
+    }
+
+    pub fn inspector_probe_status(&self) -> Option<engine::InspectorStatus> {
+        let store = self.store.borrow();
+        let probe = store.inspector_probe.filter(|probe| probe.host == self.host)?;
+        store.engine.inspector_status(probe.id)
+    }
+
+    /// Fixed trusted expression only. It assigns a document-lifetime UUID on
+    /// first evaluation so reopen can prove that the inspected page survived.
+    /// Submission does not wait: a following snapshot runs concurrently.
+    pub fn eval_inspector_probe(&mut self) -> Result<u64, String> {
+        let mut store = self.store.borrow_mut();
+        let probe = store.inspector_probe.filter(|probe| probe.host == self.host)
+            .ok_or("No inspector probe in this host")?;
+        store.next_inspector_eval = store.next_inspector_eval.checked_add(1)
+            .filter(|id| *id <= 9_007_199_254_740_991).ok_or("Inspector request IDs exhausted")?;
+        let id = store.next_inspector_eval;
+        let message = serde_json::json!({ "id": id, "method": "Runtime.evaluate", "params": {
+            "expression": "JSON.stringify({documentURL:document.URL,uuid:(globalThis.__echoInspectorProbeUUID ??= Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join(''))})",
+            "returnByValue": true
+        }}).to_string();
+        if !store.engine.send_inspector_probe_message(probe.id, &message) { return Err("Inspector evaluation rejected".into()); }
+        Ok(id)
+    }
+
+    pub fn close_inspector_probe(&mut self) {
+        let closed = {
+            let mut store = self.store.borrow_mut();
+            if store.inspector_probe.is_some_and(|probe| probe.host == self.host) {
+                store.close_inspector_probe();
+                true
+            } else { false }
+        };
+        if closed {
+            // Inspector focus events are intentionally separate from tab
+            // events. Its responder may have replaced the inspected page's.
+            self.page_has_focus = false;
+            self.apply();
+        }
+    }
+
     pub fn pump_fn(&self) -> fn() {
         self.store.borrow_mut().engine.pump_fn()
     }
@@ -664,6 +756,10 @@ impl Pages {
         }
         let mut store = self.store.borrow_mut();
         let fresh = store.engine.take_events();
+        // take_events processes inspector load callbacks first. This runs after
+        // the regular pump, with no borrow retained across pumping or awaiting.
+        for event in store.engine.take_inspector_events() { eprintln!("[inspector-event] {event:?}"); }
+        store.layout_inspector_probe();
         store.events.extend(fresh);
         let queued = std::mem::take(&mut store.events);
         let mut delivered = Vec::new();
@@ -724,7 +820,40 @@ impl Pages {
     }
 }
 
+fn inspector_probe_frames(frame: Bounds) -> (Bounds, Bounds) {
+    let width = (frame.width / 2.).floor();
+    (Bounds { width, ..frame }, Bounds { x: frame.x + width, width: frame.width - width, ..frame })
+}
+
 impl PageStore {
+    fn close_inspector_probe(&mut self) {
+        let Some(probe) = self.inspector_probe.take() else { return; };
+        self.engine.close_inspector(probe.id);
+        if let Some(page) = self.pages.get_mut(&probe.tab).filter(|page| page.view == probe.view && page.owner == probe.host) {
+            if let Some(frame) = self.layouts.get(&probe.host).and_then(|layout| layout.get(&probe.tab)).copied() {
+                self.engine.set_bounds(page.view, frame);
+                page.frame = frame;
+            }
+        }
+    }
+
+    fn layout_inspector_probe(&mut self) {
+        let Some(probe) = self.inspector_probe else { return; };
+        let frame = self.layouts.get(&probe.host).and_then(|layout| layout.get(&probe.tab)).copied();
+        let valid = self.active_host == probe.host && self.hosts.contains_key(&probe.host)
+            && self.pages.get(&probe.tab).is_some_and(|page| page.view == probe.view && page.owner == probe.host && page.visible)
+            && self.engine.inspector_status(probe.id).is_some();
+        let Some(frame) = frame.filter(|frame| valid && frame.width >= 2. && frame.height >= 1.) else {
+            self.close_inspector_probe();
+            return;
+        };
+        let (page_frame, dock) = inspector_probe_frames(frame);
+        self.engine.set_bounds(probe.view, page_frame);
+        self.pages.get_mut(&probe.tab).unwrap().frame = page_frame;
+        self.engine.set_inspector_frame(probe.id, dock);
+        self.engine.set_inspector_visible(probe.id, true);
+    }
+
     fn cancel_handoff(&mut self, tab: TabId) {
         if let Some(claim) = self.handoffs.remove(&tab) {
             if let Some(page) = self.pages.get_mut(&tab).filter(|page| page.snapshot_pending == Some(claim.request)) {
@@ -750,6 +879,9 @@ impl PageStore {
 
     /// True means the existing view may now be reparented.
     fn prepare_handoff(&mut self, tab: TabId, target: u64) -> bool {
+        // The temporary dock belongs to its original GPUI parent. Restore the
+        // full viewport before snapshotting or transferring the inspected view.
+        if self.inspector_probe.is_some_and(|probe| probe.tab == tab && probe.host != target) { self.close_inspector_probe(); }
         let Some(page) = self.pages.get(&tab) else { return true; };
         if page.owner == target || !self.engine.supports_snapshots() { return true; }
         if let Some(claim) = self.handoffs.get(&tab) {

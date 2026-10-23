@@ -8,6 +8,9 @@
 //! Commands: `reopen` (Dock request), `window <index|last>` (select a browser root),
 //! `transfer-new-host`, `transfer-back` (diagnostic live-page host transfer),
 //! `snapshot <file.png>` (capture the active document through CEF),
+//! `inspector-open`, `inspector-status`, `inspector-eval`, `inspector-close`
+//! (native diagnostic right dock; eval is fixed document URL + lifetime UUID,
+//! submitted without waiting so a following snapshot can run concurrently),
 //! `activate`, `require-focus` (abort on focus loss or occlusion),
 //! `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `menu <menu title> > <item title>` (invoke an enabled native menu item),
@@ -349,6 +352,37 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let content: *mut AnyObject = msg_send![window, contentView];
                     let frame_view: *mut AnyObject = msg_send![content, superview];
                     print_views(if frame_view.is_null() { content } else { frame_view }, 0);
+                },
+                "inspector-open" | "inspector-status" | "inspector-eval" | "inspector-close" => {
+                    // No arbitrary JS, protocol JSON, view IDs or parent pointers
+                    // are accepted from the script. Events are logged centrally
+                    // by Pages::take_events after the regular engine pump.
+                    if !arg.is_empty() {
+                        eprintln!("[automation] {name} rejected: this command accepts no arguments");
+                        continue;
+                    }
+                    let pages = view.read_with(cx, |view, _| view.pages.clone()).ok().flatten();
+                    if let Some(pages) = pages {
+                        let mut pages = pages.borrow_mut();
+                        match name {
+                            "inspector-open" => match pages.open_inspector_probe() {
+                                Ok(status) => eprintln!("[inspector-status] {status:?}"),
+                                Err(error) => eprintln!("[inspector-error] {error}"),
+                            },
+                            "inspector-status" => eprintln!("[inspector-status] {:?}", pages.inspector_probe_status()),
+                            "inspector-eval" => match pages.eval_inspector_probe() {
+                                Ok(id) => eprintln!("[inspector-eval] submitted id={id}; result follows in inspector-event Protocol"),
+                                Err(error) => eprintln!("[inspector-error] {error}"),
+                            },
+                            "inspector-close" => {
+                                pages.close_inspector_probe();
+                                eprintln!("[inspector-status] closed; inspected page retained");
+                            },
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        eprintln!("[inspector-error] No live page engine");
+                    }
                 },
                 "snapshot" => {
                     let page = view.read_with(cx, |view, _| Some((view.pages.clone()?, view.browser.active_tab()?.id))).ok().flatten();

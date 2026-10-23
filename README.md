@@ -78,6 +78,12 @@ Transfers wait for the source viewport capture before reparenting. `snapshot
 `position <x> <y>` places the current test window in native screen coordinates
 without moving the pointer; `shotall <prefix>` captures every app window.
 
+`inspector-open`, `inspector-status`, `inspector-eval` and `inspector-close`
+probe the bundled Alloy DevTools frontend and local protocol. Evaluation uses
+a fixed document URL/lifetime identifier expression; protocol responses are
+logged asynchronously. These diagnostics do not assert that frontend panels
+are connected. Closing the probe restores page bounds and intended focus.
+
 `menu Edit > Undo` invokes an enabled native menu item without moving the
 system pointer. Keyboard events follow the focused browser child window,
 including the Command Bar; point coordinates remain relative to the main window.
