@@ -121,6 +121,7 @@ pub(crate) fn build() -> Vec<Menu> {
             name: "Spaces".into(),
             items: vec![
                 MenuItem::action("New Space…", window::NewSpace),
+                MenuItem::action("New Folder…", window::NewFolder),
                 MenuItem::action("Rename Space…", RenameSpace),
                 MenuItem::action("Change Space Icon…", window::CustomizeSpaceIcon),
                 MenuItem::action("Show/Hide Space Header", window::ToggleSpaceHeader),
@@ -135,6 +136,8 @@ pub(crate) fn build() -> Vec<Menu> {
             name: "Tabs".into(),
             items: vec![
                 MenuItem::action("Include/Exclude Favorites in Ordering", window::ToggleFavoritesOrdering),
+                MenuItem::action("Collapse All Folders", window::CollapseAllFolders),
+                MenuItem::action("Expand All Folders", window::ExpandAllFolders),
                 MenuItem::action("Reveal Tab in Sidebar", window::RevealTab),
                 MenuItem::action("Duplicate Current Tab", window::DuplicateTab),
                 MenuItem::action("Pin/Unpin Tab", window::TogglePin),

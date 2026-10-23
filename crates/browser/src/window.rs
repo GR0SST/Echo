@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use browser_core::omnibox::{self, Resolved};
 use browser_core::{Browser, Section, SpaceId, Tab, TabId};
+use browser_core::folders::{FolderId, PinnedItem};
 use engine::Event;
 use gpui::{
     actions, canvas, div, ease_out_quint, point, size, Animation, AnimationExt, AnyElement, Bounds,
@@ -61,6 +62,9 @@ actions!(
         OpenCommandBar,
         CopyUrl,
         CopyUrlAsMarkdown,
+        NewFolder,
+        CollapseAllFolders,
+        ExpandAllFolders,
         NewSpace,
         EditCurrentUrl,
         CloseTab,
@@ -284,6 +288,10 @@ pub enum Target {
     RenameSpace(SpaceId),
     RenameTab(TabId),
     Icon(crate::icons::IconTarget),
+    NewFolder { space: SpaceId, parent: Option<FolderId>, tab: Option<TabId> },
+    RenameFolder(FolderId),
+    MoveToFolder(TabId),
+    MoveFolder(FolderId),
     ArchiveInterval,
     Archive(Option<SpaceId>),
     ConfirmClearArchive,
@@ -297,6 +305,8 @@ pub enum Suggestion {
     SwitchToTab { id: TabId, title: String, url: String, space: String },
     Action { command: Command, label: String },
     SaveSpace { name: String },
+    SaveFolderName { name: String },
+    FolderDestination { space: SpaceId, parent: Option<FolderId>, label: String },
     SaveTabName { name: String },
     SaveIcon { icon: Option<String> },
     ArchiveAfter { label: String, seconds: Option<u64> },
@@ -317,6 +327,12 @@ pub enum Command {
     CyclePane(isize),
     MovePane(isize),
     DuplicateTab,
+    NewFolder,
+    MoveToFolder,
+    CollapseAllFolders,
+    ExpandAllFolders,
+    RenameFolder(FolderId),
+    ExpandFolder(FolderId),
     NewSpace,
     RenameSpace,
     FindPage,
@@ -695,6 +711,9 @@ impl BrowserWindow {
         let input = cx.new(|cx| {
             let placeholder = match target {
                 Target::Split { .. } => "Add a page to Split View…",
+                Target::NewFolder { .. } => "Name your Folder…",
+                Target::RenameFolder(_) => "Rename Folder…",
+                Target::MoveToFolder(_) | Target::MoveFolder(_) => "Choose a destination folder…",
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
                 Target::RenameTab(_) => "Rename Tab…",
@@ -809,6 +828,7 @@ impl BrowserWindow {
             if let Some(overlay) = bar.overlay {
                 let _ = overlay.update(cx, |_, window, _| window.remove_window());
             }
+            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some()).unwrap_or(false) { return; }
             let _ = main_window.update(cx, |_, window, _| {
                 window.activate_window();
                 focus.focus(window);
@@ -852,6 +872,10 @@ impl BrowserWindow {
             }
             return suggestions;
         }
+        if matches!(bar.target, Target::NewFolder { .. } | Target::RenameFolder(_)) {
+            return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveFolderName { name: text.trim().to_string() }] };
+        }
+        if matches!(bar.target, Target::MoveToFolder(_) | Target::MoveFolder(_)) { return self.folder_destinations(bar.target, text); }
         if matches!(bar.target, Target::Icon(_)) {
             return if text.trim().is_empty() { vec![Suggestion::SaveIcon { icon: None }] }
                 else if browser_core::icons::valid_icon(text) { vec![Suggestion::SaveIcon { icon: Some(text.trim().to_string()) }] } else { Vec::new() };
@@ -871,6 +895,10 @@ impl BrowserWindow {
             let favorite = active.is_some_and(|tab| self.browser.is_favorite(tab.id));
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::NewFolder, "New Folder…", "new folder|create folder|add folder", true),
+                (Command::MoveToFolder, "Move to Folder…", "move to folder|pin to folder", active.is_some()),
+                (Command::CollapseAllFolders, "Collapse All Folders", "collapse all folders", self.browser.space().folders.iter().any(|folder| !folder.collapsed)),
+                (Command::ExpandAllFolders, "Expand All Folders", "expand all folders", self.browser.space().folders.iter().any(|folder| folder.collapsed)),
                 (Command::DuplicateTab, "Duplicate Current Tab", "duplicate current tab|duplicate tab|duplicate current item|duplicate split view", active.is_some()),
                 (Command::RenameTab, "Rename Current Tab…", "rename current tab|rename tab|rename current item", active.is_some()),
                 (Command::CustomizeTabIcon, "Customize Tab Icon…", "customize tab icon|change tab icon|customize tab", active.is_some()),
@@ -898,7 +926,7 @@ impl BrowserWindow {
                 (Command::ToggleMute, if active.is_some_and(|tab| tab.muted) { "Unmute Tab" } else { "Mute Tab" }, if active.is_some_and(|tab| tab.muted) { "unmute tab|unmute current tab" } else { "mute tab|mute current tab" }, active.is_some_and(|tab| !omnibox::is_internal_url(&tab.url))),
                 (Command::MuteAllTabs, "Mute All Tabs", "mute all tabs|mute all", self.browser.all_tabs().any(|tab| !tab.muted && !omnibox::is_internal_url(&tab.url))),
                 (Command::UnmuteAllTabs, "Unmute All Tabs", "unmute all tabs|unmute all", self.browser.all_tabs().any(|tab| tab.muted && !omnibox::is_internal_url(&tab.url))),
-                (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned.is_empty()),
+                (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned_items.is_empty()),
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
                 (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
@@ -936,6 +964,17 @@ impl BrowserWindow {
                         command: Command::FocusSpace(space.id),
                         label: format!("Focus on {}", space.name),
                     }));
+                }
+            }
+            for space in &self.browser.spaces {
+                for folder in &space.folders {
+                    let path = self.browser.folder_path(folder.id);
+                    for (command, label, names) in [
+                        (Command::ExpandFolder(folder.id), format!("Expand Folder {path}"), format!("expand folder {path}|expand {path}")),
+                        (Command::RenameFolder(folder.id), format!("Rename Folder {path}…"), format!("rename folder {path}")),
+                    ] {
+                        if let Some(score) = command_match_score(&query, &names) { matches.push((score, Suggestion::Action { command, label })); }
+                    }
                 }
             }
             if let Some(tab) = active {
@@ -1033,7 +1072,7 @@ impl BrowserWindow {
                         self.browser.navigate(id, resolved.url());
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
+                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::NewFolder { .. } | Target::RenameFolder(_) | Target::MoveToFolder(_) | Target::MoveFolder(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -1081,8 +1120,15 @@ impl BrowserWindow {
             Suggestion::ArchiveAfter { seconds, .. } => {
                 self.browser.archive_after = seconds.map(Duration::from_secs);
             }
+            Suggestion::SaveFolderName { name } => {
+                if !self.save_folder_name(target, &name, cx) { return; }
+            }
+            Suggestion::FolderDestination { space, parent, .. } => {
+                if !self.confirm_folder_destination(target, space, parent, cx) { return; }
+            }
             Suggestion::SaveIcon { icon } => {
                 match target {
+                    Target::Icon(crate::icons::IconTarget::Folder(id)) => { self.browser.set_folder_icon(id, icon.as_deref()); }
                     Target::Icon(crate::icons::IconTarget::Tab(id)) => { self.browser.set_item_icon(id, icon.as_deref()); }
                     Target::Icon(crate::icons::IconTarget::Space(id)) => { self.browser.set_space_icon(id, icon.as_deref()); }
                     _ => return,
@@ -1106,6 +1152,12 @@ impl BrowserWindow {
 
     pub(crate) fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::NewFolder => self.edit_new_folder(None, None, cx),
+            Command::MoveToFolder => { if let Some(id) = self.browser.space().active_tab { self.edit_folder_destination(Target::MoveToFolder(id), cx); } }
+            Command::CollapseAllFolders => { self.browser.set_all_folders_collapsed(self.browser.space().id, true); }
+            Command::ExpandAllFolders => { self.browser.set_all_folders_collapsed(self.browser.space().id, false); }
+            Command::RenameFolder(id) => self.edit_folder_name(id, cx),
+            Command::ExpandFolder(id) => self.expand_folder(id, cx),
             Command::AddSplit(placement) => self.edit_split(placement, cx),
             Command::CloseSplitPane => { if let Some(id) = self.browser.space().active_tab { self.close_split_pane(id, cx); } }
             Command::SplitAxis(axis) => { if let Some(id) = self.browser.space().active_tab { self.browser.set_split_axis(id, axis); } }
@@ -1242,6 +1294,9 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx)))
+            .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
+            .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))
             .on_action(cx.listener(|this, _: &CustomizeTabIcon, window, cx| this.open_command_action(Command::CustomizeTabIcon, window, cx)))
             .on_action(cx.listener(|this, _: &CustomizeSpaceIcon, window, cx| this.open_command_action(Command::CustomizeSpaceIcon, window, cx)))
             .on_action(cx.listener(|this, _: &ResetNameAndIcon, _, cx| this.run_command(Command::ResetNameAndIcon, cx)))
@@ -1327,18 +1382,28 @@ impl BrowserWindow {
         self.toggle_sidebar(cx);
     }
 
+    pub(crate) fn scroll_to_pinned_item(&mut self, item: PinnedItem, cx: &mut Context<Self>) {
+        let space = self.browser.space().id;
+        if let Some(index) = self.browser.pinned_rows(space, false).iter().position(|row| row.item == item) {
+            self.sidebar_scrolls.entry(space).or_default().pending.set(Some((Section::Pinned, index)));
+        }
+        cx.notify();
+    }
+
     fn reveal_active_tab(&mut self, cx: &mut Context<Self>) {
         let Some(active) = self.browser.space().active_tab else { return; };
         self.close_command_bar(cx);
         if !self.sidebar_visible { self.toggle_sidebar(cx); }
         self.close_floating_sidebar(cx);
+        for folder in self.browser.folder_ancestors(active) { self.browser.set_folder_collapsed(folder, false); }
         let anchor = self.browser.item_anchor(active);
         let space = self.browser.space();
         let section = if space.pinned.iter().any(|tab| tab.id == anchor) { Some(Section::Pinned) }
             else if space.today.iter().any(|tab| tab.id == anchor) { Some(Section::Today) } else { None };
         if let Some(section) = section {
             let tabs = if section == Section::Pinned { &space.pinned } else { &space.today };
-            let index = tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor);
+            let index = if section == Section::Pinned { self.browser.pinned_rows(space.id, false).iter().position(|row| self.browser.pinned_item_tab(space.id, row.item) == Some(anchor)) }
+                else { tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor) };
             let scrolls = self.sidebar_scrolls.entry(space.id).or_default();
             if let Some(index) = index { scrolls.pending.set(Some((section, index))); }
             if section == Section::Pinned { self.browser.spaces[self.browser.active_space].pinned_collapsed = false; }
@@ -1556,7 +1621,7 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    fn switch_space(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn switch_space(&mut self, index: usize, cx: &mut Context<Self>) {
         self.browser.switch_space(index);
         self.settle_pager(cx);
         cx.notify();
@@ -1570,7 +1635,7 @@ impl BrowserWindow {
 
     // Rendering.
 
-    fn render_tab(
+    pub(crate) fn render_tab(
         &self,
         tab: &Tab,
         section: Section,
@@ -1806,7 +1871,7 @@ impl BrowserWindow {
                 })
                 .collect()
         };
-        let pinned = tabs(&space.pinned, Section::Pinned, cx);
+        let pinned = self.render_folder_rows(space.id, hue, cx);
         let today = tabs(&space.today, Section::Today, cx);
 
         div()
@@ -1826,7 +1891,7 @@ impl BrowserWindow {
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .child(space.name.clone()),
             ))
-            .when(!space.pinned.is_empty(), |this| {
+            .when(!space.pinned_items.is_empty(), |this| {
                 this.child(div()
                     .id(("pinned-section", index))
                     .when(current, |this| this.debug_selector(|| "pinned-section".into()))
@@ -2095,7 +2160,9 @@ impl BrowserWindow {
                         ("⇥", title, format!("Switch to Tab · {space}"))
                     }
                     Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
-                    Suggestion::SaveIcon { icon } => ("↵", icon.unwrap_or_else(|| "Reset Icon".into()), if matches!(bar.target, Target::Icon(crate::icons::IconTarget::Space(_))) { "Space Icon".into() } else { "Tab Icon".into() }),
+                    Suggestion::SaveFolderName { name } => ("▸", name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
+                    Suggestion::FolderDestination { label, .. } => ("▸", label, "Move".into()),
+                    Suggestion::SaveIcon { icon } => ("↵", icon.unwrap_or_else(|| "Reset Icon".into()), match bar.target { Target::Icon(crate::icons::IconTarget::Space(_)) => "Space Icon".into(), Target::Icon(crate::icons::IconTarget::Folder(_)) => "Folder Icon".into(), _ => "Tab Icon".into() }),
                     Suggestion::SaveTabName { name } => ("↵", name, "Rename Tab".into()),
                     Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
                     Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
@@ -2236,7 +2303,7 @@ impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
         self.sync_history_focus(window, cx);
-        if self.tab_menu.as_ref().is_some_and(|menu| !self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|tab| tab.id == menu.tab)) {
+        if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_target_exists(menu.target)) {
             self.close_tab_menu(cx);
         }
         if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {
@@ -2293,6 +2360,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx)))
+            .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
+            .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))
             .on_action(cx.listener(|this, _: &CustomizeTabIcon, window, cx| this.open_command_action(Command::CustomizeTabIcon, window, cx)))
             .on_action(cx.listener(|this, _: &CustomizeSpaceIcon, window, cx| this.open_command_action(Command::CustomizeSpaceIcon, window, cx)))
             .on_action(cx.listener(|this, _: &ResetNameAndIcon, _, cx| this.run_command(Command::ResetNameAndIcon, cx)))

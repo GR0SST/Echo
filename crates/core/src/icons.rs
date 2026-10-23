@@ -36,6 +36,12 @@ impl Browser {
         self.spaces.iter_mut().find(|entry| entry.id == space).is_some_and(|space| replace(&mut space.custom_icon, icon))
     }
 
+    pub fn set_folder_icon(&mut self, folder: crate::folders::FolderId, icon: Option<&str>) -> bool {
+        let Some(icon) = normalized(icon) else { return false; };
+        self.spaces.iter_mut().flat_map(|space| &mut space.folders).find(|entry| entry.id == folder)
+            .is_some_and(|folder| replace(&mut folder.custom_icon, icon))
+    }
+
     pub fn reset_item_customization(&mut self, tab: TabId) -> bool {
         let name = self.reset_tab_name(tab);
         self.set_item_icon(tab, None) | name

@@ -2881,3 +2881,229 @@ fn space_icon_picker_persists_symbols_and_blank_input_restores_the_default(cx: &
     bar(&view, cx).simulate_keystrokes("backspace enter");
     assert!(view.read_with(cx, |w, _| w.browser.space().custom_icon.is_none()));
 }
+
+fn open_folder_pages(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut VisualTestContext, FakeEngine) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new();
+    let now = std::time::SystemTime::now();
+    let space = browser.space().id;
+    let root = browser.create_folder(space, None, "Projects").unwrap();
+    let nested = browser.create_folder(space, Some(root), "Research").unwrap();
+    let a = browser.new_tab("https://a.example", now);
+    browser.set_title(a, "A");
+    browser.toggle_pin(a);
+    let b = browser.new_tab("https://b.example", now);
+    browser.set_title(b, "B");
+    browser.add_split(a, b, browser_core::splits::Placement::Right, now).unwrap();
+    browser.move_item_to_folder(a, nested);
+    browser.new_tab("https://outside.example", now);
+    browser.activate_tab(b, now);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    cx.run_until_parked();
+    (view, cx, fake)
+}
+
+#[gpui::test]
+fn folder_creation_and_nested_creation_keep_the_page_and_cancel_without_creating_items(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    run_named_command(&view, cx, "new folder");
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders.is_empty()));
+    dispatch_menu(cx, "Spaces", "New Folder…");
+    bar(&view, cx).simulate_input("Projects");
+    bar(&view, cx).simulate_keystrokes("enter");
+    click(cx, "folder-new-9");
+    bar(&view, cx).simulate_input("Research");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().folders.len(), 2);
+        assert_eq!(w.browser.folder_path(w.browser.space().folders[1].id), "Projects / Research");
+    });
+    assert!(cx.debug_bounds("folder-10").unwrap().origin.x > cx.debug_bounds("folder-9").unwrap().origin.x);
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn context_new_folder_pins_the_clicked_tab_while_preserving_the_other_active_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "tab-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-new-folder-with-tab");
+    bar(&view, cx).simulate_input("Reading");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        let folder = &w.browser.space().folders[0];
+        assert_eq!(folder.name, "Reading");
+        assert_eq!(w.browser.folder_tabs(folder.id).iter().map(|id| id.get()).collect::<Vec<_>>(), vec![7]);
+        assert!(!w.browser.space().today.iter().any(|tab| tab.id.get() == 7));
+    });
+    assert_eq!(active_url(&view, cx), active);
+    assert!(cx.debug_bounds("tab-7").unwrap().origin.x > cx.debug_bounds("folder-9").unwrap().origin.x);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn collapsing_a_folder_keeps_its_active_split_visible_and_reveal_unfolds_its_ancestors(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    fake.take_calls();
+    click(cx, "folder-2");
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.space().folders[0].collapsed);
+        assert_eq!(w.browser.pinned_rows(w.browser.space().id, false).len(), 2);
+    });
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 5);
+    assert!(cx.debug_bounds("tab-4").is_some());
+    click(cx, "tab-7");
+    fake.take_calls();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.pinned_rows(w.browser.space().id, false).len()), 1);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("b.example");
+    bar(&view, cx).simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 5);
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders[0].collapsed));
+    run_named_command(&view, cx, "reveal tab in sidebar");
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.space().folders.iter().all(|folder| !folder.collapsed));
+        assert_eq!(w.browser.active_tab().unwrap().id.get(), 5);
+    });
+    assert!(cx.debug_bounds("tab-4").unwrap().origin.x > cx.debug_bounds("folder-3").unwrap().origin.x);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn moving_a_split_to_a_closed_folder_in_another_space_keeps_its_engine_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let destination = view.update(cx, |w, _| {
+        let space = w.browser.add_space("Work", 100.);
+        let folder = w.browser.create_folder(space, None, "Saved").unwrap();
+        w.browser.set_folder_collapsed(folder, true);
+        folder
+    });
+    fake.take_calls();
+    run_named_command(&view, cx, "move to folder");
+    bar(&view, cx).simulate_input("Work");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert!(w.browser.folder(destination).unwrap().collapsed);
+        assert_eq!(w.browser.active_tab().unwrap().id.get(), 5);
+        assert_eq!(w.browser.folder_ancestors(w.browser.active_tab().unwrap().id), vec![destination]);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    right_click(cx, "folder-9");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-move");
+    bar(&view, cx).simulate_input("pinned in personal");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Personal");
+        assert_eq!(w.browser.active_tab().unwrap().id.get(), 5);
+        assert_eq!(w.browser.folder_space(destination), Some(w.browser.space().id));
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn folder_context_actions_rename_customize_and_copy_all_nested_page_links(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "folder-3");
+    tab_menu(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Research"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))), "the closing menu must not focus Chromium behind its replacement editor");
+    bar(&view, cx).simulate_input("References");
+    bar(&view, cx).simulate_keystrokes("enter");
+    right_click(cx, "folder-3");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-icon");
+    bar(&view, cx).simulate_input("📚");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        let folder = &w.browser.space().folders[1];
+        assert_eq!(w.browser.folder_path(folder.id), "Projects / References");
+        assert_eq!(folder.custom_icon.as_deref(), Some("📚"));
+    });
+    right_click(cx, "folder-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-copy-markdown");
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some("[A](https://a.example)\n[B](https://b.example)"));
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn folder_destination_picker_rejects_cycles_and_empty_folder_deletion_keeps_other_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "folder-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-move");
+    view.read_with(cx, |w, cx| {
+        let root = w.browser.space().folders[0].id;
+        let nested = w.browser.space().folders[1].id;
+        assert!(!w.suggestions(cx).iter().any(|suggestion| matches!(suggestion, Suggestion::FolderDestination { parent: Some(parent), .. } if *parent == root || *parent == nested)));
+    });
+    bar(&view, cx).simulate_keystrokes("escape");
+    run_named_command(&view, cx, "new folder");
+    bar(&view, cx).simulate_input("Empty");
+    bar(&view, cx).simulate_keystrokes("enter");
+    right_click(cx, "folder-8");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-delete");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().folders.len()), 2);
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn named_folder_expansion_and_collapse_all_leave_the_selected_page_intact(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    run_named_command(&view, cx, "collapse all folders");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders.iter().all(|folder| folder.collapsed)));
+    run_named_command(&view, cx, "expand folder Projects / Research");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders.iter().all(|folder| !folder.collapsed)));
+    dispatch_menu(cx, "Tabs", "Collapse All Folders");
+    dispatch_menu(cx, "Tabs", "Expand All Folders");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders.iter().all(|folder| !folder.collapsed)));
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn moving_to_a_folder_when_none_exist_creates_one_around_the_active_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    run_named_command(&view, cx, "move to folder");
+    assert!(bar_input_focused(&view, cx));
+    assert!(view.read_with(cx, |w, _| matches!(w.command_bar.as_ref().unwrap().target, crate::window::Target::NewFolder { .. })));
+    bar(&view, cx).simulate_input("Current project");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_tab().unwrap().id.get(), 8);
+        assert_eq!(w.browser.folder_tabs(w.browser.space().folders[0].id).iter().map(|id| id.get()).collect::<Vec<_>>(), vec![8]);
+        assert_eq!(w.browser.space().pinned.iter().find(|tab| tab.id.get() == 8).unwrap().pinned_url.as_deref(), active.as_deref());
+    });
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

@@ -128,8 +128,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
 | Pin/Unpin Tab | ⌘D | done | — |
 | Open Little Arc or Peek in… (pick a Space) | ⌘O | missing | — |
-| New Folder… | ⇧⌘N per nib (?) | missing | The nib gives it the same shortcut as Incognito; the real binding is set in code |
-| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | partial | Duplicate Current Tab and Rename Current Tab are implemented; folder actions remain missing |
+| New Folder… | ⇧⌘N per nib (?) | partial | GPUI name editor from Spaces menu and Command Bar; the nib's shortcut conflicts with Incognito, so no binding is assigned yet |
+| Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | done | Tab duplication/rename and current-Space folder collapse/expand are available from menus and the Command Bar |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
 | Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
 | Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | done | Same grouped sidebar order as Next/Previous Tab; intercepted inside CEF pages |
@@ -181,7 +181,7 @@ folder pages are Pinned and do not auto-archive.
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
 | "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | done | Click Clear above Today; preserves Pinned and other Spaces |
 | "Tidy Tabs": AI grouping of Today by topic | — | missing | Arc Max feature, can wait |
-| Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | partial | Core has an ordered nested Pinned tree, collapse/rename, moving pages or complete Split Views into folders, moving subtrees across Spaces, and cycle-safe session repair without losing pages. GPUI folder controls, drag/drop, previews, Turn into Space and multi-selection remain missing |
+| Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | partial | Persistent ordered nested Pinned tree with GPUI creation, rename, icons, collapse/expand and folder/tab context menus. Move pages, complete Split Views or folder subtrees across Spaces without recreating pages; closed folders stay closed and reveal the active item. Reveal Tab unfolds ancestors. Drag/drop, previews, Turn into Space and multi-selection remain missing; fresh visual check awaits an unlocked desktop |
 | Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | missing | — |
 | Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | missing | — |
 | Haptic feedback when reordering tabs | — | missing | Option in Advanced |
@@ -248,10 +248,10 @@ folder pages are Pinned and do not auto-archive.
 | Removing a suggestion ("Delete Suggestion") | — | partial | × removes a local history suggestion and its saved visit without opening it; the query and keyboard selection remain usable. Remote search suggestions are not implemented |
 | **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab, window controls, Space/tab management and archive. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
-| Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | partial | Move to Pinned/Today in any Space and Pin to <space> are implemented. Identity, custom name and loaded page are preserved; destination is focused. Move to Folder remains missing |
+| Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | done | Search destinations by Space and full folder path; Move to Folder creates a folder if none exist. Identity, custom name, selected Split View pane and loaded pages are preserved; destination is focused |
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | done | Command Bar and Tabs menu; Unfavorite returns the tab to Today in the current Space |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
-| Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
+| Folders: Create New Folder, Collapse/Expand All Folders | — | done | Name editor, current-Space collapse/expand, and named Expand Folder / Rename Folder actions |
 | Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab, Reset Tab Name and Mute/Unmute All are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate works for ordinary tabs, Pinned, Favorites and entire Split Views, creating independent page identities |
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
@@ -269,7 +269,7 @@ in code, so some were reconstructed from translator comments (?).
 |---|---|---|
 | **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Duplicate, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Customize Tab Icon, Reset Name and Icon, Add Split View, Mute/Unmute, Close/Archive and Archive Other Tabs/Tabs Above/Tabs Below (Today items only; Split Views stay atomic). Up/Down/Enter/Escape, scrolling in short windows and outside dismissal; actions target the clicked tab. Copy/rename/pin/mute preserve other active tabs; Duplicate focuses its independent copy. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
-| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | missing | — |
+| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | partial | GPUI context menu supports rename, nested creation, moving the complete subtree, icon changes, collapse/expand, deleting empty folders and copying all nested page links (plain/Markdown). Share, Duplicate, archiving nonempty folders and Turn into Space remain missing |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
 | **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, duplication, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share and graphical icon catalog remain |
 | **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | partial | GPUI ellipsis and right-click menus target the clicked pane; all listed local actions implemented. Share remains |

@@ -135,10 +135,12 @@ impl BrowserWindow {
         let main = self.main_window;
         let focus = self.focus_handle.clone();
         let pages = self.pages.clone();
+        let browser = cx.entity().downgrade();
         cx.defer(move |cx| {
             if let Some(overlay) = bar.overlay {
                 let _ = overlay.update(cx, |_, window, _| window.remove_window());
             }
+            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some()).unwrap_or(false) { return; }
             let _ = main.update(cx, |_, window, _| {
                 window.activate_window();
                 focus.focus(window);

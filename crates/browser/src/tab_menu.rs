@@ -1,6 +1,6 @@
 //! Sidebar context menus target the clicked tab without activating it.
 use crate::window::{BrowserWindow, Overlay, OverlayKind, Target};
-use browser_core::{TabId, splits::{Axis, Placement}};
+use browser_core::{TabId, folders::FolderId, splits::{Axis, Placement}};
 use gpui::{
     actions, div, hsla, point, prelude::*, px, AnyElement, App, Context, FocusHandle,
     KeyBinding, Pixels, Point, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
@@ -20,8 +20,11 @@ pub(crate) fn bind_keys(cx: &mut App) {
     ]);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId) }
+
 pub(crate) struct TabMenu {
-    pub tab: TabId,
+    pub target: MenuTarget,
     pub selected: usize,
     max_height: Pixels,
     scroll: gpui::ScrollHandle,
@@ -32,12 +35,14 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-enum Command { Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { NewFolderWithTab, MoveToFolder, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
+            Self::NewFolderWithTab => "new-folder-with-tab", Self::MoveToFolder => "move-to-folder",
+            Self::FolderRename => "folder-rename", Self::FolderNew => "folder-new", Self::FolderMove => "folder-move", Self::FolderIcon => "folder-icon", Self::FolderCollapse => "folder-collapse", Self::FolderDelete => "folder-delete", Self::FolderCopy => "folder-copy", Self::FolderCopyMarkdown => "folder-copy-markdown",
             Self::Icon => "icon", Self::ResetCustomization => "reset-customization", Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
             Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::Mute => "mute", Self::Close => "close",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Other) => "archive-other",
@@ -53,11 +58,26 @@ impl Command {
 
 impl BrowserWindow {
     pub(crate) fn open_tab_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab) { return; }
+        self.open_sidebar_menu(MenuTarget::Tab(tab), position, window, cx);
+    }
+
+    pub(crate) fn open_folder_menu(&mut self, folder: FolderId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_sidebar_menu(MenuTarget::Folder(folder), position, window, cx);
+    }
+
+    pub(crate) fn menu_target_exists(&self, target: MenuTarget) -> bool {
+        match target {
+            MenuTarget::Tab(tab) => self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
+            MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
+        }
+    }
+
+    fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.menu_target_exists(target) { return; }
         self.close_tab_menu(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { tab, selected: 0, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None });
+        self.tab_menu = Some(TabMenu { target, selected: 0, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None });
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -101,8 +121,12 @@ impl BrowserWindow {
         let main = self.main_window;
         let focus = self.focus_handle.clone();
         let pages = self.pages.clone();
+        let browser = cx.entity().downgrade();
         cx.defer(move |cx| {
             if let Some(overlay) = menu.overlay { let _ = overlay.update(cx, |_, window, _| window.remove_window()); }
+            // A menu action can replace this overlay with an editor. Returning
+            // native focus to Chromium here would steal its keyboard input.
+            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some()).unwrap_or(false) { return; }
             let _ = main.update(cx, |_, window, _| { window.activate_window(); focus.focus(window); });
             if let Some(pages) = pages { pages.borrow_mut().focus_shown(); }
         });
@@ -111,7 +135,8 @@ impl BrowserWindow {
 
     fn tab_menu_commands(&self) -> Vec<(&'static str, Command)> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
-        let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == menu.tab) else { return Vec::new(); };
+        let id = match menu.target { MenuTarget::Folder(id) => return self.folder_menu_commands(id), MenuTarget::Tab(id) => id };
+        let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == id) else { return Vec::new(); };
         let split = self.browser.split_for(tab.id);
         let orientation = if split.is_some_and(|split| split.axis == Axis::Horizontal) {
             ("Convert to Vertical Split", Command::Axis(Axis::Vertical))
@@ -138,6 +163,8 @@ impl BrowserWindow {
             rows.push(("Reset Tab to Original URL", Command::Reset));
             rows.push(("Replace Pinned URL with Current", Command::Replace));
         }
+        rows.push(("Move to Folder…", Command::MoveToFolder));
+        rows.push(("New Folder with This Tab…", Command::NewFolderWithTab));
         rows.push(("Customize Tab Icon…", Command::Icon));
         if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(("Reset Name and Icon", Command::ResetCustomization)); }
         for (relative, label) in [(browser_core::bulk_archive::Relative::Other, "Archive Other Tabs"), (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above"), (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below")] {
@@ -166,10 +193,13 @@ impl BrowserWindow {
     }
 
     fn confirm_tab_menu(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((id, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.tab, menu.pane)) else { return; };
+        let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
         let Some((_, command)) = self.tab_menu_commands().get(index).copied() else { self.close_tab_menu(cx); return; };
         self.close_tab_menu(cx);
+        let id = match target { MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }, MenuTarget::Tab(id) => id };
         match command {
+            Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),
+            Command::MoveToFolder => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
             Command::Add(mut placement) => {
                 if !self.can_add_split(id) { self.show_toast("Cannot Add New Pane".into(), cx); }
                 else {
@@ -215,6 +245,7 @@ impl BrowserWindow {
                 for id in ids { self.set_tab_muted(id, muted, cx); }
             }
             Command::Close => self.close_tab(id, cx),
+            _ => {},
         }
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
         cx.notify();

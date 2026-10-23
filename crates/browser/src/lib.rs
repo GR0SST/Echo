@@ -11,6 +11,7 @@ mod audio;
 mod split_layout;
 mod split;
 mod icons;
+mod folders;
 pub mod pages;
 pub mod text_input;
 pub mod window;

@@ -93,6 +93,17 @@ impl Browser {
         Vec::new()
     }
 
+    pub fn folder_tabs(&self, id: FolderId) -> Vec<TabId> {
+        let Some(space) = self.spaces.iter().find(|space| space.folders.iter().any(|folder| folder.id == id)) else { return Vec::new(); };
+        let mut items = Vec::new();
+        all_items(space, &[PinnedItem::Folder(id)], 0, &mut items);
+        items.into_iter().flat_map(|item| match item {
+            PinnedItem::Tab(id) => vec![id],
+            PinnedItem::Split(id) => space.splits.iter().find(|split| split.id == id).map(|split| split.panes.clone()).unwrap_or_default(),
+            PinnedItem::Folder(_) => Vec::new(),
+        }).collect()
+    }
+
     pub fn folder_path(&self, id: FolderId) -> String {
         let Some(space) = self
             .spaces
@@ -285,12 +296,7 @@ impl Browser {
 
     /// Moves a complete subtree. Pages and Split Views keep their identities,
     /// original URLs and loaded engine views, including across Spaces.
-    pub fn move_folder(
-        &mut self,
-        id: FolderId,
-        destination: SpaceId,
-        parent: Option<FolderId>,
-    ) -> bool {
+    pub fn can_move_folder(&self, id: FolderId, destination: SpaceId, parent: Option<FolderId>) -> bool {
         let Some(source) = self
             .spaces
             .iter()
@@ -322,6 +328,19 @@ impl Browser {
         if parent_depth + subtree_depth > MAX_FOLDER_DEPTH {
             return false;
         }
+        true
+    }
+
+    pub fn move_folder(
+        &mut self,
+        id: FolderId,
+        destination: SpaceId,
+        parent: Option<FolderId>,
+    ) -> bool {
+        if !self.can_move_folder(id, destination, parent) { return false; }
+        let source = self.spaces.iter().position(|space| space.folders.iter().any(|folder| folder.id == id)).unwrap();
+        let target = self.spaces.iter().position(|space| space.id == destination).unwrap();
+        let descendants = subtree_folders(&self.spaces[source], id);
         self.repair_folders();
         remove_item(&mut self.spaces[source], PinnedItem::Folder(id));
         if source != target {

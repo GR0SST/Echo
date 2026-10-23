@@ -4,7 +4,7 @@ use browser_core::{SpaceId, TabId};
 use gpui::{div, prelude::*, px, AnyElement, Context};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IconTarget { Tab(TabId), Space(SpaceId) }
+pub enum IconTarget { Tab(TabId), Space(SpaceId), Folder(browser_core::folders::FolderId) }
 
 pub(crate) fn glyph(icon: &str) -> AnyElement {
     div().size(px(18.)).flex_none().flex().items_center().justify_center().text_size(px(16.)).line_height(px(18.)).child(icon.to_string()).into_any_element()
@@ -13,6 +13,7 @@ pub(crate) fn glyph(icon: &str) -> AnyElement {
 impl BrowserWindow {
     pub(crate) fn edit_icon(&mut self, target: IconTarget, cx: &mut Context<Self>) {
         let icon = match target {
+            IconTarget::Folder(id) => self.browser.folder(id).and_then(|folder| folder.custom_icon.as_deref()),
             IconTarget::Tab(id) => self.browser.item_icon(id),
             IconTarget::Space(id) => self.browser.spaces.iter().find(|space| space.id == id).and_then(|space| space.custom_icon.as_deref()),
         }.unwrap_or_default().to_string();
