@@ -6,7 +6,7 @@
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
 //! Commands: `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
-//! `click <x> <y>` or `doubleclick <x> <y>` (logical px from the browser's top-left;
+//! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
@@ -80,6 +80,13 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                 "doubleclick" => {
                     let coords: Vec<f64> = arg.split_whitespace().filter_map(|value| value.parse().ok()).collect();
                     if let [x, y] = coords[..] { unsafe { post_double_click(ns_view, x, y) }; }
+                    cx.background_executor().timer(EVENT_GAP).await;
+                }
+                "rightclick" => {
+                    let coords: Vec<f64> = arg.split_whitespace().filter_map(|value| value.parse().ok()).collect();
+                    if let [x, y] = coords[..] {
+                        unsafe { send_right_click(ns_view, x, y); }
+                    }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "click" => {
@@ -229,6 +236,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
     if let Some(bar) = &this.command_bar {
         out += &format!("[dump] command_target={:?} selected={} suggestions={}\n", bar.target, bar.selected, this.suggestions(cx).len());
     }
+    if let Some(menu) = &this.tab_menu { out += &format!("[dump] tab_menu={} selected={}\n", menu.tab.get(), menu.selected); }
     out += &format!("[dump] archive_after_seconds={:?}\n", browser.archive_after.map(|duration| duration.as_secs()));
     if let Some(toast) = &this.toast {
         out += &format!("[dump] toast={:?}\n", toast.message);
@@ -461,13 +469,17 @@ unsafe fn post_mouse_button(kind: usize, location: (f64, f64), window_number: is
 }
 
 unsafe fn post_mouse_button_count(kind: usize, (x, y): (f64, f64), window_number: isize, count: isize) {
+    unsafe { post_mouse_button_modified(kind, (x, y), window_number, count, 0); }
+}
+
+unsafe fn post_mouse_button_modified(kind: usize, (x, y): (f64, f64), window_number: isize, count: isize, flags: usize) {
     unsafe {
         let nil: *mut AnyObject = std::ptr::null_mut();
         let event: *mut AnyObject = msg_send![
             AnyClass::get(c"NSEvent").unwrap(),
             mouseEventWithType: kind,
             location: NSPoint::new(x, y),
-            modifierFlags: 0usize,
+            modifierFlags: flags,
             timestamp: 0.0f64,
             windowNumber: window_number,
             context: nil,
@@ -500,6 +512,18 @@ unsafe extern "C" {
     fn CGEventSetLocation(event: *mut c_void, location: NSPoint);
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
+}
+
+/// AppKit's synthetic mouseEventWithType reports buttonNumber=0 even for
+/// RightMouseDown. Use macOS's standard control-click gesture instead, keeping
+/// the event bound to its window and routed through AppKit's normal hit-test.
+unsafe fn send_right_click(view: *mut AnyObject, x: f64, y: f64) {
+    unsafe {
+        let (window, point) = mouse_target(view, x, y);
+        let number: isize = msg_send![window, windowNumber];
+        post_mouse_button_modified(MOUSE_DOWN, (point.x, point.y), number, 1, CONTROL);
+        post_mouse_button_modified(MOUSE_UP, (point.x, point.y), number, 1, CONTROL);
+    }
 }
 
 /// Hands a trackpad scroll event at window point (x, y) (top-left origin)

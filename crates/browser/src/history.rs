@@ -80,6 +80,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_tab_menu(cx);
         let existing = self.browser.favorites.iter()
             .chain(&self.browser.space().pinned)
             .chain(&self.browser.space().today)

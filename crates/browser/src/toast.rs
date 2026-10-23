@@ -13,16 +13,19 @@ pub(crate) struct Toast {
 
 impl BrowserWindow {
     pub(crate) fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        let Some(tab) = self.browser.active_tab() else {
-            return;
-        };
+        let Some(id) = self.browser.space().active_tab else { return; };
+        self.copy_tab_url(id, markdown, cx);
+    }
+
+    pub(crate) fn copy_tab_url(&mut self, id: browser_core::TabId, markdown: bool, cx: &mut Context<Self>) {
+        let Some(tab) = self.browser.all_tabs().find(|tab| tab.id == id) else { return; };
         let clean = browser_core::links::clean_url(&tab.url);
         let message = if markdown {
             "Copied URL as Markdown"
         } else if clean != tab.url {
             "Copied a clean link without trackers"
         } else {
-            "Copied Current URL"
+            "Copied URL"
         };
         let text = if markdown {
             browser_core::links::markdown_link(&tab.title, &tab.url)

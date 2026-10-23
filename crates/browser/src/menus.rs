@@ -181,6 +181,7 @@ impl window::BrowserWindow {
     ) {
         self.close_command_bar(cx);
         self.close_find(cx);
+        self.close_tab_menu(cx);
         let main = self.main_window;
         cx.defer(move |cx| {
             let _ = main.update(cx, |_, window, _| match operation {

@@ -356,6 +356,7 @@ pub enum OverlayKind {
     Toast,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
+    TabMenu,
 }
 
 /// Root of a transparent child window over the browser window. Pages are
@@ -390,6 +391,7 @@ impl Render for Overlay {
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast => browser.render_toast(),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
+                    OverlayKind::TabMenu => browser.render_tab_menu(cx),
                 };
                 browser.render_overlay_shell(content, cx)
             })
@@ -420,6 +422,7 @@ pub struct BrowserWindow {
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
     pub(crate) history_page: crate::history::HistoryPage,
+    pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
     pub floating_sidebar: Option<FloatingSidebar>,
@@ -489,6 +492,7 @@ impl BrowserWindow {
             history_page: crate::history::HistoryPage::new(cx),
             pages,
             floating_sidebar: None,
+            tab_menu: None,
             main_window: window.window_handle(),
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
@@ -623,6 +627,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         self.close_command_bar(cx);
+        self.close_tab_menu(cx);
         self.close_find(cx);
         let input = cx.new(|cx| {
             let placeholder = match target {
@@ -1127,7 +1132,7 @@ impl BrowserWindow {
     }
 
     /// Archives a Today tab or unloads a pinned one, as in Arc.
-    fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
+    pub(crate) fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         if self.browser.close_tab(id, SystemTime::now()) == Some(Closed::Unloaded) {
             if let Some(pages) = &self.pages {
                 pages.borrow_mut().discard(id);
@@ -1413,6 +1418,10 @@ impl BrowserWindow {
             .rounded_lg()
             .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
             .when(!active, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3))))
+            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_tab_menu(id, event.position, window, cx);
+            }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 this.browser.activate_tab(id, SystemTime::now());
                 if event.click_count() == 2 {
@@ -1467,6 +1476,10 @@ impl BrowserWindow {
             .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
             .when(active, |this| this.shadow_sm())
             .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.65)))
+            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_tab_menu(id, event.position, window, cx);
+            }))
             .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: title.clone(), url: display_url(&url) }).into())
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 this.browser.activate_tab(id, SystemTime::now());
@@ -1975,6 +1988,9 @@ impl BrowserWindow {
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_history_focus(window, cx);
+        if self.tab_menu.as_ref().is_some_and(|menu| !self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|tab| tab.id == menu.tab)) {
+            self.close_tab_menu(cx);
+        }
         if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {
             self.close_find(cx);
         }

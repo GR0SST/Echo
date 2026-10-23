@@ -1844,3 +1844,123 @@ fn engine_favicons_follow_tabs_into_favorites_and_survive_closing_and_sessions(c
     click(cx, "favorite-8");
     assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
 }
+
+fn right_click(cx: &mut VisualTestContext, selector: &'static str) {
+    cx.run_until_parked();
+    let center = cx.debug_bounds(selector).unwrap().center();
+    cx.simulate_mouse_move(center, None, Modifiers::none());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+}
+
+fn tab_menu(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.tab_menu.as_ref().and_then(|menu| menu.overlay)).unwrap();
+    VisualTestContext::from_window(overlay.into(), cx)
+}
+
+#[gpui::test]
+fn context_copy_uses_the_clicked_tab_and_keeps_the_current_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "tab-4");
+    assert_eq!(active_url(&view, cx), original);
+    let mut menu = tab_menu(&view, cx);
+    let panel = menu.debug_bounds("tab-context-menu").unwrap();
+    let size = menu.update(|window, _| window.bounds().size);
+    assert!(panel.origin.x >= gpui::px(0.) && panel.right() <= size.width);
+    assert!(panel.origin.y >= gpui::px(0.) && panel.bottom() <= size.height);
+    menu.simulate_keystrokes("enter");
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("https://github.com"));
+    assert_eq!(active_url(&view, cx), original);
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))));
+}
+
+#[gpui::test]
+fn context_pin_and_rename_do_not_activate_the_clicked_tab(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let original = active_url(&view, cx);
+    right_click(cx, "tab-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-row-3");
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.id.get() == 7)));
+    assert_eq!(active_url(&view, cx), original);
+    right_click(cx, "tab-7");
+    tab_menu(&view, cx).simulate_keystrokes("down down enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("GPUI"));
+    bar(&view, cx).simulate_input("Renamed from menu");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id.get() == 7).unwrap().title.clone()), "Renamed from menu");
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
+}
+
+#[gpui::test]
+fn context_favorite_and_unfavorite_preserve_the_other_active_tab(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let original = active_url(&view, cx);
+    right_click(cx, "tab-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-row-4");
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites[0].id.get()), 7);
+    right_click(cx, "favorite-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-row-3");
+    assert_eq!(active_url(&view, cx), original);
+    assert!(view.read_with(cx, |w, _| w.browser.favorites.is_empty()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().today[0].id.get()), 7);
+}
+
+#[gpui::test]
+fn context_archive_targets_the_clicked_tab_and_escape_or_outside_click_cancel(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let original = active_url(&view, cx);
+    for _ in 0..3 {
+        right_click(cx, "tab-7");
+        tab_menu(&view, cx).simulate_keystrokes("escape");
+        assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
+        assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
+    }
+    right_click(cx, "tab-7");
+    let mut menu = tab_menu(&view, cx);
+    menu.simulate_click(gpui::point(gpui::px(900.), gpui::px(650.)), Modifiers::none());
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+    right_click(cx, "tab-7");
+    tab_menu(&view, cx).simulate_keystrokes("up enter");
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive[0].tab.id.get()), 7);
+}
+
+#[gpui::test]
+fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-4");
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_input("https://github.com/elsewhere");
+    bar(&view, cx).simulate_keystrokes("enter");
+    click(cx, "tab-8");
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "tab-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-row-5");
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].url.clone()), "https://github.com");
+    assert!(fake.take_calls().contains(&Call::Close(2)), "reset unloads an inactive page immediately");
+    click(cx, "tab-4");
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_input("https://github.com/new-original");
+    bar(&view, cx).simulate_keystrokes("enter");
+    click(cx, "tab-8");
+    right_click(cx, "tab-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-row-6");
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].pinned_url.clone()).as_deref(), Some("https://github.com/new-original"));
+    right_click(cx, "tab-4");
+    tab_menu(&view, cx).simulate_keystrokes("up enter");
+    assert!(fake.take_calls().contains(&Call::Close(3)));
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].url.clone()), "https://github.com/new-original");
+}
