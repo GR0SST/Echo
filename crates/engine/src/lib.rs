@@ -136,7 +136,9 @@ pub struct Engine {
     message_ids: devtools::MessageIds,
     inspectors: devtools::Inspectors,
     _runtime: std::rc::Rc<Runtime>,
-    private_context: Option<std::rc::Rc<RequestContext>>,
+    // Always the actual CEF context, including the global normal profile.
+    // Keeping this explicit prevents a fork from silently using global storage.
+    context: std::rc::Rc<RequestContext>,
 }
 
 
@@ -145,9 +147,17 @@ impl Engine {
     /// executable, e.g. when running the bare binary outside the app bundle.
     /// `shortcuts` are intercepted before pages see them and reported as
     /// [`Event::Shortcut`]. Chromium keeps its data (cookies, cache) in
-    /// `data_dir`.
+    /// `data_dir`. Retains the actual global request context; fails if CEF
+    /// cannot provide it instead of creating a replacement profile.
     pub fn start(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
-        let runtime = RUNTIME.with(|slot| -> Result<std::rc::Rc<Runtime>, String> {
+        let runtime = Self::start_runtime(data_dir)?;
+        let context = request_context_get_global_context()
+            .ok_or_else(|| "Global Chromium request context is unavailable".to_string())?;
+        Ok(Self::with_context(runtime, std::rc::Rc::new(context), Arc::new(shortcuts)))
+    }
+
+    fn start_runtime(data_dir: &Path) -> Result<std::rc::Rc<Runtime>, String> {
+        RUNTIME.with(|slot| -> Result<std::rc::Rc<Runtime>, String> {
             if let Some(runtime) = slot.borrow().as_ref() {
                 return Ok(runtime.clone());
             }
@@ -203,11 +213,17 @@ impl Engine {
             });
             *slot.borrow_mut() = Some(runtime.clone());
             Ok(runtime)
-        })?;
+        })
+    }
 
+    // All constructors, including forks, allocate fresh per-engine state here.
+    fn with_context(
+        runtime: std::rc::Rc<Runtime>,
+        context: std::rc::Rc<RequestContext>,
+        shortcuts: Shortcuts,
+    ) -> Self {
         let events = EventQueue::default();
-        let shortcuts = Arc::new(shortcuts);
-        Ok(Self {
+        Self {
             client: EngineClient::new(events.clone(), shortcuts.clone(), None),
             shortcuts,
             events,
@@ -218,14 +234,14 @@ impl Engine {
             message_ids: devtools::MessageIds::default(),
             inspectors: devtools::Inspectors::default(),
             _runtime: runtime,
-            private_context: None,
-        })
+            context,
+        }
     }
 
-    /// Private windows share an in-memory context until the last private
-    /// engine closes. Never fall back to the persistent global context.
+    /// Private windows share an in-memory context retained by private engines
+    /// and their forks. Never fall back to the persistent global context.
     pub fn start_private(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
-        let mut engine = Self::start(data_dir, shortcuts)?;
+        let runtime = Self::start_runtime(data_dir)?;
         let context = PRIVATE_CONTEXT.with(|slot| {
             if let Some(context) = slot.borrow().upgrade() { return Ok(context); }
             // CEF: an empty cache path makes both HTTP cache and site data
@@ -236,8 +252,27 @@ impl Engine {
             *slot.borrow_mut() = std::rc::Rc::downgrade(&context);
             Ok::<_, String>(context)
         })?;
-        engine.private_context = Some(context);
-        Ok(engine)
+        Ok(Self::with_context(runtime, context, Arc::new(shortcuts)))
+    }
+
+    /// Creates an empty, independent page pool using this engine's actual
+    /// CEF request context and initialized runtime. No CEF initialization or
+    /// new request context/cache is created. Cookies and origin storage are
+    /// shared; views, callbacks, snapshots, inspectors and ID counters are new.
+    /// Shortcuts retain the source's immutable configuration.
+    ///
+    /// This is profile-neutral: a private source produces a private fork.
+    /// Callers implementing Blank windows must choose a normal-profile source,
+    /// including when the command originated in a private window.
+    ///
+    /// Both retained handles outlive the source engine if needed. Dropping or
+    /// closing either pool leaves the other intact. View and inspector IDs are
+    /// local to each engine and must not be passed between pools. Like all
+    /// engine operations, call this on the main thread. This is infallible
+    /// because construction already requires a resolved, non-optional context;
+    /// it never falls back to the global context.
+    pub fn fork_with_shared_storage(&self) -> Self {
+        Self::with_context(self._runtime.clone(), self.context.clone(), self.shortcuts.clone())
     }
 
     /// Runs pending Chromium work. Call often (every few milliseconds).
@@ -310,13 +345,13 @@ impl Engine {
         frame: Bounds,
         corner_radius: f64,
     ) -> Option<ViewId> {
-        let context = self.private_context.as_ref().map(|context| context.as_ref().clone());
+        let context = self.context.as_ref().clone();
         self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context)
     }
 
     fn create_content_view(
         &mut self, ui_view: *mut c_void, url: &str, frame: Bounds,
-        corner_radius: f64, role: ViewRole, mut context: Option<RequestContext>,
+        corner_radius: f64, role: ViewRole, mut context: RequestContext,
     ) -> Option<ViewId> {
         if ui_view.is_null() { return None; }
         let parent = host::parent_of(ui_view);
@@ -360,7 +395,7 @@ impl Engine {
             Some(&CefString::from(url)),
             Some(&BrowserSettings::default()),
             extra.as_mut(),
-            context.as_mut(),
+            Some(&mut context),
         );
         let Some(browser) = browser else {
             #[cfg(target_os = "macos")]
@@ -571,7 +606,7 @@ impl Engine {
         let mut observer = devtools::InspectorObserver::new(self.inspectors.queue.clone(), id);
         let registration = host.add_dev_tools_message_observer(Some(&mut observer))
             .ok_or("Cannot register local DevTools observer")?;
-        let frontend = self.create_content_view(ui_view, INSPECTOR_FRONTEND_URL, frame, 0.0, ViewRole::Inspector(id), Some(context.clone()))
+        let frontend = self.create_content_view(ui_view, INSPECTOR_FRONTEND_URL, frame, 0.0, ViewRole::Inspector(id), context.clone())
             .ok_or("Cannot create Alloy inspector content view")?;
         let is_alloy = self.views.get(&frontend).and_then(|view| view.browser.host())
             .is_some_and(|host| host.runtime_style() == RuntimeStyle::ALLOY);

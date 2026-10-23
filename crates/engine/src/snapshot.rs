@@ -384,6 +384,33 @@ mod tests {
     }
 
     #[test]
+    fn separate_pools_with_reused_ids_do_not_drain_or_close_each_others_captures() {
+        // Shared-storage engines have independent browser agents and may reuse
+        // every local ID. A late callback must stay with its original pool.
+        let mut source = Snapshots::default();
+        let mut fork = Snapshots::default();
+        let view = ViewId::from_raw(1);
+        let now = Instant::now();
+        let source_id = pending(&mut source, view, 7, now);
+        let fork_id = pending(&mut fork, view, 7, now);
+        assert_eq!(source_id, fork_id);
+        reply(&source, view, source_id);
+        assert!(fork.take().is_empty());
+        source.close(view);
+        let late_source_callbacks = source.queue.clone();
+        drop(source);
+        late_source_callbacks.lock().unwrap().push((view, source_id, Reply::Detached));
+        assert!(fork.take().is_empty());
+        reply(&fork, view, fork_id);
+        let completed = fork.take();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].view, view);
+        assert_eq!(completed[0].request, 7);
+        assert!(completed[0].png.is_some());
+        assert!(fork.take().is_empty());
+    }
+
+    #[test]
     fn screenshot_ids_share_the_frontend_allocator() {
         let ids = crate::devtools::MessageIds::default();
         let mut state = Snapshots { message_ids: ids.clone(), ..Default::default() };

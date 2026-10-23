@@ -576,6 +576,44 @@ mod tests {
     }
 
     #[test]
+    fn shared_context_pools_keep_inspectors_and_protocol_callbacks_independent() {
+        // A shared native context is opaque to this state machine. Closing the
+        // source pool must not detach the fork's same-numbered inspector.
+        let context = std::rc::Rc::new("shared request context");
+        let mut source = Inspectors::default();
+        let mut fork = Inspectors::default();
+        let source_id = insert(&mut source, 1, context.clone());
+        let fork_id = insert(&mut fork, 1, context.clone());
+        assert_eq!(source_id, fork_id);
+        source.take();
+        fork.take();
+        let source_ids = MessageIds::default();
+        let fork_ids = MessageIds::default();
+        let request = r#"{"id":7,"method":"Runtime.enable"}"#;
+        let (source_wire, _) = source.submit(source_id, &source_ids, request).unwrap();
+        let (fork_wire, _) = fork.submit(fork_id, &fork_ids, request).unwrap();
+        assert_eq!(source_wire, fork_wire);
+        let source_callbacks = source.queue.clone();
+        source.close(source_id);
+        drop(source);
+        source_callbacks.lock().unwrap().push((source_id, Backend::Detached));
+        assert!(fork.take().is_empty());
+        assert_eq!(fork.sessions[&fork_id].status.phase, InspectorPhase::Opening);
+        assert!(std::rc::Rc::ptr_eq(&fork.sessions[&fork_id]._binding, &context));
+        fork.queue.lock().unwrap().push((fork_id, Backend::Message(
+            format!(r#"{{"id":{fork_wire},"result":{{}}}}"#).into_bytes(),
+        )));
+        let events = fork.take();
+        assert_eq!(events, vec![InspectorEvent::Protocol {
+            inspector: fork_id,
+            message: r#"{"id":7,"result":{}}"#.into(),
+        }]);
+        assert!(fork.sessions[&fork_id].protocol.pending.is_empty());
+        fork.close(fork_id);
+        assert_eq!(std::rc::Rc::strong_count(&context), 1);
+    }
+
+    #[test]
     fn lifecycle_coalesces_panel_requests_and_close_drops_only_frontend_binding() {
         let mut state = Inspectors::default();
         let binding = std::rc::Rc::new("private context and observer lifetime");
