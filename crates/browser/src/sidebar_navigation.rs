@@ -44,6 +44,7 @@ pub(crate) struct SidebarNavigation {
     pub(crate) media: Option<Entity<library::media::MediaView>>,
     media_events: Option<Subscription>,
     pub(crate) media_search_focus: bool,
+    pub(crate) downloads: crate::library_downloads::DownloadsNavigation,
     preview_focus_scope: Option<gpui::FocusHandle>,
     preview_rendered_content: Rc<std::cell::RefCell<Option<PreviewContent>>>,
     pub(crate) preview_ui_focus: Option<PreviewUiResponder>,
@@ -62,6 +63,7 @@ impl SidebarNavigation {
             media: None,
             media_events: None,
             media_search_focus: false,
+            downloads: Default::default(),
             preview_focus_scope: None,
             preview_rendered_content: Rc::default(),
             preview_ui_focus: None,
@@ -148,6 +150,7 @@ impl BrowserWindow {
         }
     }
     fn close_navigation_peers(&mut self, cx: &mut Context<Self>) {
+        self.retire_library_downloads_route();
         // Invalidate restoration before removing any child; the new root owns focus.
         self.invalidate_sidebar_focus();
         self.finish_tab_rename(true, cx);
@@ -432,6 +435,7 @@ impl BrowserWindow {
     }
     /// Shared capture entry point before a popup replaces responder intent.
     pub(crate) fn remember_library_popup_focus(&mut self, window: &Window, cx: &gpui::App) {
+        self.remember_downloads_control(window, cx);
         self.remember_library_preview_focus(window, cx);
         self.remember_library_native_popup_focus();
     }
@@ -448,6 +452,7 @@ impl BrowserWindow {
         self.sidebar_navigation.preview_native_focus = Some(saved);
         self.sidebar_navigation.preview_ui_focus = None;
         self.sidebar_navigation.media_search_focus = false;
+        self.sidebar_navigation.downloads.focus = None;
     }
     /// Popup owners that already replaced Pages intent still share the same
     /// validated restore path. This dormant snapshot never moves focus by itself.
@@ -504,12 +509,26 @@ impl BrowserWindow {
                     return;
                 }
             }
+            if self.restore_downloads_control(window, cx) { return; }
             self.focus_handle.focus(window);
             if self.page_content_visible() {
                 if let Some(pages) = &self.pages {
                     pages.borrow_mut().focus_shown();
                 }
             }
+        }
+    }
+    pub(crate) fn library_downloads_controls_took_focus(&mut self) {
+        self.invalidate_sidebar_focus();
+        self.invalidate_navigation_focus();
+        self.sidebar_navigation.media_search_focus = false;
+        self.sidebar_navigation.preview_ui_focus = None;
+        self.sidebar_navigation.preview_native_focus = None;
+        self.sidebar_navigation.preview_native_intent = None;
+        let root = self.sidebar_root_may_take_focus();
+        if let Some(pages) = &self.pages {
+            if root { pages.borrow_mut().focus_ui(); }
+            else { pages.borrow_mut().request_ui_focus(); }
         }
     }
     /// Revalidate the painted card owner before any callback uses active-profile APIs.
@@ -543,7 +562,8 @@ impl BrowserWindow {
             return;
         }
         match intent {
-            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Spaces)) => {
+            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces)) => {
+                self.retire_library_downloads_route();
                 self.invalidate_sidebar_focus();
                 self.sidebar_navigation.library_section = section;
                 self.sync_navigation_visibility();
@@ -592,7 +612,7 @@ impl BrowserWindow {
         };
         let section = self.sidebar_navigation.library_section;
         let preview = (section == LibrarySection::Media).then(|| self.render_library_page_preview(cx));
-        let empty = (section == LibrarySection::Media).then(|| {
+        let mut empty = (section == LibrarySection::Media).then(|| {
             // Reuse existing host semantic surfaces; never change App appearance.
             let media_colors = library::media::MediaColors {
                 column: colors.background,
@@ -630,6 +650,9 @@ impl BrowserWindow {
                 .child(library::media::render_preview(media_colors.preview, preview))
                 .into_any_element()
         });
+        if section == LibrarySection::Downloads {
+            empty = self.sidebar_navigation.downloads.host.as_ref().map(|host| host.view().into_any_element());
+        }
         library::render_library(
             &projection,
             section,
@@ -637,6 +660,7 @@ impl BrowserWindow {
             LibraryActions {
                 profile: true,
                 media: true,
+                downloads: true,
                 ..Default::default()
             },
             events,
@@ -652,6 +676,7 @@ impl BrowserWindow {
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                 // Bubble after the preview's own editor/control has selected its
                 // responder. CEF page clicks do not pass through this GPUI tree.
+                this.sidebar_navigation.downloads.focus = None;
                 this.sidebar_navigation.preview_native_focus = None;
                 this.sidebar_navigation.preview_native_intent = None;
                 if this.history_is_open() {

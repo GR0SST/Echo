@@ -91,6 +91,7 @@ actions!(
         ExpandCurrentSplit,
         ViewSource,
         ViewLibrary,
+        ViewDownloads,
         DeveloperTools,
         InspectElements,
         JavaScriptConsole,
@@ -165,6 +166,7 @@ window_shortcuts! {
     "ctrl-cmd-f" => crate::menus::ToggleFullscreen,
     "cmd-l" => EditCurrentUrl,
     "cmd-shift-l" => ViewLibrary,
+    "cmd-shift-j" => ViewDownloads,
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
@@ -394,6 +396,7 @@ pub enum Command {
     ViewArchive,
     ViewHistory,
     OpenLibrary,
+    ViewDownloads,
     RequestClearArchive,
     ResetPinnedTab,
     ResetSpace,
@@ -639,6 +642,7 @@ impl BrowserWindow {
         let selected = self.sidebar_navigation.controller.selected();
         let previous_index = self.sidebar_navigation.controller.pages(&self.browser).iter().position(|page| *page == selected);
         self.browser = projection;
+        self.sidebar_navigation.downloads.dirty = true;
         self.reconcile_sidebar_navigation();
         let current_index = self.sidebar_navigation.controller.pages(&self.browser).iter().position(|page| *page == selected);
         // A retained draft follows its origin through external reorders even
@@ -1015,6 +1019,7 @@ impl BrowserWindow {
                         self.invalidate_navigation_focus();
                         self.popup_focus_on_activation = false;
                         self.sidebar_navigation.media_search_focus = false;
+                        self.sidebar_navigation.downloads.focus = None;
                         self.sidebar_navigation.preview_ui_focus = None;
                         self.sidebar_navigation.preview_native_focus = None;
                         let active = self.browser.space().active_tab;
@@ -1474,6 +1479,7 @@ impl BrowserWindow {
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
                 (Command::ViewHistory, "View History", "view history|open history|browsing history", true),
                 (Command::OpenLibrary, "Open Library", "open library|view library|library", !self.browser.is_private() && !self.browser.is_blank()),
+                (Command::ViewDownloads, "View Downloads", "view downloads|downloads", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
@@ -1807,6 +1813,7 @@ impl BrowserWindow {
             }
             Command::ViewHistory => self.history_from_command(cx),
             Command::OpenLibrary => self.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx),
+            Command::ViewDownloads => self.open_library_downloads(cx),
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
@@ -1932,7 +1939,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
-            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
                 .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))
@@ -3613,6 +3620,7 @@ impl Render for BrowserWindow {
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);
         }
+        self.sync_library_downloads(window, cx);
         self.remember_library_preview_focus(window, cx);
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
@@ -3670,7 +3678,7 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
-            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
                 .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))

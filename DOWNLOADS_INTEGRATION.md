@@ -606,3 +606,52 @@ The staged sentinel stayed unchanged; all screenshots were inspected and no owne
 helper remained. These do not claim a native final-poll Complete race, interrupted
 shutdown recovery, general admission fence, default destination or remaining
 cross-platform acceptance.
+
+
+## Library completed-record route
+
+`LibraryDownloadsHost` is mounted by the actual BrowserWindow through Window →
+View Downloads…, ⇧⌘J (including CEF focus), Command Bar → View Downloads, and the
+Library rail. It reads the canonical normal workspace; it does not install a
+consumer, admit a download, choose a destination, or expose file actions. Private
+and Blank routes remain unavailable. One presenter retains its query/filter across
+section changes. Every route departure invalidates its captured event generation,
+even if departure and return occur before a paint. Canonical notifications refresh
+hidden inventory; an active-only presentation timer refreshes calendar wording.
+
+The list and controls use the existing Downloads presenter. The right rectangle
+mounts the existing selected-page renderer and measured Pages viewport. Search,
+Filter, Done, chips and list-background hits transfer native intent to the exact
+available GPUI control. Passive GPUI focus observations (including root-window
+reactivation) can reconcile an existing UI cache but cannot create UI intent or
+replace a saved native responder. Popup dismissal revalidates that responder; newer native
+or History input supersedes the list cache.
+
+`downloads_presentation.rs` orders valid completed timestamps newest first, retains
+stable tie order, and groups by the displayed heading. On macOS it uses the current
+system calendar for Today/Yesterday and Foundation's full numeric relative date
+formatter for older/future instants. This follows the available native observations
+and static Home-grouping candidate; the exact Downloads-to-Home call chain and all
+boundary cases have not been proved. No 30-day month cutoff is inferred. Other
+platforms currently use Today/Yesterday/calendar dates, pending their qualification.
+Unknown/unrepresentable dates remain present after dated records with no invented
+heading. No unfiltered-empty copy is invented. File-type/source subtitles remain
+unfilled pending an established type policy; row file actions stay disabled.
+
+These routes establish partial Downloads presentation, not default production
+download activation or complete Arc parity. Multiple-profile combinations, file
+thumbnails/types/actions, missing-file states, active transfers, animation, exact
+visual/material parity, platform formatting and general admission fences remain
+open alongside the previously listed publication/recovery gates.
+
+The integrated route passed 1,022 workspace tests on macOS (752 browser, 165 core,
+105 engine). An initial native attempt exposed passive GPUI activation invalidating
+the saved native responder; that failed run is not acceptance. After separating
+Observed from Requested control focus, the final bundle passed the same scenario:
+search retained input after Command Bar dismissal, an empty Profile filter toggled
+off once through actual Space key release, and the same native document UUID
+received subsequent input after popup dismissal without another click. Screenshots
+were inspected. A reload through the actual core session reader retained the one
+original genuine completed record under its captured named Profile, with none in
+Default. These checks used a fresh copy of previously verified owned fixture data;
+no new admission, destination policy, file action or full-fence capability was enabled.

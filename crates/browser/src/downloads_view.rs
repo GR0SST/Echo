@@ -88,7 +88,13 @@ pub(crate) enum DownloadsIntent<Token> {
 
 /// Host responder intent for the list controls only; never the right preview.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct DownloadsControlFocused;
+pub(crate) enum DownloadsControlFocused {
+    /// Pointer, keyboard traversal or activation explicitly chose a control.
+    Requested,
+    /// GPUI retained/reconciled a handle, including native-window activation.
+    /// This alone must never supersede a newer native document responder.
+    Observed,
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct DownloadsColors {
@@ -189,7 +195,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
     pub(crate) fn observe_control_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self._control_focus.is_none() {
             self._control_focus = Some(cx.on_focus_in(&self.controls_focus, window, |_, _, cx| {
-                cx.emit(DownloadsControlFocused);
+                cx.emit(DownloadsControlFocused::Observed);
             }));
         }
     }
@@ -274,7 +280,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                 .is_some_and(|id| !projection.profiles.iter().any(|profile| profile.id == id))
         {
             self.done_focus.focus(window);
-            cx.emit(DownloadsControlFocused);
+            cx.emit(DownloadsControlFocused::Observed);
         }
         self.profile_focus = projection
             .profiles
@@ -326,7 +332,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
         } else {
             self.filter_focus.focus(window);
         }
-        cx.emit(DownloadsControlFocused);
+        cx.emit(DownloadsControlFocused::Requested);
         cx.emit(DownloadsIntent::<Token>::FilterVisibilityChanged(visible));
         cx.notify();
     }
@@ -350,7 +356,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             None => 0,
         };
         targets[next].focus(window);
-        cx.emit(DownloadsControlFocused);
+        cx.emit(DownloadsControlFocused::Requested);
         if self.filter_visible && next > 0 {
             self.chips_scroll.scroll_to_item(next - 1);
         }
@@ -461,7 +467,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                                         {
                                             focus.focus(window);
                                         }
-                                        cx.emit(DownloadsControlFocused);
+                                        cx.emit(DownloadsControlFocused::Requested);
                                         cx.emit(DownloadsIntent::<Token>::ToggleProfile(id))
                                     }))
                                     .child(
@@ -512,7 +518,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                             if !focus.is_focused(window) {
                                 focus.focus(window);
                             }
-                            cx.emit(DownloadsControlFocused);
+                            cx.emit(DownloadsControlFocused::Requested);
                             // A focusable enclosing browser must not take focus back.
                             window.prevent_default();
                         }),
@@ -783,7 +789,7 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
                                 this.focus_handle(cx).focus(window);
                             }
                             window.prevent_default();
-                            cx.emit(DownloadsControlFocused);
+                            cx.emit(DownloadsControlFocused::Requested);
                         }),
                     )
                     .absolute()

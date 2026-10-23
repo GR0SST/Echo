@@ -207,6 +207,7 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::action("Zoom", ZoomWindow),
                 MenuItem::separator(),
                 MenuItem::action("Open Library…", window::ViewLibrary),
+                MenuItem::action("View Downloads…", window::ViewDownloads),
                 MenuItem::separator(),
                 MenuItem::action("Bring All to Front", BringAllToFront),
             ],

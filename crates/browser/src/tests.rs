@@ -7134,6 +7134,8 @@ fn quit_retires_every_pool_even_while_stale_layout_closures_hold_pages() {
 
 #[path = "library_route_tests.rs"]
 mod library_route_tests;
+#[path = "library_downloads_route_tests.rs"]
+mod library_downloads_route_tests;
 
 #[path = "download_probe_page_tests.rs"]
 mod download_probe_page_tests;

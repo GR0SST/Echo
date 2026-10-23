@@ -42,6 +42,8 @@ mod downloads;
 mod downloads_publication;
 mod download_acceptance;
 mod library_downloads_host;
+mod library_downloads;
+mod downloads_presentation;
 mod user_profile_dialog;
 mod user_profiles;
 pub mod pages;

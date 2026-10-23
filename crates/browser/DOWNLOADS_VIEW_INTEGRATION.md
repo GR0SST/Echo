@@ -1,3 +1,11 @@
+> Current integration: BrowserWindow mounts this presenter through
+> `library_downloads.rs` and the canonical `LibraryDownloadsHost`. Window → View
+> Downloads…, ⇧⌘J, Command Bar and the Library rail are wired. File actions,
+> active rows, type subtitles and default download admission remain incomplete.
+> `DownloadsControlFocused::Requested` is explicit user intent; `Observed` is
+> passive handle reconciliation and must not supersede a native popup responder.
+> Earlier "unwired" checkpoints below describe their historical scope.
+
 # Library Downloads presenter integration
 
 ## Search reference update (2026-10-24)

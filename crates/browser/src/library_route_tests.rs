@@ -165,6 +165,9 @@ fn unavailable(cx: &mut TestAppContext, browser: browser_core::Browser) {
     cx.run_until_parked();
     let before = view.read_with(cx, |view, _| view.session_json());
     assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::ViewLibrary, cx)));
+    assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::ViewDownloads, cx)));
+    cx.simulate_keystrokes("cmd-shift-j");
+    dispatch_menu(cx, "Window", "View Downloads…");
     cx.simulate_keystrokes("cmd-shift-l");
     dispatch_menu(cx, "Window", "Open Library…");
     assert!(view.read_with(cx, |view, _| view.page_content_visible()));
@@ -184,7 +187,10 @@ fn unavailable(cx: &mut TestAppContext, browser: browser_core::Browser) {
     );
     assert!(!bar(&view, cx)
         .update(|window, cx| window.is_action_available(&crate::window::ViewLibrary, cx)));
-    view.update(cx, |view, cx| view.run_command(Command::OpenLibrary, cx));
+    view.update(cx, |view, cx| {
+        view.run_command(Command::OpenLibrary, cx);
+        view.run_command(Command::ViewDownloads, cx);
+    });
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.page_content_visible()));
     assert_eq!(view.read_with(cx, |view, _| view.session_json()), before);
@@ -220,7 +226,7 @@ fn library_menu_uses_the_observed_window_menu_position() {
             "Minimize Window",
             "Zoom",
             "Open Library…",
-            "Bring All to Front"
+            "View Downloads…",            "Bring All to Front"
         ]
     );
 }
