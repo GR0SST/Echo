@@ -161,6 +161,15 @@ impl BrowserWindow {
             let projection = browser.window_projection(&self.profile.selection);
             (result, projection)
         };
+        let selection_changed = self.browser.space().id != projection.space().id
+            || self.browser.space().active_tab != projection.space().active_tab;
+        if selection_changed && self.command_bar.is_none() && self.tab_rename.is_none() {
+            if let Some(pages) = &self.pages {
+                let mut pages = pages.borrow_mut();
+                // A native Focused event has already selected its responder.
+                if pages.shown() != projection.space().active_tab { pages.request_page_focus(); }
+            }
+        }
         self.publish_profile_edit(projection);
         result
     }

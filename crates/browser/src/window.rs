@@ -536,6 +536,7 @@ pub struct BrowserWindow {
     pub(crate) sidebar_hovered: bool,
     pub(crate) traffic_lights_hovered: bool,
     favicon_styles: RefCell<crate::favicon_style::FaviconStyles>,
+    pub(crate) snapshot_images: RefCell<crate::window_snapshots::SnapshotImages>,
     pub command_bar: Option<CommandBar>,
     pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
     pub(crate) tab_rename_pending: Option<TabId>,
@@ -630,23 +631,32 @@ impl BrowserWindow {
                 }
             }).detach();
             let pump = pages.borrow().pump_fn();
-            cx.spawn_in(window, async move |this, cx| loop {
-                cx.background_executor().timer(ENGINE_PUMP_INTERVAL).await;
-                if this.upgrade().is_none() {
-                    break;
-                }
-                pump();
-                let Ok(events) = pages.try_borrow_mut().map(|mut pages| pages.take_events()) else {
-                    continue;
-                };
-                if events.is_empty() {
-                    continue;
-                }
-                let applied = this.update_in(cx, |this, window, cx| {
-                    this.apply_events(events, window, cx)
-                });
-                if applied.is_err() {
-                    break;
+            cx.spawn_in(window, async move |this, cx| {
+                let mut mirror_revision = 0;
+                loop {
+                    cx.background_executor().timer(ENGINE_PUMP_INTERVAL).await;
+                    if this.upgrade().is_none() {
+                        break;
+                    }
+                    pump();
+                    let Ok((events, revision)) = pages.try_borrow_mut().map(|mut pages| {
+                        let events = pages.take_events();
+                        (events, pages.mirror_revision())
+                    }) else {
+                        continue;
+                    };
+                    let mirrors_changed = mirror_revision != revision;
+                    mirror_revision = revision;
+                    if events.is_empty() && !mirrors_changed {
+                        continue;
+                    }
+                    let applied = this.update_in(cx, |this, window, cx| {
+                        this.apply_events(events, window, cx);
+                        if mirrors_changed { cx.notify(); }
+                    });
+                    if applied.is_err() {
+                        break;
+                    }
                 }
             })
             .detach();
@@ -677,6 +687,7 @@ impl BrowserWindow {
             sidebar_hovered: false,
             traffic_lights_hovered: false,
             favicon_styles: Default::default(),
+            snapshot_images: Default::default(),
             command_bar: None,
             tab_rename: None,
             tab_rename_pending: None,
@@ -867,6 +878,7 @@ impl BrowserWindow {
         self.close_command_bar(cx);
         self.close_tab_menu(cx);
         self.close_find(cx);
+        if let Some(pages) = &self.pages { pages.borrow_mut().request_ui_focus(); }
         let input = cx.new(|cx| {
             let placeholder = match target {
                 Target::Split { .. } => "Search or Enter URL…",
@@ -2028,6 +2040,7 @@ impl BrowserWindow {
                 this.open_tab_menu(id, event.position, window, cx);
             }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
                     this.open_tab_rename(id, window, cx);
@@ -2090,6 +2103,7 @@ impl BrowserWindow {
             }))
             // No tooltip: the page view covers the sidebar's popups.
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
                     let title = this.browser.item_title(id);
@@ -2140,7 +2154,7 @@ impl BrowserWindow {
         let url = self
             .browser
             .active_tab()
-            .map(|t| if t.url == crate::split::EMPTY_PANE_URL { "Search or Enter URL…".into() } else { address_host(&t.url) })
+            .map(|t| if t.url == crate::split::EMPTY_PANE_URL || self.has_frozen_active_page() { "Search or Enter URL…".into() } else { address_host(&t.url) })
             .unwrap_or_else(|| if self.browser.is_private() { "Search or Enter URL…".into() } else { String::new() });
         let private = self.browser.is_private();
         let pages: Vec<_> = if private { vec![div().w(px(SIDEBAR_WIDTH)).h_full().child(self.render_private_tabs(cx)).into_any_element()] } else { (0..self.browser.spaces.len())
@@ -3089,6 +3103,7 @@ impl Render for BrowserWindow {
                 .relative().flex_none().h_full().w(px(SIDEBAR_WIDTH * sidebar_amount)).overflow_hidden()
                 .when(sidebar_amount > 0., |this| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(self.render_sidebar(cx)))))
             .child(self.render_content(cx))
+            .children(self.render_window_snapshots())
             .child(release_hover_on_exit())
 
     }

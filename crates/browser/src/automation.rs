@@ -7,6 +7,7 @@
 //!
 //! Commands: `reopen` (Dock request), `window <index|last>` (select a browser root),
 //! `transfer-new-host`, `transfer-back` (diagnostic live-page host transfer),
+//! `snapshot <file.png>` (capture the active document through CEF),
 //! `activate`, `require-focus` (abort on focus loss or occlusion),
 //! `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `menu <menu title> > <item title>` (invoke an enabled native menu item),
@@ -15,7 +16,8 @@
 //! clicks and moves hit its child overlays when present),
 //! `pointer <x> <y>` (also moves the physical pointer for native hover checks),
 //! `drag <x1> <y1> <x2> <y2> [hold_ms]` (hold at the destination before releasing),
-//! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
+//! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`,
+//! `position <x> <y>` (native screen coordinates), `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
 
 use std::ffi::{c_void, CString};
@@ -48,7 +50,7 @@ struct HostTransfer {
     tab: browser_core::TabId,
 }
 
-fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> Option<(HostTransfer, WeakEntity<BrowserWindow>, usize)> {
+async fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> Option<(HostTransfer, WeakEntity<BrowserWindow>, usize)> {
     let (source_window, source_view, profile, selection, pages, tab, frame) = source.read_with(cx, |view, _| {
         let pages = view.pages.clone()?;
         let layout = pages.borrow().surface_layout();
@@ -71,40 +73,48 @@ fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> O
         let (parent, entity) = target.update(cx, |_, window, cx| {
             crate::native::view_of(window).map(|parent| (parent, cx.weak_entity()))
         }).ok().flatten()?;
-        let attached = target.update(cx, |view, _, _| {
+        target.update(cx, |view, _, _| {
             let mut pages = view.pages.as_ref().unwrap().borrow_mut();
             pages.sync(&view.browser, true);
             pages.set_bounds(frame);
             pages.activate_host(&view.browser);
-            pages.is_visible(tab)
-        }).unwrap_or(false);
-        if !attached {
-            let _ = target.update(cx, |_, window, _| window.remove_window());
-            return None;
-        }
+        }).ok()?;
         let _ = target.update(cx, |_, window, _| window.activate_window());
         let _ = target.update(cx, |view, _, _| view.pages.as_ref().unwrap().borrow_mut().focus_shown());
         Some((target, parent as usize, entity))
     }).ok().flatten()?;
+    if !wait_for_page(&target_entity, tab, cx).await {
+        let _ = cx.update(|cx| target.update(cx, |_, window, _| window.remove_window()));
+        return None;
+    }
     Some((HostTransfer { source: source.clone(), source_view, source_window, target, pages, tab }, target_entity, target_view))
 }
 
-fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
+async fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
     if transfer.source.upgrade().is_none() { return false; }
     if !cx.update(|cx| transfer.source_window.update(cx, |_, _, _| ()).is_ok()).unwrap_or(false) { return false; }
     let restored_page = cx.update(|cx| transfer.source.update(cx, |view, _| {
         view.refresh_profile_projection();
         let mut pages = transfer.pages.borrow_mut();
         pages.activate_host(&view.browser);
-        pages.is_visible(transfer.tab)
-    }).unwrap_or(false)).unwrap_or(false);
-    if !restored_page { return false; }
+    }).is_ok()).unwrap_or(false);
+    if !restored_page || !wait_for_page(&transfer.source, transfer.tab, cx).await { return false; }
     let restored = cx.update(|cx| {
+        let _ = transfer.target.update(cx, |_, window, _| window.remove_window());
         let _ = transfer.source_window.update(cx, |_, window, _| window.activate_window());
         transfer.pages.borrow_mut().focus_shown();
-        let _ = transfer.target.update(cx, |_, window, _| window.remove_window());
     }).is_ok();
     restored
+}
+
+// Native handoff may wait briefly for the source viewport capture. Never hold
+// a window or Pages borrow while waiting for the regular engine pump.
+async fn wait_for_page(view: &WeakEntity<BrowserWindow>, tab: browser_core::TabId, cx: &mut AsyncApp) -> bool {
+    for _ in 0..100 {
+        if view.read_with(cx, |view, _| view.pages.as_ref().is_some_and(|pages| pages.borrow().is_visible(tab))).unwrap_or(false) { return true; }
+        cx.background_executor().timer(Duration::from_millis(20)).await;
+    }
+    false
 }
 
 pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut c_void, cx: &mut App) {
@@ -129,7 +139,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             match name {
                 "require-focus" => {},
                 "transfer-new-host" => {
-                    let moved = if transfer.is_none() { transfer_new_host(&view, cx) } else { None };
+                    let moved = if transfer.is_none() { transfer_new_host(&view, cx).await } else { None };
                     let Some((state, target, parent)) = moved else {
                         eprintln!("[automation] aborted: live host transfer needs one loaded standalone page and a supported native host");
                         let _ = cx.update(|cx| cx.quit());
@@ -141,7 +151,9 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     cx.background_executor().timer(Duration::from_millis(300)).await;
                 }
                 "transfer-back" => {
-                    let Some(state) = transfer.take().filter(|state| transfer_back(state, cx)) else {
+                    let state = transfer.take();
+                    let restored = if let Some(state) = &state { transfer_back(state, cx).await } else { false };
+                    let Some(state) = state.filter(|_| restored) else {
                         eprintln!("[automation] aborted: live host transfer could not restore the source");
                         let _ = cx.update(|cx| cx.quit());
                         return;
@@ -152,7 +164,16 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 }
                 "window" => {
                     let selected = cx.update(|cx| {
-                        let roots: Vec<_> = cx.windows().into_iter().filter_map(|handle| handle.downcast::<BrowserWindow>()).collect();
+                        let mut roots: Vec<_> = cx.windows().into_iter().filter_map(|handle| handle.downcast::<BrowserWindow>()).collect();
+                        // App::windows iterates a hash map. Native window
+                        // numbers give these disposable roots creation order.
+                        roots.sort_by_key(|handle| handle.update(cx, |_, window, _| {
+                            crate::native::view_of(window).map(|parent| unsafe {
+                                let root = window_of(parent.cast());
+                                let number: isize = msg_send![root, windowNumber];
+                                number
+                            }).unwrap_or_default()
+                        }).unwrap_or_default());
                         let handle = if arg == "last" { roots.last() } else { arg.parse::<usize>().ok().and_then(|index| roots.get(index)) }?;
                         handle.update(cx, |view, window, cx| crate::native::view_of(window).map(|parent| {
                             unsafe {
@@ -329,6 +350,35 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let frame_view: *mut AnyObject = msg_send![content, superview];
                     print_views(if frame_view.is_null() { content } else { frame_view }, 0);
                 },
+                "snapshot" => {
+                    let page = view.read_with(cx, |view, _| Some((view.pages.clone()?, view.browser.active_tab()?.id))).ok().flatten();
+                    let requested = page.and_then(|(pages, tab)| {
+                        let request = pages.borrow_mut().request_snapshot(tab)?;
+                        Some((pages, tab, request))
+                    });
+                    let Some((pages, tab, request)) = requested else {
+                        eprintln!("[automation] aborted: active page snapshot request was rejected");
+                        let _ = cx.update(|cx| cx.quit());
+                        return;
+                    };
+                    let mut captured = None;
+                    for _ in 0..300 {
+                        cx.background_executor().timer(Duration::from_millis(20)).await;
+                        let snapshot = pages.borrow().snapshot(tab).filter(|(id, _)| *id == request);
+                        if let Some((_, png)) = snapshot { captured = Some(png); break; }
+                        if !pages.borrow().snapshot_pending(tab, request) { break; }
+                    }
+                    if let Some(png) = captured {
+                        match std::fs::write(arg, png.as_ref()) {
+                            Ok(()) => eprintln!("[automation] saved page snapshot {arg}"),
+                            Err(error) => eprintln!("[automation] page snapshot write failed: {error}"),
+                        }
+                    } else {
+                        eprintln!("[automation] aborted: active page snapshot failed or timed out");
+                        let _ = cx.update(|cx| cx.quit());
+                        return;
+                    }
+                },
                 "shotstack" => unsafe {
                     // All our windows composited over the main window's frame,
                     // e.g. to see overlays such as the command bar.
@@ -378,6 +428,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
+                "position" => unsafe {
+                    let mut origin = arg.split_whitespace().filter_map(|v| v.parse::<f64>().ok());
+                    if let (Some(x), Some(y)) = (origin.next(), origin.next()) {
+                        let window = window_of(ns_view);
+                        let _: () = msg_send![window, setFrameOrigin: NSPoint::new(x, y)];
+                    }
+                    cx.background_executor().timer(EVENT_GAP).await;
+                },
                 "resize" => unsafe {
                     let mut size = arg.split_whitespace().filter_map(|v| v.parse::<f64>().ok());
                     if let (Some(w), Some(h)) = (size.next(), size.next()) {

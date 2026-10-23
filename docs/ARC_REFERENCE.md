@@ -553,3 +553,47 @@ probe returned four page-only PNGs of the existing Home document before and
 after native host transfer. The per-window freeze/restore UI and marker-input
 validation remain separate integration work; this primitive does not complete
 New Window parity.
+
+### Developer Tools opening and toggling — 2026-10-23
+
+In a disposable normal Arc window on the same local fixture, Option+Cmd+I
+opened the original DevTools frontend embedded to the right of the page,
+with Elements selected. The sidebar remained unchanged and a vertical splitter
+separated page and tools. This is the current profile's remembered docking
+state, not proof of the factory default. A screenshot and accessibility tree
+were inspected. Repeating Option+Cmd+I closed the frontend and retained the
+fixture document UUID. Option+Cmd+J from closed opened Console in the same
+embedded layout; repeating it closed DevTools again. The temporary fixture tab
+was archived and its window closed. Other dock positions, Split View placement,
+Inspect Elements, Network Inspector and dimension persistence need native checks.
+
+
+### Echo frozen-window integration — 2026-10-23
+
+A bundled Echo run used a fresh profile, local input/counter/UUID fixture and
+focus guards. Two 1200×800 roots were placed side by side without moving the
+pointer. Both reported onScreen=true. After transfer, source A showed the
+frozen, dimmed `source-A` at counter 3 and the address placeholder. Active B
+showed `source-A-live-B` at counter 5. Both displayed UUID
+`4ed46dbe-de4b-49f8-a2c8-919b38618fa6`. Returning the native document to A
+preserved the value; appending `-returned` worked without recreating the page.
+Source, active and returned screenshots were inspected. This run exercised
+native host-transfer diagnostics; production New Window routing is checked
+separately. Captures are bounded by a 250 ms handoff fallback; a failed capture
+without a valid previous frame may leave no inactive image. Windows/X11,
+minimization, hidden surfaces and exact display-color calibration remain
+unverified, so New Window stays partial.
+
+The workspace suite passed 457 tests: 327 browser, 123 core and 7 engine.
+Coverage includes capture ordering, per-host frozen images, cancellation,
+source closure, stale results, geometry, deferred navigation and UI focus.
+
+A second guarded native run exercised the production Cmd+N flow. The new
+window's focused Command Bar selected the existing fixture tab from its tab
+suggestion (Down, Enter). With both roots on screen, source A froze `cmdn-A`
+at counter 3; B showed `cmdn-A-cmdn-B` at counter 4, sharing UUID
+`96ef0781-142a-4426-97aa-8b4f60271714`. Closing B with Shift+Cmd+W and activating
+A retained that UUID and accepted `-host-closed` at counter 7. All three images
+were inspected. No extra fixture tab or reload was created. The diagnostic
+window selector now sorts native root window numbers rather than depending
+on App::windows hash-map iteration order.

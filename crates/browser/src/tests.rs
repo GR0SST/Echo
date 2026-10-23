@@ -203,6 +203,7 @@ enum Call {
     StopFinding(u64),
     Reload(u64),
     Close(u64),
+    Snapshot(u64, u64),
 }
 
 /// Records what the window asks of the engine; `events` are returned by
@@ -218,6 +219,10 @@ struct FakeState {
     muted: std::collections::HashSet<u64>,
     focus_on_create: bool,
     reject_move: bool,
+    reject_snapshot: bool,
+    capture_supported: bool,
+    reject_create: bool,
+    snapshots: Vec<engine::PageSnapshot>,
 }
 
 #[derive(Clone, Default)]
@@ -240,6 +245,12 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn supports_snapshots(&self) -> bool { self.0.borrow().capture_supported }
+    fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
+        self.call(Call::Snapshot(raw(view), request));
+        !self.0.borrow().reject_snapshot
+    }
+    fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { std::mem::take(&mut self.0.borrow_mut().snapshots) }
     fn move_view(&mut self, view: ViewId, parent: *mut std::ffi::c_void, bounds: Bounds) -> bool {
         let mut state = self.0.borrow_mut();
         state.calls.push(Call::MoveHost(raw(view), parent as usize, bounds));
@@ -251,6 +262,7 @@ impl WebEngine for FakeEngine {
     fn redo(&mut self, view: ViewId) { self.call(Call::Redo(raw(view))); }
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId> {
         let mut state = self.0.borrow_mut();
+        if state.reject_create { return None; }
         state.next_view += 1;
         let id = state.next_view;
         state.bounds.insert(id, bounds);
@@ -6221,3 +6233,93 @@ fn reactivating_a_shared_page_host_preserves_its_inline_editor_focus(cx: &mut Te
     click(visual_a, "tab-7");
     assert!(fake.take_calls().contains(&Call::FocusPage(2)));
 }
+
+
+#[gpui::test]
+fn shared_page_snapshots_coalesce_and_keep_the_last_good_image_on_failure(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    fake.take_calls();
+    let first = a.update(visual_a, |view, _| view.pages.as_ref().unwrap().borrow_mut().request_snapshot(tab).unwrap());
+    let again = b.update(&mut visual_b, |view, _| view.pages.as_ref().unwrap().borrow_mut().request_snapshot(tab).unwrap());
+    assert_eq!(first, again);
+    assert_eq!(fake.take_calls(), vec![Call::Snapshot(1, first)]);
+    fake.0.borrow_mut().snapshots.push(engine::PageSnapshot { view: page(1), request: first, png: Some(vec![1, 2, 3]) });
+    b.update(&mut visual_b, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
+    for (view, visual) in [(&a, &mut *visual_a), (&b, &mut visual_b)] {
+        view.read_with(visual, |view, _| {
+            let pages = view.pages.as_ref().unwrap().borrow();
+            assert_eq!(pages.snapshot(tab).unwrap().1.as_slice(), &[1, 2, 3]);
+            assert!(!pages.snapshot_pending(tab, first));
+        });
+    }
+    let second = a.update(visual_a, |view, _| view.pages.as_ref().unwrap().borrow_mut().request_snapshot(tab).unwrap());
+    assert_ne!(first, second);
+    fake.0.borrow_mut().snapshots.push(engine::PageSnapshot { view: page(1), request: first, png: Some(vec![9]) });
+    a.update(visual_a, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        pages.take_events();
+        assert!(pages.snapshot_pending(tab, second));
+        assert_eq!(pages.snapshot(tab).unwrap().0, first);
+    });
+    fake.0.borrow_mut().snapshots.push(engine::PageSnapshot { view: page(1), request: second, png: None });
+    a.update(visual_a, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        pages.take_events();
+        assert!(!pages.snapshot_pending(tab, second));
+        assert_eq!(pages.snapshot(tab).unwrap().1.as_slice(), &[1, 2, 3]);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))));
+}
+
+#[gpui::test]
+fn a_snapshot_of_a_discarded_renderer_cannot_replace_its_reopened_tab(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (view, visual) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = view.read_with(visual, |view, _| view.browser.active_tab().unwrap().id);
+    let first = view.update(visual, |view, _| view.pages.as_ref().unwrap().borrow_mut().request_snapshot(tab).unwrap());
+    view.update(visual, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        pages.discard(tab);
+        pages.sync(&view.browser, true);
+    });
+    fake.0.borrow_mut().snapshots.push(engine::PageSnapshot { view: page(1), request: first, png: Some(vec![9]) });
+    view.update(visual, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        pages.take_events();
+        assert!(pages.snapshot(tab).is_none());
+        assert!(!pages.snapshot_pending(tab, first));
+    });
+    fake.0.borrow_mut().reject_snapshot = true;
+    fake.take_calls();
+    view.update(visual, |view, _| assert!(view.pages.as_ref().unwrap().borrow_mut().request_snapshot(tab).is_none()));
+    assert_eq!(fake.take_calls().len(), 1);
+    fake.0.borrow_mut().reject_snapshot = false;
+    assert!(view.update(visual, |view, _| view.pages.as_ref().unwrap().borrow_mut().request_snapshot(tab).is_some()));
+}
+
+
+#[gpui::test]
+fn a_late_initial_renderer_does_not_take_the_open_command_bars_native_focus(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    fake.0.borrow_mut().reject_create = true;
+    let (view, visual) = open_with(cx, Some(Box::new(fake.clone())));
+    visual.simulate_keystrokes("cmd-t");
+    bar(&view, visual).simulate_input("https://late.example/first");
+    fake.take_calls();
+    fake.0.borrow_mut().reject_create = false;
+    view.update(visual, |_, cx| cx.notify());
+    visual.run_until_parked();
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::Create(1, _))), "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))), "{calls:?}");
+    assert!(bar_input_focused(&view, visual));
+    bar(&view, visual).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, visual).as_deref(), Some("https://late.example/first"));
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))));
+}
+
+#[path = "page_handoff_tests.rs"]
+mod page_handoff_tests;

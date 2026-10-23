@@ -10,6 +10,7 @@ mod tab_menu;
 mod site_controls;
 mod panel;
 mod favicon_style;
+mod window_snapshots;
 mod new_menu;
 mod new_window;
 mod audio;
@@ -34,6 +35,8 @@ pub mod window;
 mod tests;
 #[cfg(test)]
 mod new_window_tests;
+#[cfg(test)]
+mod window_snapshot_tests;
 
 use std::path::PathBuf;
 use std::time::SystemTime;

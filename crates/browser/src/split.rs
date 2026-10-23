@@ -200,6 +200,7 @@ impl BrowserWindow {
                     .hover(|style| style.bg(hsla(0., 0., 1., 0.45)))
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                         cx.stop_propagation();
+                        if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                         this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
                         if event.click_count() == 2 { this.open_command_bar(Target::RenameTab(id), &this.browser.item_title(id), window, cx); }
                         cx.notify();
@@ -235,7 +236,8 @@ impl BrowserWindow {
                         .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
                         .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
-                        .on_click(cx.listener(move |this, _, _, cx| { this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); } cx.notify(); }))
+                        .on_click(cx.listener(move |this, _, _, cx| { if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
+                        this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); } cx.notify(); }))
                         .child(div().id(("pane-back", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Back))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_back(id); } })))
                         .child(div().id(("pane-forward", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Forward))
@@ -244,7 +246,10 @@ impl BrowserWindow {
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().reload(id); } })))
                         .child(div().id(("pane-address", key)).debug_selector(move || format!("pane-address-{key}"))
                             .flex_1().min_w_0().text_center().truncate().child(if tab.url == EMPTY_PANE_URL { "Search or Enter URL…".into() } else { crate::window::display_url(&tab.url) })
-                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); let url = this.browser.active_tab().unwrap().url.clone(); this.open_command_bar(Target::Tab(id), &url, window, cx); })))
+                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
+                        this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
+                        if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); }
+                        let url = this.browser.active_tab().unwrap().url.clone(); this.open_command_bar(Target::Tab(id), &url, window, cx); })))
                         .child(div().id(("pane-menu", key)).debug_selector(move || format!("pane-menu-{key}")).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child(crate::icons::control(crate::icons::Icon::Split)))

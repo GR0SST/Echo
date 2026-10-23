@@ -3,7 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::{cell::RefCell, rc::Rc};
+use std::time::{Duration, Instant};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use browser_core::{Browser, TabId};
 use engine::{Bounds, Engine, Event, ViewId};
@@ -12,6 +13,10 @@ use engine::{Bounds, Engine, Event, ViewId};
 /// app and by a recording fake in tests.
 pub trait WebEngine {
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId>;
+    /// Whether transfers should wait briefly for an owner-viewport photograph.
+    fn supports_snapshots(&self) -> bool { false }
+    fn request_snapshot(&mut self, _view: ViewId, _request: u64) -> bool { false }
+    fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { Vec::new() }
     fn create_in_host(&mut self, _parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> { self.create(url, bounds) }
     fn focus_ui_in_host(&mut self, _parent: *mut c_void) { self.focus_ui(); }
     /// Transfer an existing native page. Engines without native hosting reject it.
@@ -57,6 +62,9 @@ pub const CONTENT_INSET: f32 = 8.0;
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
 impl WebEngine for Chromium {
+    fn supports_snapshots(&self) -> bool { true }
+    fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_snapshot(view, request) }
+    fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { self.engine.take_snapshots() }
     fn create_in_host(&mut self, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
         let parent = if parent.is_null() { self.parent } else { parent };
         self.engine.create_view(parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS))
@@ -134,6 +142,10 @@ struct Page {
     url: String,
     state: PageState,
     muted: bool,
+    snapshot: Option<(u64, Arc<Vec<u8>>)>,
+    snapshot_pending: Option<u64>,
+    snapshot_origin: Option<(u64, Bounds)>,
+    snapshot_good_origin: Option<(u64, Bounds)>,
 }
 
 #[derive(Clone)]
@@ -145,6 +157,20 @@ struct PageIntent {
     internal: bool,
 }
 
+/// A claim belongs to one activation/selection and one unchanged source viewport.
+/// Its request ID also acts as the generation: cancelled IDs are never reused.
+struct Handoff {
+    source: u64,
+    target: u64,
+    view: ViewId,
+    frame: Bounds,
+    request: u64,
+    deadline: Instant,
+    ready: bool,
+}
+
+const HANDOFF_TIMEOUT: Duration = Duration::from_millis(250);
+
 struct PageStore {
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
@@ -152,6 +178,11 @@ struct PageStore {
     next_host: u64,
     active_host: u64,
     events: Vec<Event>,
+    next_snapshot: u64,
+    handoffs: HashMap<TabId, Handoff>,
+    layouts: HashMap<u64, HashMap<TabId, Bounds>>,
+    frozen: HashMap<(u64, TabId), Arc<Vec<u8>>>,
+    mirror_revision: u64,
 }
 
 pub struct Pages {
@@ -159,6 +190,7 @@ pub struct Pages {
     host: u64,
     parent: *mut c_void,
     page_focus: bool,
+    page_has_focus: bool,
     preserve_ui_focus: bool,
     wanted: Vec<PageIntent>,
     wanted_focus: Option<TabId>,
@@ -167,16 +199,18 @@ pub struct Pages {
     visible: HashSet<TabId>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
+    seen_revision: u64,
 }
 
 impl Pages {
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
         Self {
             store: Rc::new(RefCell::new(PageStore { engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
-                events: Vec::new() })),
+                events: Vec::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             host: 1,
             parent: std::ptr::null_mut(),
             page_focus: true,
+            page_has_focus: false,
             preserve_ui_focus: false,
             wanted: Vec::new(),
             wanted_focus: None,
@@ -185,6 +219,7 @@ impl Pages {
             visible: HashSet::new(),
             shown: None,
             bounds: None,
+            seen_revision: 0,
         }
     }
 
@@ -195,8 +230,8 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { store: self.store.clone(), host, parent, page_focus: true, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None }
+        Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
+            axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0 }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -210,6 +245,8 @@ impl Pages {
             let mut store = self.store.borrow_mut();
             if store.active_host != self.host { self.shown = None; }
             store.active_host = self.host;
+            let cancelled: Vec<_> = store.handoffs.iter().filter(|(_, claim)| claim.target != self.host).map(|(tab, _)| *tab).collect();
+            for tab in cancelled { store.cancel_handoff(tab); }
         }
         // Rebuild intent from the freshly projected model before transferring:
         // the previous window may have navigated while this host was inactive.
@@ -223,6 +260,11 @@ impl Pages {
     pub fn release_host(&mut self) {
         let mut store = self.store.borrow_mut();
         if store.hosts.remove(&self.host).is_none() { return; }
+        store.layouts.remove(&self.host);
+        store.frozen.retain(|(host, _), _| *host != self.host);
+        let cancelled: Vec<_> = store.handoffs.iter().filter(|(_, claim)| claim.source == self.host || claim.target == self.host).map(|(tab, _)| *tab).collect();
+        for tab in cancelled { store.cancel_handoff(tab); }
+        store.mirror_revision = store.mirror_revision.wrapping_add(1);
         let destination = store.hosts.iter().filter(|(_, parent)| !parent.is_null())
             .min_by_key(|(host, _)| **host).map(|(host, parent)| (*host, *parent));
         let owned: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(tab, _)| *tab).collect();
@@ -282,6 +324,7 @@ impl Pages {
             }
         }
 
+        self.store.borrow_mut().prune();
         self.wanted.clear();
         self.wanted_focus = None;
         self.split = false;
@@ -302,7 +345,7 @@ impl Pages {
                 }
             }
         }
-        self.apply();
+        self.apply_with_navigation(true);
         self.sync_audio(browser);
     }
 
@@ -333,10 +376,11 @@ impl Pages {
             return;
         };
         engine.close(page.view);
+        store.prune();
         self.visible.remove(&tab);
         if self.shown == Some(tab) {
             self.shown = None;
-            engine.focus_ui_in_host(self.parent);
+            store.engine.focus_ui_in_host(self.parent);
         }
     }
 
@@ -350,11 +394,28 @@ impl Pages {
     }
 
     fn apply(&mut self) {
+        self.apply_with_navigation(false);
+    }
+
+    // Only sync supplies fresh model intent. Capture completion and geometry
+    // updates must never navigate using an inactive window's cached URL.
+    fn apply_with_navigation(&mut self, navigate: bool) {
         let frames = self.pane_bounds();
         let wanted: Vec<_> = self.wanted.iter().zip(frames).filter(|(intent, frame)| !intent.internal && frame.page.width >= 1. && frame.page.height >= 1.)
             .map(|(intent, frame)| (intent.clone(), frame.page)).collect();
         let mut store = self.store.borrow_mut();
         let active = store.active_host == self.host;
+        let layout: HashMap<_, _> = wanted.iter().map(|(intent, bounds)| (intent.tab, *bounds)).collect();
+        if store.layouts.get(&self.host) != Some(&layout) {
+            store.layouts.insert(self.host, layout);
+            store.mirror_revision = store.mirror_revision.wrapping_add(1);
+        }
+        store.prune();
+        // Decide before borrowing individual pages. Starting capture never pumps
+        // CEF, and the native parent is unchanged until ready or the deadline.
+        let waiting: HashSet<_> = wanted.iter().filter_map(|(intent, _)| {
+            (active && !self.parent.is_null() && !store.prepare_handoff(intent.tab, self.host)).then_some(intent.tab)
+        }).collect();
         let PageStore { engine, pages, .. } = &mut *store;
         let ids: HashSet<_> = wanted.iter().map(|(intent, _)| intent.tab).collect();
         let hidden: Vec<_> = self.visible.difference(&ids).copied().collect();
@@ -372,13 +433,15 @@ impl Pages {
             if active { engine.focus_ui_in_host(self.parent); }
         }
         let mut created = false;
+        let mut moved = false;
         for (intent, bounds) in wanted {
             let PageIntent { tab, url, muted, .. } = intent;
             match pages.get_mut(&tab) {
                 Some(page) => {
                     if page.owner != self.host {
-                        if !active || self.parent.is_null() || !engine.move_view(page.view, self.parent, bounds) { self.visible.remove(&tab); continue; }
+                        if waiting.contains(&tab) || !active || self.parent.is_null() || !engine.move_view(page.view, self.parent, bounds) { self.visible.remove(&tab); continue; }
                         page.owner = self.host;
+                        moved = true;
                         self.visible.remove(&tab);
                         created = true;
                     }
@@ -386,7 +449,7 @@ impl Pages {
                         engine.set_audio_muted(page.view, muted);
                         page.muted = muted;
                     }
-                    if page.url != url {
+                    if navigate && page.url != url {
                         page.state.status.clear();
                         engine.navigate(page.view, &url);
                         page.url = url;
@@ -399,7 +462,7 @@ impl Pages {
                     let Some(view) = engine.create_in_host(self.parent, &url, bounds) else { continue; };
                     created = true;
                     if muted { engine.set_audio_muted(view, true); }
-                    pages.insert(tab, Page { owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted });
+                    pages.insert(tab, Page { owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
             engine.set_top_corners_rounded(pages[&tab].view, !self.split);
@@ -409,19 +472,29 @@ impl Pages {
         }
         // Creating a native browser may take the responder even when the
         // intended active pane has not changed. Reassert it after all creates.
-        if active && !self.preserve_ui_focus && (focused != self.shown || created) {
+        if active && self.page_focus && !self.preserve_ui_focus && (focused != self.shown || created || !self.page_has_focus) {
             if let Some((tab, view)) = focused.and_then(|id| pages.get(&id).filter(|page| page.owner == self.host).map(|page| (id, page.view))) {
                 engine.focus_page(view);
                 self.shown = Some(tab);
                 self.page_focus = true;
+                self.page_has_focus = true;
             } else if self.shown.take().is_some() || created {
                 if active { engine.focus_ui_in_host(self.parent); }
             }
         }
-        if active && self.preserve_ui_focus {
+        if active && (!self.page_focus || self.preserve_ui_focus) {
+            self.page_has_focus = false;
             self.shown = focused.filter(|tab| pages.get(tab).is_some_and(|page| page.owner == self.host));
             if created { engine.focus_ui_in_host(self.parent); }
         }
+        if moved { store.mirror_revision = store.mirror_revision.wrapping_add(1); }
+        // Ownership changes remove target photographs and reveal source ones.
+        let completed: Vec<_> = store.handoffs.iter().filter(|(tab, claim)| store.pages.get(*tab).is_some_and(|page| page.owner == claim.target)).map(|(tab, _)| *tab).collect();
+        for tab in completed {
+            store.cancel_handoff(tab);
+            store.mirror_revision = store.mirror_revision.wrapping_add(1);
+        }
+        self.seen_revision = store.mirror_revision;
     }
 
     fn pane_bounds(&self) -> Vec<crate::split_layout::PaneBounds> {
@@ -438,13 +511,37 @@ impl Pages {
         self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| (intent.tab, frame.page)).collect()
     }
 
+    /// Frozen owner-viewport images, positioned in this host's logical layout.
+    /// Images never follow later captures in another host.
+    pub fn mirrors(&self) -> Vec<(TabId, Bounds, Arc<Vec<u8>>)> {
+        let store = self.store.borrow();
+        self.wanted.iter().zip(self.pane_bounds()).filter_map(|(intent, frame)| {
+            let page = store.pages.get(&intent.tab)?;
+            if page.owner == self.host || intent.internal { return None; }
+            store.frozen.get(&(self.host, intent.tab)).map(|png| (intent.tab, frame.page, png.clone()))
+        }).collect()
+    }
+
+    pub fn mirror_revision(&self) -> u64 { self.store.borrow().mirror_revision }
+
     pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) && self.view(tab).is_some() }
 
     /// Transfers the native responder to GPUI without hiding the page.
     pub fn focus_ui(&mut self) {
-        self.page_focus = false;
+        self.request_ui_focus();
         self.store.borrow_mut().engine.focus_ui_in_host(self.parent);
     }
+
+    /// An overlay owns its own native responder; remember its intent without
+    /// pulling focus back into the underlying root window.
+    pub fn request_ui_focus(&mut self) {
+        self.page_focus = false;
+        self.page_has_focus = false;
+    }
+
+    /// Records explicit navigation/selection intent without changing the native
+    /// responder before layout or an asynchronous handoff is ready.
+    pub fn request_page_focus(&mut self) { self.page_focus = true; self.page_has_focus = false; }
 
     /// Gives keyboard focus back to the page on screen.
     pub fn focus_shown(&mut self) {
@@ -452,6 +549,7 @@ impl Pages {
         if let Some((tab, view)) = self.wanted_focus.and_then(|tab| self.view(tab).map(|view| (tab, view))) {
             self.store.borrow_mut().engine.focus_page(view);
             self.shown = Some(tab);
+            self.page_has_focus = true;
         }
     }
 
@@ -520,11 +618,50 @@ impl Pages {
         if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.stop_finding(view); }
     }
 
+    /// Captures the existing document; concurrent requests for a tab coalesce.
+    pub fn request_snapshot(&mut self, tab: TabId) -> Option<u64> {
+        let mut store = self.store.borrow_mut();
+        let page = store.pages.get(&tab)?;
+        if let Some(request) = page.snapshot_pending { return Some(request); }
+        let view = page.view;
+        let origin = (page.owner, page.frame);
+        store.next_snapshot = store.next_snapshot.checked_add(1)?;
+        let request = store.next_snapshot;
+        if !store.engine.request_snapshot(view, request) { return None; }
+        let page = store.pages.get_mut(&tab)?;
+        page.snapshot_pending = Some(request);
+        page.snapshot_origin = Some(origin);
+        Some(request)
+    }
+
+    /// A previous good image remains available while another capture is pending.
+    pub fn snapshot(&self, tab: TabId) -> Option<(u64, Arc<Vec<u8>>)> {
+        self.store.borrow().pages.get(&tab)?.snapshot.clone()
+    }
+
+    pub fn snapshot_pending(&self, tab: TabId, request: u64) -> bool {
+        self.store.borrow().pages.get(&tab).is_some_and(|page| page.snapshot_pending == Some(request))
+    }
+
     pub fn pump_fn(&self) -> fn() {
         self.store.borrow_mut().engine.pump_fn()
     }
 
     pub fn take_events(&mut self) -> Vec<Event> {
+        let mut store = self.store.borrow_mut();
+        store.drain_snapshots();
+        // Every host polls, even without a browser event. A source may drain the
+        // result first; shared revision wakes the target on its following poll.
+        let reapply = store.mirror_revision != self.seen_revision
+            || store.handoffs.values().any(|claim| claim.target == self.host);
+        drop(store);
+        if reapply {
+            // A deferred transfer must retain the UI/page focus decision that
+            // activation made, rather than stealing focus from an open input.
+            self.preserve_ui_focus = !self.page_focus;
+            self.apply();
+            self.preserve_ui_focus = false;
+        }
         let mut store = self.store.borrow_mut();
         let fresh = store.engine.take_events();
         store.events.extend(fresh);
@@ -554,7 +691,7 @@ impl Pages {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
             }
             Event::Focused { view } => {
-                if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); self.page_focus = true; }
+                if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); self.page_focus = true; self.page_has_focus = true; }
             }
             Event::UrlChanged { view, url } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
@@ -583,6 +720,103 @@ impl Pages {
                 }
             }
             Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
+        }
+    }
+}
+
+impl PageStore {
+    fn cancel_handoff(&mut self, tab: TabId) {
+        if let Some(claim) = self.handoffs.remove(&tab) {
+            if let Some(page) = self.pages.get_mut(&tab).filter(|page| page.snapshot_pending == Some(claim.request)) {
+                page.snapshot_pending = None;
+                page.snapshot_origin = None;
+            }
+        }
+    }
+
+    fn prune(&mut self) {
+        let cancelled: Vec<_> = self.handoffs.iter().filter(|(tab, claim)| {
+            self.active_host != claim.target
+                || !self.hosts.contains_key(&claim.source)
+                || !self.layouts.get(&claim.target).is_some_and(|layout| layout.contains_key(*tab))
+                || !self.pages.get(*tab).is_some_and(|page| page.owner == claim.source && page.view == claim.view && page.frame == claim.frame)
+        }).map(|(tab, _)| *tab).collect();
+        for tab in cancelled { self.cancel_handoff(tab); }
+        let before = self.frozen.len();
+        self.frozen.retain(|(host, tab), _| self.hosts.contains_key(host) && self.pages.contains_key(tab)
+            && self.layouts.get(host).is_some_and(|layout| layout.contains_key(tab)));
+        if before != self.frozen.len() { self.mirror_revision = self.mirror_revision.wrapping_add(1); }
+    }
+
+    /// True means the existing view may now be reparented.
+    fn prepare_handoff(&mut self, tab: TabId, target: u64) -> bool {
+        let Some(page) = self.pages.get(&tab) else { return true; };
+        if page.owner == target || !self.engine.supports_snapshots() { return true; }
+        if let Some(claim) = self.handoffs.get(&tab) {
+            if claim.target == target {
+                if claim.ready || Instant::now() >= claim.deadline {
+                    self.freeze_cached(tab);
+                    return true;
+                }
+                return false;
+            }
+        }
+        let (source, view, frame) = (page.owner, page.view, page.frame);
+        let existing = page.snapshot_pending.filter(|_| page.snapshot_origin == Some((source, frame)));
+        let request = if let Some(request) = existing { request } else {
+            let Some(request) = self.next_snapshot.checked_add(1) else { return true; };
+            self.next_snapshot = request;
+            if !self.engine.request_snapshot(view, request) { self.freeze_cached(tab); return true; }
+            let page = self.pages.get_mut(&tab).unwrap();
+            page.snapshot_pending = Some(request);
+            page.snapshot_origin = Some((source, frame));
+            request
+        };
+        self.handoffs.insert(tab, Handoff { source, target, view, frame, request,
+            deadline: Instant::now() + HANDOFF_TIMEOUT, ready: false });
+        false
+    }
+
+    fn freeze_cached(&mut self, tab: TabId) {
+        let Some(page) = self.pages.get(&tab) else { return; };
+        if page.snapshot_good_origin != Some((page.owner, page.frame))
+            || !self.layouts.get(&page.owner).is_some_and(|layout| layout.contains_key(&tab)) { return; }
+        if let Some((_, png)) = &page.snapshot {
+            let key = (page.owner, tab);
+            if !self.frozen.get(&key).is_some_and(|old| Arc::ptr_eq(old, png)) {
+                self.frozen.insert(key, png.clone());
+                self.mirror_revision = self.mirror_revision.wrapping_add(1);
+            }
+        }
+    }
+
+    fn drain_snapshots(&mut self) {
+        self.prune();
+        for result in self.engine.take_snapshots() {
+            let Some(tab) = self.pages.iter().find_map(|(tab, page)|
+                (page.view == result.view && page.snapshot_pending == Some(result.request)).then_some(*tab)) else { continue; };
+            let page = self.pages.get_mut(&tab).unwrap();
+            page.snapshot_pending = None;
+            let origin = page.snapshot_origin.take();
+            let image = result.png.map(Arc::new);
+            // Preserve the diagnostic cache API independently of handoff images.
+            let timely = self.handoffs.get(&tab).is_none_or(|claim| Instant::now() < claim.deadline);
+            if let Some(png) = &image {
+                if timely {
+                    page.snapshot = Some((result.request, png.clone()));
+                    page.snapshot_good_origin = origin;
+                }
+            }
+            if let Some(claim) = self.handoffs.get_mut(&tab).filter(|claim|
+                claim.request == result.request && claim.view == result.view
+                    && claim.source == page.owner && claim.frame == page.frame
+                    && origin == Some((claim.source, claim.frame))) {
+                // Commit the image only when prepare_handoff revalidates this
+                // claim immediately before reparenting. Merely completing a
+                // cancelled/obsolete claim must not replace a host photograph.
+                claim.ready = true;
+                self.mirror_revision = self.mirror_revision.wrapping_add(1);
+            }
         }
     }
 }

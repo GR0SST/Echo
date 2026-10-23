@@ -73,6 +73,10 @@ panels are excluded from this index.
 For native page-lifetime checks, `transfer-new-host` moves the loaded standalone
 page into a temporary GPUI host. `transfer-back` restores the original host and
 closes the temporary window. Use `shotstack` to capture the temporary host.
+Transfers wait for the source viewport capture before reparenting. `snapshot
+<file.png>` saves the active page's PNG through the local CEF capture API.
+`position <x> <y>` places the current test window in native screen coordinates
+without moving the pointer; `shotall <prefix>` captures every app window.
 
 `menu Edit > Undo` invokes an enabled native menu item without moving the
 system pointer. Keyboard events follow the focused browser child window,
