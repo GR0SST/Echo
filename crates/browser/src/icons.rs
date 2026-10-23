@@ -291,6 +291,7 @@ pub(crate) fn folder(custom: Option<&str>) -> AnyElement {
 
 impl BrowserWindow {
     pub(crate) fn edit_icon(&mut self, target: IconTarget, cx: &mut Context<Self>) {
+        if self.browser.is_blank() && !matches!(target, IconTarget::Tab(_)) { return; }
         let icon = match target {
             IconTarget::Folder(id) => self.browser.folder(id).and_then(|folder| folder.custom_icon.as_deref()),
             IconTarget::Tab(id) => self.browser.item_icon(id),

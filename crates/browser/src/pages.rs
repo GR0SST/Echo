@@ -15,6 +15,8 @@ pub(crate) mod devtools;
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    /// Independent page/event ownership over this engine's regular storage.
+    fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> { None }
     /// Product commands stay disabled until the renderer host bridge is ready.
     fn supports_inspector(&self) -> bool { false }
     /// Reuse this page's frontend, selecting the requested panel. `inspect`
@@ -81,6 +83,9 @@ pub const CONTENT_INSET: f32 = 8.0;
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
 impl WebEngine for Chromium {
+    fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> {
+        Some(Box::new(Self { engine: self.engine.fork_with_shared_storage(), parent: std::ptr::null_mut() }))
+    }
     fn supports_inspector(&self) -> bool { true }
     fn open_inspector(&mut self, view: ViewId, parent: *mut c_void, bounds: Bounds, panel: engine::InspectorPanel, inspect: bool) -> Result<engine::InspectorId, String> {
         let id = self.engine.open_inspector_probe(view, parent, bounds, panel)?;
@@ -273,6 +278,14 @@ impl Pages {
             bounds: None,
             seen_revision: 0,
         }
+    }
+
+    /// Independent models may reuse TabIds, so they must never share PageStore.
+    pub fn independent_with_shared_storage(&self, parent: *mut c_void) -> Option<Self> {
+        let engine = self.store.borrow().engine.fork_with_shared_storage()?;
+        let mut pages = Self::new(engine);
+        pages.set_parent(parent);
+        Some(pages)
     }
 
     /// Creates an independent layout over the same live pages and engine.

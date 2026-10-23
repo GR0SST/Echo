@@ -213,6 +213,7 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    forks: Vec<FakeEngine>,
     calls: Vec<Call>,
     /// Latest bounds given to each view.
     bounds: std::collections::HashMap<u64, Bounds>,
@@ -254,6 +255,11 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> {
+        let child = Self::default();
+        self.0.borrow_mut().forks.push(child.clone());
+        Some(Box::new(child))
+    }
     fn supports_inspector(&self) -> bool { self.0.borrow().inspector_supported }
     fn open_inspector(&mut self, view: ViewId, parent: *mut std::ffi::c_void, bounds: Bounds, panel: engine::InspectorPanel, inspect: bool) -> Result<engine::InspectorId, String> {
         self.call(Call::InspectorOpen(raw(view), parent as usize, bounds, panel, inspect));
@@ -6924,3 +6930,6 @@ fn same_drain_page_cmd_w_precedes_later_page_focus(cx: &mut TestAppContext) {
 fn same_drain_deferred_console_action_precedes_later_page_focus(cx: &mut TestAppContext) {
     assert_focus_after_shortcut_keeps_original_target(cx, true, true);
 }
+
+#[path = "blank_window_tests.rs"]
+mod blank_window_tests;

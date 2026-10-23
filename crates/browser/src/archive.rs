@@ -20,7 +20,8 @@ impl BrowserWindow {
             for id in removed { pages.discard(id); }
             pages.sync(&self.browser, true);
         }
-        if count > 0 { self.show_toast(format!("Archived {count} {}", if count == 1 { "tab" } else { "tabs" }), cx); }
+        if count > 0 { self.after_tab_removal(cx); }
+        if count > 0 && !(self.browser.is_blank() && self.browser.all_tabs().next().is_none()) { self.show_toast(format!("Archived {count} {}", if count == 1 { "tab" } else { "tabs" }), cx); }
         cx.notify();
     }
 

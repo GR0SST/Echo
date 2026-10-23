@@ -8,6 +8,8 @@ use std::time::SystemTime;
 #[derive(Clone)]
 pub(crate) struct TabDrag {
     pub id: TabId,
+    source: gpui::AnyWindowHandle,
+    blank: bool,
     focus: TabId,
     title: String,
     icon: Option<String>,
@@ -41,12 +43,16 @@ impl TabDrag {
 }
 
 impl BrowserWindow {
+    fn accepts_tab_drag(&self, drag: &TabDrag) -> bool {
+        if self.browser.is_blank() || drag.blank { self.main_window == drag.source } else { true }
+    }
     pub(crate) fn drop_tab_on_space(
         &mut self,
         drag: &TabDrag,
         space: SpaceId,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_tab_drag(drag) { return; }
         let tab = drag.id;
         self.cancel_space_drag_hover();
         let section = if self.browser.is_favorite(tab)
@@ -70,6 +76,7 @@ impl BrowserWindow {
         after: bool,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_tab_drag(drag) { return; }
         let tab = drag.id;
         if !self.edit_browser(|browser| browser.move_tab_relative(tab, target, after)) {
             return;
@@ -104,6 +111,7 @@ impl BrowserWindow {
         target: TabId,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_tab_drag(drag) { return; }
         let tab = drag.id;
         let Some(destination) = self
             .browser
@@ -129,6 +137,7 @@ impl BrowserWindow {
         section: Section,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_tab_drag(drag) { return; }
         let tab = drag.id;
         let changed = match section {
             Section::Pinned => self.edit_browser(|browser| browser.move_item_to_pinned_root(tab, space)),
@@ -154,11 +163,12 @@ impl BrowserWindow {
     }
 
     pub(crate) fn can_drop_in_favorites(&self, drag: &TabDrag) -> bool {
-        !self.browser.is_favorite(drag.id)
+        self.accepts_tab_drag(drag) && !self.browser.is_blank() && !self.browser.is_favorite(drag.id)
             && self.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES
     }
 
     pub(crate) fn drop_tab_in_favorites(&mut self, drag: &TabDrag, cx: &mut Context<Self>) {
+        if !self.accepts_tab_drag(drag) { return; }
         if self.can_drop_in_favorites(drag)
             && self.edit_browser(|browser| browser.favorite_tab(drag.id))
         {
@@ -188,6 +198,8 @@ impl BrowserWindow {
                     .map_or(tab.id, |split| split.active)
             });
         TabDrag {
+            source: self.main_window,
+            blank: self.browser.is_blank(),
             id: self.browser.item_anchor(tab.id),
             focus,
             title: self.browser.item_title(tab.id),
@@ -203,6 +215,7 @@ impl BrowserWindow {
         folder: FolderId,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_tab_drag(drag) { return; }
         if let Some(space) = self.browser.folder_space(folder) {
             if self.confirm_folder_destination(
                 Target::MoveToFolder(drag.id),

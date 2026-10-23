@@ -15,6 +15,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.browser.is_blank() { return; }
         self.open_sidebar_menu(MenuTarget::Space(space), position, window, cx);
     }
 
@@ -49,6 +50,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.browser.is_blank() { return; }
         let Some(space) = self.browser.spaces.iter().find(|space| space.id == id) else {
             return;
         };

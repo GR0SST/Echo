@@ -173,6 +173,7 @@ impl BrowserWindow {
         if self.edit_browser(|browser| browser.close_split_pane(id, SystemTime::now())) {
             self.close_find(cx);
             if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); pages.discard(id); pages.sync(&self.browser, true); }
+            self.after_tab_removal(cx);
             cx.notify();
         }
     }

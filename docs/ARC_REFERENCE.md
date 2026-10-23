@@ -727,3 +727,28 @@ not been matched to the native settings control. Interval parity therefore
 remains partial pending release-menu inspection and Profile propagation checks.
 Incognito's internal disabled timer and Little Arc's separate interval must not
 be changed solely on this public-menu evidence.
+
+## Echo Blank Window acceptance (2026-10-23)
+
+The immutable bundled build passed guarded native input checks through
+Control+Command+N, File → Blank Window and the Command Bar action. Empty Blank
+opened with focused input; stack screenshots showed its profile header and
+New Tab without Favorites, Pinned or Space controls. Two simultaneous Blanks
+kept distinct Today lists and document UUIDs; closing one left the other intact.
+
+Regular and Blank documents saw the same owned cookie/localStorage marker.
+The Incognito source saw neither; Blank created from it saw normal storage.
+New Window from Blank returned to the retained regular Space/sidebar. Regular
+History included Blank visits and excluded the private source. Closing a
+nonfinal Blank tab and restoring it produced a fresh document UUID; closing
+the last tab removed that root while the original normal document survived.
+The resulting PNGs were inspected. The first automation attempt used the
+unsupported `return` key token and was discarded; acceptance used `enter`.
+
+The workspace passed 526 Rust tests (366 browser, 132 core, 28 engine), plus
+8 installed-CEF Bun contract tests with 82 assertions. Regression coverage
+includes independent overlapping TabIds, profile-specific history, retention
+of the normal session writer after its windows close, persistent-sidebar
+restrictions, split/draft behavior and final-removal cleanup. Named profile
+selection, global Archive, relaunch behavior and exact remaining visual details
+are not claimed complete.

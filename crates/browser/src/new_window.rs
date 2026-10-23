@@ -17,9 +17,9 @@ use crate::{
 /// Retaining this after the last window closes avoids reloading the session
 /// or creating a second persistent engine when the Dock opens another window.
 #[derive(Clone)]
-struct NormalProfile {
-    profile: ProfileHandle,
-    pages: Option<Rc<RefCell<Pages>>>,
+pub(crate) struct NormalProfile {
+    pub(crate) profile: ProfileHandle,
+    pub(crate) pages: Option<Rc<RefCell<Pages>>>,
 }
 
 impl Global for NormalProfile {}
@@ -30,10 +30,16 @@ struct NewWindow {
 }
 
 impl BrowserWindow {
+    pub(crate) fn retain_normal_source(&self, cx: &mut App) {
+        if !self.browser.is_private() && !self.browser.is_blank() {
+            cx.set_global(NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() });
+        }
+    }
+
     pub(crate) fn new_window(&mut self, cx: &mut Context<Self>) {
         self.refresh_profile_projection();
         self.close_command_bar(cx);
-        if self.browser.is_private() {
+        if self.browser.is_private() || self.browser.is_blank() {
             // Private models and request contexts must never enter the normal pool.
             cx.defer(|cx| open(true, cx));
             return;
@@ -51,15 +57,7 @@ impl BrowserWindow {
 
 /// `command_bar` distinguishes New Window from initial launch/session restore.
 pub(crate) fn open(command_bar: bool, cx: &mut App) {
-    let normal = if let Some(normal) = cx.try_global::<NormalProfile>() {
-        normal.clone()
-    } else {
-        let session = crate::profile_dir().join("session.json");
-        NormalProfile {
-            profile: ProfileHandle::new(crate::load_session(&session), cx),
-            pages: None,
-        }
-    };
+    let normal = normal_source(cx);
     let selection = if command_bar {
         normal.profile.new_window_selection()
     } else {
@@ -128,5 +126,18 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
             });
         })
         .detach();
+    }
+}
+
+/// The retained regular model is also the storage/history source for Blank.
+pub(crate) fn normal_source(cx: &mut App) -> NormalProfile {
+    if let Some(normal) = cx.try_global::<NormalProfile>() {
+        normal.clone()
+    } else {
+        let session = crate::profile_dir().join("session.json");
+        NormalProfile {
+            profile: ProfileHandle::new(crate::load_session(&session), cx),
+            pages: None,
+        }
     }
 }

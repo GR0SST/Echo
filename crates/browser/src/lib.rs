@@ -13,6 +13,7 @@ mod favicon_style;
 mod window_snapshots;
 mod new_menu;
 mod new_window;
+mod blank_window;
 mod audio;
 mod split_layout;
 mod split;

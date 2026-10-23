@@ -264,8 +264,8 @@ impl BrowserWindow {
 
     fn move_to_entries(&self) -> Vec<Entry> {
         vec![
-            item("New Folder…", Command::NewFolderWithTab).into(),
-            item("Folder…", Command::MoveToFolder).into(),
+            item("New Folder…", Command::NewFolderWithTab).enabled(!self.browser.is_blank()).into(),
+            item("Folder…", Command::MoveToFolder).enabled(!self.browser.is_blank()).into(),
         ]
     }
 
@@ -344,8 +344,8 @@ impl BrowserWindow {
         archive_relative(&mut rows);
         rows.push(Entry::Separator);
         rows.push(item(if pinned { "Close Tab" } else { "Archive Tab" }, Command::Close).shortcut("⌘W").into());
-        if !favorite { rows.push(item(if pinned { "Unpin Tab" } else { "Pin Tab" }, Command::Pin).into()); }
-        rows.push(item(if favorite { "Remove Favorite" } else { "Add to Favorites" }, Command::Favorite).into());
+        if !favorite { rows.push(item(if pinned { "Unpin Tab" } else { "Pin Tab" }, Command::Pin).enabled(!self.browser.is_blank()).into()); }
+        rows.push(item(if favorite { "Remove Favorite" } else { "Add to Favorites" }, Command::Favorite).enabled(!self.browser.is_blank()).into());
         rows
     }
 
@@ -404,6 +404,7 @@ impl BrowserWindow {
         self.close_tab_menu(cx);
         // Items without a command are shown for parity but not built yet.
         let Some(command) = item.command else { return; };
+        if self.browser.is_blank() && matches!(command, Command::Pin | Command::Favorite | Command::NewFolderWithTab | Command::MoveToFolder) { return; }
         let pane_menu = pane_menu || item.pane.is_some();
         let id = match target {
             MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
