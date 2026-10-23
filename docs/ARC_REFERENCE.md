@@ -251,3 +251,39 @@ events. The run clicked the page before hovering its link. All 336 workspace
 tests passed. The automation driver now routes synthetic moves to the native
 view under the point rather than unconditionally sending them to GPUI.
 `require-focus` aborts interrupted runs, including between typed characters.
+
+## Text Undo and Redo — 2026-10-23
+
+Reference: the installed Arc Command Bar in a separate Blank Window. Three
+individual key presses produced three characters; Cmd+Z removed only the last
+character and Cmd+Shift+Z restored it. Pasting over the selected query, then
+undoing, restored the entire previous query in one step. The disposable
+window was closed without navigating or changing the user's existing tabs.
+The system pointer and keyboard layout were left unchanged.
+
+Echo text fields now keep independent text/selection histories, with one step
+per insertion event. A new edit after undo drops the abandoned redo branch.
+Programmatic initialization or retargeting starts a fresh history. IME
+candidates are provisional; committing or unmarking records one edit, while
+cancelling back to the original text preserves redo. IME selection offsets
+are interpreted relative to the inserted string, including after Unicode
+prefixes. These composition paths have GPUI coverage; their exact Arc IME
+grouping has not been inspected directly.
+
+Edit menu Undo/Redo also route to CEF's focused frame when no GPUI editor owns
+the action. A focused name editor with an empty undo stack must not undo the
+underlying page. Native page keyboard shortcuts stay with Chromium. Sidebar
+and Peek operation histories remain separate unfinished parity work.
+
+Native verification exercised both shortcuts and the real Edit menu in an
+on-screen, focused Echo window. The Command Bar followed `abc → ab → abc`,
+and undoing a whole-text replacement restored `abc` selected; redo restored
+`replacement`. On an autofocus HTML input, native Edit → Undo restored
+`Original`, and Edit → Redo restored `NativeEdit`. All four screenshots were
+inspected. No cursor warp or clipboard operation was used in this Echo run.
+All 344 workspace tests passed.
+
+This check also exposed an automation error: modified key events had been
+addressed to the main window while its Command Bar child owned focus. The
+driver now targets the key window only when it belongs to this browser, and
+can invoke enabled native menu items directly for end-to-end routing checks.

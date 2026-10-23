@@ -81,6 +81,9 @@ pub(crate) fn build() -> Vec<Menu> {
         Menu {
             name: "Edit".into(),
             items: vec![
+                MenuItem::os_action("Undo", text_input::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", text_input::Redo, OsAction::Redo),
+                MenuItem::separator(),
                 MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", text_input::Paste, OsAction::Paste),

@@ -391,6 +391,15 @@ impl Engine {
         }
     }
 
+    /// Edit history belongs to the focused frame, including embedded editors.
+    pub fn undo(&mut self, id: ViewId) {
+        if let Some(frame) = self.views.get(&id).and_then(|view| view.browser.focused_frame()) { frame.undo(); }
+    }
+
+    pub fn redo(&mut self, id: ViewId) {
+        if let Some(frame) = self.views.get(&id).and_then(|view| view.browser.focused_frame()) { frame.redo(); }
+    }
+
     pub fn go_forward(&mut self, id: ViewId) {
         if let Some(view) = self.views.get(&id) {
             view.browser.go_forward();

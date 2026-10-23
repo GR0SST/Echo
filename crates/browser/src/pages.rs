@@ -21,6 +21,8 @@ pub trait WebEngine {
     fn navigate(&mut self, view: ViewId, url: &str);
     fn go_back(&mut self, view: ViewId);
     fn go_forward(&mut self, view: ViewId);
+    fn undo(&mut self, view: ViewId);
+    fn redo(&mut self, view: ViewId);
     fn reload(&mut self, view: ViewId);
     fn force_reload(&mut self, view: ViewId);
     fn stop_loading(&mut self, view: ViewId);
@@ -78,6 +80,8 @@ impl WebEngine for Chromium {
     fn go_forward(&mut self, view: ViewId) {
         self.engine.go_forward(view)
     }
+    fn undo(&mut self, view: ViewId) { self.engine.undo(view) }
+    fn redo(&mut self, view: ViewId) { self.engine.redo(view) }
     fn reload(&mut self, view: ViewId) {
         self.engine.reload(view)
     }
@@ -349,6 +353,14 @@ impl Pages {
         if let Some(view) = self.view(tab) {
             self.engine.go_forward(view);
         }
+    }
+
+    pub fn undo(&mut self, tab: TabId) {
+        if let Some(view) = self.view(tab) { self.engine.undo(view); }
+    }
+
+    pub fn redo(&mut self, tab: TabId) {
+        if let Some(view) = self.view(tab) { self.engine.redo(view); }
     }
 
     pub fn reload(&mut self, tab: TabId) {

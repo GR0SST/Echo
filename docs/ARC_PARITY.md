@@ -74,7 +74,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | missing | No undo manager for the sidebar. Undo in the Command Bar input not checked either (?) |
+| Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | partial | GPUI text fields support per-input undo/redo, restoring text, caret and selection. Paste/cut and committed IME input are single edits; new edits clear redo, no-op deletion preserves it, and retargeting clears field history. Edit menu actions use the focused field or the active CEF page's focused frame. Undo of sidebar operations and Peek remains missing |
 | Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in `TextInput`; Edit menu includes OS editing selectors for native page responders. Page editing through CEF still needs an unlocked visual check |
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
@@ -524,8 +524,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 71
-- **partial**: 49
-- **missing**: 181
+- **partial**: 50
+- **missing**: 180
 
 ### Biggest gaps (by importance for parity)
 

@@ -40,6 +40,8 @@ enum Call {
     Navigate(u64, String),
     Back(u64),
     Forward(u64),
+    Undo(u64),
+    Redo(u64),
     ForceReload(u64),
     StopLoading(u64),
     Mute(u64, bool),
@@ -83,6 +85,8 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn undo(&mut self, view: ViewId) { self.call(Call::Undo(raw(view))); }
+    fn redo(&mut self, view: ViewId) { self.call(Call::Redo(raw(view))); }
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId> {
         let mut state = self.0.borrow_mut();
         state.next_view += 1;
@@ -1807,6 +1811,170 @@ fn dispatch_menu(cx: &mut VisualTestContext, menu: &str, label: &str) {
     let action = menu_action(menu, label);
     cx.update(|window, cx| window.dispatch_action(action, cx));
     cx.run_until_parked();
+}
+
+fn paste_test_text(cx: &mut VisualTestContext, text: &str) {
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_owned())));
+    cx.simulate_keystrokes("cmd-v");
+}
+
+#[gpui::test]
+fn text_undo_and_redo_follow_arc_per_key_and_menu_actions_without_navigating(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    let mut input = bar(&view, cx);
+    input.simulate_input("abc");
+    input.simulate_keystrokes("cmd-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("ab"));
+    dispatch_menu(&mut input, "Edit", "Undo");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("a"));
+    dispatch_menu(&mut input, "Edit", "Redo");
+    input.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("abc"));
+    input.simulate_keystrokes("cmd-z");
+    input.simulate_input("X");
+    input.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("abX"));
+    assert!(bar_input_focused(&view, cx));
+    assert!(fake.take_calls().is_empty());
+}
+
+#[gpui::test]
+fn text_undo_restores_selected_url_and_paste_is_one_edit(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let original = active_url(&view, cx).unwrap();
+    cx.simulate_keystrokes("cmd-l");
+    let mut input = bar(&view, cx);
+    paste_test_text(&mut input, "replacement");
+    input.simulate_keystrokes("cmd-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(original.as_str()));
+    input.simulate_input("x");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("x"), "undo must restore the selection, not only the URL");
+    input.simulate_keystrokes("cmd-z cmd-shift-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("x"));
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+}
+
+#[gpui::test]
+fn text_undo_restores_graphemes_caret_and_cut_selection(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    let mut input = bar(&view, cx);
+    paste_test_text(&mut input, "A🙂e\u{301}Z");
+    input.simulate_keystrokes("end left backspace");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("A🙂Z"));
+    input.simulate_keystrokes("cmd-z");
+    input.simulate_input("!");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("A🙂e\u{301}!Z"));
+    input.simulate_keystrokes("cmd-a cmd-x cmd-z");
+    input.simulate_input("R");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("R"));
+}
+
+#[gpui::test]
+fn text_undo_noop_deletion_preserves_redo_and_retargeting_clears_history(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-l");
+    let mut input = bar(&view, cx);
+    paste_test_text(&mut input, "abc");
+    input.simulate_keystrokes("cmd-z");
+    // Undo restores the original selected URL. A no-op delete at its start
+    // must not discard the available redo.
+    input.simulate_keystrokes("home backspace cmd-shift-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("abc"));
+    input.simulate_keystrokes("cmd-t cmd-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+}
+
+fn mark_command_text(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, text: &str, selection: std::ops::Range<usize>) {
+    use gpui::EntityInputHandler;
+    let input = view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().input.clone());
+    cx.update(|window, cx| input.update(cx, |input, cx|
+        input.replace_and_mark_text_in_range(None, text, Some(selection), window, cx)));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn text_undo_treats_ime_candidates_as_one_edit_and_uses_relative_utf16_selection(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    let mut input_window = bar(&view, cx);
+    paste_test_text(&mut input_window, "🙂");
+    mark_command_text(&view, &mut input_window, "か", 0..1);
+    let input = view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().input.clone());
+    let selection = input_window.update(|window, cx| input.update(cx, |input, cx|
+        input.selected_text_range(false, window, cx).unwrap().range));
+    assert_eq!(selection, 2..3);
+    mark_command_text(&view, &mut input_window, "かな", 2..2);
+    input_window.update(|window, cx| input.update(cx, |input, cx|
+        input.replace_text_in_range(None, "仮名", window, cx)));
+    input_window.run_until_parked();
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("🙂仮名"));
+    input_window.simulate_keystrokes("cmd-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("🙂"));
+    input_window.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("🙂仮名"));
+}
+
+#[gpui::test]
+fn text_undo_ime_unmark_commits_and_cancelling_does_not_destroy_redo(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    let mut input_window = bar(&view, cx);
+    mark_command_text(&view, &mut input_window, "日本", 2..2);
+    let input = view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().input.clone());
+    input_window.update(|window, cx| input.update(cx, |input, cx| input.unmark_text(window, cx)));
+    input_window.run_until_parked();
+    input_window.simulate_keystrokes("cmd-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    mark_command_text(&view, &mut input_window, "に", 1..1);
+    input_window.update(|window, cx| input.update(cx, |input, cx|
+        input.replace_text_in_range(None, "", window, cx)));
+    input_window.run_until_parked();
+    input_window.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("日本"));
+}
+
+#[gpui::test]
+fn text_undo_updates_live_find_and_inline_rename_without_changing_page_identity(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-f");
+    let mut find = find_overlay(&view, cx);
+    paste_test_text(&mut find, "needle");
+    fake.take_calls();
+    find.simulate_keystrokes("cmd-z");
+    assert!(fake.take_calls().contains(&Call::StopFinding(1)));
+    find.simulate_keystrokes("cmd-shift-z");
+    assert!(fake.take_calls().contains(&Call::Find(1, "needle".into(), true, false)));
+    find.simulate_keystrokes("escape");
+    double_click(cx, "tab-8");
+    paste_test_text(cx, "Custom name");
+    cx.simulate_keystrokes("cmd-z enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Chromium");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn text_undo_native_page_menus_target_its_focused_pane_but_not_an_empty_name_editor(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    fake.send(cx, Event::Focused { view: page(1) });
+    fake.take_calls();
+    dispatch_menu(cx, "Edit", "Undo");
+    assert_eq!(fake.take_calls(), vec![Call::Undo(1)]);
+    fake.send(cx, Event::Focused { view: page(2) });
+    dispatch_menu(cx, "Edit", "Redo");
+    assert!(fake.take_calls().contains(&Call::Redo(2)));
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    let active = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    double_click(cx, test_selector(format!("tab-{}", active.get())));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-z");
+    assert!(fake.take_calls().is_empty());
+    assert!(inline_name(&view, cx).is_some());
 }
 
 #[gpui::test]

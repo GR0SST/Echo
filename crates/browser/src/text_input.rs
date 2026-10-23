@@ -28,6 +28,8 @@ actions!(
         Paste,
         Cut,
         Copy,
+        Undo,
+        Redo,
     ]
 );
 
@@ -49,12 +51,21 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
+        KeyBinding::new("cmd-z", Undo, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-z", Redo, Some(CONTEXT)),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some(CONTEXT)),
     ]);
 }
 
 /// Emitted whenever the text changes.
 pub struct Changed;
+
+#[derive(Clone)]
+struct EditState {
+    text: SharedString,
+    selection: Range<usize>,
+    reversed: bool,
+}
 
 pub struct TextInput {
     focus_handle: FocusHandle,
@@ -68,6 +79,11 @@ pub struct TextInput {
     is_selecting: bool,
     /// Horizontal scroll that keeps the cursor visible in long text.
     scroll_x: Pixels,
+    undo_history: Vec<EditState>,
+    redo_history: Vec<EditState>,
+    /// IME updates replace one provisional range; only its final result is
+    /// one undoable edit, never the individual conversion candidates.
+    composition_before: Option<EditState>,
 }
 
 impl EventEmitter<Changed> for TextInput {}
@@ -91,6 +107,9 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             scroll_x: px(0.),
+            undo_history: Vec::new(),
+            redo_history: Vec::new(),
+            composition_before: None,
         }
     }
 
@@ -113,6 +132,9 @@ impl TextInput {
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
         self.marked_range = None;
+        self.undo_history.clear();
+        self.redo_history.clear();
+        self.composition_before = None;
         cx.emit(Changed);
         cx.notify();
     }
@@ -159,17 +181,58 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx)
-        }
-        self.replace_text_in_range(None, "", window, cx)
+        let range = if self.selected_range.is_empty() {
+            self.previous_boundary(self.cursor_offset())..self.cursor_offset()
+        } else { self.selected_range.clone() };
+        self.replace_text_in_range(Some(self.range_to_utf16(&range)), "", window, cx)
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx)
+        let range = if self.selected_range.is_empty() {
+            self.cursor_offset()..self.next_boundary(self.cursor_offset())
+        } else { self.selected_range.clone() };
+        self.replace_text_in_range(Some(self.range_to_utf16(&range)), "", window, cx)
+    }
+
+    fn edit_state(&self) -> EditState {
+        EditState { text: self.content.clone(), selection: self.selected_range.clone(), reversed: self.selection_reversed }
+    }
+
+    fn record_edit(&mut self, before: EditState) {
+        if before.text != self.content {
+            self.undo_history.push(before);
+            self.redo_history.clear();
         }
-        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    fn finish_composition(&mut self) {
+        if let Some(before) = self.composition_before.take() { self.record_edit(before); }
+        self.marked_range = None;
+    }
+
+    fn restore_edit(&mut self, state: EditState, cx: &mut Context<Self>) {
+        let changed = self.content != state.text;
+        self.content = state.text;
+        self.selected_range = state.selection;
+        self.selection_reversed = state.reversed;
+        self.marked_range = None;
+        self.is_selecting = false;
+        if changed { cx.emit(Changed); }
+        cx.notify();
+    }
+
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition();
+        let Some(before) = self.undo_history.pop() else { return; };
+        self.redo_history.push(self.edit_state());
+        self.restore_edit(before, cx);
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition();
+        let Some(after) = self.redo_history.pop() else { return; };
+        self.undo_history.push(self.edit_state());
+        self.restore_edit(after, cx);
     }
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -267,9 +330,13 @@ impl TextInput {
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
+        Self::offset_in_text_from_utf16(&self.content, offset)
+    }
+
+    fn offset_in_text_from_utf16(text: &str, offset: usize) -> usize {
         let mut utf8_offset = 0;
         let mut utf16_count = 0;
-        for ch in self.content.chars() {
+        for ch in text.chars() {
             if utf16_count >= offset {
                 break;
             }
@@ -347,8 +414,9 @@ impl EntityInputHandler for TextInput {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {
-        self.marked_range = None;
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition();
+        cx.notify();
     }
 
     fn replace_text_in_range(
@@ -358,6 +426,8 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let old_text = self.content.clone();
+        let before = self.composition_before.take().unwrap_or_else(|| self.edit_state());
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -368,8 +438,10 @@ impl EntityInputHandler for TextInput {
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        self.selection_reversed = false;
         self.marked_range.take();
-        cx.emit(Changed);
+        self.record_edit(before);
+        if old_text != self.content { cx.emit(Changed); }
         cx.notify();
     }
 
@@ -381,6 +453,8 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.composition_before.is_none() { self.composition_before = Some(self.edit_state()); }
+        let old_text = self.content.clone();
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -395,10 +469,12 @@ impl EntityInputHandler for TextInput {
         // The new selection is relative to the inserted text.
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .map(|range_utf16| Self::offset_in_text_from_utf16(new_text, range_utf16.start)
+                ..Self::offset_in_text_from_utf16(new_text, range_utf16.end))
             .map(|new_range| new_range.start + range.start..new_range.end + range.start)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
-        cx.emit(Changed);
+        self.selection_reversed = false;
+        if old_text != self.content { cx.emit(Changed); }
         cx.notify();
     }
 
@@ -642,6 +718,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
+            .when(!self.undo_history.is_empty() || self.composition_before.as_ref().is_some_and(|before| before.text != self.content), |this| this.on_action(cx.listener(Self::undo)))
+            .when(!self.redo_history.is_empty() && self.composition_before.is_none(), |this| this.on_action(cx.listener(Self::redo)))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))

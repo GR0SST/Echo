@@ -2916,6 +2916,9 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
+            .when(self.tab_rename.is_none() && self.pages.is_some() && self.browser.active_tab().is_some_and(|tab| !browser_core::omnibox::is_internal_url(&tab.url)), |this| this
+                .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, _| this.with_active_page(|pages, tab| pages.undo(tab))))
+                .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, _| this.with_active_page(|pages, tab| pages.redo(tab)))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
