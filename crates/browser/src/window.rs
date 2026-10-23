@@ -1222,9 +1222,7 @@ impl BrowserWindow {
                     let id = if self.browser.is_favorite(id) || self.browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == id)) {
                         self.browser.copy_item_to_today(id, now).expect("existing suggested tab")
                     } else { id };
-                    let archived = self.browser.archive.len();
-                    self.browser.close_split_pane(draft.pane, now);
-                    self.browser.archive.truncate(archived);
+                    self.browser.discard_split_draft(draft.pane, None, now);
                     self.browser.add_split(anchor, id, placement, now).expect("validated suggested pane");
                 } else { return; }
             }

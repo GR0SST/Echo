@@ -382,6 +382,25 @@ impl Browser {
         true
     }
 
+    /// Removes an uncommitted Today pane and, optionally, its protected-item
+    /// copy. Draft cleanup must not add archive/Undo entries or clear Redo.
+    pub fn discard_split_draft(&mut self, pane: TabId, copied_anchor: Option<TabId>, now: SystemTime) -> bool {
+        let Some(Scope::Space(index, Section::Today)) = self.tab_scope(pane) else { return false; };
+        let Some(split) = self.split_for(pane) else { return false; };
+        if copied_anchor.is_some_and(|anchor| anchor == pane || !split.panes.contains(&anchor)
+            || self.tab_scope(anchor) != Some(Scope::Space(index, Section::Today))) { return false; }
+        let archived = self.archive.len();
+        if !self.close_split_pane_unrecorded(pane, now) { return false; }
+        if let Some(anchor) = copied_anchor {
+            let active = self.active_space;
+            self.active_space = index;
+            self.close_tab_unrecorded(anchor, now);
+            self.active_space = active;
+        }
+        self.archive.truncate(archived);
+        true
+    }
+
     pub fn close_split_pane(&mut self, tab: TabId, now: SystemTime) -> bool {
         let capture = crate::undo::PaneCapture::new(self, tab);
         let closed = self.close_split_pane_unrecorded(tab, now);

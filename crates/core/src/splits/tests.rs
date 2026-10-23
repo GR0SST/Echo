@@ -501,3 +501,47 @@ fn copying_a_pinned_split_into_today_preserves_the_original_tree_and_pane_state(
     assert_eq!(restored.space().splits.len(), 2);
     assert_eq!(restored.space().pinned.len(), 2);
 }
+
+#[test]
+fn discarding_a_draft_removes_the_entire_protected_copy_without_changing_archive_or_redo() {
+    let mut browser = Browser::new();
+    let a = page(&mut browser, "a");
+    let b = page(&mut browser, "b");
+    browser.add_split(a, b, Placement::Right, NOW).unwrap();
+    browser.toggle_pin(a);
+    let original = browser.split_for(a).unwrap().id;
+    let closed = page(&mut browser, "closed");
+    browser.close_tab(closed, NOW);
+    browser.undo_sidebar(NOW);
+    let copy = browser.copy_item_to_today(a, NOW).unwrap();
+    let draft = browser.new_tab("browser://newtab", NOW);
+    browser.add_split(copy, draft, Placement::Right, NOW).unwrap();
+    browser.add_space("Other", 20.);
+    browser.switch_space(1);
+    assert!(browser.discard_split_draft(draft, Some(copy), NOW));
+    assert_eq!(browser.active_space, 1);
+    assert_eq!(browser.all_tabs().count(), 3);
+    assert_eq!(browser.split_for(a).unwrap().id, original);
+    assert!(browser.archive.is_empty());
+    assert!(browser.redo_sidebar(NOW));
+    assert_eq!(browser.archive[0].tab.id, closed);
+    assert_eq!(browser.spaces[0].pinned.len(), 2);
+    assert_eq!(browser.all_tabs().count(), 2);
+}
+
+#[test]
+fn draft_cleanup_rejects_protected_panes_and_unrelated_anchors_without_changing_the_session() {
+    let mut browser = Browser::new();
+    let a = page(&mut browser, "a");
+    let b = page(&mut browser, "b");
+    browser.add_split(a, b, Placement::Right, NOW).unwrap();
+    browser.toggle_pin(a);
+    let before = crate::session::to_json(&browser);
+    assert!(!browser.discard_split_draft(b, Some(a), NOW));
+    assert_eq!(crate::session::to_json(&browser), before);
+    browser.toggle_pin(a);
+    let other = page(&mut browser, "other");
+    let before = crate::session::to_json(&browser);
+    assert!(!browser.discard_split_draft(b, Some(other), NOW));
+    assert_eq!(crate::session::to_json(&browser), before);
+}

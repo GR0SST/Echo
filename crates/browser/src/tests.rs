@@ -5636,3 +5636,41 @@ fn creating_the_restored_native_pane_cannot_steal_the_surviving_panes_selection(
     assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().shown()), Some(survivor));
     assert!(fake.take_calls().contains(&Call::FocusPage(1)));
 }
+
+#[gpui::test]
+fn cancelled_split_draft_keeps_the_previous_pin_redo(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let source = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("cmd-d cmd-z ctrl-shift-=");
+    bar(&view, cx).simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.id == source)));
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty() && w.browser.active_split().is_none()));
+}
+
+#[gpui::test]
+fn cancelled_split_draft_on_a_pinned_group_discards_every_copy_without_consuming_redo(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 2);
+    cx.simulate_keystrokes("cmd-d cmd-t");
+    bar(&view, cx).simulate_input("https://closed.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-w cmd-z cmd-1 ctrl-shift-=");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 3);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 2);
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 2);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 2);
+}
+
+#[gpui::test]
+fn cancelled_split_draft_with_cmd_w_keeps_a_previous_pane_close_redo(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 2);
+    cx.simulate_keystrokes("cmd-w cmd-z ctrl-shift-=");
+    bar(&view, cx).simulate_keystrokes("cmd-w");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 2);
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 0);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+}

@@ -17,10 +17,7 @@ pub(crate) struct SplitDraft {
 
 impl SplitDraft {
     fn rollback(&self, browser: &mut Browser) {
-        let archived = browser.archive.len();
-        browser.close_split_pane(self.pane, SystemTime::now());
-        if self.copied { browser.close_tab(self.anchor, SystemTime::now()); }
-        browser.archive.truncate(archived);
+        browser.discard_split_draft(self.pane, self.copied.then_some(self.anchor), SystemTime::now());
         if let Some(original) = &self.original {
             browser.set_split_axis(original.anchor, original.axis);
             browser.set_split_weights(original.anchor, &original.weights);

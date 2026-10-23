@@ -433,3 +433,44 @@ was used. All 382 workspace tests passed (269 browser, 111 core, 2 engine).
 Favorite-group restoration has model coverage; these native runs cover Today
 and Pinned folder groups. Pinned/Favorite unloading, other sidebar Undo actions,
 Peek and dynamic action labels remain unfinished.
+
+### Cancelled split drafts and Redo — 2026-10-23
+
+In a disposable Arc Blank Window, a Today tab was archived and restored with
+Undo. View → Add Split View opened an unfinished pane; Escape cancelled it.
+Native Edit → Redo still rearchived the original restored tab, leaving its
+previous neighbor open. Cancellation therefore must not consume or replace
+the preceding redo action. The disposable window was closed afterward.
+
+Three new GPUI tests reproduced Echo's failure before the fix: cancelling a
+normal draft destroyed pin Redo, cancelling a copied Pinned group destroyed
+archive Redo, and cancelling with Cmd+W destroyed pane-close Redo. Draft
+rollback had used recorded pane/tab closure before truncating the archive,
+which left invalid history entries and cleared the redo stack.
+
+The model now has an explicit draft-discard operation. It removes the
+uncommitted pane and, when requested, the entire protected-item copy without
+recording closure or adding to the archive. The original Pinned/Favorite item
+is retained. Replacing a draft with an existing suggested tab uses the same
+unrecorded cleanup. Scope/anchor validation prevents accidental disposal of
+protected panes or unrelated items, and cleanup preserves the active Space
+even when invoked from another Space. The browser still restores the original
+group geometry and selection after cancellation.
+
+Native Echo checks used a separate profile with a Pinned two-pane group, a
+Today tab to archive/restore, and a fallback page. After opening and cancelling
+a normal draft, Shift+Cmd+Z rearchived the intended Today tab. The same passed
+after cancelling a draft copied from the Pinned group; both original pinned
+pages remained, with no Today copies. Cmd+W cancellation also preserved the
+prior Redo. The root-window draft preview and three post-Redo screenshots
+were inspected; inventory reported key=true and onScreen=true. The root-only
+draft preview does not capture the child Command Bar and is not evidence of
+complete overlay visual parity. No mouse movement or clipboard was used.
+All 387 tests passed (272 browser, 113 core, 2 engine).
+
+A further Arc check committed a new third page in a split after restoring an
+archived second tab. Redo still removed the original second tab, leaving the
+new third page and the first standalone tab. Echo currently invalidates a
+whole-item archive redo when its target has been regrouped. This is a known
+remaining mismatch, distinct from pane-close Redo's whole-group behavior, and
+is tracked in the partial Undo/Redo row. The temporary Arc window was closed.
