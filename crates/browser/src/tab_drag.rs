@@ -15,6 +15,31 @@ pub(crate) struct TabDrag {
     split: bool,
 }
 
+impl TabDrag {
+    pub(crate) fn start(
+        &self,
+        owner: gpui::WeakEntity<BrowserWindow>,
+        cx: &mut gpui::App,
+    ) -> gpui::Entity<Self> {
+        let _ = owner.update(cx, |this, cx| {
+            this.tab_drag_active = true;
+            cx.notify();
+        });
+        cx.new(|cx| {
+            // Tie restoration of a dismissed card to this typed drag's lifetime, including
+            // cancellations and drops outside the sidebar.
+            cx.on_release(move |_, cx| {
+                let _ = owner.update(cx, |this, cx| {
+                    this.tab_drag_active = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+            self.clone()
+        })
+    }
+}
+
 impl BrowserWindow {
     pub(crate) fn drop_tab_on_space(
         &mut self,
@@ -128,8 +153,15 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    pub(crate) fn can_drop_in_favorites(&self, drag: &TabDrag) -> bool {
+        !self.browser.is_favorite(drag.id)
+            && self.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES
+    }
+
     pub(crate) fn drop_tab_in_favorites(&mut self, drag: &TabDrag, cx: &mut Context<Self>) {
-        if self.edit_browser(|browser| browser.favorite_tab(drag.id)) {
+        if self.can_drop_in_favorites(drag)
+            && self.edit_browser(|browser| browser.favorite_tab(drag.id))
+        {
             self.activate_dragged_tab(drag);
             cx.notify();
         }

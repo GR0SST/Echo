@@ -528,6 +528,7 @@ pub struct BrowserWindow {
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
+    pub(crate) tab_drag_active: bool,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub(crate) hovered_row: Option<TabId>,
@@ -681,6 +682,7 @@ impl BrowserWindow {
             sidebar_scrolls: HashMap::new(),
             pinned_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
+            tab_drag_active: false,
             space_drag_hover: None,
             split_draft: None,
             hovered_row: None,
@@ -1998,12 +2000,13 @@ impl BrowserWindow {
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
         let move_edge = edge.clone();
         let paint_edge = edge.clone();
+        let drag_owner = cx.entity().downgrade();
 
         div()
             .id(("tab", key))
             .debug_selector(|| format!("tab-{key}"))
             .group(group.clone())
-            .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
             .on_drag_move::<crate::tab_drag::TabDrag>(move |event, _, _| { move_edge.set(event.event.position.y > event.bounds.center().y); })
             .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {
@@ -2080,6 +2083,7 @@ impl BrowserWindow {
         let group = SharedString::from(format!("favorite-{key}"));
         let active = self.browser.space().active_tab.is_some_and(|active| self.browser.item_anchor(active) == id);
         let browser = cx.entity().downgrade();
+        let drag_owner = browser.clone();
         // The active Favorite stays translucent with an outline tinted by its
         // icon, so light icons keep their contrast.
         let outline = self.browser.favicon(&tab.url)
@@ -2087,7 +2091,7 @@ impl BrowserWindow {
             .map_or(hsla(0., 0., 1., 0.95), |accent| accent.opacity(0.85));
         div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
             .group(group.clone()).relative().flex().items_center().justify_center()
-            .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
             .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
                 browser.read_with(cx, |this, _| drag.id != id && (this.browser.is_favorite(drag.id) || this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES)).unwrap_or(false)
             }))
@@ -2259,12 +2263,14 @@ impl BrowserWindow {
                             "address-actions", address_actions_shown))),
                 ),
             )
-            .when(!favorites.is_empty(), |this| this.child(
+            .when(!favorites.is_empty() || (!private && (!self.browser.empty_favorites_dismissed || self.tab_drag_active)), |this| this.child(
                 div().id("favorites").debug_selector(|| "favorites".into())
                     .flex().flex_wrap().gap(px(FAVORITE_GAP)).px(px(SIDEBAR_INSET))
+                    .when(favorites.is_empty(), |this| this.flex_none()
+                        .child(self.render_empty_favorites(cx)))
                     .rounded_lg().drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.3)))
                     .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
-                        browser.read_with(cx, |this, _| !this.browser.is_favorite(drag.id) && this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES).unwrap_or(false)
+                        browser.read_with(cx, |this, _| this.can_drop_in_favorites(drag)).unwrap_or(false)
                     }))
                     .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_favorites(drag, cx)))
                     .children(favorites.iter().map(|tab| self.render_favorite(tab, favorite_width, cx))),
@@ -2289,6 +2295,48 @@ impl BrowserWindow {
                 .child(div().id("private-plus").size(px(32.)).flex().items_center().justify_center()
                     .on_click(cx.listener(|this, _, window, cx| this.open_private_command_bar(window, cx)))
                     .child(crate::icons::control(crate::icons::Icon::Plus)))))
+    }
+
+    /// The supplied Arc reference shows this card at rest. After dismissal,
+    /// reuse the same card during tab drags; Arc's drag presentation is still
+    /// pending native observation, so no additional transition is introduced.
+    fn render_empty_favorites(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().id("empty-favorites").debug_selector(|| "empty-favorites".into())
+            .relative().w_full().h(px(95.)).flex_none()
+            .rounded(px(12.)).border_1().border_dashed()
+            .border_color(hsla(0., 0., 1., 0.26))
+            .flex().flex_col().items_center().pt(px(11.))
+            .text_color(hsla(0., 0., 1., 0.78))
+            .child(canvas(|_, _, _| (), |bounds, _, window, _| {
+                let center = bounds.center();
+                window.paint_quad(gpui::fill(Bounds::new(
+                    center - point(px(8.), px(8.)), size(px(16.), px(16.))),
+                    hsla(0.67, 0.8, 0.91, 1.)).corner_radii(px(8.)));
+                let mut star = gpui::PathBuilder::fill();
+                for i in 0..10 {
+                    let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.;
+                    let radius = if i % 2 == 0 { 5.3 } else { 2.3 };
+                    let p = center + point(px(angle.cos() * radius), px(angle.sin() * radius));
+                    if i == 0 { star.move_to(p); } else { star.line_to(p); }
+                }
+                star.close();
+                if let Ok(star) = star.build() { window.paint_path(star, hsla(0.67, 0.45, 0.38, 1.)); }
+            }).size(px(16.)).flex_none())
+            .child(div().mt(px(5.)).text_size(px(13.)).line_height(px(16.))
+                .font_weight(gpui::FontWeight::BOLD).child("Drag to add Favorites"))
+            .child(div().mt(px(2.)).text_center().text_size(px(12.)).line_height(px(15.))
+                .child("Favorites keep your most").child(div().child("used sites and apps close")))
+            .child(div().id("dismiss-empty-favorites").debug_selector(|| "dismiss-empty-favorites".into())
+                .absolute().top(px(4.)).right(px(4.)).size(px(20.))
+                .flex().items_center().justify_center().cursor_pointer()
+                .text_color(hsla(0., 0., 1., 0.45))
+                .hover(|style| style.text_color(hsla(0., 0., 1., 0.8)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.edit_profile(|browser| browser.empty_favorites_dismissed = true);
+                    cx.notify();
+                }))
+                .child(crate::icons::control_sized(crate::icons::Icon::Close, 12.)))
     }
 
     /// Window controls stay native for their behavior, but idle as neutral

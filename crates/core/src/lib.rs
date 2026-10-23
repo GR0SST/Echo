@@ -166,6 +166,9 @@ pub struct Browser {
     /// Shared by all Spaces in the current profile.
     #[serde(default)]
     pub favorites: Vec<Tab>,
+    /// Profile-wide dismissal of the empty Favorites onboarding card.
+    #[serde(default)]
+    pub empty_favorites_dismissed: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub favicon_cache: Vec<favicons::SiteIcon>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -194,6 +197,7 @@ impl Browser {
             archive: Vec::new(),
             history: Vec::new(),
             favorites: Vec::new(),
+            empty_favorites_dismissed: false,
             favicon_cache: Vec::new(),
             favorite_splits: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),

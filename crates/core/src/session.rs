@@ -35,3 +35,24 @@ pub fn save(path: &Path, json: &str) -> io::Result<()> {
     std::fs::write(&temp, json)?;
     std::fs::rename(&temp, path)
 }
+
+#[cfg(test)]
+mod empty_favorites_tests {
+    use super::*;
+
+    #[test]
+    fn empty_favorites_dismissal_is_profile_local_and_backward_compatible() {
+        let mut profile = Browser::new();
+        assert!(!profile.empty_favorites_dismissed);
+        profile.empty_favorites_dismissed = true;
+        profile.add_space("Work", 100.);
+        profile.switch_space(1);
+        let restored = from_json(&to_json(&profile)).unwrap();
+        assert!(restored.empty_favorites_dismissed);
+        assert_eq!(restored.spaces.len(), 2);
+        assert!(!Browser::new().empty_favorites_dismissed);
+        let mut legacy: serde_json::Value = serde_json::from_str(&to_json(&profile)).unwrap();
+        legacy.as_object_mut().unwrap().remove("empty_favorites_dismissed");
+        assert!(!from_json(&legacy.to_string()).unwrap().empty_favorites_dismissed);
+    }
+}

@@ -36,6 +36,8 @@ mod tests;
 #[cfg(test)]
 mod new_window_tests;
 #[cfg(test)]
+mod empty_favorites_tests;
+#[cfg(test)]
 mod window_snapshot_tests;
 
 use std::path::PathBuf;

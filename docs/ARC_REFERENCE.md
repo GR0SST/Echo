@@ -614,3 +614,26 @@ asset availability and local transport correlation, not frontend readiness or
 private storage isolation. The workspace suite passed 466 tests (327 browser,
 123 core, 16 engine), including sessionless child-target errors and shared CDP
 request IDs. Renderer host injection and authenticated readiness come next.
+
+### Empty Favorites reference supplied by the user — 2026-10-23
+
+Two user screenshots establish the normal empty state and its collapsed state.
+The first has a rounded dashed card below the address field, approximately
+234×95 px in a 247 px-wide sidebar. A circle with a star sits above the bold
+“Drag to add Favorites” title. Its subtitle wraps as “Favorites keep your most”
+and “used sites and apps close”; a small vector close control is at top right.
+The Space header follows below it. The second image has no card, and the
+Space header and Pinned/Today sections move upward without a reserved gap.
+No Favorites or profile content was changed for these supplied references.
+The visibility and geometry of a dismissed empty dock during dragging remain
+unobserved. Image noise prevents treating sampled colors as exact calibration.
+
+Bundled Echo's 95 px card, close control and collapsed state were inspected
+against these screenshots. Clicking close removed the full card plus its 8 px
+sidebar gap; restarting the same profile kept it dismissed. In a guarded native
+drag run, moving the live Today fixture onto the empty card made it the first
+Favorite. Its `favorite-live` input and document UUID
+`4455791d-96f0-4b38-8a9e-67134e4986c8` survived, with one history entry and no
+reload. The resulting window and page PNGs were inspected. The full workspace
+passed 472 tests: 332 browser, 124 core and 16 engine. Exact drag-after-dismiss
+Arc states and theme-dependent contrast still need reference checks.

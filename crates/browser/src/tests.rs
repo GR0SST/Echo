@@ -4161,33 +4161,39 @@ fn new_folder_from_an_inactive_space_menu_uses_that_space_and_retains_the_source
 }
 
 fn drag_between(cx: &mut VisualTestContext, source: &'static str, destination: &'static str) {
-    cx.run_until_parked();
+    begin_sidebar_drag(cx, source);
+    // Drag-only targets can change the layout; aim at the rendered destination.
     let end = cx.debug_bounds(destination).unwrap().center();
-    drag_to_point(cx, source, end);
+    finish_sidebar_drag(cx, end);
 }
 
-fn drag_to_point(cx: &mut VisualTestContext, source: &'static str, end: gpui::Point<gpui::Pixels>) {
-    begin_drag_to_point(cx, source, end);
+fn finish_sidebar_drag(cx: &mut VisualTestContext, end: gpui::Point<gpui::Pixels>) {
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
     cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
 }
 
-fn begin_drag_to_point(cx: &mut VisualTestContext, source: &'static str, end: gpui::Point<gpui::Pixels>) {
+fn begin_sidebar_drag(cx: &mut VisualTestContext, source: &'static str) {
     cx.run_until_parked();
     let start = cx.debug_bounds(source).unwrap().center();
     cx.simulate_mouse_move(start, None, Modifiers::none());
     cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(start + gpui::point(gpui::px(5.), gpui::px(0.)), gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
+}
+
+fn begin_drag_to_point(cx: &mut VisualTestContext, source: &'static str, end: gpui::Point<gpui::Pixels>) {
+    begin_sidebar_drag(cx, source);
     cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
 }
 
 fn drag_to_row_edge(cx: &mut VisualTestContext, source: &'static str, destination: &'static str, after: bool) {
-    cx.run_until_parked();
+    begin_sidebar_drag(cx, source);
     let bounds = cx.debug_bounds(destination).unwrap();
     let y = if after { bounds.bottom() - gpui::px(4.) } else { bounds.top() + gpui::px(4.) };
-    drag_to_point(cx, source, gpui::point(bounds.center().x, y));
+    finish_sidebar_drag(cx, gpui::point(bounds.center().x, y));
 }
 
 #[gpui::test]
