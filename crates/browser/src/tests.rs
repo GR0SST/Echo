@@ -2064,3 +2064,94 @@ fn engine_initialization_cannot_clear_a_saved_mute_intent(cx: &mut TestAppContex
     assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
     assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().audio_muted(w.browser.active_tab().unwrap().id)), Some(true));
 }
+
+fn open_split_pages(cx: &mut TestAppContext, count: usize) -> (Entity<BrowserWindow>, &mut VisualTestContext, FakeEngine) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new();
+    let now = std::time::SystemTime::now();
+    let first = browser.new_tab("https://pane0.example", now);
+    for index in 1..count {
+        let next = browser.new_tab(format!("https://pane{index}.example"), now);
+        browser.add_split(first, next, browser_core::splits::Placement::Right, now).unwrap();
+    }
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    cx.run_until_parked();
+    (view, cx, fake)
+}
+
+#[gpui::test]
+fn split_pages_are_visible_together_with_nonoverlapping_native_surfaces(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 4);
+    let surfaces = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+    assert_eq!(surfaces.len(), 4);
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Create(..))).count(), 4);
+    for id in 1..=4 { assert!(calls.contains(&Call::Visible(id, true))); }
+    for pair in surfaces.windows(2) {
+        assert!(pair[0].1.x + pair[0].1.width + crate::split_layout::GAP <= pair[1].1.x + 0.001);
+        assert_eq!(pair[0].1.y, pair[1].1.y);
+    }
+    assert!(calls.contains(&Call::FocusPage(2)), "the last added pane is inserted beside the anchor and focused");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 4);
+}
+
+#[gpui::test]
+fn cef_pane_focus_updates_shortcut_targets_without_refocusing_or_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    fake.take_calls();
+    fake.send(cx, Event::Focused { view: page(1) });
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane0.example"));
+    assert!(fake.take_calls().is_empty(), "native focus is already correct; do not bounce it back to CEF");
+    cx.simulate_keystrokes("cmd-r");
+    assert!(fake.take_calls().contains(&Call::Reload(1)));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("unfinished query");
+    fake.send(cx, Event::Focused { view: page(2) });
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane0.example"));
+    assert!(bar_input_focused(&view, cx));
+}
+
+#[gpui::test]
+fn switching_split_orientation_keeps_existing_views_and_navigation_state(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    fake.take_calls();
+    view.update(cx, |w, cx| { let id = w.browser.active_tab().unwrap().id; w.browser.set_split_axis(id, browser_core::splits::Axis::Vertical); cx.notify(); });
+    cx.run_until_parked();
+    let frames = fake.0.borrow().bounds.clone();
+    assert_eq!(frames[&1].x, frames[&2].x);
+    assert!(frames[&1].y + frames[&1].height < frames[&2].y);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn closing_and_restoring_a_split_closes_and_recreates_all_its_engine_views(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-w");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(1)) && calls.contains(&Call::Close(2)));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+    assert!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout().is_empty()));
+    cx.simulate_keystrokes("cmd-shift-t");
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Create(..))).count(), 2);
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout().len()), 2);
+}
+
+#[gpui::test]
+fn hidden_split_pages_cannot_steal_the_new_tabs_shortcut_target(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://outside.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    fake.take_calls();
+    fake.send(cx, Event::Focused { view: page(1) });
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://outside.example"));
+    cx.simulate_keystrokes("cmd-r");
+    assert!(fake.take_calls().contains(&Call::Reload(3)));
+}

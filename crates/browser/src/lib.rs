@@ -8,6 +8,7 @@ mod menus;
 mod history;
 mod tab_menu;
 mod audio;
+mod split_layout;
 pub mod pages;
 pub mod text_input;
 pub mod window;

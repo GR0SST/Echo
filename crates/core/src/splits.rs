@@ -74,7 +74,9 @@ impl Browser {
     }
 
     pub fn activate_sidebar_item(&mut self, tab: TabId, now: SystemTime) {
-        let tab = self.split_for(tab).map_or(tab, |split| split.active);
+        let tab = self.split_for(tab).map_or(tab, |split| {
+            self.space().active_tab.filter(|id| split.panes.contains(id)).unwrap_or(split.active)
+        });
         self.activate_tab(tab, now);
     }
 

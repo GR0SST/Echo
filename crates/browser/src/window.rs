@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use browser_core::omnibox::{self, Resolved};
-use browser_core::{Browser, Closed, Section, SpaceId, Tab, TabId};
+use browser_core::{Browser, Section, SpaceId, Tab, TabId};
 use engine::Event;
 use gpui::{
     actions, canvas, div, ease_out_quint, point, size, Animation, AnimationExt, AnyElement, Bounds,
@@ -407,7 +407,7 @@ impl Render for Overlay {
 
 #[derive(Default)]
 struct MouseTracking {
-    hole: Option<[f64; 4]>,
+    holes: Option<Vec<[f64; 4]>>,
     areas: Vec<usize>,
 }
 
@@ -544,8 +544,19 @@ impl BrowserWindow {
             return;
         };
         for event in events {
+            if matches!(&event, Event::Focused { .. }) && (self.command_bar.is_some() || self.tab_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
+                Event::Focused { view } => {
+                    let tab = pages.borrow().tab_for(view).filter(|tab| pages.borrow().is_visible(*tab));
+                    if let Some(tab) = tab {
+                        let active = self.browser.space().active_tab;
+                        if active.is_some_and(|id| self.browser.related_tabs(id).contains(&tab)) {
+                            self.browser.activate_tab(tab, SystemTime::now());
+                            if active != Some(tab) { self.close_find(cx); }
+                        }
+                    }
+                }
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
                         if !title.is_empty() {
@@ -742,6 +753,7 @@ impl BrowserWindow {
         let main_window = self.main_window;
         let focus = self.focus_handle.clone();
         let pages = self.pages.clone();
+        let browser = cx.entity().downgrade();
         // Deferred: this may run inside the overlay window's own event.
         cx.defer(move |cx| {
             if let Some(overlay) = bar.overlay {
@@ -752,7 +764,11 @@ impl BrowserWindow {
                 focus.focus(window);
             });
             if let Some(pages) = pages {
-                pages.borrow_mut().focus_shown();
+                let _ = browser.read_with(cx, |this, _| {
+                    let mut pages = pages.borrow_mut();
+                    pages.sync(&this.browser, true);
+                    pages.focus_shown();
+                });
             }
         });
         cx.notify();
@@ -1150,9 +1166,12 @@ impl BrowserWindow {
 
     /// Archives a Today tab or unloads a pinned one, as in Arc.
     pub(crate) fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
-        if self.browser.close_tab(id, SystemTime::now()) == Some(Closed::Unloaded) {
+        let related = self.browser.related_tabs(id);
+        if self.browser.close_tab(id, SystemTime::now()).is_some() {
             if let Some(pages) = &self.pages {
-                pages.borrow_mut().discard(id);
+                let mut pages = pages.borrow_mut();
+                for id in related { pages.discard(id); }
+                pages.sync(&self.browser, true);
             }
         }
         cx.notify();
@@ -1793,20 +1812,28 @@ impl BrowserWindow {
                                     width: f64::from(f32::from(bounds.size.width)),
                                     height: f64::from(f32::from(bounds.size.height)),
                                 };
-                                if let Some(view) = native_view {
-                                    let hole = if internal { [0.0; 4] } else { [bounds.x, bounds.y, bounds.width, bounds.height] };
-                                    let mut tracking = mouse_tracking.borrow_mut();
-                                    if tracking.hole != Some(hole) {
-                                        tracking.hole = Some(hole);
-                                        crate::native::track_mouse_outside(view, hole, &mut tracking.areas);
+                                let surfaces = match pages.try_borrow_mut() {
+                                    Ok(mut pages) => { pages.set_bounds(bounds); Some(pages.surface_bounds()) }
+                                    Err(_) => None,
+                                };
+                                let tracking = mouse_tracking.clone();
+                                let update_tracking = move |surfaces: Vec<engine::Bounds>| {
+                                    if let Some(view) = native_view {
+                                        let holes: Vec<_> = surfaces.into_iter().map(|rect| [rect.x, rect.y, rect.width, rect.height]).collect();
+                                        let mut tracking = tracking.borrow_mut();
+                                        if tracking.holes.as_ref() != Some(&holes) {
+                                            tracking.holes = Some(holes.clone());
+                                            crate::native::track_mouse_outside(view, &holes, &mut tracking.areas);
+                                        }
                                     }
-                                }
-                                match pages.try_borrow_mut() {
-                                    Ok(mut pages) => pages.set_bounds(bounds),
-                                    Err(_) => {
-                                        let pages = pages.clone();
-                                        cx.defer(move |_| pages.borrow_mut().set_bounds(bounds));
-                                    }
+                                };
+                                if let Some(surfaces) = surfaces { update_tracking(surfaces); }
+                                else {
+                                    let pages = pages.clone();
+                                    cx.defer(move |_| {
+                                        let surfaces = { let mut pages = pages.borrow_mut(); pages.set_bounds(bounds); pages.surface_bounds() };
+                                        update_tracking(surfaces);
+                                    });
                                 }
                             },
                             |_, _, _, _| {},

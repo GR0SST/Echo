@@ -51,10 +51,10 @@ mod mac {
         }
     }
 
-    /// Replaces `areas` with tracking areas covering `view` except `hole`
+    /// Replaces `areas` with tracking areas covering `view` except `holes`
     /// (x, y, width, height; top-left origin), so the view gets mouse moves
     /// there even while a page (inside the hole) is first responder.
-    pub fn track_mouse_outside(view: *mut c_void, hole: [f64; 4], areas: &mut Vec<usize>) {
+    pub fn track_mouse_outside(view: *mut c_void, holes: &[[f64; 4]], areas: &mut Vec<usize>) {
         use objc2_foundation::{NSPoint, NSRect, NSSize};
         const ENTERED_AND_EXITED: usize = 0x01;
         const MOVED: usize = 0x02;
@@ -69,13 +69,7 @@ mod mac {
             let bounds: NSRect = msg_send![view, bounds];
             let flipped: Bool = msg_send![view, isFlipped];
             let (w, h) = (bounds.size.width, bounds.size.height);
-            let [x, y, hw, hh] = hole;
-            let rects = [
-                [0.0, 0.0, x, h],
-                [x + hw, 0.0, w - x - hw, h],
-                [x, 0.0, hw, y],
-                [x, y + hh, hw, h - y - hh],
-            ];
+            let rects = super::outside_regions(w, h, holes);
             for [rx, ry, rw, rh] in rects {
                 if rw <= 0.0 || rh <= 0.0 {
                     continue;
@@ -145,13 +139,49 @@ pub fn set_traffic_lights_hidden(view: *mut c_void, hidden: bool) {
     let _ = (view, hidden);
 }
 
-/// Makes `view` receive mouse moves everywhere except over `hole` (the page),
+/// Makes `view` receive mouse moves everywhere except over native page surfaces,
 /// which the engine handles. `areas` keeps what was added, for replacing.
-pub fn track_mouse_outside(view: *mut c_void, hole: [f64; 4], areas: &mut Vec<usize>) {
+pub fn track_mouse_outside(view: *mut c_void, holes: &[[f64; 4]], areas: &mut Vec<usize>) {
     #[cfg(target_os = "macos")]
-    mac::track_mouse_outside(view, hole, areas);
+    mac::track_mouse_outside(view, holes, areas);
     #[cfg(not(target_os = "macos"))]
-    let _ = (view, hole, areas);
+    let _ = (view, holes, areas);
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn outside_regions(width: f64, height: f64, holes: &[[f64; 4]]) -> Vec<[f64; 4]> {
+    let mut regions = vec![[0., 0., width, height]];
+    for &[hx, hy, hw, hh] in holes {
+        let mut next = Vec::new();
+        for [x, y, w, h] in regions {
+            let (left, top) = (x.max(hx), y.max(hy));
+            let (right, bottom) = ((x + w).min(hx + hw), (y + h).min(hy + hh));
+            if right <= left || bottom <= top { next.push([x, y, w, h]); continue; }
+            for rectangle in [[x, y, left - x, h], [right, y, x + w - right, h], [left, y, right - left, top - y], [left, bottom, right - left, y + h - bottom]] {
+                if rectangle[2] > 0. && rectangle[3] > 0. { next.push(rectangle); }
+            }
+        }
+        regions = next;
+    }
+    regions.retain(|rect| rect[2] > 0. && rect[3] > 0.);
+    regions
+}
+
+#[cfg(test)]
+mod tracking_tests {
+    use super::*;
+    #[test]
+    fn split_headers_and_gaps_are_tracked_without_covering_any_native_page() {
+        let holes = [[24., 8., 32., 28.], [60., 8., 32., 28.], [24., 44., 32., 28.], [60., 44., 32., 28.]];
+        let regions = outside_regions(100., 80., &holes);
+        let contains = |rect: &[f64; 4], x: f64, y: f64| x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3];
+        for y in 0..80 { for x in 0..100 {
+            let (x, y) = (x as f64 + 0.5, y as f64 + 0.5);
+            let covered = regions.iter().filter(|region| contains(region, x, y)).count();
+            let native = holes.iter().any(|hole| contains(hole, x, y));
+            assert_eq!(covered, usize::from(!native), "point ({x}, {y})");
+        }}
+    }
 }
 
 

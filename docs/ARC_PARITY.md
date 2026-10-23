@@ -294,14 +294,17 @@ in code, so some were reconstructed from translator comments (?).
 The persistent core model supports 2–4 pages as one sidebar item, including
 grouped pinning, Favorites, moving, renaming, closing, archive/restore and
 auto-archiving. Pane order, axis, focus and weights survive sessions. GPUI
-controls and multi-view CEF rendering are not wired yet. The unit behavior
+controls and the creation picker are not wired yet. CEF now renders all panes
+at once, lays them out horizontally or vertically and reports native focus;
+loaded pages survive pane focus and orientation changes. Native surface geometry
+is checked; page-click focus and fresh pixels await an unlocked desktop. The unit behavior
 follows Arc's [2022 release notes](https://resources.arc.net/hc/en-us/articles/20498417809815-Arc-for-macOS-2022-Release-Notes);
 the four-pane limit and preserving Pinned placement are confirmed in its
 [2024–2026 release notes](https://resources.arc.net/hc/en-us/articles/20498293324823-Arc-for-macOS-2024-2026-Release-Notes).
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Persistent core grouping and four-pane limit are implemented; the picker, shortcuts and CEF pane display remain missing |
+| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Persistent grouping, four-pane limit and native CEF pane layout are implemented; the picker and shortcuts remain missing |
 | Close a pane | ⌃⇧- | missing | — |
 | Create by dragging a tab to the middle of the window | drag | missing | — |
 | Horizontal/vertical layout, Move Left/Right/Up/Down | — | missing | — |

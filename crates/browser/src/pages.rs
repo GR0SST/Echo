@@ -1,7 +1,7 @@
 //! Keeps the engine's web views in sync with the browser model: one view per
-//! opened tab, only the active one visible, laid out over the content card.
+//! opened page, with the active tab or Split View laid out over the content card.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 
 use browser_core::{Browser, TabId};
@@ -110,11 +110,23 @@ struct Page {
     muted: bool,
 }
 
+#[derive(Clone)]
+struct PageIntent {
+    tab: TabId,
+    url: String,
+    muted: bool,
+    weight: f32,
+    internal: bool,
+}
+
 pub struct Pages {
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
-    /// Tab whose page should be on screen, with the URL it should show.
-    wanted: Option<(TabId, String, bool)>,
+    wanted: Vec<PageIntent>,
+    wanted_focus: Option<TabId>,
+    axis: browser_core::splits::Axis,
+    split: bool,
+    visible: HashSet<TabId>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
 }
@@ -124,7 +136,11 @@ impl Pages {
         Self {
             engine,
             pages: HashMap::new(),
-            wanted: None,
+            wanted: Vec::new(),
+            wanted_focus: None,
+            axis: browser_core::splits::Axis::Horizontal,
+            split: false,
+            visible: HashSet::new(),
             shown: None,
             bounds: None,
         }
@@ -156,24 +172,41 @@ impl Pages {
         for tab in closed {
             let page = self.pages.remove(&tab).unwrap();
             self.engine.close(page.view);
+            self.visible.remove(&tab);
             if self.shown == Some(tab) {
                 self.shown = None;
                 self.engine.focus_ui();
             }
         }
 
-        self.wanted = browser
-            .active_tab()
-            .filter(|tab| visible && !browser_core::omnibox::is_internal_url(&tab.url))
-            .map(|tab| (tab.id, tab.url.clone(), tab.muted));
+        self.wanted.clear();
+        self.wanted_focus = None;
+        self.split = false;
+        if visible {
+            if let Some(active) = browser.active_tab() {
+                self.wanted_focus = (!browser_core::omnibox::is_internal_url(&active.url)).then_some(active.id);
+                if let Some(split) = browser.active_split() {
+                    self.split = true;
+                    self.axis = split.axis;
+                    for (index, id) in split.panes.iter().enumerate() {
+                        if let Some(tab) = browser.all_tabs().find(|tab| tab.id == *id) {
+                            self.wanted.push(PageIntent { tab: *id, url: tab.url.clone(), muted: tab.muted,
+                                weight: split.weights[index], internal: browser_core::omnibox::is_internal_url(&tab.url) });
+                        }
+                    }
+                } else if self.wanted_focus.is_some() {
+                    self.wanted.push(PageIntent { tab: active.id, url: active.url.clone(), muted: active.muted, weight: 1., internal: false });
+                }
+            }
+        }
         self.apply();
         self.sync_audio(browser);
     }
 
     /// Applies mute intent even when an occluded window is not rendering.
     pub fn sync_audio(&mut self, browser: &Browser) {
-        if let Some((id, _, muted)) = &mut self.wanted {
-            if let Some(tab) = browser.all_tabs().find(|tab| tab.id == *id) { *muted = tab.muted; }
+        for intent in &mut self.wanted {
+            if let Some(tab) = browser.all_tabs().find(|tab| tab.id == intent.tab) { intent.muted = tab.muted; }
         }
         // Muting a background tab must not activate or load it.
         for tab in browser.all_tabs() {
@@ -193,6 +226,7 @@ impl Pages {
             return;
         };
         self.engine.close(page.view);
+        self.visible.remove(&tab);
         if self.shown == Some(tab) {
             self.shown = None;
             self.engine.focus_ui();
@@ -209,55 +243,67 @@ impl Pages {
     }
 
     fn apply(&mut self) {
-        let wanted = self.wanted.clone();
-        let wanted_tab = wanted.as_ref().map(|(tab, _, _)| *tab);
-
-        if self.shown.is_some() && self.shown != wanted_tab {
-            let shown = self.shown.take().unwrap();
-            if let Some(page) = self.pages.get(&shown) {
-                self.engine.set_visible(page.view, false);
-            }
+        let frames = self.pane_bounds();
+        let wanted: Vec<_> = self.wanted.iter().zip(frames).filter(|(intent, frame)| !intent.internal && frame.page.width >= 1. && frame.page.height >= 1.)
+            .map(|(intent, frame)| (intent.clone(), frame.page)).collect();
+        let ids: HashSet<_> = wanted.iter().map(|(intent, _)| intent.tab).collect();
+        let hidden: Vec<_> = self.visible.difference(&ids).copied().collect();
+        for tab in hidden {
+            if let Some(page) = self.pages.get(&tab) { self.engine.set_visible(page.view, false); }
+            self.visible.remove(&tab);
+        }
+        let focused = self.wanted_focus.filter(|id| ids.contains(id));
+        if self.shown.is_some() && (focused.is_none() || !self.shown.is_some_and(|id| ids.contains(&id))) {
+            self.shown = None;
             self.engine.focus_ui();
         }
-
-        let (Some((tab, url, muted)), Some(bounds)) = (wanted, self.bounds) else {
-            return;
-        };
-        match self.pages.get_mut(&tab) {
-            Some(page) => {
-                if page.muted != muted {
-                    self.engine.set_audio_muted(page.view, muted);
-                    page.muted = muted;
+        for (intent, bounds) in wanted {
+            let PageIntent { tab, url, muted, .. } = intent;
+            match self.pages.get_mut(&tab) {
+                Some(page) => {
+                    if page.muted != muted {
+                        self.engine.set_audio_muted(page.view, muted);
+                        page.muted = muted;
+                    }
+                    if page.url != url {
+                        self.engine.navigate(page.view, &url);
+                        page.url = url;
+                    }
+                    self.engine.set_bounds(page.view, bounds);
                 }
-                if page.url != url {
-                    self.engine.navigate(page.view, &url);
-                    page.url = url;
+                None => {
+                    let Some(view) = self.engine.create(&url, bounds) else { continue; };
+                    if muted { self.engine.set_audio_muted(view, true); }
+                    self.pages.insert(tab, Page { view, url, state: PageState::default(), muted });
                 }
-                self.engine.set_bounds(page.view, bounds);
             }
-            None => {
-                let Some(view) = self.engine.create(&url, bounds) else {
-                    return;
-                };
-                if muted { self.engine.set_audio_muted(view, true); }
-                self.pages.insert(
-                    tab,
-                    Page {
-                        view,
-                        url,
-                        state: PageState::default(),
-                        muted,
-                    },
-                );
-            }
+            if self.visible.insert(tab) { self.engine.set_visible(self.pages[&tab].view, true); }
         }
-        if self.shown != Some(tab) {
-            let view = self.pages[&tab].view;
-            self.engine.set_visible(view, true);
-            self.engine.focus_page(view);
-            self.shown = Some(tab);
+        if focused != self.shown {
+            if let Some((tab, view)) = focused.and_then(|id| self.view(id).map(|view| (id, view))) {
+                self.engine.focus_page(view);
+                self.shown = Some(tab);
+            } else if self.shown.take().is_some() {
+                self.engine.focus_ui();
+            }
         }
     }
+
+    fn pane_bounds(&self) -> Vec<crate::split_layout::PaneBounds> {
+        let Some(bounds) = self.bounds else { return Vec::new(); };
+        let weights: Vec<_> = self.wanted.iter().map(|intent| intent.weight).collect();
+        crate::split_layout::layout(bounds, self.axis, &weights, self.split)
+    }
+
+    pub fn surface_bounds(&self) -> Vec<Bounds> {
+        self.surface_layout().into_iter().map(|(_, bounds)| bounds).collect()
+    }
+
+    pub fn surface_layout(&self) -> Vec<(TabId, Bounds)> {
+        self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.visible.contains(&intent.tab)).map(|(intent, frame)| (intent.tab, frame.page)).collect()
+    }
+
+    pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) }
 
     /// Gives keyboard focus back to the page on screen.
     pub fn focus_shown(&mut self) {
@@ -327,6 +373,9 @@ impl Pages {
     /// Records what the engine reported so it is not re-sent by `sync`.
     pub fn record(&mut self, event: &Event) {
         match event {
+            Event::Focused { view } => {
+                if let Some(tab) = self.tab_for(*view).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); }
+            }
             Event::UrlChanged { view, url } => {
                 if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) {
                     page.url = url.clone();

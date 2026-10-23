@@ -208,6 +208,15 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                 "dump" => {
                     let _ = view.update(cx, |this, cx| eprintln!("{}", dump(this, cx)));
                 }
+                "surfaces" => {
+                    let _ = view.read_with(cx, |this, _| {
+                        if let Some(pages) = &this.pages {
+                            for (id, bounds) in pages.borrow().surface_layout() {
+                                eprintln!("[surface] tab={} x={:.1} y={:.1} width={:.1} height={:.1}", id.get(), bounds.x, bounds.y, bounds.width, bounds.height);
+                            }
+                        }
+                    });
+                }
                 "quit" => {
                     let _ = cx.update(|cx| cx.quit());
                 }
@@ -254,7 +263,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 .map(|pages| pages.borrow().state(tab.id))
                 .unwrap_or_default();
             out += &format!(
-                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?}\n",
+                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?} visible={}\n",
                 if active { "*" } else { " " },
                 if shown == Some(tab.id) { "shown" } else { "     " },
                 tab.title,
@@ -264,6 +273,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 this.browser.favicon(&tab.url).map_or(0, |png| png.len()),
                 tab.muted,
                 this.pages.as_ref().and_then(|pages| pages.borrow().audio_muted(tab.id)),
+                this.pages.as_ref().is_some_and(|pages| pages.borrow().is_visible(tab.id)),
             );
         }
     }

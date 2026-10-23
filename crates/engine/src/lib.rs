@@ -49,6 +49,7 @@ pub struct Shortcut {
 pub enum Event {
     TitleChanged { view: ViewId, title: String },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
+    Focused { view: ViewId },
     FindResult { view: ViewId, count: i32, active: i32, final_update: bool },
     UrlChanged { view: ViewId, url: String },
     LoadingChanged {
@@ -68,6 +69,7 @@ pub enum Event {
 enum RawEvent {
     Title(String),
     Favicon(String, Vec<u8>),
+    Focused,
     Find(i32, i32, bool),
     Url(String),
     Loading(bool, bool, bool),
@@ -202,6 +204,7 @@ impl Engine {
                     RawEvent::Shortcut(_) => unreachable!(),
                     RawEvent::Title(title) => Event::TitleChanged { view, title },
                     RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
+                    RawEvent::Focused => Event::Focused { view },
                     RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
                     RawEvent::Url(url) => Event::UrlChanged { view, url },
                     RawEvent::Loading(loading, can_go_back, can_go_forward) => {
@@ -437,6 +440,9 @@ wrap_client! {
         fn find_handler(&self) -> Option<FindHandler> {
             Some(EngineFindHandler::new(self.events.clone()))
         }
+        fn focus_handler(&self) -> Option<FocusHandler> {
+            Some(EngineFocusHandler::new(self.events.clone()))
+        }
 
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(EngineLoadHandler::new(self.events.clone()))
@@ -499,6 +505,13 @@ wrap_display_handler! {
                 push(&self.events, browser, RawEvent::Url(url));
             }
         }
+    }
+}
+
+wrap_focus_handler! {
+    struct EngineFocusHandler { events: EventQueue, }
+    impl FocusHandler {
+        fn on_got_focus(&self, browser: Option<&mut Browser>) { push(&self.events, browser, RawEvent::Focused); }
     }
 }
 
