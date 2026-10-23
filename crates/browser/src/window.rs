@@ -544,6 +544,9 @@ struct SidebarScrolls { pinned: gpui::ScrollHandle, today: gpui::ScrollHandle, p
 pub struct BrowserWindow {
     pub browser: browser_core::windows::WindowProjection,
     pub(crate) profile: crate::profile::ProfileBinding,
+    pub(crate) sidebar_navigation: crate::sidebar_navigation::SidebarNavigation,
+    pub(crate) sidebar_debug_namespace: Option<String>,
+    pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
     sidebar_reveal: Option<PinnedReveal>,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
@@ -601,20 +604,44 @@ pub struct BrowserWindow {
 }
 
 impl BrowserWindow {
+    pub(crate) fn window_controls_offset(&self) -> f32 {
+        if !self.page_content_visible() { 0. } else { SIDEBAR_WIDTH * (self.sidebar_amount() - 1.) }
+    }
+
+    pub(crate) fn sidebar_debug_name(&self, name: String) -> String {
+        self.sidebar_debug_namespace.as_ref().map_or_else(|| name.clone(), |namespace| format!("{namespace}/{name}"))
+    }
+
     pub(crate) fn reset_profile_pager(&mut self, index: usize) {
         self.pager.settle = None;
         self.pager.drag = None;
-        self.pager.position = index as f32;
+        self.pager.position = if self.browser.is_blank() || self.browser.is_private() {
+            index
+        } else {
+            self.sidebar_page_index()
+        } as f32;
     }
 
     pub(crate) fn receive_profile_projection(&mut self, projection: browser_core::windows::WindowProjection) {
-        if self.browser.active_space != projection.active_space || self.browser.space().id != projection.space().id {
-            self.reset_profile_pager(projection.active_space);
-        }
+        let selected = self.sidebar_navigation.controller.selected();
+        let previous_index = self.sidebar_navigation.controller.pages(&self.browser).iter().position(|page| *page == selected);
         self.browser = projection;
+        self.reconcile_sidebar_navigation();
+        let current_index = self.sidebar_navigation.controller.pages(&self.browser).iter().position(|page| *page == selected);
+        // A retained draft follows its origin through external reorders even
+        // when the underlying real Space and its model index did not change.
+        let derived_moved = previous_index.is_some() && previous_index != current_index;
+        if derived_moved { self.reset_profile_pager(self.browser.active_space); }
         self.invalidate_history_confirmation();
         if let Some(pages) = &self.pages { pages.borrow_mut().reconcile_inventory(&self.browser); }
     }
+
+    pub(crate) fn invalidate_sidebar_focus(&mut self) {
+        self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
+        self.popup_focus_pending = 0;
+    }
+    pub(crate) fn settle_sidebar_pager(&mut self, cx: &mut Context<Self>) { self.settle_pager(cx); }
+    pub(crate) fn reset_sidebar_motion(&mut self) { self.pager.drag = None; self.pager.settle = None; }
 
     pub fn new(
         browser: Browser,
@@ -663,9 +690,10 @@ impl BrowserWindow {
                     this.refresh_profile_projection();
                     if std::mem::take(&mut this.popup_focus_on_activation) && !this.popup_owns_focus() {
                         this.focus_handle.focus(window);
-                        if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
+                        if this.page_content_visible() { if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); } }
                     }
-                    if let Some(pages) = &this.pages { pages.borrow_mut().activate_host(&this.browser); }
+                    if let Some(pages) = &this.pages { pages.borrow_mut().activate_host_with_visibility(&this.browser, this.page_content_visible()); }
+                    if !this.page_content_visible() && this.sidebar_root_may_take_focus() { this.focus_sidebar_page(window, cx, None); }
                     cx.notify();
                 }
             }).detach();
@@ -696,7 +724,7 @@ impl BrowserWindow {
                         this.apply_page_events(events, window, cx);
                         let retried = if retry_creation {
                             this.refresh_profile_projection();
-                            this.pages.as_ref().is_some_and(|pages| pages.borrow_mut().retry_pending_creation(&this.browser))
+                            this.pages.as_ref().is_some_and(|pages| pages.borrow_mut().retry_pending_creation_with_visibility(&this.browser, this.page_content_visible()))
                         } else { false };
                         if mirrors_changed || retried { cx.notify(); }
                     });
@@ -708,7 +736,8 @@ impl BrowserWindow {
             .detach();
         }
 
-        let position = browser.active_space as f32;
+        let sidebar_navigation = crate::sidebar_navigation::SidebarNavigation::new(&browser);
+        let position = if browser.is_blank() || browser.is_private() { browser.active_space } else { browser.active_space + 1 } as f32;
         cx.on_release(|this, cx| {
             this.cancel_split_draft();
             if let Some(pages) = &this.pages { pages.borrow_mut().release_host(); }
@@ -722,6 +751,9 @@ impl BrowserWindow {
             },
             browser,
             profile,
+            sidebar_navigation,
+            sidebar_debug_namespace: None,
+            sidebar_page_interactive: true,
             sidebar_visible: true,
             sidebar_reveal: None,
             sidebar_scrolls: HashMap::new(),
@@ -858,7 +890,7 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (!self.page_content_visible() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::Focused { view } => {
@@ -963,7 +995,7 @@ impl BrowserWindow {
                 let Some(pages) = &this.pages else { return false; };
                 let mut pages = pages.borrow_mut();
                 pages.reconcile_inventory(&this.browser);
-                pages.accepts_input_origin(source) && this.browser.user_profile_id_for_tab(source.identity.tab) == Some(source.identity.profile)
+                this.page_content_visible() && pages.accepts_input_origin(source) && this.browser.user_profile_id_for_tab(source.identity.tab) == Some(source.identity.profile)
             }).unwrap_or(false);
             // No owner/model/PageStore borrow survives action dispatch.
             if current { window.dispatch_keystroke(keystroke, cx); }
@@ -979,6 +1011,7 @@ impl BrowserWindow {
     }
 
     fn with_active_page(&self, f: impl FnOnce(&mut Pages, TabId)) {
+        if !self.page_content_visible() { return; }
         if let (Some(pages), Some(tab)) = (&self.pages, self.browser.space().active_tab) {
             f(&mut pages.borrow_mut(), tab);
         }
@@ -1005,12 +1038,23 @@ impl BrowserWindow {
         self.browser.space().hue / 360.0
     }
 
-    /// Background hue at the pager position, blending neighbouring spaces.
+    /// Background hue at the pager position, blending neighbouring pages.
     fn pager_hue(&self) -> f32 {
-        let spaces = &self.browser.spaces;
-        let position = self.pager.position.clamp(0.0, spaces.len() as f32 - 1.0);
+        use crate::sidebar_pages::SidebarPage;
+        let hues: Vec<f32> = if self.browser.is_blank() || self.browser.is_private() {
+            self.browser.spaces.iter().map(|space| space.hue).collect()
+        } else {
+            self.sidebar_navigation.controller.pages(&self.browser).into_iter().map(|page| match page {
+                SidebarPage::Space(id) => self.browser.spaces.iter()
+                    .find(|space| space.id == id).map_or(self.browser.space().hue, |space| space.hue),
+                SidebarPage::CreateSpace => self.sidebar_navigation.controller.draft()
+                    .map_or(self.browser.space().hue, |draft| draft.hue),
+                SidebarPage::Library => self.browser.space().hue,
+            }).collect()
+        };
+        let position = self.pager.position.clamp(0.0, hues.len().saturating_sub(1) as f32);
         let (a, b) = (position.floor() as usize, position.ceil() as usize);
-        let (from, to) = (spaces[a].hue, spaces[b].hue);
+        let (from, to) = (hues[a], hues[b]);
         // Shortest way around the color wheel.
         let diff = ((to - from + 540.0) % 360.0) - 180.0;
         (from + diff * position.fract()).rem_euclid(360.0) / 360.0
@@ -1025,6 +1069,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if target == Target::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
         if self.browser.is_blank() && !matches!(target, Target::NewTab | Target::Tab(_) | Target::Split { .. } | Target::RenameTab(_) | Target::Archive(_) | Target::ConfirmClearArchive | Target::Icon(crate::icons::IconTarget::Tab(_))) { return; }
         if crate::quit::is_quitting() { return; }
         self.close_user_profile_dialog(cx);
@@ -1157,7 +1202,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        !self.page_content_visible() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1174,6 +1219,7 @@ impl BrowserWindow {
                 || self.popup_focus_pending > 0;
             self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
             self.popup_focus_pending = 0;
+            self.invalidate_navigation_focus();
             PopupFocus::OnActivation
         } else {
             PopupFocus::Restore
@@ -1201,12 +1247,13 @@ impl BrowserWindow {
             let restore = browser.update(cx, |this, _| {
                 if this.popup_focus_generation != generation { return false; }
                 this.popup_focus_pending -= 1;
-                !this.popup_owns_focus()
+                !this.popup_owns_focus() || (!this.page_content_visible() && this.sidebar_root_may_take_focus())
             }).unwrap_or(false);
             if !restore { return; }
-            let _ = main.update(cx, |_, window, _| {
+            let _ = main.update(cx, |_, window, cx| {
                 window.activate_window();
                 focus.focus(window);
+                let _ = browser.update(cx, |this, cx| { if !this.page_content_visible() && this.sidebar_root_may_take_focus() { this.focus_sidebar_page(window, cx, None); } });
             });
             let _ = browser.update(cx, |this, _| {
                 // Another host may have reassigned this Space while removal
@@ -1217,8 +1264,8 @@ impl BrowserWindow {
                 if let Some(pages) = &this.pages {
                     let mut pages = pages.borrow_mut();
                     pages.reconcile_inventory(&this.browser);
-                    if sync_pages { pages.sync(&this.browser, true); }
-                    pages.focus_shown();
+                    if sync_pages { pages.sync(&this.browser, this.page_content_visible()); }
+                    if this.page_content_visible() { pages.focus_shown(); }
                 }
             });
         });
@@ -1441,6 +1488,7 @@ impl BrowserWindow {
         let now = SystemTime::now();
         match suggestion {
             Suggestion::Load(resolved) => {
+                if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 if let Target::Tab(id) = target {
                     if self.browser.all_tabs().any(|tab| tab.id == id && tab.url == resolved.url()) {
                         if let Some(pages) = &self.pages { pages.borrow_mut().reload(id); }
@@ -1471,6 +1519,7 @@ impl BrowserWindow {
                 self.edit_browser(|browser| browser.set_title(id, title));
             }
             Suggestion::History { title, url } => {
+                if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 let id = match target {
                     Target::NewTab => self.edit_browser(|browser| browser.new_tab(&url, now)),
                     Target::Tab(id) => { self.edit_browser(|browser| browser.navigate(id, &url)); id }
@@ -1494,6 +1543,7 @@ impl BrowserWindow {
                 } else { return; }
             }
             Suggestion::SwitchToTab { id, .. } => {
+                if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 if self.browser.is_favorite(id) {
                     self.edit_browser(|browser| browser.activate_tab(id, now));
                 } else if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)) {
@@ -1542,11 +1592,7 @@ impl BrowserWindow {
                 if let Target::RenameTab(id) = target { self.edit_browser(|browser| browser.rename_tab(id, &name)); }
             }
             Suggestion::SaveSpace { name } => match target {
-                Target::NewSpace => {
-                    let hue = (self.browser.space().hue + 137.5).rem_euclid(360.0);
-                    self.edit_browser(|browser| browser.add_space(name, hue));
-                    self.switch_space(self.browser.spaces.len() - 1, cx);
-                }
+                Target::NewSpace => { self.begin_space_creation(self.browser.space().id, cx); return; }
                 Target::RenameSpace(id) => { self.edit_browser(|browser| browser.rename_space(id, &name)); }
                 _ => return,
             },
@@ -1633,7 +1679,7 @@ impl BrowserWindow {
                 }
             }
             Command::FindPage => self.find_from_command(cx),
-            Command::NewSpace => self.edit_space_name(None, cx),
+            Command::NewSpace => self.begin_space_creation(self.browser.space().id, cx),
             Command::NewProfile(space) => self.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx),
             Command::ChangeProfile(space) => self.open_user_profile_switch(space, cx),
             Command::BlankWindow => self.blank_window(cx),
@@ -1756,6 +1802,7 @@ impl BrowserWindow {
 
     pub(crate) fn open_command_action(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         if !self.blank_allows_command(command) { return; }
+        if command == Command::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
         self.open_command_bar(Target::NewTab, "", window, cx);
         self.run_command(command, cx);
     }
@@ -1775,7 +1822,7 @@ impl BrowserWindow {
         self.close_find(cx);
         let id = self.edit_browser(|browser| browser.new_tab(&url, SystemTime::now()));
         self.edit_browser(|browser| browser.set_title(id, url));
-        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
     }
 
@@ -1801,6 +1848,7 @@ impl BrowserWindow {
     }
 
     fn close_focused_tab(&mut self, cx: &mut Context<Self>) {
+        if !self.page_content_visible() { return; }
         if self.split_draft.is_some() { self.close_command_bar(cx); return; }
         if let Some(id) = self.browser.space().active_tab {
             if self.browser.split_for(id).is_some() { self.close_split_pane(id, cx); }
@@ -1816,7 +1864,7 @@ impl BrowserWindow {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 for id in related { pages.discard(id); }
-                pages.sync(&self.browser, true);
+                pages.sync(&self.browser, self.page_content_visible());
             }
             self.after_tab_removal(cx);
         }
@@ -2082,6 +2130,11 @@ impl BrowserWindow {
             return;
         };
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        let page_count = if self.browser.is_private() {
+            self.browser.spaces.len()
+        } else {
+            self.sidebar_navigation.controller.pages(&self.browser).len()
+        };
         match event.touch_phase {
             TouchPhase::Started => {
                 self.pager.settle = None;
@@ -2107,7 +2160,7 @@ impl BrowserWindow {
                 drag.samples.push((cx.background_executor().now(), dx));
                 // Fingers moving left reveal the space on the right.
                 let raw = drag.start - drag.travel / SIDEBAR_WIDTH;
-                self.pager.position = rubber_band(raw, self.browser.spaces.len());
+                self.pager.position = rubber_band(raw, page_count);
                 cx.notify();
             }
             TouchPhase::Ended => {
@@ -2127,16 +2180,29 @@ impl BrowserWindow {
                 } else {
                     0.0
                 };
-                let last = self.browser.spaces.len() as f32 - 1.0;
+                let last = page_count.saturating_sub(1) as f32;
                 let target = (start + step).clamp(0.0, last) as usize;
-                self.switch_space(target, cx);
+                if self.browser.is_private() {
+                    self.switch_space(target, cx);
+                } else if let Some(page) = self.sidebar_navigation.controller.pages(&self.browser).get(target).copied() {
+                    if page == crate::sidebar_pages::SidebarPage::CreateSpace {
+                        self.begin_space_creation(self.browser.space().id, cx);
+                    } else {
+                        self.select_sidebar_page(page, cx);
+                    }
+                    self.settle_pager(cx);
+                }
             }
         }
     }
 
-    /// Eases the pager to the active space.
-    fn settle_pager(&mut self, cx: &mut Context<Self>) {
-        let target = self.browser.active_space as f32;
+    /// Eases the pager to the selected page in the current derived order.
+    pub(crate) fn settle_pager(&mut self, cx: &mut Context<Self>) {
+        let target = if self.browser.is_blank() || self.browser.is_private() {
+            self.browser.active_space
+        } else {
+            self.sidebar_page_index()
+        } as f32;
         if (self.pager.position - target).abs() < 0.001 {
             self.pager.position = target;
             self.pager.settle = None;
@@ -2168,20 +2234,24 @@ impl BrowserWindow {
 
     pub(crate) fn switch_space(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.browser.is_blank() { return; }
+        let Some(id) = self.browser.spaces.get(index).map(|space| space.id) else { return; };
+        if !self.browser.is_private() {
+            self.select_sidebar_page(crate::sidebar_pages::SidebarPage::Space(id), cx);
+            return;
+        }
         self.finish_tab_rename(true, cx);
         self.edit_browser(|browser| browser.switch_space(index));
         self.settle_pager(cx);
         cx.notify();
     }
 
-    fn reorder_space(&mut self, id: SpaceId, destination: usize, cx: &mut Context<Self>) {
+    pub(crate) fn reorder_space(&mut self, id: SpaceId, destination: usize, cx: &mut Context<Self>) {
         if self.browser.is_blank() { return; }
         if self.edit_browser(|browser| browser.move_space(id, destination)) {
             // The selected Space is the same object at a new index. A pager
             // animation here would briefly display a different Space's tabs.
-            self.pager.settle = None;
-            self.pager.drag = None;
-            self.pager.position = self.browser.active_space as f32;
+            self.reconcile_sidebar_navigation();
+            self.reset_profile_pager(self.browser.active_space);
             cx.notify();
         }
     }
@@ -2206,8 +2276,8 @@ impl BrowserWindow {
 
     fn cycle_space(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.browser.is_blank() { return; }
-        let n = self.browser.spaces.len() as isize;
-        let index = (self.browser.active_space as isize + delta).rem_euclid(n);
+        // The reference keyboard route wraps only through real Spaces.
+        let index = (self.browser.active_space as isize + delta).rem_euclid(self.browser.spaces.len() as isize);
         self.switch_space(index as usize, cx);
     }
 
@@ -2222,6 +2292,8 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let id = tab.id;
+        let painted_space = self.browser.space().id;
+        let painted_profile = self.browser.active_user_profile_id();
         let key = id.get() as usize;
         let private = self.browser.is_private();
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
@@ -2230,22 +2302,23 @@ impl BrowserWindow {
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
+        let drag_moves_active = self.sidebar_page_interactive;
         let move_edge = edge.clone();
         let paint_edge = edge.clone();
         let drag_owner = cx.entity().downgrade();
 
         div()
             .id(("tab", key))
-            .debug_selector(|| format!("tab-{key}"))
+            .debug_selector(|| self.sidebar_debug_name((|| format!("tab-{key}"))()))
             .group(group.clone())
             .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
-            .on_drag_move::<crate::tab_drag::TabDrag>(move |event, _, _| { move_edge.set(event.event.position.y > event.bounds.center().y); })
+            .on_drag_move::<crate::tab_drag::TabDrag>(move |event, _, _| { if drag_moves_active { move_edge.set(event.event.position.y > event.bounds.center().y); } })
             .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {
                 let style = style.border_color(hsla(0., 0., 0.2, 0.6));
                 if paint_edge.get() { style.border_b_2() } else { style.border_t_2() }
             })
-            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_relative(drag, id, edge.get(), cx)))
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_relative(drag, id, edge.get(), cx); } }))
             .flex_none()
             .flex()
             .items_center()
@@ -2272,9 +2345,12 @@ impl BrowserWindow {
             .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
+                if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                 this.open_tab_menu(id, event.position, window, cx);
             }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
+                if this.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library { this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Space(painted_space), cx); }
                 if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
@@ -2287,7 +2363,7 @@ impl BrowserWindow {
             .child(
                 div()
                     .id(("close", key))
-                    .debug_selector(|| format!("close-{key}"))
+                    .debug_selector(|| self.sidebar_debug_name((|| format!("close-{key}"))()))
                     .absolute().top(px(10.)).right(px(if segmented { 4. } else { 6. }))
                     .flex_none()
                     .px_1()
@@ -2300,6 +2376,7 @@ impl BrowserWindow {
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
+                        if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                         this.close_tab(id, cx);
                     }))
                     .child(crate::icons::control(match section {
@@ -2309,8 +2386,10 @@ impl BrowserWindow {
             )
     }
 
-    fn render_favorite(&self, tab: &Tab, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_favorite(&self, tab: &Tab, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let id = tab.id;
+        let painted_space = self.browser.space().id;
+        let painted_profile = self.browser.active_user_profile_id();
         let key = id.get() as usize;
         let group = SharedString::from(format!("favorite-{key}"));
         let active = self.browser.space().active_tab.is_some_and(|active| self.browser.item_anchor(active) == id);
@@ -2321,24 +2400,27 @@ impl BrowserWindow {
         let outline = self.browser.favicon(self.browser.active_user_profile_id(), &tab.url)
             .and_then(|png| self.favicon_styles.borrow_mut().get(png).accent)
             .map_or(hsla(0., 0., 1., 0.95), |accent| accent.opacity(0.85));
-        div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
+        div().id(("favorite", key)).debug_selector(|| self.sidebar_debug_name((move || format!("favorite-{key}"))()))
             .group(group.clone()).relative().flex().items_center().justify_center()
             .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
             .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
-                browser.read_with(cx, |this, _| drag.id != id && (this.browser.is_favorite(drag.id) || this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES)).unwrap_or(false)
+                browser.read_with(cx, |this, _| drag.id != id && (this.browser.user_profile(painted_profile).is_some_and(|profile| profile.favorites.iter().any(|tab| tab.id == drag.id) || profile.favorites.len() < browser_core::favorites::MAX_FAVORITES))).unwrap_or(false)
             }))
             .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
-            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_at_favorite(drag, id, cx)))
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_at_favorite(drag, id, cx); } }))
             .w(px(width)).h(px(FAVORITE_HEIGHT)).rounded(px(SIDEBAR_ROW_RADIUS))
             .bg(hsla(0.0, 0.0, 1.0, if active { 0.5 } else { 0.3 }))
             .when(active, |this| this.border(px(1.5)).border_color(outline).shadow_sm())
             .hover(move |s| s.bg(hsla(0.0, 0.0, 1.0, if active { 0.55 } else { 0.42 })))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
+                if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                 this.open_tab_menu(id, event.position, window, cx);
             }))
             // No tooltip: the page view covers the sidebar's popups.
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
+                if this.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library { this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Space(painted_space), cx); }
                 if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
@@ -2353,15 +2435,18 @@ impl BrowserWindow {
 
     fn render_mute_control(&self, tab: &Tab, favorite: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let id = tab.id;
+        let painted_space = self.browser.space().id;
+        let painted_profile = self.browser.active_user_profile_id();
         let key = id.get() as usize;
         let title = tab.title.clone();
-        div().id(("unmute", key)).debug_selector(move || format!("unmute-{key}"))
+        div().id(("unmute", key)).debug_selector(|| self.sidebar_debug_name((move || format!("unmute-{key}"))()))
             .flex_none().px_1().rounded_sm().text_sm()
             .when(favorite, |this| this.absolute().bottom(px(1.)).left(px(1.)))
             .hover(|s| s.bg(hsla(0., 0., 0., 0.1)))
             .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: "Unmute Tab".into(), url: title.clone() }).into())
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
+                if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                 this.set_tab_muted(id, false, cx);
             })).child(crate::icons::control(crate::icons::Icon::Mute))
     }
@@ -2386,7 +2471,47 @@ impl BrowserWindow {
         div().size(px(18.)).flex_none().flex().items_center().justify_center().child(icon).into_any_element()
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if self.browser.is_blank() || self.browser.is_private() { return div().h_full().on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))).child(self.render_workspace_sidebar(None, cx)).into_any_element(); }
+        if self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::CreateSpace {
+            return div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(SIDEBAR_WIDTH)).h_full().overflow_hidden()
+                .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
+                .when_some(self.sidebar_navigation.form.clone(), |this, form| this.child(form))
+                .child(div().absolute().bottom_0().left_0().right_0().child(self.render_space_switcher(cx)))
+                .into_any_element();
+        }
+        let pages = self.sidebar_navigation.controller.pages(&self.browser);
+        let saved = self.browser.clone();
+        let saved_namespace = self.sidebar_debug_namespace.clone();
+        let saved_interactive = self.sidebar_page_interactive;
+        let mut rendered = Vec::with_capacity(pages.len());
+        for (page_index, page) in pages.into_iter().enumerate() {
+            let content = match page {
+                crate::sidebar_pages::SidebarPage::Space(id) => {
+                    let mut model: Browser = (*saved).clone();
+                    if let Some(index) = model.spaces.iter().position(|space| space.id == id) { model.switch_space(index); }
+                    self.browser = model.window_projection(&model.window_selection());
+                    let active = id == saved.space().id;
+                    self.sidebar_debug_namespace = if active { saved_namespace.clone() } else { Some(format!("inactive-{id:?}")) };
+                    self.sidebar_page_interactive = active;
+                    self.render_space_page(self.browser.active_space, cx).into_any_element()
+                }
+                crate::sidebar_pages::SidebarPage::CreateSpace | crate::sidebar_pages::SidebarPage::Library => div().into_any_element(),
+            };
+            rendered.push(div().id(("sidebar-page", page_index)).relative().flex_none().w(px(SIDEBAR_WIDTH)).h_full().child(content).into_any_element());
+        }
+        self.browser = saved;
+        self.sidebar_debug_namespace = saved_namespace;
+        self.sidebar_page_interactive = saved_interactive;
+        // Toolbar, Favorites and Space dock remain stationary while the
+        // window-local Space contents follow the fingers between real IDs.
+        div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(SIDEBAR_WIDTH)).h_full().overflow_hidden()
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
+            .child(self.render_workspace_sidebar(Some((rendered, -self.pager.position * SIDEBAR_WIDTH)), cx))
+            .into_any_element()
+    }
+
+    pub(crate) fn render_workspace_sidebar(&self, pager_pages: Option<(Vec<AnyElement>, f32)>, cx: &mut Context<Self>) -> impl IntoElement {
         let url = self
             .browser
             .active_tab()
@@ -2394,19 +2519,16 @@ impl BrowserWindow {
             .unwrap_or_else(|| if self.browser.is_private() { "Search or Enter URL…".into() } else { String::new() });
         let private = self.browser.is_private();
         let blank = self.browser.is_blank();
-        let pages: Vec<_> = if blank { vec![div().w(px(SIDEBAR_WIDTH)).h_full().child(self.render_blank_tabs(cx)).into_any_element()] } else if private { vec![div().w(px(SIDEBAR_WIDTH)).h_full().child(self.render_private_tabs(cx)).into_any_element()] } else { (0..self.browser.spaces.len())
-            .map(|index| self.render_space_page(index, cx).into_any_element())
-            .collect() };
-        let offset = if private || blank { 0. } else { -self.pager.position * SIDEBAR_WIDTH };
+        let (pages, offset) = pager_pages.unwrap_or_else(|| (vec![if blank { self.render_blank_tabs(cx).into_any_element() } else if private { self.render_private_tabs(cx).into_any_element() } else { self.render_space_page(self.browser.active_space, cx).into_any_element() }], 0.));
         let browser = cx.entity().downgrade();
         let state = self.browser.space().active_tab.and_then(|id| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(id))).unwrap_or_default();
 
         let loading = state.loading;
-        let control = |id: &'static str| div().id(id).debug_selector(move || id.into()).flex_none().size(px(28.)).rounded_md()
+        let control = |id: &'static str| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())())).flex_none().size(px(28.)).rounded_md()
             .flex().items_center().justify_center().text_color(hsla(0., 0., if private { 1. } else { 0. }, 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
         let controls_open = self.site_controls.is_some();
-        let anchor = self.site_controls_anchor.clone();
-        let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(move || id.into())
+        let anchor = if self.sidebar_debug_namespace.is_none() { self.site_controls_anchor.clone() } else { Default::default() };
+        let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .group(id).relative().flex_none().size(px(24.)).flex().items_center().justify_center()
             .child(self.render_press_highlight(id, hsla(0., 0., 0., 0.08), active));
         let address_actions_shown = controls_open || self.sidebar_hovered;
@@ -2416,13 +2538,12 @@ impl BrowserWindow {
         let favorite_width = ((SIDEBAR_WIDTH - 2. * SIDEBAR_INSET - FAVORITE_GAP * (columns - 1.)) / columns).floor();
         div()
             .id("sidebar")
-            .debug_selector(|| "sidebar".into())
+            .debug_selector(|| self.sidebar_debug_name(if private || blank { "sidebar".into() } else { "workspace-sidebar".into() }))
             .group("sidebar")
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if this.sidebar_hovered != *hovered { this.sidebar_hovered = *hovered; cx.notify(); }
             }))
             .relative()
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .flex()
             .flex_col()
             .flex_none()
@@ -2432,7 +2553,7 @@ impl BrowserWindow {
             .gap(px(8.))
             .text_color(hsla(0.0, 0.0, 0.1, 1.0))
             .child(div().absolute().top_0().left_0().right(px(8.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).flex().items_center().gap(px(6.))
-                .child(self.render_traffic_lights(cx))
+                .child(div().flex_none().w(px(74.)).h_full())
                 .child(control("toggle-sidebar").ml(px(-2.))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
                     .child(crate::icons::control(crate::icons::Icon::Sidebar)))
@@ -2452,7 +2573,7 @@ impl BrowserWindow {
                 div().px(px(SIDEBAR_INSET)).child(
                     div()
                         .id("address")
-                        .debug_selector(|| "address".into())
+                        .debug_selector(|| self.sidebar_debug_name((|| "address".into())()))
                         .h(px(36.0))
                         .pl(px(13.))
                         .pr(px(5.))
@@ -2497,7 +2618,7 @@ impl BrowserWindow {
                 ),
             )
             .when(!blank && (!favorites.is_empty() || (!private && (!self.browser.active_user_profile().empty_favorites_dismissed || self.tab_drag_active))), |this| this.child(
-                div().id("favorites").debug_selector(|| "favorites".into())
+                div().id("favorites").debug_selector(|| self.sidebar_debug_name((|| "favorites".into())()))
                     .flex().flex_wrap().gap(px(FAVORITE_GAP)).px(px(SIDEBAR_INSET))
                     .when(favorites.is_empty(), |this| this.flex_none()
                         .child(self.render_empty_favorites(cx)))
@@ -2534,7 +2655,7 @@ impl BrowserWindow {
     /// reuse the same card during tab drags; Arc's drag presentation is still
     /// pending native observation, so no additional transition is introduced.
     fn render_empty_favorites(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().id("empty-favorites").debug_selector(|| "empty-favorites".into())
+        div().id("empty-favorites").debug_selector(|| self.sidebar_debug_name((|| "empty-favorites".into())()))
             .relative().w_full().h(px(95.)).flex_none()
             .rounded(px(12.)).border_1().border_dashed()
             .border_color(hsla(0., 0., 1., 0.26))
@@ -2559,7 +2680,7 @@ impl BrowserWindow {
                 .font_weight(gpui::FontWeight::BOLD).child("Drag to add Favorites"))
             .child(div().mt(px(2.)).text_center().text_size(px(12.)).line_height(px(15.))
                 .child("Favorites keep your most").child(div().child("used sites and apps close")))
-            .child(div().id("dismiss-empty-favorites").debug_selector(|| "dismiss-empty-favorites".into())
+            .child(div().id("dismiss-empty-favorites").debug_selector(|| self.sidebar_debug_name((|| "dismiss-empty-favorites".into())()))
                 .absolute().top(px(4.)).right(px(4.)).size(px(20.))
                 .flex().items_center().justify_center().cursor_pointer()
                 .text_color(hsla(0., 0., 1., 0.45))
@@ -2576,7 +2697,7 @@ impl BrowserWindow {
     /// dots and show their colors only while the pointer is over them.
     fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let hovered = self.traffic_lights_hovered;
-        div().id("traffic-lights").debug_selector(|| "traffic-lights".into()).flex_none().w(px(74.)).h_full()
+        div().id("traffic-lights").debug_selector(|| self.sidebar_debug_name((|| "traffic-lights".into())())).flex_none().w(px(74.)).h_full()
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if this.traffic_lights_hovered != *hovered {
                     this.traffic_lights_hovered = *hovered;
@@ -2642,6 +2763,7 @@ impl BrowserWindow {
         use crate::icons::Icon;
         let Some((count, started)) = self.copy_feedback else { return crate::icons::control(Icon::Link); };
         let total = COPY_FEEDBACK.as_secs_f32() * 1000.;
+        let check_selector = self.sidebar_debug_name("copy-check".into());
         clocked(div().size(px(18.)).flex_none().relative(), format!("copy-feedback-{count}"), started, COPY_FEEDBACK, move |slot, t| {
             let ms = t * total;
             let phase = |from: f32, to: f32| ((ms - from) / (to - from)).clamp(0., 1.);
@@ -2659,7 +2781,7 @@ impl BrowserWindow {
             let erase = phase(700., 960.);
             let check_scale = (0.8 + 0.2 * appear) * (1. - 0.12 * erase) * press;
             slot.child(div().absolute().inset_0().opacity(link_alpha).child(crate::icons::scaled(Icon::Link, link_scale)))
-                .when(ms < 960., |slot| slot.child(div().debug_selector(|| "copy-check".into()).absolute().inset_0().opacity(appear)
+                .when(ms < 960., |slot| slot.child(div().debug_selector(|| check_selector.clone()).absolute().inset_0().opacity(appear)
                     .child(crate::icons::check(gpui::ease_in_out(erase), check_scale))))
         })
     }
@@ -2721,7 +2843,7 @@ impl BrowserWindow {
 
         div()
             .id(("space-page", index))
-            .when(current, |this| this.debug_selector(|| "space-page".into()))
+            .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "space-page".into())())))
             .flex()
             .flex_col()
             .flex_none()
@@ -2735,12 +2857,12 @@ impl BrowserWindow {
                 this.open_space_menu(space_id, event.position, window, cx);
             }))
             .when(space.show_header, |this| this.child(
-                div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
+                div().id(("space-header", index)).debug_selector(|| self.sidebar_debug_name((move || format!("space-header-{index}"))()))
                     .group(header_group.clone())
                     .flex().items_center().gap(px(9.)).h(px(SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).rounded(px(SIDEBAR_ROW_RADIUS))
                     .when(header_menu_open, |style| style.bg(hsla(0., 0., 1., 0.15)))
                     .hover(|style| style.bg(hsla(0., 0., 1., 0.15)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_pinned_section(index, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| { if let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) { this.toggle_pinned_section(index, cx); } }))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Pinned, cx)))
                     .drag_over::<crate::folder_drag::FolderDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
@@ -2752,20 +2874,20 @@ impl BrowserWindow {
                     .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(hsla(0., 0., 0., 0.5))
                     .child(div().relative().size(px(18.)).flex_none()
-                        .child(div().debug_selector(move || format!("space-header-icon-{index}"))
+                        .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-icon-{index}"))()))
                             .size_full().flex().items_center().justify_center()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.invisible())
                             .group_hover(header_group.clone(), |style| style.invisible())
                             .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon)))
                             .when(space.custom_icon.is_none(), |this| this.child(div().size(px(7.)).rounded_full().bg(hsla(0., 0., 0.1, 0.5)))))
-                        .child(div().debug_selector(move || format!("space-header-chevron-{index}"))
+                        .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-chevron-{index}"))()))
                             .absolute().top_0().left_0().size_full().invisible()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.visible())
                             .group_hover(header_group.clone(), |style| style.visible())
                             .child(crate::icons::disclosure(space.pinned_collapsed))))
-                    .child(div().debug_selector(move || format!("space-header-name-{index}"))
+                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-name-{index}"))()))
                         .flex_1().min_w_0().truncate().child(space.name.clone()))
-                    .child(div().id(("space-header-more", index)).debug_selector(move || format!("space-header-more-{index}"))
+                    .child(div().id(("space-header-more", index)).debug_selector(|| self.sidebar_debug_name((move || format!("space-header-more-{index}"))()))
                         .flex_none().size(px(18.)).invisible()
                         .when(header_menu_open, |this| this.visible())
                         .group_hover(header_group, |style| style.visible())
@@ -2776,17 +2898,17 @@ impl BrowserWindow {
                         .child(crate::icons::more())),
             ))
             .when(!pinned.is_empty(), |this| this.child(
-                div().id(("pinned-reveal", index)).when(current, |this| this.debug_selector(|| "pinned-reveal".into()))
+                div().id(("pinned-reveal", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "pinned-reveal".into())())))
                     .flex_none().h(px(pinned_height * reveal)).max_h(gpui::relative(0.45 * reveal))
                     .mb(px(-4. * (1. - reveal))).overflow_hidden()
-                    .child(self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| "pinned-list".into()))
+                    .child(self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "pinned-list".into())())))
                         .relative().top(px(-12. * (1. - reveal))).size_full().flex().flex_col().gap(px(SIDEBAR_ROW_GAP)).overflow_y_scroll()
                         .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
                         .children(pinned)),
             ))
             // The divider doubles as the Today drop target. Tidy and Clear show on
             // sidebar hover, and the line shortens to make room for them.
-            .child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| "today-header".into()))
+            .child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "today-header".into())())))
                 .relative().flex_none().h(px(22.)).rounded_md()
                 .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                 .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
@@ -2798,13 +2920,14 @@ impl BrowserWindow {
                 .when(!space.today.is_empty(), |this| this.child(hover_fade(div().absolute().right(px(10.)).top_0().h_full().w(px(TODAY_ACTIONS_WIDTH))
                     .flex().items_center().justify_end()
                     .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0.0, 0.0, 0.0, 0.35))
-                    .child(div().id(("tidy-today", index)).when(current, |this| this.debug_selector(|| "tidy-today".into()))
+                    .child(div().id(("tidy-today", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "tidy-today".into())())))
                         .flex().items_center().gap(px(3.)).hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
                         .child(crate::icons::control_sized(crate::icons::Icon::Tidy, 12.)).child("Tidy"))
                     .child(div().mx(px(8.)).w(px(1.)).h(px(10.)).bg(hsla(0.0, 0.0, 0.0, 0.25)))
-                    .child(div().id(("clear-today", index)).when(current, |this| this.debug_selector(|| "clear-today".into()))
+                    .child(div().id(("clear-today", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "clear-today".into())())))
                         .flex().items_center().gap(px(2.)).hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) else { return; };
                             this.edit_browser(|browser| browser.switch_space(index));
                             this.clear_today_tabs(cx);
                             this.settle_pager(cx);
@@ -2815,7 +2938,7 @@ impl BrowserWindow {
             .child(
                 div()
                     .id(("new-tab", index))
-                    .when(current, |this| this.debug_selector(|| "new-tab".into()))
+                    .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "new-tab".into())())))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
                     .flex()
@@ -2840,15 +2963,19 @@ impl BrowserWindow {
                     .flex_1()
                     .gap(px(SIDEBAR_ROW_GAP))
                     .overflow_y_scroll()
-                    .when(current, |this| this.debug_selector(|| "today-list".into()))
+                    .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "today-list".into())())))
                     .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.today))
                     .children(today),
             )
     }
 
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let new_menu_anchor = self.new_menu_anchor.clone();
-        let corner = |id: &'static str| div().id(id).debug_selector(move || id.into())
+        let drag_moves_active = self.sidebar_page_interactive;
+        let new_menu_anchor = if self.sidebar_debug_namespace.is_none() { self.new_menu_anchor.clone() } else { Default::default() };
+        let normal = !self.browser.is_blank() && !self.browser.is_private();
+        let pages = self.sidebar_navigation.controller.pages(&self.browser);
+        let selected = self.sidebar_navigation.controller.selected();
+        let corner = |id: &'static str| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .flex_none().size(px(32.)).rounded_md().flex().items_center().justify_center()
             .text_color(hsla(0.0, 0.0, 0.0, 0.5)).hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)));
         div()
@@ -2857,18 +2984,26 @@ impl BrowserWindow {
             .px(px(SIDEBAR_INSET))
             .flex()
             .items_center()
-            // Library sits at the left edge; it has no destination yet.
-            .child(corner("library").child(crate::icons::control(crate::icons::Icon::Library)))
+            .child(corner("library")
+                .when(normal && selected == crate::sidebar_pages::SidebarPage::Library, |this| this.bg(hsla(0., 0., 1., 0.3)))
+                .when(normal, |this| this.on_click(cx.listener(|this, _, _, cx| {
+                    this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx);
+                    this.settle_pager(cx);
+                })))
+                .child(crate::icons::control(crate::icons::Icon::Library)))
             .child(div().flex_1().min_w_0().flex().items_center().justify_center().gap(px(4.))
-            .children(self.browser.spaces.iter().enumerate().map(|(index, space)| {
-                let active = index == self.pager.position.round() as usize;
+            .children(self.browser.spaces.iter().enumerate().flat_map(|(index, space)| {
                 let space_id = space.id;
+                let page_index = if normal {
+                    pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::Space(space_id)).unwrap_or(index + 1)
+                } else { index };
+                let active = page_index == self.pager.position.round() as usize;
                 let drag = crate::space_drag::SpaceDrag { id: space_id, workspace: self.profile.handle.clone(), name: space.name.clone(), icon: space.custom_icon.clone(), hue: space.hue };
                 // Space marks are monochrome; only user emoji keep their colors.
                 let mark = hsla(0., 0., 0.1, if active { 0.8 } else { 0.3 });
-                div()
+                let real_mark = div()
                     .id(("space", index))
-                    .debug_selector(move || format!("space-{index}"))
+                    .debug_selector(|| self.sidebar_debug_name((move || format!("space-{index}"))()))
                     .group(SharedString::from(format!("space-mark-{index}")))
                     .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
                     .hover(|s| s.bg(hsla(0., 0., 1., 0.3)))
@@ -2876,13 +3011,23 @@ impl BrowserWindow {
                         .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., 0.1, if active { 0.8 } else { 0.5 })))))
                     .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
                         .when(!active, |this| this.opacity(0.5))
-                        .child(div().debug_selector(move || format!("space-icon-{index}")).child(crate::icons::glyph(&icon))))
-                    .on_click(cx.listener(move |this, _, _, cx| this.switch_space(index, cx)))
+                        .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-icon-{index}"))())).child(crate::icons::glyph(&icon))))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) {
+                            this.switch_space(index, cx);
+                        }
+                    }))
                     .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
                     .drag_over::<crate::space_drag::SpaceDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
-                    .on_drop(cx.listener(move |this, drag: &crate::space_drag::SpaceDrag, _, cx| { if this.profile.handle.same_workspace(&drag.workspace) { this.reorder_space(drag.id, index, cx); } }))
-                    .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, _, cx| this.hover_space_drag(space_id, event.bounds.contains(&event.event.position), cx)))
-                    .on_drag_move::<crate::folder_drag::FolderDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::folder_drag::FolderDrag>, _, cx| this.hover_space_drag(space_id, event.bounds.contains(&event.event.position), cx)))
+                    .on_drop(cx.listener(move |this, drag: &crate::space_drag::SpaceDrag, _, cx| {
+                        if this.profile.handle.same_workspace(&drag.workspace) {
+                            if let Some(destination) = this.browser.spaces.iter().position(|space| space.id == space_id) {
+                                this.reorder_space(drag.id, destination, cx);
+                            }
+                        }
+                    }))
+                    .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, _, cx| { if drag_moves_active { this.hover_space_drag(space_id, event.bounds.contains(&event.event.position), cx); } }))
+                    .on_drag_move::<crate::folder_drag::FolderDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::folder_drag::FolderDrag>, _, cx| { if drag_moves_active { this.hover_space_drag(space_id, event.bounds.contains(&event.event.position), cx); } }))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
                     .drag_over::<crate::folder_drag::FolderDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_space(drag, space_id, cx)))
@@ -2890,9 +3035,19 @@ impl BrowserWindow {
                     .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         this.open_space_menu(space_id, event.position, window, cx);
-                    }))
+                    }));
+                let mut marks = vec![real_mark.into_any_element()];
+                if self.sidebar_navigation.controller.draft().is_some_and(|draft| draft.origin == space_id) {
+                    marks.push(div().id("space-creation-mark").debug_selector(|| "space-creation-mark".into())
+                        .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
+                        .text_color(hsla(0., 0., 0.1, 0.6))
+                        .when(selected == crate::sidebar_pages::SidebarPage::CreateSpace, |mark| mark.bg(hsla(0., 0., 1., 0.3)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.begin_space_creation(space_id, cx)))
+                        .child(crate::icons::control_sized(crate::icons::Icon::NewSpace, 16.)).into_any_element());
+                }
+                marks
             })))
-            .child(div().id("new-space").debug_selector(|| "new-space".into()).group("new-space")
+            .child(div().id("new-space").debug_selector(|| self.sidebar_debug_name((|| "new-space".into())())).group("new-space")
                 .relative().flex_none().size(px(32.)).flex().items_center().justify_center()
                 .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                 .child(self.render_press_highlight("new-space", hsla(0.0, 0.0, 1.0, 0.3), self.new_menu.is_some()))
@@ -2902,18 +3057,20 @@ impl BrowserWindow {
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let split_open = self.browser.active_split().is_some();
-        let history_open = self.history_is_open();
+        let virtual_page = !self.page_content_visible();
+        let split_open = !virtual_page && self.browser.active_split().is_some();
+        let history_open = !virtual_page && self.history_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if split_open || history_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
-            (None, _) => Some(("No tab open".to_string(), "Press ⌘T to open a new tab".to_string())),
+        let placeholder = if virtual_page || split_open || history_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+            (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
         }};
         div()
+            .debug_selector(|| "browser-content".into())
             .flex_1()
             // Never grow wider than the window because of content.
             .min_w_0()
@@ -2923,6 +3080,7 @@ impl BrowserWindow {
             .pl(px(CONTENT_INSET * (1. - self.sidebar_amount())))
             .child(
                 div()
+                    .debug_selector(|| "page-surface".into())
                     .size_full()
                     .flex()
                     .flex_col()
@@ -2937,7 +3095,7 @@ impl BrowserWindow {
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .children(placeholder.map(|(title, url)| {
-                        div()
+                        div().debug_selector(|| "page-placeholder".into())
                             .flex()
                             .flex_col()
                             .items_center()
@@ -3005,7 +3163,7 @@ impl BrowserWindow {
             )
     }
 
-    fn render_floating_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_floating_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(floating) = &self.floating_sidebar else {
             return div().into_any_element();
         };
@@ -3014,7 +3172,7 @@ impl BrowserWindow {
         let width = SIDEBAR_WIDTH;
         let panel = div()
             .id("floating-sidebar")
-            .debug_selector(|| "floating-sidebar".into())
+            .debug_selector(|| self.sidebar_debug_name((|| "floating-sidebar".into())()))
             .absolute()
             .top(px(FLOATING_SIDEBAR_INSET))
             .bottom(px(FLOATING_SIDEBAR_INSET))
@@ -3030,6 +3188,9 @@ impl BrowserWindow {
             ))
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .child(self.render_sidebar(cx))
+            // This overlay is its own native window with forwarded controls.
+            // Keep its single control mount outside the page renderer too.
+            .child(div().absolute().top_0().left_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx)))
             .child(canvas(|_, _, _| (), |bounds, _, window, _| {
                 if let Some(view) = crate::native::view_of(window) {
                     crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + f32::from(bounds.origin.x) - FLOATING_SIDEBAR_INSET);
@@ -3134,7 +3295,7 @@ impl BrowserWindow {
                     .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
                 let row = div()
                     .id(("suggestion", index))
-                    .debug_selector(move || format!("suggestion-{index}"))
+                    .debug_selector(|| self.sidebar_debug_name((move || format!("suggestion-{index}"))()))
                     .flex()
                     .items_center()
                     .gap(px(9.0))
@@ -3169,7 +3330,7 @@ impl BrowserWindow {
                     )
                     .when_some(archived_id, |this, id| this.child(div()
                         .id(("delete-archived", id.get() as usize))
-                        .debug_selector(move || format!("delete-archived-{}", id.get()))
+                        .debug_selector(|| self.sidebar_debug_name((move || format!("delete-archived-{}", id.get()))()))
                         .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -3177,7 +3338,7 @@ impl BrowserWindow {
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when_some(history_url, |this, url| this.child(div()
                         .id(("delete-suggestion", index))
-                        .debug_selector(move || format!("delete-suggestion-{index}"))
+                        .debug_selector(|| self.sidebar_debug_name((move || format!("delete-suggestion-{index}"))()))
                         .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -3188,7 +3349,7 @@ impl BrowserWindow {
                         .text_color(if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, 1.0, 0.6) })
                         .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0)));
                 div().flex().flex_col().flex_none()
-                    .children(date.map(|date| div().debug_selector(move || format!("archive-date-{index}")).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
+                    .children(date.map(|date| div().debug_selector(|| self.sidebar_debug_name((move || format!("archive-date-{index}"))())).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
                     .child(row).into_any_element()
             })
             .collect();
@@ -3197,7 +3358,7 @@ impl BrowserWindow {
         // Full-window backdrop; clicking outside the panel dismisses it.
         div()
             .id("command-bar-backdrop")
-            .debug_selector(|| "command-bar-backdrop".into())
+            .debug_selector(|| self.sidebar_debug_name((|| "command-bar-backdrop".into())()))
             .size_full()
             // The overlay window is square; match the browser window's corners.
             .rounded(px(WINDOW_CORNER_RADIUS))
@@ -3211,7 +3372,7 @@ impl BrowserWindow {
             .child(
                 div()
                     .id("command-bar")
-                    .debug_selector(|| "command-bar".into())
+                    .debug_selector(|| self.sidebar_debug_name((|| "command-bar".into())()))
                     .key_context(COMMAND_BAR_CONTEXT)
                     .on_action(cx.listener(|this, _: &OpenCommandBar, _, cx| { this.toggle_command_target(Target::NewTab, "", cx); }))
                     .on_action(cx.listener(|this, _: &EditCurrentUrl, _, cx| {
@@ -3248,7 +3409,7 @@ impl BrowserWindow {
                             .pl(px(22.0)).pr(px(21.0))
                             .child(div().text_color(hsla(0.0, 0.0, 1.0, 0.75)).child(crate::icons::control_sized(crate::icons::Icon::Search, 16.0)))
                             .child(div()
-                                .debug_selector(|| "command-bar-input".into())
+                                .debug_selector(|| self.sidebar_debug_name((|| "command-bar-input".into())()))
                                 .flex_1().min_w_0()
                                 .text_size(px(18.0))
                                 .line_height(px(28.0))
@@ -3265,7 +3426,7 @@ impl BrowserWindow {
                     .when(has_rows, |this| {
                         this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, 1.0, 0.1)))
                             .text_size(px(14.0))
-                            .child(div().id("command-suggestions").debug_selector(|| "command-suggestions".into())
+                            .child(div().id("command-suggestions").debug_selector(|| self.sidebar_debug_name((|| "command-suggestions".into())()))
                                 .flex().flex_col().gap_1().pt(px(6.0)).pb(px(8.0)).max_h(px(rows_height + 14.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
                     }),
             )
@@ -3279,13 +3440,13 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
-        if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline(editor.tab)) {
-            self.finish_tab_rename(true, cx);
+        if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
+            self.finish_tab_rename(false, cx);
         }
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
-        if self.user_profile_dialog.is_none() { self.sync_history_focus(window, cx); }
+        if self.page_content_visible() && self.user_profile_dialog.is_none() { self.sync_history_focus(window, cx); }
         if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_target_exists(menu.target)) {
             self.close_tab_menu(cx);
         }
@@ -3294,7 +3455,7 @@ impl Render for BrowserWindow {
         }
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
-                Ok(mut pages) => pages.sync(&self.browser, true),
+                Ok(mut pages) => pages.sync(&self.browser, self.page_content_visible()),
                 // Re-entered from engine work; sync on the next frame.
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),
             }
@@ -3303,12 +3464,18 @@ impl Render for BrowserWindow {
         let hue = self.pager_hue();
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = SIDEBAR_WIDTH * (sidebar_amount - 1.);
+        let window_controls_offset = self.window_controls_offset();
         if let Some(view) = self.native_view {
-            crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + sidebar_offset);
+            crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + window_controls_offset);
         }
 
+        let library_open = !self.page_content_visible() && self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library;
+        let sidebar = (!library_open && sidebar_amount > 0.).then(|| self.render_sidebar(cx));
+        let library = library_open.then(|| self.render_library_host(cx));
+        let content = if library_open { div().into_any_element() } else { self.render_content(cx).into_any_element() };
         div()
             .key_context(WINDOW_CONTEXT)
+            .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
             .track_focus(&self.focus_handle)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.close_link_status(cx);
@@ -3349,7 +3516,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::ResetPinnedTab, _, cx| this.run_command(Command::ResetPinnedTab, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ReplacePinnedUrl, _, cx| this.run_command(Command::ReplacePinnedUrl, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ResetSpace, _, cx| this.run_command(Command::ResetSpace, cx)))
-            .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
+            .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.begin_space_creation(this.browser.space().id, cx)))
             .on_action(cx.listener(Self::on_edit_current_url))
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))
             .on_action(cx.listener(|this, _: &CopyUrlAsMarkdown, _, cx| this.copy_url(true, cx)))
@@ -3411,11 +3578,13 @@ impl Render for BrowserWindow {
                 linear_color_stop(tint(hue, 0.72), 1.0),
             ))
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
-            .child(div().debug_selector(|| "sidebar-clip".into())
+            .when(!library_open, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
                 .relative().flex_none().h_full().w(px(SIDEBAR_WIDTH * sidebar_amount)).overflow_hidden()
-                .when(sidebar_amount > 0., |this| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(self.render_sidebar(cx)))))
-            .child(self.render_content(cx))
-            .children(self.render_window_snapshots())
+                .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(sidebar)))))
+            .child(content)
+            .when_some(library, |this, library| this.child(library))
+            .when(self.page_content_visible(), |this| this.children(self.render_window_snapshots()))
+            .child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx)))
             .child(release_hover_on_exit())
             .into_any_element()
 
@@ -3448,7 +3617,7 @@ fn favicon(title: &str, hue: f32) -> impl IntoElement {
         .child(initial)
 }
 
-fn tint(hue: f32, lightness: f32) -> Hsla {
+pub(crate) fn tint(hue: f32, lightness: f32) -> Hsla {
     hsla(hue, 0.45, lightness, 1.0)
 }
 
@@ -3544,3 +3713,7 @@ fn rubber_band(position: f32, spaces: usize) -> f32 {
         position
     }
 }
+
+#[cfg(test)]
+#[path = "sidebar_navigation_pager_tests.rs"]
+mod sidebar_navigation_pager_tests;

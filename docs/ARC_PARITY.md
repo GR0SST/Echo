@@ -124,7 +124,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Space… | — | partial | Create a named Space from the dock + menu or Command Bar. Icon, theme and profile choices in the creation dialog remain missing |
+| New Space… | — | partial | Sidebar creation page from the dock + menu, Spaces menu, Command Bar, Library Spaces and right-edge pager. Drafts stay window-local; atomic creation inserts after the origin. Icon, theme and profile pickers, and exact swipe/visual parity remain incomplete |
 | Edit Theme… | — | missing | See "Space themes" |
 | Rename Space | — | done | Command Bar action opens a focused name editor; Escape cancels |
 | Change Profile | — | partial | Captured-Space routing and storage replacement work; warning conditions and exact sheet presentation still need matching |
@@ -169,7 +169,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 |---|---|---|---|
 | Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
 | Minimize Window / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar target the main window. Bundled macOS checks verified minimization from page, Command Bar, Find and the Minimize Window command, plus restored document/input and History/DevTools responder retention. Popup teardown cancels deferred activation that would undo minimization. Native Zoom/Bring All ordering and remaining platforms still need verification |
-| View Library | ⇧⌘L | missing | The Library button sits at the left of the Space bar but does nothing yet. See "Library" |
+| View Library | ⇧⌘L | partial | Dock Home and the far-left sidebar page open Library with its six-section rail. Spaces is interactive; the menu/shortcut route and remaining sections are incomplete |
 | View Downloads | ⇧⌘J | missing | — |
 | View Media / View Boosts | — | missing | — |
 | Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | missing | Relevant for us: "Essential Keyboard Shortcuts" (cheat sheet window) and "Restore Data" |
@@ -232,7 +232,7 @@ Folder duplication follows the right-click action documented in the
 | Reordering Spaces ("Move Space") | drag | done | Drag dock icons onto another Space to move them to that position. Stable Space/page/group identities and active pane are preserved; the pager stays on the selected Space without animating through unrelated Spaces. Dropping outside the dock cancels; order persists in the session |
 | Turning a Space into a folder ("Export “%@” into Folder") | — | missing | — |
 | Live Folders for a Space | — | missing | — |
-| Space Manager (Library → Spaces) | — | missing | — |
+| Space Manager (Library → Spaces) | — | partial | Interactive Space cards reuse tab/folder/split controls, drag ordering, captured profile switching and inline rename; creation returns to the sidebar draft. Theme, overflow and full visual parity remain incomplete |
 | Assigning a profile to a Space ("Set Profile", "Edit Space profile") | — | partial | Set Profile opens the captured Space's sheet; creation-page profile selection and remaining visual details are missing |
 
 ## 4. Space themes and colors (Space Style Editor)
@@ -408,7 +408,7 @@ rows marked partial expose the setting from the Command Bar instead.
 
 | Section | Status | What's missing |
 |---|---|---|
-| Spaces (Space Manager: order of Spaces, folders, tabs) | missing | — |
+| Spaces (Space Manager: order of Spaces, folders, tabs) | partial | Interactive cards, horizontal reachability, existing tab/folder/split controls, profile switching and creation. Theme/overflow controls, Back navigation and exact visual parity remain incomplete |
 | Archive (see section 7) | partial | Available in the Command Bar; dedicated Library page remains missing |
 | Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | missing | — |
 | Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | missing | — |

@@ -366,6 +366,7 @@ impl BrowserWindow {
         hue: f32,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        let painted_profile = self.browser.spaces.iter().find(|entry| entry.id == space).map(|entry| entry.user_profile_id);
         self.browser.pinned_rows(space, false).into_iter().filter_map(|row| {
             let indent = (row.depth as f32 * 12.).min(96.);
             match row.item {
@@ -376,12 +377,12 @@ impl BrowserWindow {
                     let focus = self.browser.spaces.iter().find(|entry| entry.id == space).and_then(|space| space.active_tab).filter(|tab| self.browser.folder_ancestors(*tab).contains(&id));
                     let active = focus.is_some();
                     let group = gpui::SharedString::from(format!("folder-{key}"));
-                    Some(div().pl(px(indent)).flex_none().min_w_0().child(div().id(("folder", key)).debug_selector(move || format!("folder-{key}"))
+                    Some(div().pl(px(indent)).flex_none().min_w_0().child(div().id(("folder", key)).debug_selector(|| self.sidebar_debug_name((move || format!("folder-{key}"))()))
                         .group(group.clone()).flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
                         .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(|this| this.bg(hsla(0., 0., 1., 0.35)))
-                        .on_click(cx.listener(move |this, _, _, cx| { if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed)); } cx.notify(); }))
-                        .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_folder_menu(id, event.position, window, cx); }))
+                        .on_click(cx.listener(move |this, _, _, cx| { if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed)); } cx.notify(); }))
+                        .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } this.open_folder_menu(id, event.position, window, cx); }))
                         .on_drag(crate::folder_drag::FolderDrag::new(folder, focus, self.profile.handle.clone(), self.browser.spaces.iter().find(|entry| entry.id == space).expect("folder Space").user_profile_id), |drag, _, _, cx| cx.new(|_| drag.clone()))
                         .can_drop(move |value, _, cx| {
                             if let Some(drag) = value.downcast_ref::<crate::folder_drag::FolderDrag>() {
@@ -393,15 +394,15 @@ impl BrowserWindow {
                         .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.65)))
                         .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_folder(drag, id, cx)))
                         .child(div().relative().size(px(18.)).flex_none()
-                            .child(div().debug_selector(move || format!("folder-icon-{key}")).size_full().group_hover(group.clone(), |style| style.invisible())
+                            .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-icon-{key}"))())).size_full().group_hover(group.clone(), |style| style.invisible())
                                 .child(crate::icons::folder(folder.custom_icon.as_deref())))
-                            .child(div().debug_selector(move || format!("folder-chevron-{key}")).absolute().top_0().left_0().size_full().invisible().group_hover(group.clone(), |style| style.visible())
+                            .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-chevron-{key}"))())).absolute().top_0().left_0().size_full().invisible().group_hover(group.clone(), |style| style.visible())
                                 .child(crate::icons::disclosure(folder.collapsed))))
-                        .child(div().debug_selector(move || format!("folder-name-{key}")).flex_1().min_w_0().truncate().child(folder.name.clone()))
-                        .child(div().id(("folder-new", key)).debug_selector(move || format!("folder-new-{key}")).invisible().group_hover(group.clone(), |style| style.visible()).px_1().rounded_sm().hover(|this| this.bg(hsla(0., 0., 0., 0.08)))
-                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.open_folder_creator(Some(id), None, window, cx); })).child(crate::icons::control(crate::icons::Icon::Plus)))
-                        .child(div().id(("folder-menu", key)).debug_selector(move || format!("folder-menu-{key}")).invisible().group_hover(group, |style| style.visible()).px_1().rounded_sm().hover(|this| this.bg(hsla(0., 0., 0., 0.08)))
-                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_folder_menu(id, event.position(), window, cx); })).child(crate::icons::more())))
+                        .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-name-{key}"))())).flex_1().min_w_0().truncate().child(folder.name.clone()))
+                        .child(div().id(("folder-new", key)).debug_selector(|| self.sidebar_debug_name((move || format!("folder-new-{key}"))())).invisible().group_hover(group.clone(), |style| style.visible()).px_1().rounded_sm().hover(|this| this.bg(hsla(0., 0., 0., 0.08)))
+                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } this.open_folder_creator(Some(id), None, window, cx); })).child(crate::icons::control(crate::icons::Icon::Plus)))
+                        .child(div().id(("folder-menu", key)).debug_selector(|| self.sidebar_debug_name((move || format!("folder-menu-{key}"))())).invisible().group_hover(group, |style| style.visible()).px_1().rounded_sm().hover(|this| this.bg(hsla(0., 0., 0., 0.08)))
+                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } this.open_folder_menu(id, event.position(), window, cx); })).child(crate::icons::more())))
                         .into_any_element())
                 }
                 item => {

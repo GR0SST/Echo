@@ -87,11 +87,11 @@ fn shared_profile_space_reordering_preserves_each_windows_visible_space(cx: &mut
     visual_a.run_until_parked();
     a.read_with(visual_a, |view, _| {
         assert_eq!(view.browser.space().name, "Personal");
-        assert_eq!(view.pager.position, 1.);
+        assert_eq!(view.pager.position, 2.);
     });
     b.read_with(&visual_b, |view, _| {
         assert_eq!(view.browser.space().name, "Work");
-        assert_eq!(view.pager.position, 0.);
+        assert_eq!(view.pager.position, 1.);
     });
 }
 
@@ -424,12 +424,29 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
 }
 
-/// The Space bar plus opens the New menu; New Space opens the name editor.
+/// The Space bar plus opens the New menu; New Space opens the sidebar form.
 fn open_new_space_from_menu(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
     click(cx, "new-space");
     cx.run_until_parked();
     let overlay = view.read_with(cx, |w, _| w.new_menu.as_ref().and_then(|menu| menu.overlay)).expect("new menu is open");
     click(&mut VisualTestContext::from_window(overlay.into(), cx), "new-menu-space");
+}
+
+/// Creation lives in the main window; wait for its sidebar page to settle
+/// before hitting form controls. Typing below also exercises deferred name focus.
+fn assert_space_creation_form(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.command_bar.is_none());
+        assert!(w.new_menu.is_none());
+        assert!(w.sidebar_visible);
+        assert_eq!(w.sidebar_navigation.controller.selected(), crate::sidebar_pages::SidebarPage::CreateSpace);
+        assert!(w.sidebar_navigation.form.is_some());
+    });
+    assert!(cx.debug_bounds("space-creation-form").is_some());
+    assert!(cx.debug_bounds("space-creation-name").is_some());
 }
 
 fn today_urls(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Vec<String> {
@@ -1047,13 +1064,26 @@ fn swiping_the_sidebar_switches_one_space_per_gesture(cx: &mut TestAppContext) {
 
     swipe(cx, "sidebar", -200.0, 10);
     assert_eq!(space(cx), 1);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
     // Also over the tab list, which scrolls vertically.
     swipe(cx, "new-tab", -200.0, 10);
     assert_eq!(space(cx), 2);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
     swipe(cx, "sidebar", -200.0, 10);
-    assert_eq!(space(cx), 2, "no wrap past the last space");
+    assert_eq!(space(cx), 2, "the creation page retains the last real Space");
+    assert_space_creation_form(&view, cx);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
+    swipe(cx, "space-creation-form", 200.0, 10);
+    assert_eq!(space(cx), 2);
+    assert!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Space(w.browser.space().id)));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
     swipe(cx, "sidebar", 200.0, 10);
     assert_eq!(space(cx), 1);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
     // A short or mostly vertical gesture does nothing.
     swipe(cx, "sidebar", -30.0, 3);
     assert_eq!(space(cx), 1);
@@ -1083,14 +1113,14 @@ fn the_sidebar_follows_the_fingers_and_settles_on_release(cx: &mut TestAppContex
     }
     // Halfway through 120 of 240 px: between spaces, nothing switched yet.
     let (position, active) = state(cx);
-    assert!((position - 0.5).abs() < 0.01, "{position}");
+    assert!((position - 1.5).abs() < 0.01, "{position}");
     assert_eq!(active, 0);
 
     scroll(cx, "sidebar", Ended, 0.0, 0.0);
     assert_eq!(state(cx).1, 1);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(state(cx), (1.0, 1));
+    assert_eq!(state(cx), (2.0, 1));
 }
 
 #[gpui::test]
@@ -1103,7 +1133,7 @@ fn a_small_drag_springs_back(cx: &mut TestAppContext) {
     scroll(cx, "sidebar", Ended, 0.0, 0.0);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |w, _| (w.pager.position, w.browser.active_space)), (0.0, 0));
+    assert_eq!(view.read_with(cx, |w, _| (w.pager.position, w.browser.active_space)), (1.0, 0));
 }
 
 #[gpui::test]
@@ -1121,7 +1151,7 @@ fn a_fast_short_sidebar_flick_commits_by_velocity(cx: &mut TestAppContext) {
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 1.);
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 2.);
 }
 
 #[gpui::test]
@@ -1139,7 +1169,7 @@ fn pausing_before_releasing_a_short_sidebar_drag_cancels_its_flick_velocity(cx: 
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 1.);
 }
 
 #[gpui::test]
@@ -1147,10 +1177,17 @@ fn dragging_past_the_ends_resists(cx: &mut TestAppContext) {
     use gpui::TouchPhase::*;
     let (view, cx) = open(cx);
     cx.run_until_parked();
-    scroll(cx, "sidebar", Started, 0.0, 0.0);
-    scroll(cx, "sidebar", Moved, 120.0, 0.0); // towards a space before the first
+    cx.simulate_keystrokes("ctrl-3");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    open_new_space_from_menu(&view, cx);
+    assert_space_creation_form(&view, cx);
+    let edge = view.read_with(cx, |w, _| w.sidebar_page_index() as f32);
+    scroll(cx, "space-creation-form", Started, 0.0, 0.0);
+    scroll(cx, "space-creation-form", Moved, -120.0, 0.0);
     let position = view.read_with(cx, |w, _| w.pager.position);
-    assert!((position + 0.15).abs() < 0.01, "{position}");
+    assert!((position - edge - 0.15).abs() < 0.01, "{position}");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
 }
 
 #[gpui::test]
@@ -1162,7 +1199,7 @@ fn vertical_scrolling_does_not_page(cx: &mut TestAppContext) {
     scroll(cx, "sidebar", Moved, -2.0, 10.0);
     scroll(cx, "sidebar", Moved, -200.0, 0.0);
     scroll(cx, "sidebar", Ended, 0.0, 0.0);
-    assert_eq!(view.read_with(cx, |w, _| (w.pager.position, w.browser.active_space)), (0.0, 0));
+    assert_eq!(view.read_with(cx, |w, _| (w.pager.position, w.browser.active_space)), (1.0, 0));
 }
 
 #[gpui::test]
@@ -1170,10 +1207,10 @@ fn keyboard_space_switches_animate_the_pager(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("ctrl-3");
     let mid = view.read_with(cx, |w, _| w.pager.position);
-    assert!(mid < 2.0, "starts animating from the old space");
+    assert!((1.0..3.0).contains(&mid), "starts animating from the old space: {mid}");
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 2.0);
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 3.0);
 }
 
 #[gpui::test]
@@ -1420,18 +1457,41 @@ fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut Te
 fn dock_creates_named_space_and_rejects_blank_names(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     open_new_space_from_menu(&view, cx);
-    assert!(bar_input_focused(&view, cx));
-    bar(&view, cx).simulate_input("   ");
-    bar(&view, cx).simulate_keystrokes("enter");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
-    assert!(bar_text(&view, cx).is_some());
-    bar(&view, cx).simulate_keystrokes("cmd-a");
-    bar(&view, cx).simulate_input("  Reading 📚  ");
-    bar(&view, cx).simulate_keystrokes("enter");
+    assert_space_creation_form(&view, cx);
+    let origin = view.read_with(cx, |w, _| w.browser.space().id);
+    cx.simulate_input("   ");
+    click(cx, "space-creation-submit");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.spaces.len(), 3);
+        assert_eq!(w.browser.space().id, origin);
+        assert_eq!(w.sidebar_navigation.controller.draft().unwrap().name, "   ");
+        assert!(w.sidebar_navigation.form.is_some());
+    });
+    // The disabled button click leaves the name field; select it again to edit.
+    assert!(cx.update(|window, cx| {
+        view.read(cx).sidebar_navigation.form.as_ref().unwrap().read(cx).focus_handle(cx).is_focused(window)
+    }));
+    click(cx, "space-creation-name");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("  Reading 📚  ");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.spaces.len(), 3);
+        assert_eq!(w.browser.space().id, origin);
+        assert_eq!(w.sidebar_navigation.controller.draft().unwrap().name, "  Reading 📚  ");
+        assert!(w.sidebar_navigation.form.is_some());
+    });
+    click(cx, "space-creation-submit");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Reading 📚");
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 4);
     assert!(today_urls(&view, cx).is_empty());
-    assert_eq!(bar_text(&view, cx), None);
+    view.read_with(cx, |w, _| {
+        assert!(w.command_bar.is_none());
+        assert!(w.sidebar_navigation.form.is_none());
+        assert!(w.sidebar_navigation.controller.draft().is_none());
+        assert_eq!(w.sidebar_navigation.controller.selected(), crate::sidebar_pages::SidebarPage::Space(w.browser.space().id));
+    });
     let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
     assert_eq!(restored.space().name, "Reading 📚");
 }
@@ -1442,10 +1502,11 @@ fn create_and_rename_space_actions_keep_focus_and_can_be_cancelled(cx: &mut Test
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("create space");
     bar(&view, cx).simulate_keystrokes("enter");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
-    assert!(bar_input_focused(&view, cx));
-    bar(&view, cx).simulate_input("Reading");
-    bar(&view, cx).simulate_keystrokes("enter");
+    assert_space_creation_form(&view, cx);
+    assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.draft().unwrap().name.clone()), "");
+    cx.simulate_input("Reading");
+    click(cx, "space-creation-submit");
+    cx.run_until_parked();
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Reading");
     let id = view.read_with(cx, |w, _| w.browser.space().id);
 
@@ -1466,8 +1527,17 @@ fn create_and_rename_space_actions_keep_focus_and_can_be_cancelled(cx: &mut Test
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Research Archive");
     open_new_space_from_menu(&view, cx);
-    bar(&view, cx).simulate_input("Cancelled Space");
-    bar(&view, cx).simulate_keystrokes("escape");
+    assert_space_creation_form(&view, cx);
+    let before_cancel = view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser));
+    cx.simulate_input("Cancelled Space");
+    assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.draft().unwrap().name.clone()), "Cancelled Space");
+    click(cx, "space-creation-cancel");
+    view.read_with(cx, |w, _| {
+        assert_eq!(browser_core::session::to_json(&w.browser), before_cancel);
+        assert!(w.sidebar_navigation.form.is_none());
+        assert!(w.sidebar_navigation.controller.draft().is_none());
+        assert_eq!(w.sidebar_navigation.controller.selected(), crate::sidebar_pages::SidebarPage::Space(id));
+    });
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 4);
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces[0].pinned.len()), 2);
 }
@@ -2279,9 +2349,9 @@ fn application_menu_actions_are_reachable_from_the_browser_window(cx: &mut TestA
 fn menu_actions_open_editors_and_edit_the_command_input(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     dispatch_menu(cx, "Spaces", "New Space…");
-    assert!(bar_input_focused(&view, cx));
-    bar(&view, cx).simulate_input("Menu Space");
-    bar(&view, cx).simulate_keystrokes("enter");
+    assert_space_creation_form(&view, cx);
+    cx.simulate_input("Menu Space");
+    click(cx, "space-creation-submit");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Menu Space");
     dispatch_menu(cx, "Spaces", "Rename Space…");
     bar(&view, cx).simulate_input("Renamed Space");
@@ -5917,7 +5987,25 @@ fn new_menu_offers_reference_items_and_opens_the_matching_editor(cx: &mut TestAp
     let mut overlay = menu(&view, cx);
     overlay.simulate_keystrokes("down enter");
     cx.run_until_parked();
-    assert!(view.read_with(cx, |w, _| w.new_menu.is_none() && matches!(w.command_bar.as_ref().map(|bar| bar.target), Some(crate::window::Target::NewSpace))));
+    assert_space_creation_form(&view, cx);
+    cx.simulate_input("Menu draft");
+    assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.draft().unwrap().name.clone()), "Menu draft");
+    // Escape first leaves the name field and preserves the draft at the form root.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.sidebar_navigation.form.is_some());
+        assert_eq!(w.sidebar_navigation.controller.draft().unwrap().name, "Menu draft");
+        assert_eq!(w.browser.spaces.len(), 3);
+    });
+    assert!(cx.update(|window, cx| {
+        view.read(cx).sidebar_navigation.form.as_ref().unwrap().read(cx).focus_handle(cx).is_focused(window)
+    }));
+    // Only Escape from the root cancels creation.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.sidebar_navigation.form.is_none() && w.sidebar_navigation.controller.draft().is_none()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
 }
 
 #[gpui::test]

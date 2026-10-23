@@ -54,7 +54,7 @@ impl BrowserWindow {
                 } else { f64::from(f32::from(size.height)) - f64::from(2. * crate::pages::CONTENT_INSET) };
                 let weights = crate::split_layout::expanded_weights(extent, split.panes.len(), index);
                 this.edit_browser(|browser| browser.set_split_weights(pane, &weights));
-                if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); }
+                if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, this.page_content_visible()); }
                 cx.notify();
             });
         });
@@ -67,7 +67,7 @@ impl BrowserWindow {
         if self.edit_browser(|browser| browser.duplicate_item(id, SystemTime::now())).is_none() {
             self.show_toast("You can have up to 12 Favorites".into(), cx);
         }
-        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
     }
 
@@ -124,7 +124,7 @@ impl BrowserWindow {
             bar.selected = 0;
             bar.input.update(cx, |input, cx| { input.set_text("", cx); input.set_placeholder("Search or Enter URL…", cx); });
         }
-        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
     }
 
@@ -172,14 +172,14 @@ impl BrowserWindow {
         }
         if self.edit_browser(|browser| browser.close_split_pane(id, SystemTime::now())) {
             self.close_find(cx);
-            if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); pages.discard(id); pages.sync(&self.browser, true); }
+            if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); pages.discard(id); pages.sync(&self.browser, self.page_content_visible()); }
             self.after_tab_removal(cx);
             cx.notify();
         }
     }
 
     pub(crate) fn render_item_icon(&self, tab: &Tab, hue: f32) -> AnyElement {
-        if let Some(icon) = self.browser.item_icon(tab.id) { return div().debug_selector(move || format!("item-icon-{}", tab.id.get())).child(crate::icons::glyph(icon)).into_any_element(); }
+        if let Some(icon) = self.browser.item_icon(tab.id) { return div().debug_selector(|| self.sidebar_debug_name((move || format!("item-icon-{}", tab.id.get()))())).child(crate::icons::glyph(icon)).into_any_element(); }
         if let Some(split) = self.browser.split_for(tab.id) {
             div().flex().flex_none().gap(px(2.)).children(split.panes.iter().filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == *id)).take(2).map(|tab| self.render_favicon(tab, hue))).into_any_element()
         } else { self.render_favicon(tab, hue).into_any_element() }
@@ -187,20 +187,26 @@ impl BrowserWindow {
 
     pub(crate) fn render_sidebar_item_contents(&self, tab: &Tab, hue: f32, cx: &mut Context<Self>) -> AnyElement {
         let anchor = tab.id.get();
+        let painted_space = self.browser.space().id;
+        let painted_profile = self.browser.active_user_profile_id();
         if let Some(split) = self.browser.split_for(tab.id).filter(|split| split.title.is_none()) {
             let count = split.panes.len();
-            return div().debug_selector(move || format!("sidebar-split-{anchor}")).flex_1().min_w_0().flex().items_center().children(split.panes.iter().enumerate().filter_map(|(index, id)| {
+            return div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-split-{anchor}"))())).flex_1().min_w_0().flex().items_center().children(split.panes.iter().enumerate().filter_map(|(index, id)| {
                 let tab = self.browser.all_tabs().find(|tab| tab.id == *id)?;
                 let id = *id;
                 let active = self.browser.space().active_tab == Some(id);
                 let close_visible = split.panes.last() == Some(&id) && self.hovered_row == Some(self.browser.item_anchor(id));
-                Some(div().id(("sidebar-pane", id.get() as usize)).debug_selector(move || format!("sidebar-pane-{}", id.get()))
+                Some(div().id(("sidebar-pane", id.get() as usize)).debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-{}", id.get()))()))
                     .relative().flex_1().flex_basis(px(0.)).min_w_0().h(px(30.)).pl(px(7.)).pr(px(4.)).rounded(px(8.)).flex().items_center().gap(px(11.))
                     .overflow_hidden()
                     .when(active, |this| this.bg(hsla(0., 0., 1., 0.65)))
                     .hover(|style| style.bg(hsla(0., 0., 1., 0.45)))
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                         cx.stop_propagation();
+                        if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
+                        if this.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library {
+                            this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Space(painted_space), cx);
+                        }
                         if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                         this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
                         if event.click_count() == 2 { this.open_command_bar(Target::RenameTab(id), &this.browser.item_title(id), window, cx); }
@@ -209,12 +215,12 @@ impl BrowserWindow {
                     // Panes are separated by a hairline, not by individual pills.
                     .when(index + 1 < count, |this| this.child(div().absolute().right_0().top(px(6.)).h(px(18.)).w(px(1.)).bg(hsla(0., 0., 0., 0.15))))
                     .child(self.render_favicon(tab, hue))
-                    .child(div().debug_selector(move || format!("sidebar-pane-title-{}", id.get())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(24.))).overflow_hidden().text_ellipsis().line_clamp(1).child(tab.title.clone())))
+                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-title-{}", id.get()))())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(24.))).overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(tab.title.clone()))))
             })).into_any_element();
         }
         div().flex_1().min_w_0().flex().items_center().gap(px(9.))
             .child(self.render_item_icon(tab, hue))
-            .child(self.render_inline_tab_name(tab.id, cx).unwrap_or_else(|| div().flex_1().min_w_0().overflow_hidden().text_ellipsis().line_clamp(1).child(self.browser.item_title(tab.id)).into_any_element())).into_any_element()
+            .child(self.render_inline_tab_name(tab.id, cx).unwrap_or_else(|| div().debug_selector(|| self.sidebar_debug_name(format!("sidebar-item-title-{}", tab.id.get()))).flex_1().min_w_0().overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(self.browser.item_title(tab.id))).into_any_element())).into_any_element()
     }
 
     pub(crate) fn render_split(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -227,37 +233,49 @@ impl BrowserWindow {
                 let id = *id;
                 let key = id.get() as usize;
                 let active = self.browser.space().active_tab == Some(id);
-                let mut pane = div().id(("pane", key)).debug_selector(move || format!("split-pane-{key}"))
+                let mut pane = div().id(("pane", key)).debug_selector(|| self.sidebar_debug_name((move || format!("split-pane-{key}"))()))
                     .min_w_0().min_h_0().flex_basis(px(0.)).flex().flex_col()
                     .rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).overflow_hidden().shadow_sm();
                 pane.style().flex_grow = Some(*weight);
                 Some(pane
-                    .child(div().id(("pane-header", key)).debug_selector(move || format!("pane-header-{key}"))
+                    .child(div().id(("pane-header", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-header-{key}"))()))
                         .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
                         .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
                         .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
-                        .on_click(cx.listener(move |this, _, _, cx| { if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
-                        this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); } cx.notify(); }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if this.page_content_visible() {
+                                if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
+                            }
+                            this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
+                            if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, this.page_content_visible()); }
+                            cx.notify();
+                        }))
                         .child(div().id(("pane-back", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Back))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_back(id); } })))
                         .child(div().id(("pane-forward", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Forward))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_forward(id); } })))
                         .child(div().id(("pane-reload", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Reload))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().reload(id); } })))
-                        .child(div().id(("pane-address", key)).debug_selector(move || format!("pane-address-{key}"))
+                        .child(div().id(("pane-address", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-address-{key}"))()))
                             .flex_1().min_w_0().text_center().truncate().child(if tab.url == EMPTY_PANE_URL { "Search or Enter URL…".into() } else { crate::window::display_url(&tab.url) })
-                            .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
-                        this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
-                        if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); }
-                        let url = this.browser.active_tab().unwrap().url.clone(); this.open_command_bar(Target::Tab(id), &url, window, cx); })))
-                        .child(div().id(("pane-menu", key)).debug_selector(move || format!("pane-menu-{key}")).px_1().rounded_sm()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if this.page_content_visible() {
+                                    if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
+                                }
+                                this.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
+                                if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, this.page_content_visible()); }
+                                let url = this.browser.active_tab().unwrap().url.clone();
+                                this.open_command_bar(Target::Tab(id), &url, window, cx);
+                            })))
+                        .child(div().id(("pane-menu", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-menu-{key}"))())).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child(crate::icons::control(crate::icons::Icon::Split)))
-                        .child(div().id(("pane-close", key)).debug_selector(move || format!("pane-close-{key}")).px_1().rounded_sm()
+                        .child(div().id(("pane-close", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-close-{key}"))())).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if this.split_draft.as_ref().is_some_and(|draft| draft.pane == id) { this.close_command_bar(cx); } else { this.close_split_pane(id, cx); } })).child(crate::icons::control(crate::icons::Icon::Close))))
-                    .child(div().debug_selector(move || format!("pane-body-{key}")).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
+                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("pane-body-{key}"))())).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
             }));
         div().size_full().flex().flex_col().child(panes).into_any_element()
     }

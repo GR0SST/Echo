@@ -18,7 +18,7 @@ impl BrowserWindow {
         if let Some(pages) = &self.pages {
             let mut pages = pages.borrow_mut();
             for id in removed { pages.discard(id); }
-            pages.sync(&self.browser, true);
+            pages.sync(&self.browser, self.page_content_visible());
         }
         if count > 0 { self.after_tab_removal(cx); }
         if count > 0 && !(self.browser.is_blank() && self.browser.all_tabs().next().is_none()) { self.show_toast(format!("Archived {count} {}", if count == 1 { "tab" } else { "tabs" }), cx); }

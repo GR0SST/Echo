@@ -17,6 +17,7 @@ mod new_window;
 mod blank_window;
 mod audio;
 mod split_layout;
+mod sidebar_title;
 mod split;
 mod icons;
 mod folders;
@@ -29,6 +30,11 @@ mod link_status;
 mod status_url;
 mod private;
 mod profile;
+mod sidebar_pages;
+mod space_creation;
+mod space_creation_view;
+mod sidebar_navigation;
+mod library;
 mod user_profile_dialog;
 mod user_profiles;
 pub mod pages;
@@ -73,6 +79,7 @@ pub fn init(cx: &mut App) {
     site_controls::bind_keys(cx);
     new_menu::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);
+    space_creation_view::bind_keys(cx);
 }
 
 /// Content of the first launch.

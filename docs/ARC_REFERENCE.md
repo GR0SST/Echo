@@ -973,3 +973,73 @@ Command Bar. It retained the originating Grosst Profile and therefore showed
 that Profile's existing Favorites. The new Space remains for the owner to
 delete manually. Owned window `DCDCDCE3-66D3-4261-B99A-A6107F35ACD4` was closed;
 no Space was deleted. Creation-draft Profile-menu contents remain unverified.
+
+In a later owned Arc window `FB13DAA7-44D9-4EBC-9BCD-7A513708E33E`, a named
+creation draft received Return while its name field was focused. The draft and
+name remained; Return did not create a Space. Escape from the focused name
+field moved focus to the window while keeping the draft. A second Escape with
+the window focused cancelled the draft. The owned window was then closed.
+No real Space was created, deleted or reassigned during this keyboard check.
+Return's exact focus result was inconsistent between accessibility captures.
+Later inspection found a real `Echo Enter Reference 20261023` Space in owned
+window `A67B9EAD-A154-4233-AA82-4458797CBEBA`; the intervening input delivery
+was not reliably bound to that window. The earlier observation therefore does
+not establish a universal Return-submission rule. Recheck keyboard behavior
+with safely bound native input before claiming parity. No Space was deleted.
+
+### Library Downloads: initial list and profile filtering
+
+A delegated native check in owned window
+`701EB055-383A-4BFA-ADBD-77B507E02755` observed Cmd+Shift+J opening Library's
+Downloads section in the same window. The Window menu includes View Downloads.
+The left navigation is approximately 112 px wide; the adjacent download-list
+column extends to approximately x=416 in the 3840 × 2130 capture. With no item
+selected, a large themed preview surface remains blank to its right.
+
+The list has Search Downloads… and Filter controls and date-grouped rows with
+filename and muted type/source text. Filter replaces that toolbar inline with
+Filter Downloads…, Done, a Profiles heading and wrapping profile chips. Toggling
+a chip updates results immediately; toggling it off restores the unfiltered
+list. Multi-selection and filter persistence were not tested.
+
+The filtered-empty screenshot was also inspected by the parent. Its download
+arrow, “Nothing here yet!” heading and “Come back after you’ve found some / cool
+stuff to save.” subtitle are centered within the narrow list column, not the
+large preview surface. This establishes filtered-empty presentation only.
+Search semantics, context actions, active/missing downloads, file opening and
+download-location settings remain unverified. No download was started or file
+opened. The owned window was closed and Space inventory was unchanged.
+
+The delegated check accidentally clicked the protected YouTube window after a
+focus change. Its final accessibility state showed playback running and the
+window remained open. A stale-index capture from that window was rejected as
+Downloads evidence. Future native actions must verify the exact owned window
+against a fresh accessibility state immediately before interaction.
+
+
+### Echo sidebar creation and Library acceptance, 2026-10-23
+
+The immutable `/tmp/echo-space-library-qa-r2.app` passed both edge gestures in
+an isolated retained session: swiping left from the final real Space opened
+the right-edge Create Space page; swiping right from the first real Space
+opened Library. The menu creation route displayed the responsive sidebar form,
+fixed dock, retained draft marker and window controls. Empty content contained
+no invented placeholder or Command Bar. The Library rail rendered its six
+centered icon tiles. Screenshots were inspected directly.
+
+The r2 check exposed a production rendering defect: Library card titles
+clipped despite full saved values and passing test-platform geometry checks.
+The r3 bundle fixed this by shaping fresh complete font runs against final
+label bounds. Native screenshots confirmed GitHub, Gmail, Home, GPUI and
+Arc is shutting down in full, both idle and hovered, in Library and the normal
+sidebar. A server-supplied title containing CJK, combining accents and a
+family emoji rendered correctly and ended with an ellipsis. Sending non-BMP
+characters through the automation typing command corrupted its URL; the
+Unicode acceptance therefore used an ASCII URL and server-owned title.
+The strengthened regression inspects
+actual painted text and glyph indices, not only container bounds.
+
+Native acceptance remains partial overall.
+Theme, icon and draft Profile pickers remain unimplemented. The test process
+completed orderly shutdown with zero CEF owners, browsers and cookie flushes;
+no live Space was deleted.

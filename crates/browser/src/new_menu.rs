@@ -121,7 +121,7 @@ impl BrowserWindow {
     pub(crate) fn confirm_new_menu(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
         self.close_new_menu(cx);
         match item {
-            Item::Space => self.open_command_bar(Target::NewSpace, "", window, cx),
+            Item::Space => self.begin_space_creation(self.browser.space().id, cx),
             Item::Folder => self.open_folder_creator(None, None, window, cx),
             // Boosts are not implemented yet.
             Item::Boost => {}

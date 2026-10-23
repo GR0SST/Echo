@@ -78,6 +78,7 @@ pub(crate) fn frames(frame: Bounds) -> Option<(Bounds, Bounds, Bounds)> {
 
 impl BrowserWindow {
     pub(crate) fn devtools_available(&self) -> bool {
+        if !self.page_content_visible() { return false; }
         let Some(tab) = self
             .browser
             .active_tab()
@@ -104,10 +105,8 @@ impl BrowserWindow {
         let entity = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = entity.update(cx, |this, cx| {
-                if this
-                    .browser
-                    .active_tab()
-                    .is_none_or(|active| active.id != tab)
+                if !this.page_content_visible()
+                    || this.browser.active_tab().is_none_or(|active| active.id != tab)
                     || this.user_profile_dialog.is_some()
                     || this.command_bar.is_some()
                     || this.find_bar.is_some()
@@ -116,7 +115,7 @@ impl BrowserWindow {
                 }
                 if let Some(pages) = &this.pages {
                     let mut pages = pages.borrow_mut();
-                    pages.sync(&this.browser, true);
+                    pages.sync(&this.browser, this.page_content_visible());
                     if let Err(error) = pages.run_devtools(tab, command) {
                         eprintln!("[devtools] {error}");
                     }

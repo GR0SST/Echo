@@ -537,6 +537,11 @@ impl Pages {
 
     /// Called when a browser root becomes active, before reconciling its layout.
     pub fn activate_host(&mut self, browser: &Browser) {
+        self.activate_host_with_visibility(browser, true);
+    }
+
+    /// Activating a virtual sidebar page must not restore native page views.
+    pub fn activate_host_with_visibility(&mut self, browser: &Browser, visible: bool) {
         {
             let mut store = self.store.borrow_mut();
             if store.active_host != self.host { self.shown = None; }
@@ -547,7 +552,7 @@ impl Pages {
         // Rebuild intent from the freshly projected model before transferring:
         // the previous window may have navigated while this host was inactive.
         self.preserve_ui_focus = !self.page_focus;
-        self.sync(browser, true);
+        self.sync(browser, visible);
         self.preserve_ui_focus = false;
     }
 
@@ -898,7 +903,12 @@ impl Pages {
     pub fn focus_shown(&mut self) {
         self.devtools_focused = false;
         self.page_focus = true;
-        if let Some((tab, view)) = self.wanted_focus.and_then(|tab| self.view(tab).map(|view| (tab, view))) {
+        let target = self.wanted_focus.filter(|tab| self.visible.contains(tab)).and_then(|tab| {
+            let store = self.store.borrow();
+            store.pages.get(&tab).filter(|page| store.active_host == self.host && page.owner == self.host && page.visible)
+                .map(|page| (tab, page.view))
+        });
+        if let Some((tab, view)) = target {
             self.store.borrow_mut().engine.focus_page(view);
             self.shown = Some(tab);
             self.page_has_focus = true;
@@ -1068,8 +1078,14 @@ impl Pages {
     /// Rebuild intent rather than applying a cached URL/profile while waiting
     /// for asynchronous context initialization. No engine pumping occurs here.
     pub(crate) fn retry_pending_creation(&mut self, browser: &Browser) -> bool {
+        self.retry_pending_creation_with_visibility(browser, true)
+    }
+
+    /// Refresh intent with the host's current sidebar-page visibility so a
+    /// deferred engine context cannot surface a page behind Library/creation.
+    pub(crate) fn retry_pending_creation_with_visibility(&mut self, browser: &Browser, visible: bool) -> bool {
         if !self.creation_pending { return false; }
-        self.sync(browser, true);
+        self.sync(browser, visible);
         !self.creation_pending
     }
 

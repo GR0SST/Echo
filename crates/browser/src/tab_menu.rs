@@ -466,7 +466,7 @@ impl BrowserWindow {
             Command::Close => self.close_tab(id, cx),
             _ => {},
         }
-        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
     }
 

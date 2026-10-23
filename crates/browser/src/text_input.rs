@@ -1,7 +1,7 @@
 //! Single-line text input with IME, selection and clipboard support.
 //! Adapted from gpui's `examples/input.rs`.
 
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use gpui::{
     actions, div, fill, hsla, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem,
@@ -34,6 +34,16 @@ actions!(
 );
 
 const CONTEXT: &str = "TextInput";
+
+/// Replace each CR/LF separately so UTF-16 offsets supplied by an IME stay
+/// valid (including offsets inside CRLF). CRLF intentionally becomes two spaces.
+fn single_line_text(text: &str) -> Cow<'_, str> {
+    if text.contains(['\r', '\n']) {
+        Cow::Owned(text.replace(['\r', '\n'], " "))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -96,10 +106,11 @@ impl Focusable for TextInput {
 
 impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+        let placeholder = placeholder.into();
         Self {
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
-            placeholder: placeholder.into(),
+            placeholder: single_line_text(&placeholder).into_owned().into(),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -118,7 +129,8 @@ impl TextInput {
     }
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.placeholder = placeholder.into();
+        let placeholder = placeholder.into();
+        self.placeholder = single_line_text(&placeholder).into_owned().into();
         cx.notify();
     }
 
@@ -128,7 +140,8 @@ impl TextInput {
 
     /// Replaces the text and selects all of it, so typing overwrites it.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = text.into();
+        let text = text.into();
+        self.content = single_line_text(&text).into_owned().into();
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
         self.marked_range = None;
@@ -266,7 +279,7 @@ impl TextInput {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text.replace('\n', " "), window, cx);
+            self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
@@ -427,6 +440,8 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let new_text = single_line_text(new_text);
+        let new_text = new_text.as_ref();
         let old_text = self.content.clone();
         let before = self.composition_before.take().unwrap_or_else(|| self.edit_state());
         let range = range_utf16
@@ -454,6 +469,8 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let new_text = single_line_text(new_text);
+        let new_text = new_text.as_ref();
         if self.composition_before.is_none() { self.composition_before = Some(self.edit_state()); }
         let old_text = self.content.clone();
         let range = range_utf16
@@ -733,3 +750,7 @@ impl Render for TextInput {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "single_line_input_tests.rs"]
+mod single_line_input_tests;

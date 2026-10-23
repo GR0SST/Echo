@@ -1,6 +1,6 @@
 //! One editable profile and session writer, with read-only window projections.
 use crate::{split::SplitDraft, window::BrowserWindow};
-use browser_core::{Browser, TabId, UserProfileId, windows::{WindowProjection, WindowSelection}};
+use browser_core::{Browser, SpaceId, TabId, UserProfileId, space_creation::{SpaceCreation, SpaceCreationError}, windows::{WindowProjection, WindowSelection}};
 use gpui::{prelude::*, App, AsyncApp, Context, Entity, ForegroundExecutor, Subscription};
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::{Rc, Weak}, time::{Duration, SystemTime}};
 
@@ -232,9 +232,22 @@ impl BrowserWindow {
         if self.profile.revision == self.profile.handle.revision.get() { return; }
         let projection = self.profile.handle.projection(&self.profile.selection);
         self.receive_profile_projection(projection);
+        self.reconcile_sidebar_navigation();
         self.profile.selection = self.browser.window_selection();
         self.profile.remember_selection();
         self.profile.revision = self.profile.handle.revision.get();
+    }
+
+    /// Commit against the authoritative workspace before publishing a new
+    /// projection. Failed validation never applies this window's selection.
+    pub(crate) fn commit_space_creation_request(&mut self, request: &SpaceCreation) -> Result<SpaceId, SpaceCreationError> {
+        let (id, projection) = self.profile.handle.edit(|browser| {
+            browser.create_space_after_in_window(&mut self.profile.selection, request)
+                .map(|id| (id, browser.window_projection(&self.profile.selection)))
+        })?;
+        self.sidebar_navigation.controller.committed(id);
+        self.publish_profile_edit(projection);
+        Ok(id)
     }
 
     pub(crate) fn edit_browser<R>(&mut self, edit: impl FnOnce(&mut Browser) -> R) -> R {
@@ -245,7 +258,7 @@ impl BrowserWindow {
         });
         let selection_changed = self.browser.space().id != projection.space().id
             || self.browser.space().active_tab != projection.space().active_tab;
-        if selection_changed && self.user_profile_dialog.is_none() && self.command_bar.is_none() && self.tab_rename.is_none() {
+        if selection_changed && self.page_content_visible() && self.user_profile_dialog.is_none() && self.command_bar.is_none() && self.tab_rename.is_none() {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 // A native Focused event has already selected its responder.
@@ -268,12 +281,7 @@ impl BrowserWindow {
     }
 
     fn publish_profile_edit(&mut self, projection: WindowProjection) {
-        if self.browser.space().id == projection.space().id && self.browser.active_space != projection.active_space {
-            self.reset_profile_pager(projection.active_space);
-        }
-        self.browser = projection;
-        self.invalidate_history_confirmation();
-        if let Some(pages) = &self.pages { pages.borrow_mut().reconcile_inventory(&self.browser); }
+        self.receive_profile_projection(projection);
         self.profile.remember_draft(&self.split_draft);
         self.profile.remember_selection();
         let revision = self.profile.handle.revision.get().wrapping_add(1);
