@@ -161,6 +161,7 @@ window_shortcuts! {
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
     "cmd-shift-w" => crate::menus::CloseWindow,
+    "cmd-shift-n" => crate::menus::NewIncognitoWindow,
     "ctrl-shift-=" => AddSplit,
     "ctrl-shift--" => CloseSplitPane,
     "cmd-shift-t" => RestoreTab,
@@ -362,6 +363,7 @@ pub enum Command {
     MoveToFolder,
     PinToFolder(FolderId),
     NewFolderWithTab,
+    NewIncognitoWindow,
     CollapseAllFolders,
     ExpandAllFolders,
     RenameFolder(FolderId),
@@ -666,6 +668,7 @@ impl BrowserWindow {
     /// Keeps the session saved at `path`: shortly after every change and
     /// when the app quits.
     pub fn save_session_to(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if self.browser.is_private() { return; }
         // Empty, so the first launch's content is saved too.
         let saved = Rc::new(RefCell::new(String::new()));
         let save = {
@@ -931,6 +934,9 @@ impl BrowserWindow {
                         bar.overlay = Some(overlay);
                     }
                 });
+                // Attaching a key window as a child can make AppKit return
+                // key status to its parent. Activate after attachment.
+                let _ = overlay.update(cx, |_, window, _| window.activate_window());
             }
         });
     }
@@ -1063,6 +1069,7 @@ impl BrowserWindow {
                 (Command::ArchiveSettings, "Archive Tabs After…", "archive tabs after|auto archive settings|change auto archiving", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
+                (Command::NewIncognitoWindow, "New Incognito Window", "new incognito window|incognito|private window", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
                 (Command::ToggleSpaceHeader, if self.browser.space().show_header { "Hide Space Header" } else { "Show Space Header" }, if self.browser.space().show_header { "hide space header|toggle space header" } else { "show space header|toggle space header" }, true),
                 (Command::ToggleFavoritesOrdering, if self.browser.include_favorites_in_ordering { "Exclude Favorites from Ordering" } else { "Include Favorites in Ordering" }, if self.browser.include_favorites_in_ordering { "exclude favorites from ordering|exclude favorites in ordering" } else { "include favorites in ordering" }, true),
@@ -1392,6 +1399,10 @@ impl BrowserWindow {
             }
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.edit_space_name(None, cx),
+            Command::NewIncognitoWindow => {
+                self.close_command_bar(cx);
+                cx.defer(crate::open_incognito_window);
+            }
             Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
             Command::ToggleSpaceHeader => { self.browser.set_space_header(self.browser.space().id, !self.browser.space().show_header); }
             Command::ToggleFavoritesOrdering => { self.browser.include_favorites_in_ordering = !self.browser.include_favorites_in_ordering; }
@@ -1949,6 +1960,7 @@ impl BrowserWindow {
     ) -> gpui::Stateful<gpui::Div> {
         let id = tab.id;
         let key = id.get() as usize;
+        let private = self.browser.is_private();
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
         let renaming = self.tab_rename.as_ref().is_some_and(|editor| editor.tab == id);
         let reserve_close = !segmented && !tab.muted && !renaming;
@@ -1991,7 +2003,9 @@ impl BrowserWindow {
             .when(segmented, |this| this.px_1().gap_0())
             .rounded(px(SIDEBAR_ROW_RADIUS))
             .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
-            .when(!active, |this| this.hover(|style| style.bg(hsla(0.0, 0.0, 1.0, 0.3))))
+            .when(self.browser.is_private(), |this| this.text_color(hsla(0., 0., 1., 0.85))
+                .when(active, |this| this.bg(hsla(0., 0., 1., 0.16))))
+            .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 this.open_tab_menu(id, event.position, window, cx);
@@ -2015,6 +2029,7 @@ impl BrowserWindow {
                     .rounded_sm()
                     .text_sm()
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
+                    .when(private, |this| this.text_color(hsla(0., 0., 1., 0.6)))
                     .invisible()
                     .when(!renaming, |this| this.group_hover(group, |s| s.visible()))
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
@@ -2084,7 +2099,7 @@ impl BrowserWindow {
             })).child(crate::icons::control(crate::icons::Icon::Mute))
     }
 
-    pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, false) }
+    pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, self.browser.is_private()) }
 
     /// `tab`'s favicon for a light surface, or a dark one when `dark`.
     pub(crate) fn render_favicon_on(&self, tab: &Tab, hue: f32, dark: bool) -> AnyElement {
@@ -2109,17 +2124,18 @@ impl BrowserWindow {
             .browser
             .active_tab()
             .map(|t| if t.url == crate::split::EMPTY_PANE_URL { "Search or Enter URL…".into() } else { address_host(&t.url) })
-            .unwrap_or_default();
-        let pages: Vec<_> = (0..self.browser.spaces.len())
+            .unwrap_or_else(|| if self.browser.is_private() { "Search or Enter URL…".into() } else { String::new() });
+        let private = self.browser.is_private();
+        let pages: Vec<_> = if private { vec![div().w(px(SIDEBAR_WIDTH)).h_full().child(self.render_private_tabs(cx)).into_any_element()] } else { (0..self.browser.spaces.len())
             .map(|index| self.render_space_page(index, cx).into_any_element())
-            .collect();
-        let offset = -self.pager.position * SIDEBAR_WIDTH;
+            .collect() };
+        let offset = if private { 0. } else { -self.pager.position * SIDEBAR_WIDTH };
         let browser = cx.entity().downgrade();
         let state = self.browser.space().active_tab.and_then(|id| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(id))).unwrap_or_default();
 
         let loading = state.loading;
         let control = |id: &'static str| div().id(id).debug_selector(move || id.into()).flex_none().size(px(28.)).rounded_md()
-            .flex().items_center().justify_center().text_color(hsla(0., 0., 0., 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
+            .flex().items_center().justify_center().text_color(hsla(0., 0., if private { 1. } else { 0. }, 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
         let controls_open = self.site_controls.is_some();
         let anchor = self.site_controls_anchor.clone();
         let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(move || id.into())
@@ -2154,11 +2170,11 @@ impl BrowserWindow {
                     .child(crate::icons::control(crate::icons::Icon::Sidebar)))
                 .child(div().flex_1())
                 .child(control("go-back")
-                    .text_color(hsla(0., 0., 0., if state.can_go_back { 0.6 } else { 0.25 }))
+                    .text_color(hsla(0., 0., if private { 1. } else { 0. }, if state.can_go_back { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_back(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Back)))
                 .child(control("go-forward")
-                    .text_color(hsla(0., 0., 0., if state.can_go_forward { 0.6 } else { 0.25 }))
+                    .text_color(hsla(0., 0., if private { 1. } else { 0. }, if state.can_go_forward { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_forward(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Forward)))
                 .child(control("reload-page")
@@ -2177,9 +2193,10 @@ impl BrowserWindow {
                         .gap(px(4.))
                         .rounded(px(SIDEBAR_ROW_RADIUS))
                         .bg(hsla(0.0, 0.0, 1.0, 0.35))
-                        .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.5)))
+                        .hover(move |s| s.bg(hsla(0.0, 0.0, 1.0, if private { 0.2 } else { 0.5 })))
                         .text_size(px(14.))
                         .text_color(hsla(0.0, 0.0, 0.0, 0.6))
+                        .when(private, |this| this.bg(hsla(0., 0., 1., 0.14)).text_color(hsla(0., 0., 1., 0.65)))
                         .whitespace_nowrap()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_edit_current_url(&EditCurrentUrl, window, cx)
@@ -2233,7 +2250,14 @@ impl BrowserWindow {
                         .children(pages),
                 ),
             )
-            .child(self.render_space_switcher(cx))
+            .when(!private, |this| this.child(self.render_space_switcher(cx)))
+            .when(private, |this| this.child(div().h(px(SPACE_BAR_HEIGHT)).flex_none().px(px(7.)).flex().items_center()
+                .text_color(hsla(0., 0., 1., 0.5))
+                .child(div().size(px(32.)).flex().items_center().justify_center().child(crate::icons::control(crate::icons::Icon::Library)))
+                .child(div().flex_1())
+                .child(div().id("private-plus").size(px(32.)).flex().items_center().justify_center()
+                    .on_click(cx.listener(|this, _, window, cx| this.open_private_command_bar(window, cx)))
+                    .child(crate::icons::control(crate::icons::Icon::Plus)))))
     }
 
     /// Window controls stay native for their behavior, but idle as neutral
@@ -2569,7 +2593,7 @@ impl BrowserWindow {
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if split_open || history_open { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if split_open || history_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => Some(("No tab open".to_string(), "Press ⌘T to open a new tab".to_string())),
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -2593,6 +2617,7 @@ impl BrowserWindow {
                     .when(!split_open, |this| this.px_8())
                     .overflow_hidden()
                     .when(!split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).bg(gpui::white()).shadow_md())
+                    .when(self.browser.is_private() && !split_open, |this| this.bg(hsla(210. / 360., 0.035, 0.15, 1.)))
                     .relative()
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
@@ -2680,6 +2705,7 @@ impl BrowserWindow {
                 linear_color_stop(tint(hue, 0.82), 0.0),
                 linear_color_stop(tint(hue, 0.72), 1.0),
             ))
+            .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .child(self.render_sidebar(cx))
             .child(canvas(|_, _, _| (), |bounds, _, window, _| {
                 if let Some(view) = crate::native::view_of(window) {
@@ -3039,6 +3065,7 @@ impl Render for BrowserWindow {
                 linear_color_stop(tint(hue, 0.82), 0.0),
                 linear_color_stop(tint(hue, 0.72), 1.0),
             ))
+            .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .child(div().debug_selector(|| "sidebar-clip".into())
                 .relative().flex_none().h_full().w(px(SIDEBAR_WIDTH * sidebar_amount)).overflow_hidden()
                 .when(sidebar_amount > 0., |this| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(self.render_sidebar(cx)))))

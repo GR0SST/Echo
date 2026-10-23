@@ -23,6 +23,7 @@ mod folder_drag;
 mod inline_rename;
 mod link_status;
 mod status_url;
+mod private;
 pub mod pages;
 pub mod text_input;
 pub mod window;
@@ -118,9 +119,11 @@ fn load_session(path: &std::path::Path) -> Browser {
 
 /// Starts Chromium inside `window`, or returns `None` (pages are then
 /// shown as placeholders), e.g. when not running from the app bundle.
-fn start_engine(window: &gpui::Window, data_dir: &std::path::Path) -> Option<Box<dyn WebEngine>> {
+fn start_engine(window: &gpui::Window, data_dir: &std::path::Path, private: bool) -> Option<Box<dyn WebEngine>> {
     let parent = native::view_of(window)?;
-    match engine::Engine::start(data_dir, window::page_shortcuts()) {
+    let engine = if private { engine::Engine::start_private(data_dir, window::page_shortcuts()) }
+        else { engine::Engine::start(data_dir, window::page_shortcuts()) };
+    match engine {
         Ok(engine) => Some(Box::new(Chromium { engine, parent })),
         Err(error) => {
             eprintln!("Web engine unavailable: {error}");
@@ -135,12 +138,20 @@ const LEGACY_APP_NAME: &str = "Browser";
 
 /// Opens the main browser window, restoring the last saved session.
 fn open_browser_window(cx: &mut App) {
+    open_window_with_privacy(false, cx);
+}
+
+fn open_incognito_window(cx: &mut App) {
+    open_window_with_privacy(true, cx);
+}
+
+fn open_window_with_privacy(private: bool, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
-    cx.open_window(
+    let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some(APP_NAME.into()),
+                title: Some(if private { "Echo — Incognito" } else { APP_NAME }.into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))),
             }),
@@ -149,10 +160,11 @@ fn open_browser_window(cx: &mut App) {
         |window, cx| {
             let profile = profile_dir();
             let session = profile.join("session.json");
-            let engine = start_engine(window, &profile.join("Chromium"));
+            let engine = start_engine(window, &profile.join("Chromium"), private);
             let view = cx.new(|cx| {
-                let mut view = BrowserWindow::new(load_session(&session), engine, window, cx);
-                view.save_session_to(session, cx);
+                let browser = if private { Browser::new_private() } else { load_session(&session) };
+                let mut view = BrowserWindow::new(browser, engine, window, cx);
+                if !private { view.save_session_to(session, cx); }
                 view
             });
             view.read(cx).focus(window);
@@ -161,6 +173,16 @@ fn open_browser_window(cx: &mut App) {
     )
     .unwrap();
     cx.activate(true);
+    if private {
+        // AppKit finishes returning focus from the old Command Bar after
+        // its key event unwinds. Present the input on the next event-loop turn.
+        cx.spawn(async move |cx| {
+            let _ = handle.update(cx, |view, window, cx| {
+                window.activate_window();
+                view.open_private_command_bar(window, cx);
+            });
+        }).detach();
+    }
 }
 
 /// Handles platform reopen requests, including clicks on the macOS Dock icon.

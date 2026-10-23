@@ -173,6 +173,8 @@ pub struct Browser {
     pub archive_after: Option<Duration>,
     #[serde(skip)]
     sidebar_history: undo::SidebarHistory,
+    #[serde(skip)]
+    private: bool,
     next_id: u64,
 }
 
@@ -195,11 +197,23 @@ impl Browser {
             favorite_splits: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
             sidebar_history: undo::SidebarHistory::default(),
+            private: false,
             next_id: 1,
         };
         browser.add_space("Personal", 250.0);
         browser
     }
+
+    /// A window-local tab list that never records browsing history.
+    pub fn new_private() -> Self {
+        let mut browser = Self::new();
+        browser.private = true;
+        browser.spaces[0].name = "Incognito".into();
+        browser.archive_after = None;
+        browser
+    }
+
+    pub fn is_private(&self) -> bool { self.private }
 
     /// Makes a deserialized model consistent: at least one space, a valid
     /// active space and ids that never repeat.

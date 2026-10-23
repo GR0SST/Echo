@@ -13,6 +13,7 @@ pub struct HistoryEntry {
 impl Browser {
     /// One entry per URL, newest visit first. Internal and data pages are excluded.
     pub fn record_visit(&mut self, url: &str, now: SystemTime) {
+        if self.is_private() { return; }
         let web = url.split_once(':').is_some_and(|(scheme, rest)| {
             (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
                 && rest.starts_with("//")
@@ -53,6 +54,21 @@ impl Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_visits_stay_out_of_history_but_closed_tabs_can_be_restored() {
+        let mut browser = Browser::new_private();
+        let now = SystemTime::UNIX_EPOCH;
+        let tab = browser.new_tab("https://private.example/secret", now);
+        browser.record_visit("https://private.example/secret", now);
+        browser.update_history_title("https://private.example/secret", "Private page");
+        assert!(browser.history.is_empty());
+        assert_eq!(browser.archive_after, None);
+        browser.close_tab(tab, now).unwrap();
+        assert_eq!(browser.restore_last_archived(now), Some(tab));
+        assert_eq!(browser.active_tab().unwrap().url, "https://private.example/secret");
+        assert!(browser.history.is_empty());
+    }
 
     #[test]
     fn visits_are_ordered_deduplicated_and_keep_page_titles() {

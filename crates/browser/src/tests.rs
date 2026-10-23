@@ -4872,6 +4872,100 @@ fn dock_reopen_restores_a_closed_window_and_accepts_keyboard_input(cx: &mut Test
 }
 
 #[gpui::test]
+fn incognito_shortcut_opens_an_independent_window_with_command_input(cx: &mut TestAppContext) {
+    let (regular, visual) = open(cx);
+    let original = regular.read_with(visual, |view, _| browser_core::session::to_json(&view.browser));
+    visual.simulate_keystrokes("cmd-shift-n");
+    visual.cx.refresh().unwrap();
+    visual.run_until_parked();
+    let private = visual.cx.update(|cx| {
+        let roots: Vec<_> = cx.windows().into_iter().filter_map(|window| window.downcast::<BrowserWindow>())
+            .filter_map(|window| window.root(cx).ok()).collect();
+        roots.into_iter().find(|view| view.read(cx).browser.is_private()).unwrap()
+    });
+    private.read_with(visual, |view, cx| {
+        assert!(view.command_bar.is_some());
+        assert!(view.command_bar.as_ref().unwrap().input.read(cx).text().is_empty());
+        assert!(view.browser.all_tabs().next().is_none());
+        assert!(view.browser.favorites.is_empty());
+        assert_eq!(view.browser.space().name, "Incognito");
+    });
+    assert_eq!(regular.read_with(visual, |view, _| browser_core::session::to_json(&view.browser)), original);
+    let handle = private.read_with(visual, |view, _| view.main_window);
+    let mut private_visual = VisualTestContext::from_window(handle, &visual.cx);
+    bar(&private, &mut private_visual).simulate_input("https://private.example/first-window");
+    bar(&private, &mut private_visual).simulate_keystrokes("enter");
+    private_visual.simulate_keystrokes("cmd-shift-n");
+    private_visual.run_until_parked();
+    private.read_with(&private_visual, |view, _| {
+        assert_eq!(view.browser.space().today.len(), 1);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/first-window");
+        assert!(view.browser.history.is_empty());
+    });
+    let roots = private_visual.cx.update(|cx| {
+        let views: Vec<_> = cx.windows().into_iter().filter_map(|window| window.downcast::<BrowserWindow>())
+            .filter_map(|window| window.root(cx).ok()).collect();
+        views.into_iter().filter(|view| view.read(cx).browser.is_private()).collect::<Vec<_>>()
+    });
+    assert_eq!(roots.len(), 2);
+    assert_eq!(roots.iter().filter(|view| view.read_with(&private_visual, |view, _| view.browser.all_tabs().next().is_none())).count(), 1);
+}
+
+#[gpui::test]
+fn incognito_command_bar_action_opens_a_private_window(cx: &mut TestAppContext) {
+    let (regular, visual) = open(cx);
+    run_named_command(&regular, visual, "new incognito window");
+    visual.cx.refresh().unwrap();
+    visual.run_until_parked();
+    let private_count = visual.cx.update(|cx| {
+        let views: Vec<_> = cx.windows().into_iter().filter_map(|window| window.downcast::<BrowserWindow>())
+            .filter_map(|window| window.root(cx).ok()).collect();
+        views.into_iter().filter(|view| view.read(cx).browser.is_private()).count()
+    });
+    assert_eq!(private_count, 1);
+    assert!(regular.read_with(visual, |view, _| view.command_bar.is_none()));
+    let private = visual.cx.update(|cx| {
+        let views: Vec<_> = cx.windows().into_iter().filter_map(|window| window.downcast::<BrowserWindow>())
+            .filter_map(|window| window.root(cx).ok()).collect();
+        views.into_iter().find(|view| view.read(cx).browser.is_private()).unwrap()
+    });
+    let mut private_visual = VisualTestContext::from_window(private.read_with(visual, |view, _| view.main_window), &visual.cx);
+    bar(&private, &mut private_visual).simulate_input("https://private.example/from-command");
+    bar(&private, &mut private_visual).simulate_keystrokes("enter");
+    private.read_with(&private_visual, |view, _| {
+        assert!(view.command_bar.is_none());
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/from-command");
+    });
+}
+
+#[gpui::test]
+fn incognito_never_saves_the_private_window_to_a_session(cx: &mut TestAppContext) {
+    let path = std::env::temp_dir().join(format!("echo-incognito-session-{}.json", std::process::id()));
+    std::fs::write(&path, "existing regular session").unwrap();
+    cx.update(init);
+    let (view, visual) = cx.add_window_view(|window, cx| {
+        let mut view = BrowserWindow::new(browser_core::Browser::new_private(), None, window, cx);
+        view.save_session_to(path.clone(), cx);
+        view.focus(window);
+        view
+    });
+    visual.simulate_keystrokes("cmd-t");
+    bar(&view, visual).simulate_input("https://private.example/secret");
+    bar(&view, visual).simulate_keystrokes("enter");
+    visual.executor().advance_clock(Duration::from_secs(2));
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://private.example/secret");
+        assert!(view.browser.history.is_empty());
+    });
+    visual.simulate_keystrokes("cmd-shift-w");
+    drop(view);
+    visual.cx.update(|_| {});
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "existing regular session");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
 fn close_window_shortcut_preserves_tabs_and_saves_the_session(cx: &mut TestAppContext) {
     let path = std::env::temp_dir().join(format!("echo-close-window-{}.json", std::process::id()));
     let (view, visual) = open(cx);

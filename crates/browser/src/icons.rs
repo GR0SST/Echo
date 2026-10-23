@@ -48,7 +48,7 @@ pub(crate) fn more() -> AnyElement {
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
     Search, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, Link,
-    SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab,
+    SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab, Incognito,
 }
 
 fn arc(x: f32, y: f32, radius: f32, from: f32, to: f32) -> Vec<(f32, f32)> {
@@ -117,6 +117,7 @@ fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
         Icon::Share => "share-outline", Icon::Boost => "color-wand-outline",
         Icon::Capture => "camera-outline", Icon::Screenshot => "scan-outline",
         Icon::NewSpace => "duplicate-outline", Icon::Lock => "lock-closed", Icon::Unlock => "lock-open",
+        Icon::Incognito => "eye-off-outline",
         Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
         Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size, zoom),
     };
@@ -269,7 +270,7 @@ mod catalog_tests {
     #[test]
     fn bundled_ionicons_preserve_valid_curves_and_exclude_brand_glyphs() {
         assert_eq!(IONICONS.len(), 1108);
-        for name in ["pizza-outline", "link-outline", "folder-outline", "arrow-back-outline", "close-outline", "volume-mute-outline"] {
+        for name in ["pizza-outline", "link-outline", "folder-outline", "arrow-back-outline", "close-outline", "volume-mute-outline", "eye-off-outline"] {
             assert!(IONICONS.contains_key(name), "{name}");
         }
         for (name, commands) in IONICONS.iter() {

@@ -64,8 +64,11 @@ The driver then stops before the next input command (and between typed character
 if another app takes focus or the browser becomes occluded. Command Bar and
 menu child windows count as browser focus. An aborted run exits with status 1
 and must be repeated before using its screenshots as evidence.
-`windows`, `reopen` and `quit` remain available after deliberately closing the
+`windows`, `window`, `reopen` and `quit` remain available after deliberately closing the
 window, so a guarded script can inspect closure and test Dock restoration.
+`window <index>` or `window last` binds subsequent commands to another browser
+root without changing focus; use `activate` explicitly when needed. Child
+panels are excluded from this index.
 
 `menu Edit > Undo` invokes an enabled native menu item without moving the
 system pointer. Keyboard events follow the focused browser child window,

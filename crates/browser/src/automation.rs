@@ -5,7 +5,8 @@
 //!
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
-//! Commands: `reopen` (Dock request), `activate`, `require-focus` (abort on focus loss or occlusion),
+//! Commands: `reopen` (Dock request), `window <index|last>` (select a browser root),
+//! `activate`, `require-focus` (abort on focus loss or occlusion),
 //! `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `menu <menu title> > <item title>` (invoke an enabled native menu item),
 //! `compose <text>` (native IME/emoji text insertion into the focused responder),
@@ -49,7 +50,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             if name == "require-focus" { require_focus = true; }
             // These commands do not send input and remain useful after a
             // deliberate Close Window, especially for testing Dock reopen.
-            let after_close = matches!(name, "windows" | "reopen" | "quit");
+            let after_close = matches!(name, "windows" | "reopen" | "window" | "quit");
             if require_focus && !after_close && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
                 eprintln!("[automation] aborted: browser lost focus or is not on screen");
                 let _ = cx.update(|cx| cx.quit());
@@ -57,6 +58,33 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             }
             match name {
                 "require-focus" => {},
+                "window" => {
+                    let selected = cx.update(|cx| {
+                        let roots: Vec<_> = cx.windows().into_iter().filter_map(|handle| handle.downcast::<BrowserWindow>()).collect();
+                        let handle = if arg == "last" { roots.last() } else { arg.parse::<usize>().ok().and_then(|index| roots.get(index)) }?;
+                        handle.update(cx, |view, window, cx| crate::native::view_of(window).map(|parent| {
+                            unsafe {
+                                let root = window_of(parent.cast());
+                                let keyboard = keyboard_window(parent.cast());
+                                let root_number: isize = msg_send![root, windowNumber];
+                                let keyboard_number: isize = msg_send![keyboard, windowNumber];
+                                eprintln!("[automation] selected_window private={} root={root_number} keyboard={keyboard_number}", view.browser.is_private());
+                            }
+                            (cx.weak_entity(), parent)
+                        })).ok().flatten()
+                    }).ok().flatten();
+                    let Some((new_view, parent)) = selected else {
+                        eprintln!("[automation] aborted: browser window selector did not match");
+                        let _ = cx.update(|cx| cx.quit());
+                        return;
+                    };
+                    view = new_view;
+                    ns_view = parent.cast();
+                    // Bind only. A just-opened root may not have its final
+                    // occlusion state yet; making it key would steal focus
+                    // from its already-focused Command Bar child.
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                }
                 "menu" => {
                     let invoked = arg.split_once(" > ").is_some_and(|(menu, item)| unsafe { perform_menu_action(menu, item) });
                     if !invoked {

@@ -54,7 +54,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | New Tab… (opens the Command Bar) | ⌘T | done | — |
 | New Window | ⌘N | missing | We have a single window |
 | Blank Window | ⌃⌘N | missing | — |
-| New Incognito Window | ⇧⌘N | missing | Incognito window with its own sidebar ("Incognito Tabs") |
+| New Incognito Window | ⇧⌘N | partial | File menu, shortcut and Command Bar open independent private tab lists. CEF cookies and localStorage are shared only among live private windows, isolated from regular browsing and discarded after the last private window closes. Private visits and sessions are not saved; closed tabs can be restored in memory. Verified against installed Arc and bundled Echo. Private menu/action availability and remaining visual states still need parity work |
 | New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
 | Restore Last Closed Tab | ⇧⌘T | done | Brings the last archived tab back to its Space |
 | Open Command Bar (on the current URL) | ⌘L | done | — |
@@ -201,7 +201,7 @@ Folder duplication follows the right-click action documented in the
 | Spaces dock at the bottom (Space icons) | click | partial | User-selected symbols/emoji persist per Space and render in the dock. Default icons remain colored dots; the bundled graphical catalog is not yet wired to a Space icon picker |
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost does nothing yet; New Easel is left out |
 | "Springy" click animation on sidebar items | — | missing | — |
-| Incognito window sidebar ("Incognito Tabs") | — | missing | — |
+| Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
 | Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | — |
 | Media controls in the sidebar | — | missing | See "Media and PiP" |
 
@@ -524,8 +524,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 72
-- **partial**: 50
-- **missing**: 179
+- **partial**: 52
+- **missing**: 177
 
 ### Biggest gaps (by importance for parity)
 

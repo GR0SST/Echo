@@ -102,6 +102,7 @@ struct View {
 // CEF is initialized once per process, including across closed/reopened windows.
 thread_local! {
     static RUNTIME: std::cell::RefCell<Option<std::rc::Rc<Runtime>>> = const { std::cell::RefCell::new(None) };
+    static PRIVATE_CONTEXT: std::cell::RefCell<std::rc::Weak<RequestContext>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
 }
 
 struct Runtime {
@@ -116,6 +117,7 @@ pub struct Engine {
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
     _runtime: std::rc::Rc<Runtime>,
+    private_context: Option<std::rc::Rc<RequestContext>>,
 }
 
 
@@ -192,7 +194,26 @@ impl Engine {
             by_browser_id: HashMap::new(),
             next_id: 1,
             _runtime: runtime,
+            private_context: None,
         })
+    }
+
+    /// Private windows share an in-memory context until the last private
+    /// engine closes. Never fall back to the persistent global context.
+    pub fn start_private(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
+        let mut engine = Self::start(data_dir, shortcuts)?;
+        let context = PRIVATE_CONTEXT.with(|slot| {
+            if let Some(context) = slot.borrow().upgrade() { return Ok(context); }
+            // CEF: an empty cache path makes both HTTP cache and site data
+            // ephemeral, independent of the global context's cache path.
+            let context = request_context_create_context(Some(&RequestContextSettings::default()), None)
+                .ok_or_else(|| "Cannot create a private Chromium context".to_string())?;
+            let context = std::rc::Rc::new(context);
+            *slot.borrow_mut() = std::rc::Rc::downgrade(&context);
+            Ok::<_, String>(context)
+        })?;
+        engine.private_context = Some(context);
+        Ok(engine)
     }
 
     /// Runs pending Chromium work. Call often (every few milliseconds).
@@ -289,13 +310,14 @@ impl Engine {
             ..Default::default()
         }
         .set_as_child(page_parent as _, &bounds);
+        let mut context = self.private_context.as_ref().map(|context| context.as_ref().clone());
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut self.client.clone()),
             Some(&CefString::from(url)),
             Some(&BrowserSettings::default()),
             None,
-            None,
+            context.as_mut(),
         );
         let Some(browser) = browser else {
             #[cfg(target_os = "macos")]
