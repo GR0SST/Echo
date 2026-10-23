@@ -373,6 +373,30 @@ impl Browser {
         }
     }
 
+    /// Returns a pinned tab to the URL it was pinned at, keeping its identity.
+    pub fn reset_pinned_tab(&mut self, id: TabId) -> bool {
+        for space in &mut self.spaces {
+            if let Some(tab) = space.pinned.iter_mut().find(|tab| tab.id == id) {
+                let Some(url) = tab.pinned_url.clone() else { return false; };
+                tab.title = url.clone();
+                tab.url = url;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Changes the original pinned URL without navigating the current page.
+    pub fn replace_pinned_url(&mut self, id: TabId) -> bool {
+        for space in &mut self.spaces {
+            if let Some(tab) = space.pinned.iter_mut().find(|tab| tab.id == id) {
+                tab.pinned_url = Some(tab.url.clone());
+                return true;
+            }
+        }
+        false
+    }
+
     /// Loads `url` in an existing tab of any space.
     pub fn navigate(&mut self, id: TabId, url: impl Into<String>) {
         let url = url.into();
@@ -682,6 +706,27 @@ mod tests {
         json["archive"][0].as_object_mut().unwrap().remove("reason");
         let restored = session::from_json(&json.to_string()).unwrap();
         assert_eq!(restored.archive[0].reason, ArchiveReason::Unknown);
+    }
+
+
+    #[test]
+    fn pinned_url_can_be_reset_or_replaced_without_unpinning() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("https://original", t0());
+        browser.toggle_pin(tab);
+        browser.navigate(tab, "https://original/elsewhere");
+        assert!(browser.reset_pinned_tab(tab));
+        assert_eq!(browser.active_tab().unwrap().url, "https://original");
+        browser.navigate(tab, "https://replacement");
+        assert!(browser.replace_pinned_url(tab));
+        browser.navigate(tab, "https://replacement/elsewhere");
+        assert!(browser.reset_pinned_tab(tab));
+        assert_eq!(browser.active_tab().unwrap().url, "https://replacement");
+        assert_eq!(browser.space().pinned.len(), 1);
+        assert_eq!(browser.space().pinned[0].id, tab);
+        let unpinned = browser.new_tab("https://today", t0());
+        assert!(!browser.reset_pinned_tab(unpinned));
+        assert!(!browser.replace_pinned_url(unpinned));
     }
 
 }

@@ -134,7 +134,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Reveal Tab in Sidebar | — | missing | — |
 | Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
 | Reset all tabs in this Space | — | missing | — |
-| Reset Tab to Original URL (pinned) | hidden | missing | — |
+| Reset Tab to Original URL (pinned) | hidden | done | Command Bar → Reset Tab to Original URL navigates modified pinned tabs back to their original page |
 
 ### Archive (that's the menu's name)
 
@@ -170,7 +170,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | ⇧⌘D | missing | — |
 | **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | missing | Needs drag and drop ("Drag to add Favorites"), unread badges (Gmail, GitHub, X, WhatsApp), calendar captions ("Show Time to Next Meeting") |
 | Hover previews for Favorites, Pinned and folders (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | hover | missing | Configured in "Previews Settings…" |
-| **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL), "Replace Pinned URL with Current", "Reset Tab to Original URL". Pinned section can be collapsed |
+| **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL). Reset to Original URL and Replace Pinned URL with Current are available in the Command Bar; section can be collapsed |
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
 | "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | done | Click Clear above Today; preserves Pinned and other Spaces |
 | "Tidy Tabs": AI grouping of Today by topic | — | missing | Arc Max feature, can wait |
@@ -245,7 +245,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
-| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | missing | — |
+| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Reset Tab and Replace Pin with Current Page implemented for modified pinned tabs; duplicate, rename and mute remain missing |
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
@@ -495,9 +495,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 46
-- **partial**: 23
-- **missing**: 226
+- **done**: 47
+- **partial**: 24
+- **missing**: 224
 
 ### Biggest gaps (by importance for parity)
 

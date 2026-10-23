@@ -1287,3 +1287,37 @@ fn cmd_t_and_cmd_l_restart_the_command_overlay_from_archive_mode(cx: &mut TestAp
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com"));
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
 }
+
+#[gpui::test]
+fn reset_pinned_tab_navigates_back_to_the_original_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-d cmd-l");
+    bar(&view, cx).simulate_input("https://example.com/elsewhere");
+    bar(&view, cx).simulate_keystrokes("enter");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("reset pinned tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
+    assert!(fake.take_calls().contains(&Call::Navigate(1, "https://www.chromium.org".into())));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 3);
+}
+
+#[gpui::test]
+fn replace_pinned_url_changes_the_page_used_after_closing(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-d cmd-l");
+    bar(&view, cx).simulate_input("https://example.com/replacement");
+    bar(&view, cx).simulate_keystrokes("enter");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("replace pin with current page");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.clone()).as_deref(), Some("https://example.com/replacement"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(_, _))));
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_input("https://example.com/elsewhere");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-w");
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.url == "https://example.com/replacement" && tab.pinned_url.as_deref() == Some("https://example.com/replacement"))));
+}

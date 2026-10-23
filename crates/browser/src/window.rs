@@ -282,6 +282,8 @@ pub enum Command {
     ArchiveSettings,
     ViewArchive,
     RequestClearArchive,
+    ResetPinnedTab,
+    ReplacePinnedUrl,
     CopyUrl,
     CopyUrlAsMarkdown,
     ToggleSidebar,
@@ -714,7 +716,10 @@ impl BrowserWindow {
         if !query.is_empty() {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
+            let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
+                (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
@@ -845,6 +850,16 @@ impl BrowserWindow {
 
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::ResetPinnedTab => {
+                if let Some(id) = self.browser.space().active_tab {
+                    if self.browser.reset_pinned_tab(id) { self.show_toast("Tab reset to its pinned URL".into(), cx); }
+                }
+            }
+            Command::ReplacePinnedUrl => {
+                if let Some(id) = self.browser.space().active_tab {
+                    if self.browser.replace_pinned_url(id) { self.show_toast("Pinned URL updated".into(), cx); }
+                }
+            }
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
@@ -1609,6 +1624,10 @@ impl BrowserWindow {
                     .child(
                         div()
                             .flex_none()
+                            .max_w(px(260.0))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .text_xs()
                             .when(!selected, |this| this.text_color(hsla(0.0, 0.0, 0.0, 0.45)))
                             .child(detail),
