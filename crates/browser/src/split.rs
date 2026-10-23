@@ -165,7 +165,7 @@ impl BrowserWindow {
                 let tab = self.browser.all_tabs().find(|tab| tab.id == *id)?;
                 let id = *id;
                 let active = self.browser.space().active_tab == Some(id);
-                let close_visible = split.panes.last() == Some(&id) && self.hovered_split_row == Some(self.browser.item_anchor(id));
+                let close_visible = split.panes.last() == Some(&id) && self.hovered_row == Some(self.browser.item_anchor(id));
                 Some(div().id(("sidebar-pane", id.get() as usize)).debug_selector(move || format!("sidebar-pane-{}", id.get()))
                     .relative().flex_1().flex_basis(px(0.)).min_w_0().h(px(30.)).pl(px(7.)).pr(px(4.)).rounded(px(8.)).flex().items_center().gap(px(11.))
                     .overflow_hidden()

@@ -7,6 +7,7 @@ mod archive;
 mod menus;
 mod history;
 mod tab_menu;
+mod site_controls;
 mod audio;
 mod split_layout;
 mod split;
@@ -45,6 +46,7 @@ pub fn init(cx: &mut App) {
     menus::init(cx);
     history::bind_keys(cx);
     tab_menu::bind_keys(cx);
+    site_controls::bind_keys(cx);
 }
 
 /// Content of the first launch.

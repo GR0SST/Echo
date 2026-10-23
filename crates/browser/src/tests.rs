@@ -1018,6 +1018,12 @@ fn page_controls_are_available_by_name(cx: &mut TestAppContext) {
 #[gpui::test]
 fn clear_button_archives_today_without_touching_pinned_or_other_spaces(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
+    // Tidy and Clear appear only while the pointer is over the sidebar.
+    move_mouse(cx, 600., 400.);
+    assert!(cx.debug_bounds("clear-today").is_none());
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    move_mouse(cx, f32::from(sidebar.center().x), f32::from(sidebar.center().y));
+    assert!(cx.debug_bounds("tidy-today").is_some());
     click(cx, "clear-today");
     assert!(today_urls(&view, cx).is_empty());
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 2);
@@ -4764,4 +4770,23 @@ fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext)
     let clipboard = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(clipboard, active_url(&view, cx));
     assert!(view.read_with(cx, |w, _| w.command_bar.is_none()));
+}
+
+#[gpui::test]
+fn space_bar_and_site_controls_match_the_reference_layout(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    // Library on the left, Spaces centered, New Space on the right, all on one axis.
+    let library = cx.debug_bounds("library").unwrap();
+    let space = cx.debug_bounds("space-0").unwrap();
+    let plus = cx.debug_bounds("new-space").unwrap();
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    assert_eq!(library.center().y, space.center().y);
+    assert_eq!(plus.center().y, space.center().y);
+    assert!(library.right() < space.origin.x && space.right() < plus.origin.x);
+    assert_eq!(library.origin.x - sidebar.origin.x, sidebar.right() - plus.right());
+    // The site controls button opens the panel and Escape-like dismissal closes it.
+    click(cx, "address-site-controls");
+    assert!(view.read_with(cx, |w, _| w.site_controls.is_some()));
+    view.update(cx, |w, cx| w.close_site_controls(cx));
+    assert!(view.read_with(cx, |w, _| w.site_controls.is_none()));
 }

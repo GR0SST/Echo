@@ -33,6 +33,9 @@ pub(crate) const SIDEBAR_ROW_RADIUS: f32 = 10.0;
 const FAVORITE_HEIGHT: f32 = 46.0;
 const FAVORITE_GAP: f32 = 8.0;
 const FAVORITE_COLUMNS: usize = 4;
+/// Room for "Tidy | Clear" at the right of the Today divider.
+const TODAY_ACTIONS_WIDTH: f32 = 96.0;
+const SPACE_BAR_HEIGHT: f32 = 42.0;
 const COMMAND_BAR_WIDTH: f32 = 620.0;
 const MAX_TAB_SUGGESTIONS: usize = 6;
 const MAX_HISTORY_SUGGESTIONS: usize = 4;
@@ -436,6 +439,7 @@ pub enum OverlayKind {
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
     TabMenu,
+    SiteControls,
 }
 
 /// Root of a transparent child window over the browser window. Pages are
@@ -471,6 +475,7 @@ impl Render for Overlay {
                     OverlayKind::Toast => browser.render_toast(),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(cx),
+                    OverlayKind::SiteControls => browser.render_site_controls(cx),
                 };
                 browser.render_overlay_shell(content, cx)
             })
@@ -507,7 +512,10 @@ pub struct BrowserWindow {
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
-    pub(crate) hovered_split_row: Option<TabId>,
+    pub(crate) hovered_row: Option<TabId>,
+    /// Layout that changes on sidebar hover (Today actions) needs state:
+    /// hover styles alone repaint without a new layout.
+    pub(crate) sidebar_hovered: bool,
     pub(crate) traffic_lights_hovered: bool,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
@@ -515,6 +523,8 @@ pub struct BrowserWindow {
     pub(crate) toast_generation: u64,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
+    pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
+    pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
     pub floating_sidebar: Option<FloatingSidebar>,
@@ -586,7 +596,8 @@ impl BrowserWindow {
             tab_drop_edges: RefCell::new(HashMap::new()),
             space_drag_hover: None,
             split_draft: None,
-            hovered_split_row: None,
+            hovered_row: None,
+            sidebar_hovered: false,
             traffic_lights_hovered: false,
             command_bar: None,
             find_bar: None,
@@ -596,6 +607,8 @@ impl BrowserWindow {
             pages,
             floating_sidebar: None,
             tab_menu: None,
+            site_controls: None,
+            site_controls_anchor: Default::default(),
             main_window: window.window_handle(),
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
@@ -643,7 +656,7 @@ impl BrowserWindow {
             return;
         };
         for event in events {
-            if matches!(&event, Event::Focused { .. }) && (self.command_bar.is_some() || self.tab_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (self.command_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::Focused { view } => {
@@ -1843,21 +1856,19 @@ impl BrowserWindow {
             .pl(px(9.))
             // Titles run to the edge; the close control takes room only on
             // hover. A mute control keeps its place left of it.
-            .pr(px(if tab.muted { 34. } else { 6. }))
+            // Hover alone only repaints, so the padding follows hover state.
+            .pr(px(if tab.muted || (reserve_close && self.hovered_row == Some(id)) { 34. } else { 6. }))
             .text_size(px(14.))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .when(segmented, |this| this.px_1().gap_0()
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered { this.hovered_split_row = Some(id); }
-                    else if this.hovered_split_row == Some(id) { this.hovered_split_row = None; }
-                    cx.notify();
-                })))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered { this.hovered_row = Some(id); }
+                else if this.hovered_row == Some(id) { this.hovered_row = None; }
+                cx.notify();
+            }))
+            .when(segmented, |this| this.px_1().gap_0())
             .rounded(px(SIDEBAR_ROW_RADIUS))
             .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
-            .hover(move |style| {
-                let style = if active { style } else { style.bg(hsla(0.0, 0.0, 1.0, 0.3)) };
-                if reserve_close { style.pr(px(34.)) } else { style }
-            })
+            .when(!active, |this| this.hover(|style| style.bg(hsla(0.0, 0.0, 1.0, 0.3))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 this.open_tab_menu(id, event.position, window, cx);
@@ -1988,6 +1999,12 @@ impl BrowserWindow {
         let loading = state.loading;
         let control = |id: &'static str| div().id(id).debug_selector(move || id.into()).flex_none().size(px(28.)).rounded_md()
             .flex().items_center().justify_center().text_color(hsla(0., 0., 0., 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
+        let controls_open = self.site_controls.is_some();
+        let anchor = self.site_controls_anchor.clone();
+        let address_action = |id: &'static str, shown: bool| div().id(id).debug_selector(move || id.into())
+            .relative().flex_none().size(px(24.)).rounded_md().flex().items_center().justify_center()
+            .when(!shown, |this| this.invisible().group_hover("sidebar", |style| style.visible()))
+            .hover(|style| style.bg(hsla(0., 0., 0., 0.08)));
         let favorites: Vec<_> = self.browser.favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).collect();
         // Favorites stretch to fill each row, as in the reference.
         let columns = favorites.len().clamp(1, FAVORITE_COLUMNS) as f32;
@@ -1996,6 +2013,9 @@ impl BrowserWindow {
             .id("sidebar")
             .debug_selector(|| "sidebar".into())
             .group("sidebar")
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.sidebar_hovered != *hovered { this.sidebar_hovered = *hovered; cx.notify(); }
+            }))
             .relative()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .flex()
@@ -2004,7 +2024,6 @@ impl BrowserWindow {
             .w(px(SIDEBAR_WIDTH))
             .h_full()
             .pt(px(SIDEBAR_TOOLBAR_HEIGHT - 1.))
-            .pb_2()
             .gap(px(8.))
             .text_color(hsla(0.0, 0.0, 0.1, 1.0))
             .child(div().absolute().top_0().left_0().right(px(8.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).flex().items_center().gap(px(6.))
@@ -2031,10 +2050,10 @@ impl BrowserWindow {
                         .debug_selector(|| "address".into())
                         .h(px(36.0))
                         .pl(px(13.))
-                        .pr(px(9.))
+                        .pr(px(5.))
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(px(4.))
                         .rounded(px(SIDEBAR_ROW_RADIUS))
                         .bg(hsla(0.0, 0.0, 1.0, 0.35))
                         .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.5)))
@@ -2046,14 +2065,16 @@ impl BrowserWindow {
                         }))
                         .child(div().flex_1().min_w_0().overflow_hidden().child(url))
                         // Page actions appear only while the pointer is over the sidebar.
-                        .when(self.browser.active_tab().is_some(), |this| this.child(
-                            div().id("address-copy-link").debug_selector(|| "address-copy-link".into())
-                                .flex_none().size(px(24.)).rounded_md().flex().items_center().justify_center()
-                                .invisible().group_hover("sidebar", |style| style.visible())
-                                .hover(|style| style.bg(hsla(0., 0., 0., 0.08)))
+                        .when(self.browser.active_tab().is_some(), |this| this
+                            .child(address_action("address-copy-link", controls_open)
                                 .tooltip(|_, cx| cx.new(|_| TabTooltip { title: "Copy URL".into(), url: String::new() }).into())
                                 .on_click(cx.listener(|this, _, _, cx| { cx.stop_propagation(); this.copy_url(false, cx); }))
-                                .child(crate::icons::control(crate::icons::Icon::Link)))),
+                                .child(crate::icons::control(crate::icons::Icon::Link)))
+                            .child(address_action("address-site-controls", controls_open)
+                                .when(controls_open, |this| this.bg(hsla(0., 0., 0., 0.08)))
+                                .on_click(cx.listener(|this, _, window, cx| { cx.stop_propagation(); this.toggle_site_controls(window, cx); }))
+                                .child(crate::icons::control(crate::icons::Icon::SiteControls))
+                                .child(canvas(|_, _, _| (), move |bounds, _, _, _| anchor.set(Some(bounds))).absolute().inset_0()))),
                 ),
             )
             .when(!favorites.is_empty(), |this| this.child(
@@ -2144,6 +2165,7 @@ impl BrowserWindow {
             .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
         let pinned_height = pinned.len() as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
         let header_group = SharedString::from(format!("space-header-{index}"));
+        let today_actions = !space.today.is_empty() && self.sidebar_hovered;
         let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
 
         div()
@@ -2177,7 +2199,7 @@ impl BrowserWindow {
                             .when(space.pinned_collapsed || header_menu_open, |this| this.invisible())
                             .group_hover(header_group.clone(), |style| style.invisible())
                             .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon)))
-                            .when(space.custom_icon.is_none(), |this| this.child(div().size(px(7.)).rounded_full().bg(hsla(hue, 0.55, 0.5, 0.8)))))
+                            .when(space.custom_icon.is_none(), |this| this.child(div().size(px(7.)).rounded_full().bg(hsla(0., 0., 0.1, 0.5)))))
                         .child(div().debug_selector(move || format!("space-header-chevron-{index}"))
                             .absolute().top_0().left_0().size_full().invisible()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.visible())
@@ -2204,28 +2226,31 @@ impl BrowserWindow {
                         .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
                         .children(pinned)),
             ))
-            // The divider doubles as the Today drop target; Clear shows on sidebar hover.
+            // The divider doubles as the Today drop target. Tidy and Clear show on
+            // sidebar hover, and the line shortens to make room for them.
             .child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| "today-header".into()))
-                .relative().flex_none().h(px(22.)).px(px(10.)).flex().items_center().rounded_md()
+                .relative().flex_none().h(px(22.)).rounded_md()
                 .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                 .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
-                .child(div().flex_1().h(px(1.)).bg(hsla(0.0, 0.0, 0.0, 0.12))
-                    .when(!space.today.is_empty(), |this| this.group_hover("sidebar", |style| style.mr(px(54.)))))
-                .when(!space.today.is_empty(), |this| this.child(div().id(("clear-today", index))
-                    .when(current, |this| this.debug_selector(|| "clear-today".into()))
-                    .absolute().right(px(6.)).top(px(2.)).h(px(18.)).px(px(4.)).rounded_md()
-                    .flex().items_center().gap(px(2.))
+                .child(div().absolute().left(px(10.)).top(px(11.)).h(px(1.)).bg(hsla(0.0, 0.0, 0.0, 0.12))
+                    .right(px(if today_actions { TODAY_ACTIONS_WIDTH + 21. } else { 10. })))
+                .when(today_actions, |this| this.child(div().absolute().right(px(10.)).top_0().h_full().w(px(TODAY_ACTIONS_WIDTH))
+                    .flex().items_center().justify_end()
                     .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0.0, 0.0, 0.0, 0.35))
-                    .invisible().group_hover("sidebar", |style| style.visible())
-                    .hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.browser.switch_space(index);
-                        this.browser.clear_today(SystemTime::now());
-                        this.settle_pager(cx);
-                        cx.notify();
-                    }))
-                    .child(crate::icons::control_sized(crate::icons::Icon::Down, 12.))
-                    .child("Clear"))))
+                    .child(div().id(("tidy-today", index)).when(current, |this| this.debug_selector(|| "tidy-today".into()))
+                        .flex().items_center().gap(px(3.)).hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
+                        .child(crate::icons::control_sized(crate::icons::Icon::Tidy, 12.)).child("Tidy"))
+                    .child(div().mx(px(8.)).w(px(1.)).h(px(10.)).bg(hsla(0.0, 0.0, 0.0, 0.25)))
+                    .child(div().id(("clear-today", index)).when(current, |this| this.debug_selector(|| "clear-today".into()))
+                        .flex().items_center().gap(px(2.)).hover(|s| s.text_color(hsla(0.0, 0.0, 0.0, 0.6)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.browser.switch_space(index);
+                            this.browser.clear_today(SystemTime::now());
+                            this.settle_pager(cx);
+                            cx.notify();
+                        }))
+                        .child(crate::icons::control_sized(crate::icons::Icon::Down, 12.))
+                        .child("Clear")))))
             .child(
                 div()
                     .id(("new-tab", index))
@@ -2261,24 +2286,34 @@ impl BrowserWindow {
     }
 
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let corner = |id: &'static str| div().id(id).debug_selector(move || id.into())
+            .flex_none().size(px(32.)).rounded_md().flex().items_center().justify_center()
+            .text_color(hsla(0.0, 0.0, 0.0, 0.5)).hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)));
         div()
+            .flex_none()
+            .h(px(SPACE_BAR_HEIGHT))
+            .px(px(SIDEBAR_INSET))
             .flex()
             .items_center()
-            .justify_center()
-            .gap_2()
-            .pt_2()
+            // Library sits at the left edge; it has no destination yet.
+            .child(corner("library").child(crate::icons::control(crate::icons::Icon::Library)))
+            .child(div().flex_1().min_w_0().flex().items_center().justify_center().gap(px(4.))
             .children(self.browser.spaces.iter().enumerate().map(|(index, space)| {
                 let active = index == self.pager.position.round() as usize;
                 let space_id = space.id;
-                let hue = space.hue / 360.0;
                 let drag = crate::space_drag::SpaceDrag { id: space_id, name: space.name.clone(), icon: space.custom_icon.clone(), hue: space.hue };
+                // Space marks are monochrome; only user emoji keep their colors.
+                let mark = hsla(0., 0., 0.1, if active { 0.8 } else { 0.3 });
                 div()
                     .id(("space", index))
                     .debug_selector(move || format!("space-{index}"))
-                    .flex_none().size(px(if space.custom_icon.is_some() { 22. } else if active { 10. } else { 8. }))
-                    .when(space.custom_icon.is_none(), |this| this.rounded_full().bg(hsla(hue, 0.55, 0.5, if active { 1.0 } else { 0.45 })).hover(move |s| s.bg(hsla(hue, 0.55, 0.5, 0.8))))
-                    .when_some(space.custom_icon.clone(), |this, icon| this.flex().items_center().justify_center().rounded_md()
-                        .when(active, |this| this.bg(hsla(0., 0., 1., 0.5))).hover(|this| this.bg(hsla(0., 0., 1., 0.3)))
+                    .group(SharedString::from(format!("space-mark-{index}")))
+                    .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
+                    .hover(|s| s.bg(hsla(0., 0., 1., 0.3)))
+                    .when(space.custom_icon.is_none(), |this| this.child(div().size(px(if active { 8. } else { 7. })).rounded_full().bg(mark)
+                        .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., 0.1, if active { 0.8 } else { 0.5 })))))
+                    .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
+                        .when(!active, |this| this.opacity(0.5))
                         .child(div().debug_selector(move || format!("space-icon-{index}")).child(crate::icons::glyph(&icon))))
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_space(index, cx)))
                     .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
@@ -2294,12 +2329,8 @@ impl BrowserWindow {
                         cx.stop_propagation();
                         this.open_space_menu(space_id, event.position, window, cx);
                     }))
-            }))
-            .child(div().id("new-space").debug_selector(|| "new-space".into())
-                .w(px(20.0)).h(px(20.0)).mt(px(-6.0)).rounded_md()
-                .flex().items_center().justify_center().text_sm()
-                .text_color(hsla(0.0, 0.0, 0.0, 0.55))
-                .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
+            })))
+            .child(corner("new-space")
                 .on_click(cx.listener(|this, _, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
                 .child(crate::icons::control(crate::icons::Icon::Plus)))
     }

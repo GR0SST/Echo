@@ -48,6 +48,7 @@ pub(crate) fn more() -> AnyElement {
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
     Search, External, History, Enter, Restore, Up, Down, Check, Mute, Command, Link,
+    SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock,
 }
 
 fn arc(x: f32, y: f32, radius: f32, from: f32, to: f32) -> Vec<(f32, f32)> {
@@ -107,8 +108,11 @@ pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement {
         Icon::Enter => "return-down-back-outline", Icon::Restore => "arrow-undo-outline",
         Icon::Up => "arrow-up-outline", Icon::Down => "arrow-down-outline",
         Icon::Check => "checkmark-outline", Icon::Mute => "volume-mute-outline",
-        Icon::Link => "link-outline",
+        Icon::Share => "share-outline", Icon::Boost => "color-wand-outline",
+        Icon::Capture => "camera-outline", Icon::Screenshot => "scan-outline",
+        Icon::Lock => "lock-closed", Icon::Unlock => "lock-open",
         Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
+        Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy => return drawn(icon, size),
     };
     ionicon(name, size)
 }
@@ -132,6 +136,76 @@ fn chrome_frame(icon: Icon) -> AnyElement {
             if let Ok(path) = path.build() { window.paint_path(path, color); }
         }
     }).size(px(18.)).flex_none().into_any_element()
+}
+
+/// A chain link: a capsule outline around `from`–`to`, left open for
+/// `gap` radians at the start of its `to` cap where the other link passes.
+fn link(from: (f32, f32), to: (f32, f32), radius: f32, gap: f32) -> Vec<(f32, f32)> {
+    let angle = (to.1 - from.1).atan2(to.0 - from.0);
+    let half = std::f32::consts::FRAC_PI_2;
+    let mut points = arc(to.0, to.1, radius, angle - half + gap, angle + half);
+    points.extend(arc(from.0, from.1, radius, angle + half, angle + 3. * half));
+    points.push((to.0 + radius * (angle - half).cos(), to.1 + radius * (angle - half).sin()));
+    points
+}
+
+fn circle(x: f32, y: f32, radius: f32) -> Vec<(f32, f32)> {
+    arc(x, y, radius, 0., std::f32::consts::TAU)
+}
+
+/// Controls drawn on an 18 px grid to match the reference's symbols:
+/// `strokes` are 1.5 px outlines, `fills` are solid contours (a reversed
+/// inner contour cuts a hole).
+fn drawn(icon: Icon, size: f32) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let (strokes, fills): (Vec<Vec<(f32, f32)>>, Vec<Vec<Vec<(f32, f32)>>>) = match icon {
+            // Two interlocking links on the rising diagonal.
+            Icon::Link => (vec![link((6., 12.), (7.8, 10.2), 2.9, 1.5), link((12., 6.), (10.2, 7.8), 2.9, 1.5)], vec![]),
+            // Two sliders inside a rounded square: knob right on top, left below.
+            Icon::SiteControls => (vec![
+                rounded_rect(2.5, 2.5, 13., 13., 3.8),
+                vec![(5.6, 7.2), (9., 7.2)], vec![(11.6, 7.2), (12.4, 7.2)], circle(10.3, 7.2, 1.3),
+                vec![(5.6, 10.8), (6.4, 10.8)], vec![(9., 10.8), (12.4, 10.8)], circle(7.7, 10.8, 1.3),
+            ], vec![]),
+            // A filled storage box with a handle slot and items peeking out.
+            Icon::Library => (vec![], vec![
+                {
+                    let mut slot = rounded_rect(7., 10.2, 4., 1.8, 0.9);
+                    slot.reverse();
+                    vec![rounded_rect(2.8, 7.4, 12.4, 8.8, 2.2), slot]
+                },
+                vec![vec![(3.8, 6.8), (6.2, 3.2), (8.8, 4.8), (9.8, 6.8)]],
+                vec![vec![(9.2, 6.8), (12.6, 4.4), (14.4, 6.8)]],
+                vec![circle(13., 2.2, 1.2)],
+            ]),
+            // A broom: handle on the falling diagonal and a fanned head.
+            Icon::Tidy => (vec![vec![(13.5, 2.5), (9.8, 8.6)]], vec![
+                vec![vec![(7.6, 8.), (11.6, 10.4), (10.2, 15.5), (8.6, 14.2), (7.4, 15.4), (6.4, 13.8), (4.6, 14.2)]],
+            ]),
+            _ => unreachable!("drawn control"),
+        };
+        let scale = size / 18.;
+        let at = |(x, y): (f32, f32)| bounds.origin + gpui::point(px(x * scale), px(y * scale));
+        let color = window.text_style().color;
+        for points in strokes {
+            let width = if matches!(icon, Icon::SiteControls) { 1.25 } else { 1.5 };
+            let mut path = gpui::PathBuilder::stroke(px(width * scale));
+            for (index, point) in points.into_iter().enumerate() {
+                if index == 0 { path.move_to(at(point)); } else { path.line_to(at(point)); }
+            }
+            if let Ok(path) = path.build() { window.paint_path(path, color); }
+        }
+        for contours in fills {
+            let mut path = gpui::PathBuilder::fill();
+            for contour in contours {
+                for (index, point) in contour.into_iter().enumerate() {
+                    if index == 0 { path.move_to(at(point)); } else { path.line_to(at(point)); }
+                }
+                path.close();
+            }
+            if let Ok(path) = path.build() { window.paint_path(path, color); }
+        }
+    }).size(px(size)).flex_none().into_any_element()
 }
 
 #[cfg(test)]
