@@ -132,6 +132,7 @@ pub(crate) fn build() -> Vec<Menu> {
         Menu {
             name: "Tabs".into(),
             items: vec![
+                MenuItem::action("Reveal Tab in Sidebar", window::RevealTab),
                 MenuItem::action("Duplicate Current Tab", window::DuplicateTab),
                 MenuItem::action("Pin/Unpin Tab", window::TogglePin),
                 MenuItem::action("Favorite/Unfavorite Tab", window::ToggleFavorite),

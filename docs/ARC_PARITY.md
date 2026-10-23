@@ -135,7 +135,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | missing | — |
 | Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | partial | Favorites, then Pinned and Today; Split Views count as one item. The "Include Favorites in ordering" option remains missing |
 | Switch to Split View 1–4 / next / previous | (?) | done | Command Bar actions |
-| Reveal Tab in Sidebar | — | missing | — |
+| Reveal Tab in Sidebar | — | done | Command Bar and Tabs menu show the sidebar, unfold Pinned and scroll to the active item; Split View pane focus and loaded pages are preserved |
 | Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
 | Reset all tabs in this Space | — | done | Command Bar → Reset Space returns all Pinned tabs to their original URLs and unloads their pages; Today and other Spaces are preserved |
 | Reset Tab to Original URL (pinned) | hidden | done | Command Bar → Reset Tab to Original URL navigates modified pinned tabs back to their original page |

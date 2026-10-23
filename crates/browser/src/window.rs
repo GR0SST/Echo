@@ -1,7 +1,8 @@
 //! Arc-style browser window: vertical sidebar, content card, command bar.
 //! Native CEF pages sit below browser-owned GPUI controls.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -82,6 +83,7 @@ actions!(
         MuteAllTabs,
         UnmuteAllTabs,
         TogglePinnedSection,
+        RevealTab,
         ToggleSidebar,
         NextSpace,
         PreviousSpace,
@@ -319,6 +321,7 @@ pub enum Command {
     ReplacePinnedUrl,
     CopyUrl,
     CopyUrlAsMarkdown,
+    RevealTab,
     ToggleSidebar,
     TogglePin,
     ToggleFavorite,
@@ -437,9 +440,13 @@ pub struct FloatingSidebar {
 }
 
 
+#[derive(Default)]
+struct SidebarScrolls { pinned: gpui::ScrollHandle, today: gpui::ScrollHandle, pending: Rc<Cell<Option<(Section, usize)>>> }
+
 pub struct BrowserWindow {
     pub browser: Browser,
     pub sidebar_visible: bool,
+    sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -508,6 +515,7 @@ impl BrowserWindow {
             },
             browser,
             sidebar_visible: true,
+            sidebar_scrolls: HashMap::new(),
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -850,6 +858,7 @@ impl BrowserWindow {
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
+                (Command::RevealTab, "Reveal Tab in Sidebar", "reveal tab in sidebar|reveal tab|show tab in sidebar", active.is_some()),
                 (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar|sidebar" } else { "toggle sidebar|show sidebar|sidebar" }, true),
                 (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some() && !favorite),
                 (Command::ToggleFavorite, if favorite { "Unfavorite Tab" } else { "Favorite Tab" }, if favorite { "unfavorite tab|remove from favorites|unfavorite current tab" } else { "favorite tab|favorite current tab|pin to top apps|add to favorites" }, active.is_some()),
@@ -1109,6 +1118,7 @@ impl BrowserWindow {
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.edit_space_name(None, cx),
             Command::RenameSpace => self.edit_space_name(Some(self.browser.space().id), cx),
+            Command::RevealTab => self.reveal_active_tab(cx),
             Command::ToggleSidebar => self.toggle_sidebar(cx),
             Command::TogglePin => {
                 if let Some(id) = self.browser.space().active_tab { self.browser.toggle_pin(id); }
@@ -1181,6 +1191,7 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
@@ -1258,6 +1269,26 @@ impl BrowserWindow {
 
     fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.toggle_sidebar(cx);
+    }
+
+    fn reveal_active_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(active) = self.browser.space().active_tab else { return; };
+        self.close_command_bar(cx);
+        if !self.sidebar_visible { self.toggle_sidebar(cx); }
+        self.close_floating_sidebar(cx);
+        let anchor = self.browser.item_anchor(active);
+        let space = self.browser.space();
+        let section = if space.pinned.iter().any(|tab| tab.id == anchor) { Some(Section::Pinned) }
+            else if space.today.iter().any(|tab| tab.id == anchor) { Some(Section::Today) } else { None };
+        if let Some(section) = section {
+            let tabs = if section == Section::Pinned { &space.pinned } else { &space.today };
+            let index = tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor);
+            let scrolls = self.sidebar_scrolls.entry(space.id).or_default();
+            if let Some(index) = index { scrolls.pending.set(Some((section, index))); }
+            if section == Section::Pinned { self.browser.spaces[self.browser.active_space].pinned_collapsed = false; }
+        }
+        self.settle_pager(cx);
+        cx.notify();
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -1499,6 +1530,7 @@ impl BrowserWindow {
             .id(("tab", key))
             .debug_selector(|| format!("tab-{key}"))
             .group(group.clone())
+            .flex_none()
             .flex()
             .items_center()
             .gap_2()
@@ -1686,6 +1718,25 @@ impl BrowserWindow {
             .child(self.render_space_switcher(cx))
     }
 
+    fn sidebar_list(&self, space: SpaceId, section: Section, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(scrolls) = self.sidebar_scrolls.get(&space) else { return div(); };
+        let scroll = match section { Section::Pinned => scrolls.pinned.clone(), Section::Today => scrolls.today.clone() };
+        let pending = scrolls.pending.clone();
+        let browser = cx.entity().downgrade();
+        div().on_children_prepainted(move |_, _, cx| {
+            if let Some((_, index)) = pending.get().filter(|(kind, _)| *kind == section) {
+                pending.set(None);
+                let scroll = scroll.clone();
+                let browser = browser.clone();
+                // The section now has child bounds, including after unfolding it.
+                cx.defer(move |cx| {
+                    scroll.scroll_to_item(index);
+                    let _ = browser.update(cx, |_, cx| cx.notify());
+                });
+            }
+        })
+    }
+
     fn render_space_page(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let space = &self.browser.spaces[index];
         let hue = space.hue / 360.0;
@@ -1729,7 +1780,12 @@ impl BrowserWindow {
                     .child(if space.pinned_collapsed { "›" } else { "⌄" })
                     .child("Pinned"))
             })
-            .when(!space.pinned_collapsed, |this| this.children(pinned))
+            .when(!space.pinned_collapsed && !pinned.is_empty(), |this| this.child(
+                self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| "pinned-list".into()))
+                    .flex().flex_col().flex_none().max_h(gpui::relative(0.45)).overflow_y_scroll()
+                    .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
+                    .children(pinned),
+            ))
             .child(div().h(px(1.0)).mx_2().my_2().bg(hsla(0.0, 0.0, 0.0, 0.12)))
             .when(!space.today.is_empty(), |this| {
                 this.child(div().flex().items_center().justify_between().px_2().h(px(24.0))
@@ -1766,13 +1822,15 @@ impl BrowserWindow {
                     .child("+  New Tab"),
             )
             .child(
-                div()
+                self.sidebar_list(space.id, Section::Today, cx)
                     .id(("today", index))
                     .flex()
                     .flex_col()
                     .flex_1()
                     .gap_1()
                     .overflow_y_scroll()
+                    .when(current, |this| this.debug_selector(|| "today-list".into()))
+                    .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.today))
                     .children(today),
             )
     }
@@ -2104,6 +2162,7 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
         self.sync_history_focus(window, cx);
         if self.tab_menu.as_ref().is_some_and(|menu| !self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|tab| tab.id == menu.tab)) {
             self.close_tab_menu(cx);
@@ -2162,6 +2221,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(Self::on_toggle_pin))
             .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| this.run_command(Command::ToggleFavorite, cx)))

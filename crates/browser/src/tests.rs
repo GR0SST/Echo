@@ -2567,3 +2567,98 @@ fn a_tall_context_menu_fits_a_small_window_and_keyboard_selection_scrolls_to_the
     menu.simulate_keystrokes("enter");
     assert!(view.read_with(cx, |w, _| w.tab_menu.is_none() && w.browser.archive.is_empty()));
 }
+
+fn open_long_sidebar(cx: &mut TestAppContext, pinned: bool) -> (Entity<BrowserWindow>, &mut VisualTestContext, FakeEngine) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new();
+    let now = std::time::SystemTime::now();
+    let target = browser.new_tab("https://target.example", now);
+    if pinned { browser.toggle_pin(target); }
+    else {
+        let second = browser.new_tab("https://secondary.example", now);
+        browser.add_split(target, second, browser_core::splits::Placement::Right, now).unwrap();
+    }
+    for index in 0..30 {
+        let id = browser.new_tab(format!("https://sidebar{index}.example"), now);
+        if pinned { browser.toggle_pin(id); }
+    }
+    if pinned {
+        let target = browser.space().pinned.last().unwrap().id;
+        browser.activate_tab(target, now);
+        browser.spaces[0].pinned_collapsed = true;
+    }
+    // Focus the group after the standalone pages have taken focus.
+    if !pinned {
+        let second = browser.space().splits[0].panes[1];
+        browser.activate_tab(second, now);
+    }
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    cx.run_until_parked();
+    (view, cx, fake)
+}
+
+#[gpui::test]
+fn reveal_tab_unfolds_and_scrolls_pinned_without_changing_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_long_sidebar(cx, true);
+    let active = active_url(&view, cx);
+    cx.simulate_keystrokes("cmd-s");
+    cx.run_until_parked();
+    fake.take_calls();
+    run_named_command(&view, cx, "reveal tab in sidebar");
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.sidebar_visible);
+        assert!(!w.browser.space().pinned_collapsed);
+    });
+    assert_eq!(active_url(&view, cx), active);
+    let row = cx.debug_bounds("tab-32").unwrap();
+    let list = cx.debug_bounds("pinned-list").unwrap();
+    assert!(row.origin.y >= list.origin.y && row.bottom() <= list.bottom(), "row={row:?}, list={list:?}");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn reveal_tab_scrolls_to_the_split_anchor_and_keeps_its_selected_pane(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_long_sidebar(cx, false);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    dispatch_menu(cx, "Tabs", "Reveal Tab in Sidebar");
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    let row = cx.debug_bounds("tab-2").unwrap();
+    let list = cx.debug_bounds("today-list").unwrap();
+    assert!(row.origin.y >= list.origin.y && row.bottom() <= list.bottom(), "row={row:?}, list={list:?}");
+    assert_eq!(active_url(&view, cx), active);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 3);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn reveal_tab_from_a_floating_sidebar_closes_the_overlay_and_restores_the_docked_sidebar(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-s");
+    cx.simulate_mouse_move(gpui::point(gpui::px(2.), gpui::px(200.)), None, Modifiers::none());
+    let mut sidebar = floating(&view, cx).unwrap();
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    std::thread::sleep(Duration::from_millis(200));
+    sidebar.update(|_, cx| cx.refresh_windows());
+    sidebar.run_until_parked();
+    click(&mut sidebar, "address");
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("reveal tab in sidebar");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.sidebar_visible && w.floating_sidebar.is_none()));
+    assert_eq!(active_url(&view, cx), active);
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
