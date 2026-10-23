@@ -62,7 +62,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | New Profile | — | missing | No profiles |
 | New Note | ⌃⇧N | missing | Notes (Arc Notes) |
 | New Note (in Split) | ⌃⌥N (hidden) | missing | — |
-| Close Window | ⇧⌘W | missing | — |
+| Close Window | ⇧⌘W | done | File menu and shortcut close the owning window from page or popup input focus, retain tabs without archiving and remove child panels. Checked against Arc and in bundled Echo, including Dock restoration. The engine retains its native clip hosts until teardown so closing a live CEF page is safe |
 | Archive Tab | ⌘W | done | Today tabs go to the archive; a pinned tab closes, stays in Pinned and returns to its pinned URL |
 | Share… | — | missing | System share menu |
 | Capture… | ⇧⌘2 | missing | Screenshot of a page area |
@@ -523,9 +523,9 @@ are implemented for copied links; the remaining notifications follow below.
 Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
-- **done**: 71
+- **done**: 72
 - **partial**: 50
-- **missing**: 180
+- **missing**: 179
 
 ### Biggest gaps (by importance for parity)
 

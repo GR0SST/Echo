@@ -4872,6 +4872,56 @@ fn dock_reopen_restores_a_closed_window_and_accepts_keyboard_input(cx: &mut Test
 }
 
 #[gpui::test]
+fn close_window_shortcut_preserves_tabs_and_saves_the_session(cx: &mut TestAppContext) {
+    let path = std::env::temp_dir().join(format!("echo-close-window-{}.json", std::process::id()));
+    let (view, visual) = open(cx);
+    let before = view.read_with(visual, |view, _| browser_core::session::to_json(&view.browser));
+    view.update(visual, |view, cx| view.save_session_to(path.clone(), cx));
+    visual.simulate_keystrokes("cmd-shift-w");
+    visual.run_until_parked();
+    assert!(visual.cx.read(|cx| cx.windows().is_empty()));
+    assert_eq!(view.read_with(visual, |view, _| browser_core::session::to_json(&view.browser)), before);
+    drop(view);
+    visual.cx.update(|_| {});
+    let restored = browser_core::session::load(&path).unwrap().unwrap();
+    assert_eq!(browser_core::session::to_json(&restored), before);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn close_window_from_command_input_removes_its_child_window(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    visual.simulate_keystrokes("cmd-t");
+    bar(&view, visual).simulate_input("unfinished query");
+    bar(&view, visual).simulate_keystrokes("cmd-shift-w");
+    visual.run_until_parked();
+    assert!(visual.cx.read(|cx| cx.windows().is_empty()));
+    view.read_with(visual, |view, _| {
+        assert!(view.command_bar.is_none());
+        assert!(view.browser.archive.is_empty());
+    });
+}
+
+#[gpui::test]
+fn close_window_from_page_shortcut_keeps_the_other_window_open(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (first, visual) = open_with(cx, Some(Box::new(fake.clone())));
+    let other = visual.cx.update(|cx| {
+        use gpui::AppContext;
+        cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+            cx.new(|cx| BrowserWindow::new(demo_browser(), None, window, cx))
+        }).unwrap()
+    });
+    fake.send(visual, Event::Shortcut(Shortcut {
+        cmd: true, shift: true, key: "w".into(), ..Default::default()
+    }));
+    visual.run_until_parked();
+    assert_eq!(visual.cx.read(|cx| cx.windows().len()), 1);
+    assert!(other.root(visual).is_ok());
+    assert!(first.read_with(visual, |view, _| view.browser.archive.is_empty()));
+}
+
+#[gpui::test]
 fn closing_the_window_saves_changes_before_the_periodic_save(cx: &mut TestAppContext) {
     let path = std::env::temp_dir().join(format!("browser-close-session-{}.json", std::process::id()));
     let _ = std::fs::remove_file(&path);

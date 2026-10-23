@@ -60,10 +60,12 @@ key enter; wait 3; shot /tmp/a.png; quit"`. Commands are listed in
 `crates/browser/src/automation.rs`.
 
 For focus-sensitive checks, start the script with `activate; require-focus;`.
-The driver then stops before the next command (and between typed characters)
+The driver then stops before the next input command (and between typed characters)
 if another app takes focus or the browser becomes occluded. Command Bar and
 menu child windows count as browser focus. An aborted run exits with status 1
 and must be repeated before using its screenshots as evidence.
+`windows`, `reopen` and `quit` remain available after deliberately closing the
+window, so a guarded script can inspect closure and test Dock restoration.
 
 `menu Edit > Undo` invokes an enabled native menu item without moving the
 system pointer. Keyboard events follow the focused browser child window,

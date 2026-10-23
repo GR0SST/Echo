@@ -47,7 +47,10 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
             if name == "require-focus" { require_focus = true; }
-            if require_focus && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
+            // These commands do not send input and remain useful after a
+            // deliberate Close Window, especially for testing Dock reopen.
+            let after_close = matches!(name, "windows" | "reopen" | "quit");
+            if require_focus && !after_close && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
                 eprintln!("[automation] aborted: browser lost focus or is not on screen");
                 let _ = cx.update(|cx| cx.quit());
                 return;

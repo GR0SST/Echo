@@ -299,7 +299,7 @@ impl Engine {
         );
         let Some(browser) = browser else {
             #[cfg(target_os = "macos")]
-            mac::remove_from_superview(page_parent);
+            mac::release_clip_view(page_parent);
             return None;
         };
         let page_view = browser
@@ -461,7 +461,7 @@ impl Engine {
                 host.close_browser(1);
             }
             #[cfg(target_os = "macos")]
-            mac::remove_from_superview(view.host);
+            mac::release_clip_view(view.host);
         }
     }
 }

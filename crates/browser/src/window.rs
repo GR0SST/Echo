@@ -160,6 +160,7 @@ window_shortcuts! {
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
+    "cmd-shift-w" => crate::menus::CloseWindow,
     "ctrl-shift-=" => AddSplit,
     "ctrl-shift--" => CloseSplitPane,
     "cmd-shift-t" => RestoreTab,
@@ -614,9 +615,7 @@ impl BrowserWindow {
 
         let position = browser.active_space as f32;
         cx.on_release(|this, cx| {
-            if let Some(overlay) = this.link_status.as_ref().and_then(|status| status.overlay) {
-                cx.defer(move |cx| { let _ = overlay.update(cx, |_, window, _| window.remove_window()); });
-            }
+            this.remove_child_windows(cx);
         }).detach();
         Self {
             pager: Pager {
@@ -696,6 +695,35 @@ impl BrowserWindow {
             }
         })
         .detach();
+    }
+
+    /// Closing a window keeps its tabs in the session, unlike Archive Tab.
+    pub(crate) fn close_window(&mut self, cx: &mut Context<Self>) {
+        self.cancel_split_draft();
+        self.remove_child_windows(cx);
+        let main = self.main_window;
+        cx.defer(move |cx| {
+            let _ = main.update(cx, |_, window, _| window.remove_window());
+        });
+    }
+
+    /// Child windows can outlive their parent on GPUI's test platform and
+    /// must also be removed when a native titlebar close releases the root.
+    fn remove_child_windows(&mut self, cx: &mut App) {
+        let children = [
+            self.command_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
+            self.find_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
+            self.tab_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
+            self.site_controls.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
+            self.new_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
+            self.toast.take().and_then(|toast| toast.overlay).map(|handle| handle.into()),
+            self.link_status.take().and_then(|status| status.overlay).map(|handle| handle.into()),
+            self.floating_sidebar.take().and_then(|sidebar| sidebar.overlay).map(|handle| handle.into()),
+        ];
+        for child in children.into_iter().flatten() {
+            let child: AnyWindowHandle = child;
+            cx.defer(move |cx| { let _ = child.update(cx, |_, window, _| window.remove_window()); });
+        }
     }
 
     pub fn apply_events(&mut self, events: Vec<Event>, window: &mut Window, cx: &mut Context<Self>) {
@@ -1438,6 +1466,7 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if this.command_bar.is_some() { this.close_command_bar(cx); }
                 else { this.close_focused_tab(cx); }
@@ -2928,6 +2957,7 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
+            .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .when(self.tab_rename.is_none(), |this| this
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))

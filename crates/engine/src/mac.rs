@@ -177,6 +177,8 @@ pub fn set_hidden(view: *mut c_void, hidden: bool) {
 
 /// A plain view inside `parent` that clips its subviews to rounded corners.
 /// Pages live in one, since AppKit manages the layers of CEF's own views.
+/// The engine owns the returned reference until `release_clip_view`: the
+/// window's superview may be destroyed before the engine is dropped.
 pub fn create_clip_view(parent: *mut c_void, radius: f64) -> *mut c_void {
     unsafe {
         let class = AnyClass::get(c"NSView").expect("AppKit is not loaded");
@@ -189,8 +191,6 @@ pub fn create_clip_view(parent: *mut c_void, radius: f64) -> *mut c_void {
             let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
         }
         let _: () = msg_send![parent as *mut AnyObject, addSubview: view];
-        // The superview keeps it alive.
-        ffi::objc_release(view as *mut _);
         view as *mut c_void
     }
 }
@@ -226,10 +226,11 @@ pub fn fill_superview(view: *mut c_void) {
     }
 }
 
-pub fn remove_from_superview(view: *mut c_void) {
+pub fn release_clip_view(view: *mut c_void) {
     if !view.is_null() {
         unsafe {
             let _: () = msg_send![view as *mut AnyObject, removeFromSuperview];
+            ffi::objc_release(view as *mut _);
         }
     }
 }
