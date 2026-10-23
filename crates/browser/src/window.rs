@@ -2180,9 +2180,12 @@ impl BrowserWindow {
                     let r = phase(960., 1300.);
                     ((r * 2.).min(1.), 0.6 + 0.4 * back_out(r, 1.4))
                 };
+                // The click itself gets the same light press bounce as other controls.
+                let press = press_scale(phase(0., PRESS_BOUNCE.as_secs_f32() * 1000.));
+                let link_scale = if ms < 960. { link_scale * press } else { link_scale };
                 let appear = phase(0., 160.);
                 let erase = phase(700., 960.);
-                let check_scale = (0.8 + 0.2 * appear) * (1. - 0.12 * erase);
+                let check_scale = (0.8 + 0.2 * appear) * (1. - 0.12 * erase) * press;
                 slot.child(div().absolute().inset_0().opacity(link_alpha).child(crate::icons::scaled(Icon::Link, link_scale)))
                     .when(ms < 960., |slot| slot.child(div().absolute().inset_0().opacity(appear)
                         .child(crate::icons::check(gpui::ease_in_out(erase), check_scale))))

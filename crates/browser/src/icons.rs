@@ -233,25 +233,23 @@ pub(crate) fn plus(angle: f32) -> AnyElement {
     }).size(px(18.)).flex_none().into_any_element()
 }
 
-/// A checkmark at `scale`, erased from its start as `trim` goes 0 → 1.
+/// A checkmark at `scale`, erased from its end back to its start as `trim` goes 0 → 1.
 pub(crate) fn check(trim: f32, scale: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let points = [(4.5f32, 9.4f32), (7.6, 12.5), (13.5, 5.6)];
         let lengths: Vec<f32> = points.windows(2).map(|pair| (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1)).collect();
         let total: f32 = lengths.iter().sum();
-        let mut skip = total * trim.clamp(0., 1.);
-        if skip >= total { return; }
+        let mut keep = total * (1. - trim.clamp(0., 1.));
+        if keep <= 0. { return; }
         let center = bounds.center();
         let at = |(x, y): (f32, f32)| center + gpui::point(px((x - 9.) * scale), px((y - 9.) * scale));
         let mut path = gpui::PathBuilder::stroke(px(1.6));
-        let mut started = false;
+        path.move_to(at(points[0]));
         for (pair, length) in points.windows(2).zip(&lengths) {
-            if skip >= *length { skip -= length; continue; }
-            let t = skip / length;
-            skip = 0.;
-            let from = (pair[0].0 + (pair[1].0 - pair[0].0) * t, pair[0].1 + (pair[1].1 - pair[0].1) * t);
-            if !started { path.move_to(at(from)); started = true; }
-            path.line_to(at(pair[1]));
+            if keep >= *length { path.line_to(at(pair[1])); keep -= length; continue; }
+            let t = keep / length;
+            path.line_to(at((pair[0].0 + (pair[1].0 - pair[0].0) * t, pair[0].1 + (pair[1].1 - pair[0].1) * t)));
+            break;
         }
         if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
     }).size(px(18.)).flex_none().into_any_element()
