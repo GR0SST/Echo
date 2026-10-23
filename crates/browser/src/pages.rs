@@ -141,7 +141,7 @@ impl Pages {
     /// Reconciles views with the model. `visible` is false while UI covers
     /// the page (the command bar), since native views draw above the UI.
     pub fn sync(&mut self, browser: &Browser, visible: bool) {
-        let open: Vec<TabId> = browser.all_tabs().map(|tab| tab.id).collect();
+        let open: Vec<TabId> = browser.all_tabs().filter(|tab| !browser_core::omnibox::is_internal_url(&tab.url)).map(|tab| tab.id).collect();
         let closed: Vec<TabId> = self
             .pages
             .keys()
@@ -153,12 +153,13 @@ impl Pages {
             self.engine.close(page.view);
             if self.shown == Some(tab) {
                 self.shown = None;
+                self.engine.focus_ui();
             }
         }
 
         self.wanted = browser
             .active_tab()
-            .filter(|_| visible)
+            .filter(|tab| visible && !browser_core::omnibox::is_internal_url(&tab.url))
             .map(|tab| (tab.id, tab.url.clone()));
         self.apply();
     }

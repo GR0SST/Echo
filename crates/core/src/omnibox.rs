@@ -16,7 +16,12 @@ impl Resolved {
     }
 }
 
-const SCHEMES: &[&str] = &["http://", "https://", "file://", "about:", "chrome://", "data:"];
+const SCHEMES: &[&str] = &["http://", "https://", "file://", "about:", "chrome://", "browser://", "data:"];
+
+/// Browser-owned GPUI pages must never be sent to the web engine.
+pub fn is_internal_url(url: &str) -> bool {
+    url.get(..10).is_some_and(|scheme| scheme.eq_ignore_ascii_case("browser://"))
+}
 
 /// Returns `None` for blank input.
 pub fn resolve(input: &str) -> Option<Resolved> {

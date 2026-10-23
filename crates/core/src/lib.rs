@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod omnibox;
 pub mod links;
+pub mod history;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
@@ -130,6 +131,8 @@ pub struct Browser {
     pub spaces: Vec<Space>,
     pub active_space: usize,
     pub archive: Vec<ArchivedTab>,
+    #[serde(default)]
+    pub history: Vec<history::HistoryEntry>,
     /// `None` disables auto-archiving.
     pub archive_after: Option<Duration>,
     next_id: u64,
@@ -147,6 +150,7 @@ impl Browser {
             spaces: Vec::new(),
             active_space: 0,
             archive: Vec::new(),
+            history: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
             next_id: 1,
         };
@@ -882,6 +886,7 @@ mod tests {
         let id = browser.new_tab("https://legacy", t0());
         browser.set_title(id, "Legacy page title");
         let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
+        json.as_object_mut().unwrap().remove("history");
         let tab = json["spaces"][0]["today"][0].as_object_mut().unwrap();
         for field in ["custom_title", "page_title", "pinned_title"] { tab.remove(field); }
         let mut restored = session::from_json(&json.to_string()).unwrap();

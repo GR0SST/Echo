@@ -45,6 +45,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_history_search(window, cx) { return; }
         if let Some(bar) = &self.find_bar {
             let input = bar.input.clone();
             let text = input.read(cx).text().to_string();

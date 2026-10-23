@@ -1,5 +1,5 @@
 //! Application menus share the same GPUI actions as shortcuts and the Command Bar.
-use crate::{find, native, text_input, window, Quit};
+use crate::{find, history, native, text_input, window, Quit};
 use gpui::{actions, App, KeyBinding, Menu, MenuItem, OsAction};
 
 actions!(
@@ -146,7 +146,8 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::action("Go Back", window::GoBack),
                 MenuItem::action("Go Forward", window::GoForward),
                 MenuItem::separator(),
-                MenuItem::action("View Archive", ViewArchive),
+                MenuItem::action("View History", history::ViewHistory),
+            MenuItem::action("View Archive", ViewArchive),
                 MenuItem::action("Clear Archive…", ClearArchive),
                 MenuItem::action("Archive Tabs After…", ArchiveSettings),
             ],

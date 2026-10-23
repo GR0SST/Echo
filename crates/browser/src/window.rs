@@ -112,6 +112,7 @@ macro_rules! window_shortcuts {
 
 window_shortcuts! {
     "cmd-t" => OpenCommandBar,
+    "cmd-y" => crate::history::ViewHistory,
     "cmd-m" => crate::menus::Minimize,
     "ctrl-cmd-f" => crate::menus::ToggleFullscreen,
     "cmd-l" => EditCurrentUrl,
@@ -285,6 +286,7 @@ pub enum Command {
     FindPage,
     ArchiveSettings,
     ViewArchive,
+    ViewHistory,
     RequestClearArchive,
     ResetPinnedTab,
     ResetSpace,
@@ -411,6 +413,7 @@ pub struct BrowserWindow {
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
+    pub(crate) history_page: crate::history::HistoryPage,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
     pub floating_sidebar: Option<FloatingSidebar>,
@@ -477,6 +480,7 @@ impl BrowserWindow {
             find_bar: None,
             toast: None,
             toast_generation: 0,
+            history_page: crate::history::HistoryPage::new(cx),
             pages,
             floating_sidebar: None,
             main_window: window.window_handle(),
@@ -529,13 +533,18 @@ impl BrowserWindow {
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
                         if !title.is_empty() {
-                            self.browser.set_title(tab, title);
+                            self.browser.set_title(tab, title.clone());
+                            let url = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| entry.url.clone());
+                            if let Some(url) = url { self.browser.update_history_title(&url, &title); }
                         }
                     }
                 }
                 Event::UrlChanged { view, url } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
-                        self.browser.set_url(tab, url);
+                        self.browser.set_url(tab, url.clone());
+                        self.browser.record_visit(&url, SystemTime::now());
+                        let title = self.browser.all_tabs().find(|entry| entry.id == tab).and_then(|entry| entry.page_title.clone());
+                        if let Some(title) = title { self.browser.update_history_title(&url, &title); }
                     }
                 }
                 Event::OpenInNewTab { url, .. } => {
@@ -556,6 +565,12 @@ impl BrowserWindow {
                             if active >= 0 { bar.active = active; }
                             bar.searching = !final_update;
                         }
+                    }
+                }
+                Event::LoadingChanged { view, loading: false, .. } => {
+                    if let Some(tab) = pages.borrow().tab_for(view) {
+                        let entry = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| (entry.url.clone(), entry.page_title.clone()));
+                        if let Some((url, Some(title))) = entry { self.browser.update_history_title(&url, &title); }
                     }
                 }
                 Event::LoadingChanged { .. } => {}
@@ -598,6 +613,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_command_bar(cx);
         self.close_find(cx);
         let input = cx.new(|cx| {
             let placeholder = match target {
@@ -749,6 +765,7 @@ impl BrowserWindow {
                 (Command::ResetSpace, "Reset Space", "reset space|reset all pinned tabs|reset all tabs in space", self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some())),
                 (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
+                (Command::ViewHistory, "View History", "view history|open history|browsing history", true),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
@@ -850,6 +867,7 @@ impl BrowserWindow {
             Suggestion::Load(resolved) => {
                 let title = match &resolved {
                     Resolved::Search { query, .. } => query.clone(),
+                    Resolved::Url(url) if url.eq_ignore_ascii_case(crate::history::HISTORY_URL) => "History".into(),
                     Resolved::Url(url) => display_url(url),
                 };
                 let id = match target {
@@ -935,6 +953,7 @@ impl BrowserWindow {
                     if self.browser.replace_pinned_url(id) { self.show_toast("Pinned URL updated".into(), cx); }
                 }
             }
+            Command::ViewHistory => self.history_from_command(cx),
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
@@ -1550,15 +1569,17 @@ impl BrowserWindow {
                 .child("+"))
     }
 
-    fn render_content(&self) -> impl IntoElement {
+    fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let history_open = self.history_is_open();
+        let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if history_open { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => Some(("No tab open".to_string(), "Press ⌘T to open a new tab".to_string())),
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
-        };
+        }};
         div()
             .flex_1()
             // Never grow wider than the window because of content.
@@ -1581,6 +1602,7 @@ impl BrowserWindow {
                     .bg(gpui::white())
                     .shadow_md()
                     .relative()
+                    .when(history_open, |this| this.child(self.render_history(cx)))
                     .children(placeholder.map(|(title, url)| {
                         div()
                             .flex()
@@ -1609,7 +1631,7 @@ impl BrowserWindow {
                                     height: f64::from(f32::from(bounds.size.height)),
                                 };
                                 if let Some(view) = native_view {
-                                    let hole = [bounds.x, bounds.y, bounds.width, bounds.height];
+                                    let hole = if internal { [0.0; 4] } else { [bounds.x, bounds.y, bounds.width, bounds.height] };
                                     let mut tracking = mouse_tracking.borrow_mut();
                                     if tracking.hole != Some(hole) {
                                         tracking.hole = Some(hole);
@@ -1821,6 +1843,7 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_history_focus(window, cx);
         if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {
             self.close_find(cx);
         }
@@ -1842,6 +1865,7 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
+            .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
@@ -1902,7 +1926,7 @@ impl Render for BrowserWindow {
                 linear_color_stop(tint(hue, 0.72), 1.0),
             ))
             .when(self.sidebar_visible, |this| this.child(self.render_sidebar(cx)))
-            .child(self.render_content())
+            .child(self.render_content(cx))
 
     }
 }

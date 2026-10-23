@@ -144,7 +144,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | Go Back / Go Forward | ⌘[ / ⌘] (and ⌘← / ⌘→ hidden) | partial | ⌘[/⌘] and ⌘←/⌘→ work. No history menu on long-pressing Back |
-| View History | ⌘Y | missing | Arc opens history in a new Today tab |
+| View History | ⌘Y | partial | GPUI History tab in Today with search, opening/deleting entries and confirmed clearing. HTTP(S) visits/titles persist; native restored-page search/Enter passed. Fresh visual check awaits an unlocked desktop |
 | View Archive | — | partial | Command Bar → View Archive opens search, Space filters, restore/delete and clear controls. Library page remains missing |
 | Clear Archive (with the "This action is permanent." confirmation) | — | done | Clear Archive… requires typing the confirmation phrase; Escape or Cancel preserves the archive |
 
@@ -499,8 +499,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 49
-- **partial**: 29
-- **missing**: 217
+- **partial**: 30
+- **missing**: 216
 
 ### Biggest gaps (by importance for parity)
 
@@ -521,7 +521,7 @@ rows without a status aren't counted.
 8. **Profiles.** Currently one cache for everything.
 9. **Settings window**, including the shortcut editor with the "Arc or
    website" priority.
-10. **Shortcuts.** Missing ⌘Y and ⇧⌘L.
-11. **Basic browser features:** history, downloads,
+10. **Shortcuts.** Missing ⇧⌘L.
+11. **Basic browser features:** downloads,
     DevTools, print, loading indicator, new and incognito windows.
 12. **Media controls and PiP, toasts with Undo, onboarding and import.**

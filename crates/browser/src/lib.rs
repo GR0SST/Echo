@@ -5,6 +5,7 @@ mod find;
 mod toast;
 mod archive;
 mod menus;
+mod history;
 pub mod pages;
 pub mod text_input;
 pub mod window;
@@ -32,6 +33,7 @@ pub fn init(cx: &mut App) {
     window::bind_keys(cx);
     find::bind_keys(cx);
     menus::init(cx);
+    history::bind_keys(cx);
 }
 
 /// Content of the first launch.

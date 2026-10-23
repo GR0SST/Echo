@@ -1507,3 +1507,100 @@ fn fullscreen_targets_the_main_window_from_pages_and_overlays(cx: &mut TestAppCo
         assert_eq!(cx.update(|window, _| window.is_fullscreen()), expected);
     }
 }
+
+fn record_history_fixture(fake: &FakeEngine, cx: &mut VisualTestContext) {
+    for (url, title) in [("https://example.com/one", "First page"), ("https://example.com/two", "Second page")] {
+        fake.send(cx, Event::UrlChanged { view: page(1), url: url.into() });
+        fake.send(cx, Event::TitleChanged { view: page(1), title: title.into() });
+    }
+}
+
+#[gpui::test]
+fn history_opens_a_gpui_today_tab_without_a_chromium_view(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    fake.take_calls();
+    let before = today_urls(&view, cx).len();
+    cx.simulate_keystrokes("cmd-y");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
+    assert_eq!(today_urls(&view, cx).len(), before + 1);
+    assert!(cx.debug_bounds("history-page").is_some());
+    assert!(cx.update(|window, cx| view.read(cx).history_page.input.read(cx).focus_handle(cx).is_focused(window)));
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Visible(1, false)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(_, _))));
+    cx.simulate_keystrokes("cmd-y");
+    assert_eq!(today_urls(&view, cx).len(), before + 1);
+    cx.simulate_input("first page");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/one"));
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://example.com/one")));
+}
+
+#[gpui::test]
+fn history_deletion_and_confirmation_preserve_tabs_and_can_be_cancelled(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-y");
+    let tabs = today_urls(&view, cx);
+    click(cx, "history-remove-0");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.history.len()), 1);
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
+    click(cx, "clear-history");
+    click(cx, "history-clear-cancel");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.history.len()), 1);
+    click(cx, "clear-history");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.history.len()), 1);
+    click(cx, "clear-history");
+    click(cx, "history-clear-confirm");
+    assert!(view.read_with(cx, |w, _| w.browser.history.is_empty()));
+    assert_eq!(today_urls(&view, cx), tabs);
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+}
+
+#[gpui::test]
+fn internal_navigation_closes_the_old_engine_view_and_returns_focus_to_gpui(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_input("browser://history");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(1)));
+    assert!(calls.contains(&Call::FocusUi));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(_, url) if url.starts_with("browser://"))));
+    cx.simulate_input("search text");
+    cx.simulate_keystrokes("cmd-f");
+    assert!(view.read_with(cx, |w, _| w.find_bar.is_none()));
+    cx.simulate_input("replacement query");
+    assert_eq!(view.read_with(cx, |w, cx| w.history_page.input.read(cx).text().to_string()), "replacement query");
+}
+
+#[gpui::test]
+fn history_actions_work_from_the_command_bar_and_menu(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("view history");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx), None);
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
+    let count = today_urls(&view, cx).len();
+    dispatch_menu(cx, "Archive", "View History");
+    assert_eq!(today_urls(&view, cx).len(), count);
+}
+
+#[gpui::test]
+fn native_menu_new_tab_replaces_an_existing_overlay_without_leaking_windows(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("old query");
+    for _ in 0..3 {
+        // macOS menu dispatch may target the main window while a child is key.
+        dispatch_menu(cx, "File", "New Tab…");
+        assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+        assert!(bar_input_focused(&view, cx));
+        assert_eq!(cx.cx.update(|cx| cx.windows().len()), 2);
+    }
+}

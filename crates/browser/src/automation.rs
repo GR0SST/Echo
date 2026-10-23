@@ -110,6 +110,7 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                     let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
                     let windows: *mut AnyObject = msg_send![app, windows];
                     let count: usize = msg_send![windows, count];
+                    let main: *mut AnyObject = msg_send![app, mainWindow];
                     for i in 0..count {
                         let window: *mut AnyObject = msg_send![windows, objectAtIndex: i];
                         let class: *const AnyClass = msg_send![window, class];
@@ -122,10 +123,10 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                         // windows hidden behind others, e.g. other apps'.
                         let occlusion: usize = msg_send![window, occlusionState];
                         eprintln!(
-                            "[windows] {i} {} frame=({:.0},{:.0} {:.0}x{:.0}) visible={} ignoresMouse={} key={} minimized={} onScreen={}",
+                            "[windows] {i} {} frame=({:.0},{:.0} {:.0}x{:.0}) visible={} ignoresMouse={} key={} main={} minimized={} onScreen={}",
                             (*class).name().to_string_lossy(),
                             frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
-                            visible.as_bool(), ignores.as_bool(), key.as_bool(), minimized.as_bool(), occlusion & 2 != 0,
+                            visible.as_bool(), ignores.as_bool(), key.as_bool(), window == main, minimized.as_bool(), occlusion & 2 != 0,
                         );
                     }
                 },
@@ -221,6 +222,9 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
             .map(|bar| bar.input.read(cx).text().to_string()),
     );
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
+    out += &format!("[dump] history_count={}\n", browser.history.len());
+    if this.history_is_open() { out += &format!("[dump] history_query={:?}\n", this.history_page.input.read(cx).text()); }
+
     if let Some(bar) = &this.command_bar {
         out += &format!("[dump] command_target={:?} selected={} suggestions={}\n", bar.target, bar.selected, this.suggestions(cx).len());
     }
