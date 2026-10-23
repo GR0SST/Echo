@@ -1876,6 +1876,7 @@ impl BrowserWindow {
 
     fn render_space_page(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let space = &self.browser.spaces[index];
+        let space_id = space.id;
         let hue = space.hue / 360.0;
         let current = index == self.browser.active_space;
         let tabs = |tabs: &[Tab], section, cx: &mut Context<Self>| -> Vec<AnyElement> {
@@ -1898,7 +1899,11 @@ impl BrowserWindow {
             .px_2()
             .gap_1()
             .when(space.show_header, |this| this.child(
-                div().debug_selector(move || format!("space-header-{index}"))
+                div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
+                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.open_space_menu(space_id, event.position, window, cx);
+                    }))
                     .px_2()
                     .pb_1()
                     .text_xs()
@@ -1980,6 +1985,7 @@ impl BrowserWindow {
             .pt_2()
             .children(self.browser.spaces.iter().enumerate().map(|(index, space)| {
                 let active = index == self.pager.position.round() as usize;
+                let space_id = space.id;
                 let hue = space.hue / 360.0;
                 div()
                     .id(("space", index))
@@ -1990,6 +1996,10 @@ impl BrowserWindow {
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.5))).hover(|this| this.bg(hsla(0., 0., 1., 0.3)))
                         .child(div().debug_selector(move || format!("space-icon-{index}")).child(crate::icons::glyph(&icon))))
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_space(index, cx)))
+                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.open_space_menu(space_id, event.position, window, cx);
+                    }))
             }))
             .child(div().id("new-space").debug_selector(|| "new-space".into())
                 .w(px(20.0)).h(px(20.0)).mt(px(-6.0)).rounded_md()

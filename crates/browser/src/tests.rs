@@ -3293,3 +3293,94 @@ fn named_folder_commands_disambiguate_duplicate_names_by_space_and_skip_the_curr
     bar(&view, cx).simulate_input("pin to research");
     assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::Action { command: crate::window::Command::PinToFolder(id), .. } if *id == destination))));
 }
+
+#[gpui::test]
+fn space_header_context_menu_can_rename_or_cancel_without_changing_the_active_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "space-header-0");
+    tab_menu(&view, cx).simulate_keystrokes("enter");
+    assert!(bar_input_focused(&view, cx));
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Personal"));
+    bar(&view, cx).simulate_input("Cancel this");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Personal");
+    right_click(cx, "space-header-0");
+    tab_menu(&view, cx).simulate_keystrokes("enter");
+    bar(&view, cx).simulate_input("Home");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Home");
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn inactive_space_context_actions_change_only_the_clicked_spaces_name_and_icon(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "space-1");
+    click(&mut tab_menu(&view, cx), "tab-menu-space-icon");
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("🧭");
+    bar(&view, cx).simulate_keystrokes("enter");
+    right_click(cx, "space-1");
+    tab_menu(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("Work"));
+    bar(&view, cx).simulate_input("Office");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_space, 0);
+        assert_eq!(w.browser.spaces[1].name, "Office");
+        assert_eq!(w.browser.spaces[1].custom_icon.as_deref(), Some("🧭"));
+        assert!(w.browser.spaces[0].custom_icon.is_none());
+    });
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn space_context_menu_remains_available_in_the_dock_after_hiding_its_header(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    let pinned_top = cx.debug_bounds("pinned-section").unwrap().top();
+    fake.take_calls();
+    right_click(cx, "space-header-0");
+    click(&mut tab_menu(&view, cx), "tab-menu-space-header");
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |w, _| w.browser.space().show_header));
+    assert!(cx.debug_bounds("pinned-section").unwrap().top() < pinned_top);
+    right_click(cx, "space-0");
+    assert!(view.read_with(cx, |w, _| w.space_menu_commands(w.browser.space().id).iter().any(|(label, _)| *label == "Show Space Header")));
+    click(&mut tab_menu(&view, cx), "tab-menu-space-header");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.browser.space().show_header));
+    assert_eq!(cx.debug_bounds("pinned-section").unwrap().top(), pinned_top);
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn new_folder_from_an_inactive_space_menu_uses_that_space_and_retains_the_source_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "space-1");
+    click(&mut tab_menu(&view, cx), "tab-menu-space-new-folder");
+    assert!(bar_input_focused(&view, cx));
+    assert_eq!(active_url(&view, cx), original);
+    bar(&view, cx).simulate_input("Projects");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().folders[0].name, "Projects");
+        assert!(w.browser.spaces[0].folders.is_empty());
+        assert_eq!(w.browser.all_tabs().count(), 5);
+    });
+    cx.simulate_keystrokes("alt-cmd-left");
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

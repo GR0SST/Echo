@@ -210,8 +210,8 @@ Folder duplication follows the right-click action documented in the
 | Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | done | — |
 | Switching Spaces from the keyboard (animated) | ⌥⌘→/← | done | — |
 | Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | — | partial | Named Spaces can be created from the dock or Command Bar with an automatic accent; Turn into Space converts a folder and inherits its name/icon. Space icons can be edited afterward. Theme/profile controls in the creation dialog remain missing |
-| Renaming a Space | — | done | Name editor via the Command Bar; persisted with the same Space identity |
-| Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | — | partial | Persistent Unicode symbol/emoji editor via Spaces menu and Command Bar; blank input removes the icon. Graphical icon catalog remains missing |
+| Renaming a Space | — | done | Name editor via the Command Bar, Spaces menu or header/dock context menu; persisted with the same Space identity. Context actions can target an inactive Space without changing the current page |
+| Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | — | partial | Persistent Unicode symbol/emoji editor via Spaces menu, Command Bar or the clicked Space's context menu; blank input removes the icon. Graphical icon catalog remains missing |
 | Deleting a Space (with Undo) | — | missing | — |
 | Reordering Spaces ("Move Space") | drag | missing | — |
 | Turning a Space into a folder ("Export “%@” into Folder") | — | missing | — |
@@ -275,7 +275,7 @@ in code, so some were reconstructed from translator comments (?).
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
 | **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, duplication, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share and graphical icon catalog remain |
 | **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | partial | GPUI ellipsis and right-click menus target the clicked pane; all listed local actions implemented. Share remains |
-| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | missing | — |
+| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | partial | GPUI right-click menu on headers and dock icons: Rename, Change Space Icon, Show/Hide Space Header and New Folder. Actions target the clicked Space; editing name/icon/header preserves the current page, including for inactive Spaces. A hidden header can be restored from the dock. Other actions follow their missing features |
 | **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |
 | **Download**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | missing | — |
 | **Tab group header**: Remove header | missing | — |

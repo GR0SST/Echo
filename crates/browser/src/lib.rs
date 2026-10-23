@@ -12,6 +12,7 @@ mod split_layout;
 mod split;
 mod icons;
 mod folders;
+mod space_menu;
 pub mod pages;
 pub mod text_input;
 pub mod window;

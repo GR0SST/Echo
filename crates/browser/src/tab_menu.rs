@@ -1,6 +1,6 @@
 //! Sidebar context menus target the clicked tab without activating it.
 use crate::window::{BrowserWindow, Overlay, OverlayKind, Target};
-use browser_core::{TabId, folders::FolderId, splits::{Axis, Placement}};
+use browser_core::{SpaceId, TabId, folders::FolderId, splits::{Axis, Placement}};
 use gpui::{
     actions, div, hsla, point, prelude::*, px, AnyElement, App, Context, FocusHandle,
     KeyBinding, Pixels, Point, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
@@ -21,7 +21,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId) }
+pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId) }
 
 pub(crate) struct TabMenu {
     pub target: MenuTarget,
@@ -36,11 +36,13 @@ pub(crate) struct TabMenu {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Command { NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+    SpaceRename, SpaceIcon, SpaceHeader, SpaceNewFolder,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
+            Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceHeader => "space-header", Self::SpaceNewFolder => "space-new-folder",
             Self::FolderDuplicate => "folder-duplicate",
             Self::FolderIntoSpace => "folder-into-space",
             Self::NewFolderWithTab => "new-folder-with-tab", Self::MoveToFolder => "move-to-folder",
@@ -71,10 +73,11 @@ impl BrowserWindow {
         match target {
             MenuTarget::Tab(tab) => self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
+            MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
         }
     }
 
-    fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.menu_target_exists(target) { return; }
         self.close_tab_menu(cx);
         self.close_command_bar(cx);
@@ -137,7 +140,7 @@ impl BrowserWindow {
 
     fn tab_menu_commands(&self) -> Vec<(&'static str, Command)> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
-        let id = match menu.target { MenuTarget::Folder(id) => return self.folder_menu_commands(id), MenuTarget::Tab(id) => id };
+        let id = match menu.target { MenuTarget::Space(id) => return self.space_menu_commands(id), MenuTarget::Folder(id) => return self.folder_menu_commands(id), MenuTarget::Tab(id) => id };
         let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == id) else { return Vec::new(); };
         let split = self.browser.split_for(tab.id);
         let orientation = if split.is_some_and(|split| split.axis == Axis::Horizontal) {
@@ -198,7 +201,7 @@ impl BrowserWindow {
         let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
         let Some((_, command)) = self.tab_menu_commands().get(index).copied() else { self.close_tab_menu(cx); return; };
         self.close_tab_menu(cx);
-        let id = match target { MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }, MenuTarget::Tab(id) => id };
+        let id = match target { MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }, MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }, MenuTarget::Tab(id) => id };
         match command {
             Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),
             Command::MoveToFolder => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
