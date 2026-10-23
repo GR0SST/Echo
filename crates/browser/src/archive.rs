@@ -5,6 +5,18 @@ use gpui::{div, hsla, prelude::*, AnyElement, Context};
 use std::time::SystemTime;
 
 impl BrowserWindow {
+    pub(crate) fn archive_relative(&mut self, id: TabId, relative: browser_core::bulk_archive::Relative, cx: &mut Context<Self>) {
+        let removed: Vec<_> = self.browser.tabs_to_archive(id, relative).into_iter().flat_map(|id| self.browser.related_tabs(id)).collect();
+        let count = self.browser.archive_relative(id, relative, SystemTime::now());
+        if let Some(pages) = &self.pages {
+            let mut pages = pages.borrow_mut();
+            for id in removed { pages.discard(id); }
+            pages.sync(&self.browser, true);
+        }
+        if count > 0 { self.show_toast(format!("Archived {count} {}", if count == 1 { "tab" } else { "tabs" }), cx); }
+        cx.notify();
+    }
+
     pub(crate) fn archive_suggestions(
         &self,
         space: Option<SpaceId>,

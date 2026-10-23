@@ -23,6 +23,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
 pub(crate) struct TabMenu {
     pub tab: TabId,
     pub selected: usize,
+    max_height: Pixels,
+    scroll: gpui::ScrollHandle,
     pane: bool,
     position: Point<Pixels>,
     focus: FocusHandle,
@@ -31,13 +33,16 @@ pub(crate) struct TabMenu {
 
 #[derive(Clone, Copy)]
 enum Command { Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
-    Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane }
+    Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
             Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
             Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::Mute => "mute", Self::Close => "close",
+            Self::ArchiveRelative(browser_core::bulk_archive::Relative::Other) => "archive-other",
+            Self::ArchiveRelative(browser_core::bulk_archive::Relative::Above) => "archive-above",
+            Self::ArchiveRelative(browser_core::bulk_archive::Relative::Below) => "archive-below",
             Self::Add(Placement::Left) => "add-left", Self::Add(Placement::Right) => "add-right",
             Self::Add(Placement::Above) => "add-top", Self::Add(Placement::Below) => "add-bottom",
             Self::Axis(_) => "orientation", Self::SeparateAll => "separate-all", Self::SeparatePane => "separate-pane",
@@ -52,7 +57,7 @@ impl BrowserWindow {
         self.close_tab_menu(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { tab, selected: 0, pane: false, position, focus: focus.clone(), overlay: None });
+        self.tab_menu = Some(TabMenu { tab, selected: 0, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None });
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -62,8 +67,9 @@ impl BrowserWindow {
             if !browser.read_with(cx, |this, _| this.tab_menu.as_ref().is_some_and(|menu| menu.focus == focus)).unwrap_or(false) { return; }
             let Ok(bounds) = main.update(cx, |_, window, _| window.bounds()) else { return; };
             let _ = browser.update(cx, |this, _| {
-                let height = px(this.tab_menu_commands().len() as f32 * 32.0 + 8.0);
+                let height = px(this.tab_menu_commands().len() as f32 * 32.0 + 10.0).min((bounds.size.height - px(16.)).max(px(32.)));
                 if let Some(menu) = &mut this.tab_menu {
+                    menu.max_height = (bounds.size.height - px(16.)).max(px(32.));
                     let at = position + (origin - bounds.origin);
                     menu.position = point(at.x.clamp(px(8.), (bounds.size.width - px(WIDTH + 8.)).max(px(8.))), at.y.clamp(px(8.), (bounds.size.height - height - px(8.)).max(px(8.))));
                 }
@@ -132,6 +138,9 @@ impl BrowserWindow {
             rows.push(("Reset Tab to Original URL", Command::Reset));
             rows.push(("Replace Pinned URL with Current", Command::Replace));
         }
+        for (relative, label) in [(browser_core::bulk_archive::Relative::Other, "Archive Other Tabs"), (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above"), (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below")] {
+            if !self.browser.tabs_to_archive(tab.id, relative).is_empty() { rows.push((label, Command::ArchiveRelative(relative))); }
+        }
         rows.push(("Duplicate", Command::Duplicate));
         if split.is_none() && !browser_core::omnibox::is_internal_url(&tab.url) { rows.push(("Add Split View…", Command::Add(Placement::Right))); }
         if !browser_core::omnibox::is_internal_url(&tab.url) {
@@ -149,7 +158,7 @@ impl BrowserWindow {
     fn select_tab_menu(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self.tab_menu_commands().len();
         if let Some(menu) = &mut self.tab_menu {
-            if count > 0 { menu.selected = (menu.selected as isize + delta).rem_euclid(count as isize) as usize; }
+            if count > 0 { menu.selected = (menu.selected as isize + delta).rem_euclid(count as isize) as usize; menu.scroll.scroll_to_item(menu.selected); }
         }
         cx.notify();
     }
@@ -175,6 +184,7 @@ impl BrowserWindow {
             Command::Move(delta) => { self.browser.move_split_pane(id, delta); }
             Command::ResetName => { self.browser.reset_tab_name(id); }
             Command::ClosePane => self.close_split_pane(id, cx),
+            Command::ArchiveRelative(relative) => self.archive_relative(id, relative, cx),
             Command::Duplicate => self.duplicate_tab(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),
             Command::CopyMarkdown => self.copy_tab_url(id, true, cx),
@@ -210,7 +220,7 @@ impl BrowserWindow {
         let Some(menu) = &self.tab_menu else { return div().into_any_element(); };
         let rows = self.tab_menu_commands().into_iter().enumerate().map(|(index, (label, command))| {
             div().id(("tab-menu-row", index)).debug_selector(move || format!("tab-menu-row-{index}"))
-                .h(px(32.)).px_3().flex().items_center().rounded_md()
+                .h(px(32.)).flex_none().px_3().flex().items_center().rounded_md()
                 .when(menu.selected == index, |this| this.bg(hsla(0.6, 0.7, 0.5, 1.)).text_color(gpui::white()))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered { if let Some(menu) = &mut this.tab_menu { menu.selected = index; } cx.notify(); }
@@ -231,7 +241,7 @@ impl BrowserWindow {
             .child(div().id("tab-context-menu").debug_selector(|| "tab-context-menu".into())
                 .absolute().left(menu.position.x).top(menu.position.y).w(px(WIDTH)).p_1()
                 .rounded_lg().bg(gpui::white()).shadow_lg().border_1().border_color(hsla(0., 0., 0., 0.15))
-                .flex().flex_col().text_sm().text_color(gpui::black()).children(rows)
+                .flex().flex_col().max_h(menu.max_height).overflow_y_scroll().track_scroll(&menu.scroll).text_sm().text_color(gpui::black()).children(rows)
                 .on_click(|_, _, cx| cx.stop_propagation()))
             .into_any_element()
     }

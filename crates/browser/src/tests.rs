@@ -2490,3 +2490,80 @@ fn native_duplicate_menu_dismisses_command_input_and_regular_context_menu_can_st
     bar(&view, cx).simulate_keystrokes("enter");
     view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().anchor.get(), 4));
 }
+
+#[gpui::test]
+fn context_archive_above_removes_the_active_page_and_focuses_its_reference_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-7");
+    click(cx, "tab-8");
+    fake.take_calls();
+    right_click(cx, "tab-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-archive-above");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.gpui.rs"));
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.archive.len(), 1);
+        assert_eq!(w.browser.archive[0].tab.id.get(), 8);
+        assert_eq!(w.browser.space().pinned.len(), 2);
+        assert_eq!(w.browser.space().today.len(), 2);
+        assert_eq!(w.toast.as_ref().unwrap().message, "Archived 1 tab");
+    });
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(1)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn context_archive_below_an_inactive_reference_keeps_the_current_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-6");
+    click(cx, "tab-8");
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "tab-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-archive-below");
+    assert_eq!(active_url(&view, cx), active);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive[0].tab.id.get()), 6);
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Close(2)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::FocusPage(2))));
+}
+
+#[gpui::test]
+fn archive_other_command_closes_a_split_atomically_and_restore_reopens_its_panes(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://reference.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    fake.take_calls();
+    run_named_command(&view, cx, "archive other tabs");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.all_tabs().count(), 1);
+        assert_eq!(w.browser.archive.len(), 1);
+        assert_eq!(w.browser.archive[0].split.as_ref().unwrap().view.panes.len(), 3);
+    });
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Close(..))).count(), 3);
+    cx.simulate_keystrokes("cmd-shift-t");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 3);
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout().len()), 3);
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 3);
+}
+
+#[gpui::test]
+fn a_tall_context_menu_fits_a_small_window_and_keyboard_selection_scrolls_to_the_last_row(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_resize(gpui::size(gpui::px(800.), gpui::px(320.)));
+    cx.run_until_parked();
+    right_click(cx, "tab-4");
+    let mut menu = tab_menu(&view, cx);
+    let panel = menu.debug_bounds("tab-context-menu").unwrap();
+    let size = menu.update(|window, _| window.bounds().size);
+    assert!(panel.origin.y >= gpui::px(8.) && panel.bottom() <= size.height - gpui::px(8.));
+    menu.simulate_keystrokes("up");
+    menu.run_until_parked();
+    let close = menu.debug_bounds("tab-menu-close").unwrap();
+    assert!(close.origin.y >= panel.origin.y && close.bottom() <= panel.bottom());
+    menu.simulate_keystrokes("enter");
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_none() && w.browser.archive.is_empty()));
+}

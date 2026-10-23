@@ -327,6 +327,7 @@ pub enum Command {
     UnmuteAllTabs,
     TogglePinnedSection,
     CloseTab,
+    ArchiveRelative(browser_core::bulk_archive::Relative),
     ClearToday,
     RestoreTab,
     Reload,
@@ -876,6 +877,11 @@ impl BrowserWindow {
             ];
             let mut commands = commands.to_vec();
             commands.extend(self.split_commands());
+            for (relative, label, names) in [
+                (browser_core::bulk_archive::Relative::Other, "Archive Other Tabs", "archive other tabs|close other tabs"),
+                (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above", "archive tabs above|close tabs above"),
+                (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below", "archive tabs below|close tabs below"),
+            ] { commands.push((Command::ArchiveRelative(relative), label, names, active.is_some_and(|tab| !self.browser.tabs_to_archive(tab.id, relative).is_empty()))); }
             let mut matches: Vec<_> = commands.into_iter().filter_map(|(command, label, names, available)| {
                 if !available { return None; }
                 let score = command_match_score(&query, label).into_iter().chain(command_match_score(&query, names)).min()?;
@@ -1122,6 +1128,7 @@ impl BrowserWindow {
             Command::CloseTab => {
                 if let Some(id) = self.browser.space().active_tab { self.close_tab(id, cx); }
             }
+            Command::ArchiveRelative(relative) => { if let Some(id) = self.browser.space().active_tab { self.archive_relative(id, relative, cx); } }
             Command::ClearToday => { self.browser.clear_today(SystemTime::now()); }
             Command::RestoreTab => {
                 if self.browser.restore_last_archived(SystemTime::now()).is_some() { self.settle_pager(cx); }

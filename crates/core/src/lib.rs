@@ -12,6 +12,7 @@ pub mod favorites;
 pub mod favicons;
 pub mod audio;
 pub mod splits;
+pub mod bulk_archive;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
