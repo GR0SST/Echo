@@ -210,6 +210,53 @@ fn drawn(icon: Icon, size: f32) -> AnyElement {
     }).size(px(size)).flex_none().into_any_element()
 }
 
+/// `icon` drawn at `scale` around the center of its 18 px slot, for
+/// press and appear animations.
+pub(crate) fn scaled(icon: Icon, scale: f32) -> AnyElement {
+    div().size(px(18.)).flex_none().flex().items_center().justify_center()
+        .child(control_sized(icon, 18. * scale.max(0.01))).into_any_element()
+}
+
+/// The plus as two strokes turned by `angle` radians: open menus show it as a cross.
+pub(crate) fn plus(angle: f32) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let center = bounds.center();
+        let (sin, cos) = angle.sin_cos();
+        let color = window.text_style().color;
+        for (dx, dy) in [(5.5f32, 0.), (0., 5.5f32)] {
+            let (x, y) = (dx * cos - dy * sin, dx * sin + dy * cos);
+            let mut path = gpui::PathBuilder::stroke(px(1.5));
+            path.move_to(center - gpui::point(px(x), px(y)));
+            path.line_to(center + gpui::point(px(x), px(y)));
+            if let Ok(path) = path.build() { window.paint_path(path, color); }
+        }
+    }).size(px(18.)).flex_none().into_any_element()
+}
+
+/// A checkmark at `scale`, erased from its start as `trim` goes 0 → 1.
+pub(crate) fn check(trim: f32, scale: f32) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let points = [(4.5f32, 9.4f32), (7.6, 12.5), (13.5, 5.6)];
+        let lengths: Vec<f32> = points.windows(2).map(|pair| (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1)).collect();
+        let total: f32 = lengths.iter().sum();
+        let mut skip = total * trim.clamp(0., 1.);
+        if skip >= total { return; }
+        let center = bounds.center();
+        let at = |(x, y): (f32, f32)| center + gpui::point(px((x - 9.) * scale), px((y - 9.) * scale));
+        let mut path = gpui::PathBuilder::stroke(px(1.6));
+        let mut started = false;
+        for (pair, length) in points.windows(2).zip(&lengths) {
+            if skip >= *length { skip -= length; continue; }
+            let t = skip / length;
+            skip = 0.;
+            let from = (pair[0].0 + (pair[1].0 - pair[0].0) * t, pair[0].1 + (pair[1].1 - pair[0].1) * t);
+            if !started { path.move_to(at(from)); started = true; }
+            path.line_to(at(pair[1]));
+        }
+        if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+    }).size(px(18.)).flex_none().into_any_element()
+}
+
 #[cfg(test)]
 mod catalog_tests {
     use super::*;

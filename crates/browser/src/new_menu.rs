@@ -67,6 +67,7 @@ impl BrowserWindow {
         let focus = cx.focus_handle();
         let origin = window.bounds().origin;
         let at = point(anchor.right() - px(WIDTH), anchor.top() - px(ANCHOR_GAP + height()));
+        self.new_menu_toggles += 1;
         self.new_menu = Some(NewMenu { selected: None, position: at, focus: focus.clone(), overlay: None });
         let main = self.main_window;
         let parent = self.native_view;
@@ -98,6 +99,7 @@ impl BrowserWindow {
 
     pub(crate) fn close_new_menu(&mut self, cx: &mut Context<Self>) {
         let Some(menu) = self.new_menu.take() else { return; };
+        self.new_menu_toggles += 1;
         let main = self.main_window;
         let focus = self.focus_handle.clone();
         let pages = self.pages.clone();

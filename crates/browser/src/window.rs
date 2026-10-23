@@ -529,6 +529,12 @@ pub struct BrowserWindow {
     pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     pub(crate) new_menu: Option<crate::new_menu::NewMenu>,
     pub(crate) new_menu_anchor: crate::site_controls::Anchor,
+    /// Times the New menu opened or closed, keying the plus rotation.
+    pub(crate) new_menu_toggles: u64,
+    /// The control last clicked and its click count, keying its press bounce.
+    pressed_control: Option<(&'static str, u64)>,
+    /// Copy URL clicks, keying the link → checkmark feedback.
+    pub(crate) copy_feedback: Option<u64>,
     /// Web pages; `None` when running without an engine.
     pub pages: Option<Rc<RefCell<Pages>>>,
     pub floating_sidebar: Option<FloatingSidebar>,
@@ -615,6 +621,9 @@ impl BrowserWindow {
             site_controls_anchor: Default::default(),
             new_menu: None,
             new_menu_anchor: Default::default(),
+            new_menu_toggles: 0,
+            pressed_control: None,
+            copy_feedback: None,
             main_window: window.window_handle(),
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
@@ -2072,14 +2081,22 @@ impl BrowserWindow {
                         .child(div().flex_1().min_w_0().overflow_hidden().child(url))
                         // Page actions appear only while the pointer is over the sidebar.
                         .when(self.browser.active_tab().is_some(), |this| this.child(hover_fade(div().flex().items_center().gap(px(4.))
+                            // No tooltip: the page view would cover it.
                             .child(address_action("address-copy-link")
-                                .tooltip(|_, cx| cx.new(|_| TabTooltip { title: "Copy URL".into(), url: String::new() }).into())
-                                .on_click(cx.listener(|this, _, _, cx| { cx.stop_propagation(); this.copy_url(false, cx); }))
-                                .child(crate::icons::control(crate::icons::Icon::Link)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.copy_url(false, cx);
+                                    this.copy_feedback = Some(this.copy_feedback.map_or(0, |generation| generation + 1));
+                                }))
+                                .child(self.render_copy_icon()))
                             .child(address_action("address-site-controls")
                                 .when(controls_open, |this| this.bg(hsla(0., 0., 0., 0.08)))
-                                .on_click(cx.listener(|this, _, window, cx| { cx.stop_propagation(); this.toggle_site_controls(window, cx); }))
-                                .child(crate::icons::control(crate::icons::Icon::SiteControls))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.press_control("address-site-controls");
+                                    this.toggle_site_controls(window, cx);
+                                }))
+                                .child(self.render_pressed_icon("address-site-controls", crate::icons::Icon::SiteControls))
                                 .child(canvas(|_, _, _| (), move |bounds, _, _, _| anchor.set(Some(bounds))).absolute().inset_0())),
                             "address-actions", address_actions_shown))),
                 ),
@@ -2131,6 +2148,59 @@ impl BrowserWindow {
                         hsla(0., 0., 0.47, 1.), px(1.), Hsla::from(gpui::rgb(rim)).opacity(0.45), gpui::BorderStyle::Solid));
                 }
             }).size_full())
+    }
+
+    fn press_control(&mut self, name: &'static str) {
+        let count = self.pressed_control.map_or(0, |(_, count)| count + 1);
+        self.pressed_control = Some((name, count));
+    }
+
+    /// A control icon that dips and springs back after a click.
+    fn render_pressed_icon(&self, name: &'static str, icon: crate::icons::Icon) -> AnyElement {
+        let Some((_, count)) = self.pressed_control.filter(|(pressed, _)| *pressed == name) else { return crate::icons::control(icon); };
+        div().size(px(18.)).flex_none()
+            .with_animation(SharedString::from(format!("{name}-press-{count}")), motion(PRESS_BOUNCE), move |slot, t| slot.child(crate::icons::scaled(icon, press_scale(t))))
+            .into_any_element()
+    }
+
+    /// Copy URL feedback: the link crossfades into a checkmark, the check
+    /// erases along its stroke while shrinking, then the link springs back.
+    fn render_copy_icon(&self) -> AnyElement {
+        use crate::icons::Icon;
+        let Some(count) = self.copy_feedback else { return crate::icons::control(Icon::Link); };
+        let total = COPY_FEEDBACK.as_secs_f32() * 1000.;
+        div().size(px(18.)).flex_none().relative()
+            .with_animation(SharedString::from(format!("copy-feedback-{count}")), Animation::new(COPY_FEEDBACK), move |slot, t| {
+                let ms = t * total;
+                let phase = |from: f32, to: f32| ((ms - from) / (to - from)).clamp(0., 1.);
+                let (link_alpha, link_scale) = if ms < 960. {
+                    let p = phase(0., 160.);
+                    (1. - p, 1. - 0.2 * p)
+                } else {
+                    let r = phase(960., 1300.);
+                    ((r * 2.).min(1.), 0.6 + 0.4 * back_out(r, 1.4))
+                };
+                let appear = phase(0., 160.);
+                let erase = phase(700., 960.);
+                let check_scale = (0.8 + 0.2 * appear) * (1. - 0.12 * erase);
+                slot.child(div().absolute().inset_0().opacity(link_alpha).child(crate::icons::scaled(Icon::Link, link_scale)))
+                    .when(ms < 960., |slot| slot.child(div().absolute().inset_0().opacity(appear)
+                        .child(crate::icons::check(gpui::ease_in_out(erase), check_scale))))
+            })
+            .into_any_element()
+    }
+
+    /// The Space bar plus turns into a cross while the New menu is open.
+    fn render_new_menu_plus(&self) -> AnyElement {
+        let open = self.new_menu.is_some();
+        let quarter = std::f32::consts::FRAC_PI_4;
+        if self.new_menu_toggles == 0 { return crate::icons::plus(0.); }
+        div().size(px(18.)).flex_none()
+            .with_animation(SharedString::from(format!("new-menu-plus-{}", self.new_menu_toggles)), motion(PLUS_TURN), move |slot, t| {
+                let turn = back_out(t, 0.9);
+                slot.child(crate::icons::plus(quarter * if open { turn } else { 1. - turn }))
+            })
+            .into_any_element()
     }
 
     fn sidebar_list(&self, space: SpaceId, section: Section, cx: &mut Context<Self>) -> gpui::Div {
@@ -2346,7 +2416,7 @@ impl BrowserWindow {
                 .relative()
                 .when(self.new_menu.is_some(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.3)))
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_new_menu(window, cx)))
-                .child(crate::icons::control(crate::icons::Icon::Plus))
+                .child(self.render_new_menu_plus())
                 .child(canvas(|_, _, _| (), move |bounds, _, _, _| new_menu_anchor.set(Some(bounds))).absolute().inset_0()))
     }
 
@@ -2856,6 +2926,25 @@ fn release_hover_on_exit() -> impl IntoElement {
             if let Some(view) = crate::native::view_of(window) { crate::native::replay_pointer(view); }
         });
     }).absolute().size_0()
+}
+
+const PRESS_BOUNCE: Duration = Duration::from_millis(320);
+const PLUS_TURN: Duration = Duration::from_millis(300);
+const COPY_FEEDBACK: Duration = Duration::from_millis(1300);
+
+fn motion(duration: Duration) -> Animation {
+    Animation::new(if crate::native::prefers_reduced_motion() { Duration::from_millis(1) } else { duration })
+}
+
+/// Ease-out that overshoots by an amount set by `overshoot`, then settles.
+fn back_out(t: f32, overshoot: f32) -> f32 {
+    let u = t - 1.;
+    1. + (overshoot + 1.) * u * u * u + overshoot * u * u
+}
+
+/// A light press: dip to 86 %, then spring back past full size.
+fn press_scale(t: f32) -> f32 {
+    if t < 0.25 { 1. - 0.14 * (t / 0.25) } else { 0.86 + 0.14 * back_out((t - 0.25) / 0.75, 1.2) }
 }
 
 /// Hover-only controls fade like the reference instead of popping in.

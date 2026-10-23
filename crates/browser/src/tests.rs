@@ -4826,3 +4826,23 @@ fn new_menu_offers_reference_items_and_opens_the_matching_editor(cx: &mut TestAp
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.new_menu.is_none() && matches!(w.command_bar.as_ref().map(|bar| bar.target), Some(crate::window::Target::NewSpace))));
 }
+
+#[gpui::test]
+fn sidebar_controls_animate_feedback_without_changing_layout(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let copy = cx.debug_bounds("address-copy-link").unwrap();
+    click(cx, "address-copy-link");
+    assert_eq!(view.read_with(cx, |w, _| w.copy_feedback), Some(0));
+    assert_eq!(cx.debug_bounds("address-copy-link").unwrap(), copy);
+    cx.executor().advance_clock(Duration::from_millis(1400));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("address-copy-link").unwrap(), copy);
+    // The plus turns while the New menu is open and back when it closes.
+    let plus = cx.debug_bounds("new-space").unwrap();
+    click(cx, "new-space");
+    assert_eq!(view.read_with(cx, |w, _| w.new_menu_toggles), 1);
+    view.update(cx, |w, cx| w.close_new_menu(cx));
+    assert_eq!(view.read_with(cx, |w, _| w.new_menu_toggles), 2);
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("new-space").unwrap(), plus);
+}
