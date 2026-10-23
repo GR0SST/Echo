@@ -60,6 +60,10 @@ pub(crate) enum DownloadsList<Token> {
     /// Verified only for an empty Profile-filter result. Do not infer this
     /// presentation for search misses, an empty database or failed downloads.
     FilteredEmpty,
+    /// Native search misses have their own copy and retain the exact query.
+    SearchEmpty {
+        query: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -193,7 +197,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             })
             .collect();
         self.row_keys = match &self.projection.list {
-            DownloadsList::FilteredEmpty => Vec::new(),
+            DownloadsList::FilteredEmpty | DownloadsList::SearchEmpty { .. } => Vec::new(),
             DownloadsList::Completed(groups) => groups
                 .iter()
                 .flat_map(|group| &group.rows)
@@ -595,6 +599,33 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let toolbar = self.toolbar(window, cx);
         let list = match &self.projection.list {
+            DownloadsList::SearchEmpty { query } => div()
+                .debug_selector(|| "downloads-search-empty".into())
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .debug_selector(|| "downloads-search-empty-icon".into())
+                        .flex_none()
+                        .size(px(48.))
+                        .text_color(self.colors.muted)
+                        .child(download_circle()),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "downloads-search-empty-title".into())
+                        .w_full()
+                        .px(px(12.))
+                        .text_center()
+                        .text_size(px(16.))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(format!("No results found for “{query}”")),
+                )
+                .into_any_element(),
             DownloadsList::FilteredEmpty => div()
                 .debug_selector(|| "downloads-filtered-empty".into())
                 .size_full()

@@ -156,6 +156,45 @@ impl ProfileHandle {
         })
     }
 
+    /// Download ownership resolves to the exact retained normal writer. Never
+    /// reconstruct a UserProfileId from the engine's opaque owner key.
+    pub(crate) fn download_normal_owner(&self, captured: UserProfileId) -> Option<(Self, UserProfileId, bool)> {
+        let browser = self.data.borrow();
+        if browser.is_private() { return None; }
+        if browser.is_blank() {
+            let (source, id) = self.history_source.as_ref()?;
+            if *id != captured || browser.blank_source_user_profile_id() != Some(*id) { return None; }
+            let normal = source.data.borrow();
+            if normal.is_private() || normal.is_blank() || normal.user_profile(*id).is_none() { return None; }
+            return Some(((**source).clone(), *id, true));
+        }
+        browser.user_profile(captured)?;
+        Some((self.clone(), captured, false))
+    }
+
+    /// One writer: changes canonical normal data directly, never a window's
+    /// projection. Blank callers first resolve download_normal_owner above.
+    pub(crate) fn record_completed_download(&self, profile: UserProfileId,
+        completion: browser_core::downloads::DownloadCompletion)
+        -> Result<browser_core::downloads::CompletedDownloadId, String>
+    {
+        let id = self.data.borrow_mut().record_completed_download(profile, completion)
+            .map_err(|error| format!("Cannot record completed download: {error:?}"))?;
+        self.revision.set(self.revision.get().wrapping_add(1));
+        self.notify();
+        Ok(id)
+    }
+
+    /// Actual local profile names/IDs and completed records, independent of the
+    /// selected Space or the existence of any source BrowserWindow.
+    pub(crate) fn download_inventory(&self) -> Option<(Vec<(UserProfileId, String)>, Vec<browser_core::downloads::CompletedDownload>)> {
+        let browser = self.data.borrow();
+        if browser.is_private() || browser.is_blank() { return None; }
+        let profiles = browser.user_profiles().map(|p| (p.id(), p.name().to_owned())).collect();
+        let records = browser.user_profiles().flat_map(|p| browser.completed_downloads(p.id()).unwrap_or(&[]).iter().cloned()).collect();
+        Some((profiles, records))
+    }
+
     pub(crate) fn same_workspace(&self, other: &Self) -> bool { Rc::ptr_eq(&self.data, &other.data) }
 
     pub(crate) fn blank_browser(&self, id: UserProfileId) -> Browser {

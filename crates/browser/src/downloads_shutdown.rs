@@ -1,0 +1,199 @@
+//! Exclusive quit ingestion of supplied COPIED events. No engine shutdown drain
+//! is invented here. The normal Engine drain requires Running and sealed native
+//! inboxes currently drop later callbacks; parent/engine must close that race.
+use super::*;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ShutdownDownloadError {
+    InFlight,
+    Inactive,
+    Failure(String),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConsumerOwner {
+    Running,
+    Shutdown,
+    Finished,
+}
+#[derive(Clone)]
+pub(super) struct ConsumerGate {
+    owner: Rc<Cell<ConsumerOwner>>,
+    busy: Rc<Cell<bool>>,
+}
+impl Default for ConsumerGate {
+    fn default() -> Self {
+        Self {
+            owner: Rc::new(Cell::new(ConsumerOwner::Running)),
+            busy: Rc::new(Cell::new(false)),
+        }
+    }
+}
+pub(super) struct ConsumerLease(Rc<Cell<bool>>);
+impl Drop for ConsumerLease {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+impl ConsumerGate {
+    pub(super) fn is_running(&self) -> bool {
+        self.owner.get() == ConsumerOwner::Running
+    }
+    pub(super) fn handoff(&self) -> Result<(), String> {
+        if !self.is_running() {
+            return Err("Download consumer already handed off".into());
+        }
+        self.owner.set(ConsumerOwner::Shutdown);
+        Ok(())
+    }
+    pub(super) fn acquire(
+        &self,
+        owner: ConsumerOwner,
+    ) -> Result<ConsumerLease, ShutdownDownloadError> {
+        if self.owner.get() != owner {
+            return Err(ShutdownDownloadError::Inactive);
+        }
+        if self.busy.replace(true) {
+            return Err(ShutdownDownloadError::InFlight);
+        }
+        Ok(ConsumerLease(self.busy.clone()))
+    }
+}
+
+/// Shared reducer never plans new destinations/controls after seal.
+pub(super) fn ingest_shutdown<T: Copy + Eq + Hash, H: Clone>(
+    router: &mut DownloadRouter<T, H>,
+    events: impl IntoIterator<Item = TransferEvent<T>>,
+    writer: impl FnMut(&H, UserProfileId, DownloadCompletion) -> Result<CompletedDownloadId, String>,
+) -> Vec<String> {
+    let (effects, mut errors) = router.reduce(events, |_, _| DestinationDecision::Defer);
+    debug_assert!(effects.is_empty());
+    errors.extend(router.persist(writer));
+    errors
+}
+
+/// Non-Clone quit capability. Generic copied-event/writer seams let pure tests
+/// exercise the SAME service API with fictional opaque tokens, never constructing
+/// or reconstructing a real engine DownloadToken. Production defaults stay exact.
+pub(crate) struct ShutdownDownloads<T = DownloadToken, H = ProfileHandle> {
+    service: Rc<RefCell<DownloadService<T, H>>>,
+    gate: ConsumerGate,
+    needs_flush: Cell<bool>,
+}
+impl<T: Copy + Eq + Hash, H: Clone> ShutdownDownloads<T, H> {
+    pub(super) fn take(
+        service: Rc<RefCell<DownloadService<T, H>>>,
+        gate: ConsumerGate,
+    ) -> Result<Self, String> {
+        gate.handoff()?;
+        Ok(Self {
+            service,
+            gate,
+            needs_flush: Cell::new(true),
+        })
+    }
+    fn ingest_copied(
+        &self,
+        events: impl IntoIterator<Item = TransferEvent<T>>,
+        writer: impl FnMut(&H, UserProfileId, DownloadCompletion) -> Result<CompletedDownloadId, String>,
+    ) -> Result<(), ShutdownDownloadError> {
+        self.needs_flush.set(true);
+        let mut service = self.service.borrow_mut();
+        let errors = ingest_shutdown(&mut service.router, events, writer);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            service.errors.extend(errors.clone());
+            Err(ShutdownDownloadError::Failure(errors.join("; ")))
+        }
+    }
+    /// Supplied copied events only; this performs no CEF read/pump.
+    pub(crate) fn ingest_copied_and_persist_with(
+        &self,
+        events: impl IntoIterator<Item = TransferEvent<T>>,
+        writer: impl FnMut(&H, UserProfileId, DownloadCompletion) -> Result<CompletedDownloadId, String>,
+    ) -> Result<(), ShutdownDownloadError> {
+        let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        self.ingest_copied(events, writer)
+    }
+    /// One accepted outside-borrows source drain, then the same canonical ingestion.
+    /// The supplied source must already support the actual engine lifecycle phase.
+    pub(crate) fn drain_copied_and_persist_with(
+        &self,
+        drain: impl FnOnce() -> Result<Vec<TransferEvent<T>>, String>,
+        writer: impl FnMut(&H, UserProfileId, DownloadCompletion) -> Result<CompletedDownloadId, String>,
+    ) -> Result<(), ShutdownDownloadError> {
+        let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        let events = drain().map_err(ShutdownDownloadError::Failure)?;
+        self.ingest_copied(events, writer)
+    }
+    pub(crate) fn retained_handles_by(
+        &self,
+        same: impl Fn(&H, &H) -> bool,
+    ) -> Result<Vec<H>, ShutdownDownloadError> {
+        let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        Ok(self.service.borrow().router.unique_handles_by(same))
+    }
+    /// Snapshot handles, RELEASE service/model borrows, flush once per workspace.
+    pub(crate) fn flush_retained_with(
+        &self,
+        same: impl Fn(&H, &H) -> bool,
+        mut flush: impl FnMut(H) -> Result<(), String>,
+    ) -> Result<(), ShutdownDownloadError> {
+        let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        self.needs_flush.set(true);
+        if self.service.borrow().router.has_pending_records() {
+            return Err(ShutdownDownloadError::Failure(
+                "Download records remain uncommitted".into(),
+            ));
+        }
+        let handles = self.service.borrow().router.unique_handles_by(same);
+        for handle in handles {
+            flush(handle).map_err(ShutdownDownloadError::Failure)?;
+        }
+        self.needs_flush.set(false);
+        Ok(())
+    }
+    pub(crate) fn finish(&self) -> Result<(), ShutdownDownloadError> {
+        let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        if self.needs_flush.get() || self.service.borrow().router.has_pending_records() {
+            return Err(ShutdownDownloadError::Failure(
+                "Final download persistence/session flush is pending".into(),
+            ));
+        }
+        self.gate.owner.set(ConsumerOwner::Finished);
+        Ok(())
+    }
+}
+impl ShutdownDownloads {
+    /// Public quit ingress remains usable after the app seal; no new effect policy.
+    pub(crate) fn ingest_and_persist(
+        &self,
+        events: Vec<DownloadEvent>,
+    ) -> Result<(), ShutdownDownloadError> {
+        self.ingest_copied_and_persist_with(
+            events.into_iter().map(TransferEvent::from),
+            |handle, profile, completion| handle.record_completed_download(profile, completion),
+        )
+    }
+    /// Requires a SEPARATELY ACCEPTED shutdown-safe engine copied-event source.
+    /// Engine::take_download_events is NOT available after Engine::begin_shutdown.
+    pub(crate) fn drain_and_persist_with(
+        &self,
+        drain: impl FnOnce() -> Result<Vec<DownloadEvent>, String>,
+    ) -> Result<(), ShutdownDownloadError> {
+        self.drain_copied_and_persist_with(
+            || drain().map(|events| events.into_iter().map(TransferEvent::from).collect()),
+            |handle, profile, completion| handle.record_completed_download(profile, completion),
+        )
+    }
+    pub(crate) fn retained_normal_handles(
+        &self,
+    ) -> Result<Vec<ProfileHandle>, ShutdownDownloadError> {
+        self.retained_handles_by(ProfileHandle::same_workspace)
+    }
+    pub(crate) fn flush_retained(&self, cx: &mut App) -> Result<(), ShutdownDownloadError> {
+        self.flush_retained_with(ProfileHandle::same_workspace, |handle| {
+            handle.flush_for_quit(cx)
+        })
+    }
+}

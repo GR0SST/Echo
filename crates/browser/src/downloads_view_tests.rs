@@ -218,6 +218,43 @@ fn filtered_empty_is_centered_in_list_body_not_preview(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn search_miss_keeps_query_and_filter_controls_in_the_list_column(cx: &mut TestAppContext) {
+    let query = " SOURCE-TAB ";
+    let mut projection = fixture();
+    projection.list = DownloadsList::SearchEmpty {
+        query: query.into(),
+    };
+    let (view, visual, log, _subscription) = open(cx, projection);
+    click(visual, "downloads-search");
+    visual.simulate_input(query);
+    click(visual, "downloads-filter");
+    click(visual, "downloads-filter-done");
+    assert_eq!(
+        view.read_with(visual, |view, cx| view.input.read(cx).text().to_owned()),
+        query
+    );
+    for viewport in [
+        gpui::size(px(1320.), px(800.)),
+        gpui::size(px(640.), px(480.)),
+    ] {
+        visual.simulate_resize(viewport);
+        visual.run_until_parked();
+        let body = visual.debug_bounds("downloads-list-body").unwrap();
+        let icon = visual.debug_bounds("downloads-search-empty-icon").unwrap();
+        let title = visual.debug_bounds("downloads-search-empty-title").unwrap();
+        let preview = visual.debug_bounds("downloads-preview").unwrap();
+        assert!((icon.center().x - body.center().x).abs() <= px(1.));
+        assert!(title.origin.x >= body.origin.x && title.right() <= body.right());
+        assert!(((icon.origin.y + title.bottom()) / 2. - body.center().y).abs() <= px(1.));
+        assert!(title.right() <= preview.origin.x);
+    }
+    assert!(log
+        .borrow()
+        .iter()
+        .all(|intent| !matches!(intent, DownloadsIntent::RowPressed { .. })));
+}
+
+#[gpui::test]
 fn long_completed_names_and_wrapping_chips_preserve_small_window_geometry(cx: &mut TestAppContext) {
     let mut projection = fixture();
     let DownloadsList::Completed(groups) = &mut projection.list else {

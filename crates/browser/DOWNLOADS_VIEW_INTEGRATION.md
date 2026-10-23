@@ -1,5 +1,21 @@
 # Library Downloads presenter integration
 
+## Search reference update (2026-10-24)
+
+Native observation in `/tmp/echo-download-destination-search-native-20261024.md`
+establishes a separate search-miss state. Supply
+`DownloadsList::SearchEmpty { query }` to show the exact copy
+`No results found for “<query>”` with the download-circle icon in the list
+column. Preserve the query verbatim, including spaces. `FilteredEmpty` remains
+the Profile-filter state; it must not substitute for search misses.
+
+The presenter still performs no matching. The host supplies the search
+projection; native ASCII observations support literal case-insensitive
+filename matching, without trimming or matching the source URL/type label.
+Unicode behavior remains unverified. The search-miss regression exercises
+Filter/Done query retention and bounds at both supported test sizes. Production
+route integration and native Echo presentation remain pending.
+
 This frozen slice owns `src/downloads_view.rs`, `src/downloads_view_tests.rs`,
 this guide, and exactly one module declaration in `src/lib.rs`:
 `mod downloads_view;`. It registers the prepared presenter and its tests for
@@ -50,8 +66,8 @@ by this agent.
 
 Create `DownloadsView<Token>` with:
 
-- `DownloadsProjection<Token>`: owned profiles and either ordered completed
-  groups or `DownloadsList::FilteredEmpty`.
+- `DownloadsProjection<Token>`: owned profiles and ordered completed groups,
+  `DownloadsList::FilteredEmpty`, or `DownloadsList::SearchEmpty { query }`.
 - `DownloadsColors`: existing column, preview, text, muted, control, selected and
   hover colors from the host. This slice supplies no application palette.
 - `DownloadsPreview`: a repeatable parent render callback returning an
@@ -95,9 +111,9 @@ branding. Do not initiate file/network work from the render callback.
 
 Subscribe to `DownloadsIntent<Token>` from the entity:
 
-- `SearchChanged(String)` supplies the actual TextInput query. Matching,
-  debounce, result policy and no-results copy were unverified natively; no
-  local matching behavior is invented here. Typing alone leaves the host's
+- `SearchChanged(String)` supplies the actual TextInput query. Matching stays
+  in the host; the native ASCII evidence and search-miss copy are recorded
+  above. Debounce and Unicode matching remain unverified. Typing alone leaves the host's
   existing rows visible until the host supplies a new projection.
 - `FilterVisibilityChanged(bool)` accompanies the local inline toolbar switch.
   Filter opens in the same list column. Done restores Search Downloads… and
