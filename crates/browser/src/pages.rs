@@ -178,7 +178,7 @@ impl Pages {
         // Muting a background tab must not activate or load it.
         for tab in browser.all_tabs() {
             if let Some(page) = self.pages.get_mut(&tab.id) {
-                if page.muted != tab.muted {
+                if page.muted != tab.muted || self.engine.audio_muted(page.view).is_some_and(|actual| actual != tab.muted) {
                     self.engine.set_audio_muted(page.view, tab.muted);
                     page.muted = tab.muted;
                 }

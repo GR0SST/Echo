@@ -595,6 +595,9 @@ impl BrowserWindow {
                 Event::LoadingChanged { .. } => {}
             }
         }
+        // CEF can initialize its audio state after create_view returned. Reapply
+        // persisted intent after engine events even when the window is occluded.
+        pages.borrow_mut().sync_audio(&self.browser);
         cx.notify();
     }
 

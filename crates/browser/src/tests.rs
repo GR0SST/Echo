@@ -2051,3 +2051,16 @@ fn internal_history_pages_do_not_offer_mute_commands(cx: &mut TestAppContext) {
     bar(&view, cx).simulate_input("mute tab");
     assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::Action { command: crate::window::Command::ToggleMute, .. }))));
 }
+
+#[gpui::test]
+fn engine_initialization_cannot_clear_a_saved_mute_intent(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    dispatch_menu(cx, "Tabs", "Mute/Unmute Tab");
+    fake.take_calls();
+    // CEF initialization may replace the host's initial audio flag after creation.
+    fake.0.borrow_mut().muted.clear();
+    fake.send(cx, Event::LoadingChanged { view: page(1), loading: false, can_go_back: false, can_go_forward: false });
+    assert!(fake.take_calls().contains(&Call::Mute(1, true)));
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().audio_muted(w.browser.active_tab().unwrap().id)), Some(true));
+}
