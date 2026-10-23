@@ -10,6 +10,7 @@ mod history;
 mod tab_menu;
 mod site_controls;
 mod panel;
+mod material;
 mod favicon_style;
 mod window_snapshots;
 mod new_menu;
