@@ -1739,6 +1739,7 @@ impl BrowserWindow {
             .map(|(index, suggestion)| {
                 let selected = index == bar.selected;
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
+                let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
                 let (icon, label, detail): (&str, String, String) = match suggestion {
                     Suggestion::Load(Resolved::Search { query, .. }) => {
                         ("⌕", query, "Google Search".into())
@@ -1795,6 +1796,19 @@ impl BrowserWindow {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_archive_entry(id, cx);
+                        })).child("×")))
+                    .when_some(history_url, |this, url| this.child(div()
+                        .id(("delete-suggestion", index))
+                        .debug_selector(move || format!("delete-suggestion-{index}"))
+                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.12)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.browser.delete_history_entry(&url);
+                            let count = this.suggestions(cx).len();
+                            if let Some(bar) = &mut this.command_bar {
+                                bar.selected = bar.selected.min(count.saturating_sub(1));
+                            }
+                            cx.notify();
                         })).child("×")))
                     .into_any_element()
             })

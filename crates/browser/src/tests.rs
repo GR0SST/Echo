@@ -1674,3 +1674,29 @@ fn open_tabs_match_their_page_titles_without_duplicate_history_rows(cx: &mut Tes
     assert!(suggestions.iter().any(|suggestion| matches!(suggestion, Suggestion::SwitchToTab { title, .. } if title == "Renamed tab")));
     assert!(!suggestions.iter().any(|suggestion| matches!(suggestion, Suggestion::History { url, .. } if url == "https://example.com/two")));
 }
+
+#[gpui::test]
+fn deleting_a_history_suggestion_keeps_the_bar_and_does_not_open_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-w cmd-t");
+    let before = today_urls(&view, cx);
+    bar(&view, cx).simulate_input("first page");
+    bar(&view, cx).simulate_keystrokes("down");
+    click(&mut bar(&view, cx), "delete-suggestion-1");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("first page"));
+    assert!(bar_input_focused(&view, cx));
+    assert_eq!(today_urls(&view, cx), before);
+    view.read_with(cx, |w, cx| {
+        assert_eq!(w.command_bar.as_ref().unwrap().selected, 0);
+        assert!(!w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::History { .. })));
+        let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(restored.history.len(), 1);
+        assert_eq!(restored.history[0].url, "https://example.com/two");
+        assert_eq!(restored.archive.len(), w.browser.archive.len());
+    });
+    bar(&view, cx).simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("first page");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 1);
+}
