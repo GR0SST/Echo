@@ -122,6 +122,7 @@ pub(crate) fn build() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Space…", window::NewSpace),
                 MenuItem::action("Rename Space…", RenameSpace),
+                MenuItem::action("Change Space Icon…", window::CustomizeSpaceIcon),
                 MenuItem::action("Show/Hide Space Header", window::ToggleSpaceHeader),
                 MenuItem::separator(),
                 MenuItem::action("Next Space", window::NextSpace),
@@ -142,6 +143,8 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::action("Mute All Tabs", window::MuteAllTabs),
                 MenuItem::action("Unmute All Tabs", window::UnmuteAllTabs),
                 MenuItem::action("Rename Current Tab…", RenameTab),
+                MenuItem::action("Customize Tab Icon…", window::CustomizeTabIcon),
+                MenuItem::action("Reset Name and Icon", window::ResetNameAndIcon),
                 MenuItem::action("Reset Tab Name", ResetTabName),
                 MenuItem::action("Reset Tab to Original URL", ResetPinnedTab),
                 MenuItem::action("Replace Pinned URL with Current", ReplacePinnedUrl),

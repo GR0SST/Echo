@@ -83,6 +83,9 @@ actions!(
         MuteAllTabs,
         UnmuteAllTabs,
         TogglePinnedSection,
+        CustomizeTabIcon,
+        CustomizeSpaceIcon,
+        ResetNameAndIcon,
         ToggleSpaceHeader,
         ToggleFavoritesOrdering,
         RevealTab,
@@ -280,6 +283,7 @@ pub enum Target {
     NewSpace,
     RenameSpace(SpaceId),
     RenameTab(TabId),
+    Icon(crate::icons::IconTarget),
     ArchiveInterval,
     Archive(Option<SpaceId>),
     ConfirmClearArchive,
@@ -294,6 +298,7 @@ pub enum Suggestion {
     Action { command: Command, label: String },
     SaveSpace { name: String },
     SaveTabName { name: String },
+    SaveIcon { icon: Option<String> },
     ArchiveAfter { label: String, seconds: Option<u64> },
     ArchivedTab { id: TabId, title: String, detail: String, date: String },
     MoreArchive { remaining: usize },
@@ -322,6 +327,9 @@ pub enum Command {
     ResetPinnedTab,
     ResetSpace,
     RenameTab,
+    CustomizeTabIcon,
+    CustomizeSpaceIcon,
+    ResetNameAndIcon,
     ResetTabName,
     ReplacePinnedUrl,
     CopyUrl,
@@ -690,6 +698,7 @@ impl BrowserWindow {
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
                 Target::RenameTab(_) => "Rename Tab…",
+                Target::Icon(_) => "Enter one symbol or emoji…",
                 Target::ArchiveInterval => "Archive tabs after…",
                 Target::Archive(_) => "Search Archive…",
                 Target::ConfirmClearArchive => "Type “Clear Archive” to confirm…",
@@ -843,6 +852,10 @@ impl BrowserWindow {
             }
             return suggestions;
         }
+        if matches!(bar.target, Target::Icon(_)) {
+            return if text.trim().is_empty() { vec![Suggestion::SaveIcon { icon: None }] }
+                else if browser_core::icons::valid_icon(text) { vec![Suggestion::SaveIcon { icon: Some(text.trim().to_string()) }] } else { Vec::new() };
+        }
         if matches!(bar.target, Target::RenameTab(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveTabName { name: text.trim().to_string() }] };
         }
@@ -860,7 +873,10 @@ impl BrowserWindow {
             let commands = [
                 (Command::DuplicateTab, "Duplicate Current Tab", "duplicate current tab|duplicate tab|duplicate current item|duplicate split view", active.is_some()),
                 (Command::RenameTab, "Rename Current Tab…", "rename current tab|rename tab|rename current item", active.is_some()),
-                (Command::ResetTabName, "Reset Tab Name", "reset tab name|reset name and icon|reset name", active.is_some_and(|tab| self.browser.item_has_custom_name(tab.id))),
+                (Command::CustomizeTabIcon, "Customize Tab Icon…", "customize tab icon|change tab icon|customize tab", active.is_some()),
+                (Command::CustomizeSpaceIcon, "Change Space Icon…", "change space icon|customize space icon", true),
+                (Command::ResetNameAndIcon, "Reset Name and Icon", "reset name and icon|reset tab customization", active.is_some_and(|tab| self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some())),
+                (Command::ResetTabName, "Reset Tab Name", "reset tab name|reset name", active.is_some_and(|tab| self.browser.item_has_custom_name(tab.id))),
                 (Command::ResetSpace, "Reset Space", "reset space|reset all pinned tabs|reset all tabs in space", self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some())),
                 (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
@@ -1017,7 +1033,7 @@ impl BrowserWindow {
                         self.browser.navigate(id, resolved.url());
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
+                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
                 self.browser.set_title(id, title);
             }
@@ -1065,6 +1081,13 @@ impl BrowserWindow {
             Suggestion::ArchiveAfter { seconds, .. } => {
                 self.browser.archive_after = seconds.map(Duration::from_secs);
             }
+            Suggestion::SaveIcon { icon } => {
+                match target {
+                    Target::Icon(crate::icons::IconTarget::Tab(id)) => { self.browser.set_item_icon(id, icon.as_deref()); }
+                    Target::Icon(crate::icons::IconTarget::Space(id)) => { self.browser.set_space_icon(id, icon.as_deref()); }
+                    _ => return,
+                }
+            }
             Suggestion::SaveTabName { name } => {
                 if let Target::RenameTab(id) = target { self.browser.rename_tab(id, &name); }
             }
@@ -1102,6 +1125,9 @@ impl BrowserWindow {
                     }
                 }
             }
+            Command::CustomizeTabIcon => { if let Some(id) = self.browser.space().active_tab { self.edit_icon(crate::icons::IconTarget::Tab(id), cx); } }
+            Command::CustomizeSpaceIcon => self.edit_icon(crate::icons::IconTarget::Space(self.browser.space().id), cx),
+            Command::ResetNameAndIcon => { if let Some(id) = self.browser.space().active_tab { self.browser.reset_item_customization(id); } }
             Command::ResetTabName => {
                 if let Some(id) = self.browser.space().active_tab { self.browser.reset_tab_name(id); }
             }
@@ -1216,6 +1242,9 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &CustomizeTabIcon, window, cx| this.open_command_action(Command::CustomizeTabIcon, window, cx)))
+            .on_action(cx.listener(|this, _: &CustomizeSpaceIcon, window, cx| this.open_command_action(Command::CustomizeSpaceIcon, window, cx)))
+            .on_action(cx.listener(|this, _: &ResetNameAndIcon, _, cx| this.run_command(Command::ResetNameAndIcon, cx)))
             .on_action(cx.listener(|this, _: &ToggleSpaceHeader, _, cx| this.run_command(Command::ToggleSpaceHeader, cx)))
             .on_action(cx.listener(|this, _: &ToggleFavoritesOrdering, _, cx| this.run_command(Command::ToggleFavoritesOrdering, cx)))
             .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
@@ -1228,7 +1257,7 @@ impl BrowserWindow {
             .child(content).into_any_element()
     }
 
-    fn open_command_action(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_command_action(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         self.open_command_bar(Target::NewTab, "", window, cx);
         self.run_command(command, cx);
     }
@@ -1666,6 +1695,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
+        if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
         match self.browser.favicon(&tab.url) {
             Some(png) => {
                 let title = tab.title.clone();
@@ -1874,10 +1904,11 @@ impl BrowserWindow {
                 div()
                     .id(("space", index))
                     .debug_selector(move || format!("space-{index}"))
-                    .size(px(if active { 10.0 } else { 8.0 }))
-                    .rounded_full()
-                    .bg(hsla(hue, 0.55, 0.5, if active { 1.0 } else { 0.45 }))
-                    .hover(move |s| s.bg(hsla(hue, 0.55, 0.5, 0.8)))
+                    .flex_none().size(px(if space.custom_icon.is_some() { 22. } else if active { 10. } else { 8. }))
+                    .when(space.custom_icon.is_none(), |this| this.rounded_full().bg(hsla(hue, 0.55, 0.5, if active { 1.0 } else { 0.45 })).hover(move |s| s.bg(hsla(hue, 0.55, 0.5, 0.8))))
+                    .when_some(space.custom_icon.clone(), |this, icon| this.flex().items_center().justify_center().rounded_md()
+                        .when(active, |this| this.bg(hsla(0., 0., 1., 0.5))).hover(|this| this.bg(hsla(0., 0., 1., 0.3)))
+                        .child(div().debug_selector(move || format!("space-icon-{index}")).child(crate::icons::glyph(&icon))))
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_space(index, cx)))
             }))
             .child(div().id("new-space").debug_selector(|| "new-space".into())
@@ -2064,6 +2095,7 @@ impl BrowserWindow {
                         ("⇥", title, format!("Switch to Tab · {space}"))
                     }
                     Suggestion::Action { label, .. } => ("⌘", label, "Action".into()),
+                    Suggestion::SaveIcon { icon } => ("↵", icon.unwrap_or_else(|| "Reset Icon".into()), if matches!(bar.target, Target::Icon(crate::icons::IconTarget::Space(_))) { "Space Icon".into() } else { "Tab Icon".into() }),
                     Suggestion::SaveTabName { name } => ("↵", name, "Rename Tab".into()),
                     Suggestion::SaveSpace { name } => ("+", name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
                     Suggestion::ArchiveAfter { label, seconds } => ("◷", label, if self.browser.archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
@@ -2186,6 +2218,7 @@ impl BrowserWindow {
                             .line_height(px(32.0))
                             .child(bar.input.clone()),
                     )
+                    .when(matches!(bar.target, Target::Icon(_)), |this| this.child(div().px_4().pb_2().text_xs().child("Enter one symbol or emoji. Leave blank to restore the default icon.")))
                     .when(matches!(bar.target, Target::Archive(_)), |this| this.child(self.render_archive_controls(cx)))
                     .when(bar.target == Target::ConfirmClearArchive, |this| this.child(div().px_4().pb_2().text_sm().child("This action is permanent. Archived tabs from all Spaces will be deleted.")))
                     .when(!has_rows && matches!(bar.target, Target::Archive(_)), |this| this.child(div().px_4().py_3().text_sm().child("No archived tabs match your search.")))
@@ -2260,6 +2293,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &CustomizeTabIcon, window, cx| this.open_command_action(Command::CustomizeTabIcon, window, cx)))
+            .on_action(cx.listener(|this, _: &CustomizeSpaceIcon, window, cx| this.open_command_action(Command::CustomizeSpaceIcon, window, cx)))
+            .on_action(cx.listener(|this, _: &ResetNameAndIcon, _, cx| this.run_command(Command::ResetNameAndIcon, cx)))
             .on_action(cx.listener(|this, _: &ToggleSpaceHeader, _, cx| this.run_command(Command::ToggleSpaceHeader, cx)))
             .on_action(cx.listener(|this, _: &ToggleFavoritesOrdering, _, cx| this.run_command(Command::ToggleFavoritesOrdering, cx)))
             .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))

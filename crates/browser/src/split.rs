@@ -86,6 +86,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn render_item_icon(&self, tab: &Tab, hue: f32) -> AnyElement {
+        if let Some(icon) = self.browser.item_icon(tab.id) { return div().debug_selector(move || format!("item-icon-{}", tab.id.get())).child(crate::icons::glyph(icon)).into_any_element(); }
         if let Some(split) = self.browser.split_for(tab.id) {
             div().flex().flex_none().gap(px(2.)).children(split.panes.iter().filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == *id)).take(2).map(|tab| self.render_favicon(tab, hue))).into_any_element()
         } else { self.render_favicon(tab, hue).into_any_element() }

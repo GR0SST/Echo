@@ -32,13 +32,13 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-enum Command { Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+enum Command { Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
-            Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
+            Self::Icon => "icon", Self::ResetCustomization => "reset-customization", Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
             Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::Mute => "mute", Self::Close => "close",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Other) => "archive-other",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Above) => "archive-above",
@@ -138,6 +138,8 @@ impl BrowserWindow {
             rows.push(("Reset Tab to Original URL", Command::Reset));
             rows.push(("Replace Pinned URL with Current", Command::Replace));
         }
+        rows.push(("Customize Tab Icon…", Command::Icon));
+        if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(("Reset Name and Icon", Command::ResetCustomization)); }
         for (relative, label) in [(browser_core::bulk_archive::Relative::Other, "Archive Other Tabs"), (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above"), (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below")] {
             if !self.browser.tabs_to_archive(tab.id, relative).is_empty() { rows.push((label, Command::ArchiveRelative(relative))); }
         }
@@ -184,6 +186,8 @@ impl BrowserWindow {
             Command::Move(delta) => { self.browser.move_split_pane(id, delta); }
             Command::ResetName => { self.browser.reset_tab_name(id); }
             Command::ClosePane => self.close_split_pane(id, cx),
+            Command::Icon => self.open_command_bar(Target::Icon(crate::icons::IconTarget::Tab(id)), &self.browser.item_icon(id).unwrap_or_default().to_string(), window, cx),
+            Command::ResetCustomization => { self.browser.reset_item_customization(id); }
             Command::ArchiveRelative(relative) => self.archive_relative(id, relative, cx),
             Command::Duplicate => self.duplicate_tab(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),

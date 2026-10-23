@@ -6,6 +6,7 @@
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
 //! Commands: `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
+//! `compose <text>` (native IME/emoji text insertion into the focused responder),
 //! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
@@ -17,7 +18,8 @@ use std::time::Duration;
 use gpui::{App, AsyncApp, WeakEntity};
 use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2::msg_send;
-use objc2_foundation::{NSPoint, NSRect, NSString};
+use objc2::encode::{Encode, Encoding};
+use objc2_foundation::{NSPoint, NSRange, NSRect, NSString, NSNotFound};
 
 use crate::window::BrowserWindow;
 
@@ -59,6 +61,12 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                         unsafe { post_key(ns_view, &ch.to_string()) };
                         cx.background_executor().timer(Duration::from_millis(15)).await;
                     }
+                    cx.background_executor().timer(EVENT_GAP).await;
+                }
+                "compose" => {
+                    let overlay = view.update(cx, |this, _| this.command_bar.as_ref().and_then(|bar| bar.overlay)).ok().flatten();
+                    let target = overlay.and_then(|handle| handle.update(cx, |_, window, _| crate::native::view_of(window)).ok().flatten()).map_or(ns_view, |view| view.cast());
+                    unsafe { compose_text(target, arg); }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "move" => {
@@ -414,6 +422,35 @@ fn key_code(ch: char) -> u16 {
         .iter()
         .find(|(c, _)| *c == lower)
         .map_or(0, |(_, code)| *code)
+}
+
+// GPUI 0.2 registers Cocoa's legacy `NSRange` encoding; Foundation uses
+// `_NSRange`. They share an ABI, but objc2 validates the structure tag too.
+#[repr(C)]
+struct LegacyTextRange { location: usize, length: usize }
+unsafe impl Encode for LegacyTextRange {
+    const ENCODING: Encoding = Encoding::Struct("NSRange", &[usize::ENCODING, usize::ENCODING]);
+}
+
+/// Supplementary Unicode and emoji are delivered by the system's text input
+/// client, not by a physical keyboard's virtual key code. Keep this separate
+/// from `type`, which exercises the NSEvent shortcut/key routing path.
+unsafe fn compose_text(view: *mut AnyObject, text: &str) {
+    unsafe {
+        let window = window_of(view);
+        let responder: *mut AnyObject = msg_send![window, firstResponder];
+        if responder.is_null() { eprintln!("[automation] no text responder"); return; }
+        let accepts: Bool = msg_send![responder, respondsToSelector: objc2::sel!(insertText:replacementRange:)];
+        if !accepts.as_bool() { eprintln!("[automation] focused responder does not accept composed text"); return; }
+        let text = NSString::from_str(text);
+        let legacy_range = (*responder).class().instance_method(objc2::sel!(insertText:replacementRange:))
+            .and_then(|method| method.argument_type(3)).is_some_and(|encoding| encoding.to_bytes().starts_with(b"{NSRange="));
+        if legacy_range {
+            let _: () = msg_send![responder, insertText: &*text, replacementRange: LegacyTextRange { location: NSNotFound as usize, length: 0 }];
+        } else {
+            let _: () = msg_send![responder, insertText: &*text, replacementRange: NSRange::new(NSNotFound as usize, 0)];
+        }
+    }
 }
 
 unsafe fn post_key(view: *mut AnyObject, spec: &str) {

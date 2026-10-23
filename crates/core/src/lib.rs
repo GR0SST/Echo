@@ -14,6 +14,7 @@ pub mod audio;
 pub mod splits;
 pub mod bulk_archive;
 pub mod preferences;
+pub mod icons;
 
 fn default_enabled() -> bool { true }
 pub mod session;
@@ -48,6 +49,8 @@ pub struct Tab {
     #[serde(default)]
     pub custom_title: Option<String>,
     #[serde(default)]
+    pub custom_icon: Option<String>,
+    #[serde(default)]
     pub page_title: Option<String>,
     #[serde(default)]
     pub pinned_title: Option<String>,
@@ -80,6 +83,8 @@ pub struct Space {
     pub hue: f32,
     #[serde(default = "default_enabled")]
     pub show_header: bool,
+    #[serde(default)]
+    pub custom_icon: Option<String>,
     pub pinned: Vec<Tab>,
     #[serde(default)]
     pub pinned_collapsed: bool,
@@ -234,6 +239,7 @@ impl Browser {
             name: name.into(),
             hue,
             show_header: true,
+            custom_icon: None,
             pinned: Vec::new(),
             pinned_collapsed: false,
             today: Vec::new(),
@@ -269,6 +275,7 @@ impl Browser {
                 id,
                 title: url.clone(),
                 custom_title: None,
+                custom_icon: None,
                 page_title: None,
                 pinned_title: None,
                 url,

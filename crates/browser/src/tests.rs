@@ -2800,3 +2800,84 @@ fn hidden_cycle_shortcuts_work_from_ui_and_native_page_focus_and_keep_split_grou
     fake.send(cx, Event::Shortcut(shortcut("right")));
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://next.example"));
 }
+
+#[gpui::test]
+fn tab_icon_editor_accepts_complex_emoji_and_invalid_input_does_not_change_the_icon(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    run_named_command(&view, cx, "customize tab icon");
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("two symbols");
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(bar_text(&view, cx).is_some());
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("👨‍👩‍👧‍👦");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.item_icon(w.browser.active_tab().unwrap().id).map(str::to_string)).as_deref(), Some("👨‍👩‍👧‍👦"));
+    assert!(cx.debug_bounds("item-icon-8").is_some());
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn context_icon_editor_targets_an_inactive_tab_and_reset_name_and_icon_restores_its_defaults(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    right_click(cx, "tab-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-icon");
+    bar(&view, cx).simulate_input("★");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx), active);
+    view.read_with(cx, |w, _| assert_eq!(w.browser.space().pinned[0].custom_icon.as_deref(), Some("★")));
+    right_click(cx, "tab-4");
+    click(&mut tab_menu(&view, cx), "tab-menu-reset-customization");
+    assert_eq!(active_url(&view, cx), active);
+    assert!(view.read_with(cx, |w, _| w.browser.space().pinned[0].custom_icon.is_none()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn split_group_icon_survives_favorite_and_separation_reveals_the_original_page_icons(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    fake.take_calls();
+    dispatch_menu(cx, "Tabs", "Customize Tab Icon…");
+    bar(&view, cx).simulate_input("🔬");
+    bar(&view, cx).simulate_keystrokes("enter");
+    run_named_command(&view, cx, "favorite tab");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().custom_icon.as_deref(), Some("🔬")));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("item-icon-2").is_some());
+    dispatch_menu(cx, "Tabs", "Reset Name and Icon");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().custom_icon.is_none()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn space_icon_picker_persists_symbols_and_blank_input_restores_the_default(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    bar(&view, cx).simulate_input("🧭");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("space-icon-0").is_some());
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().custom_icon.as_deref(), Some("🧭"));
+        assert_eq!(w.browser.spaces[1].custom_icon, None);
+        let saved = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(saved.space().custom_icon.as_deref(), Some("🧭"));
+    });
+    click(cx, "space-1");
+    run_named_command(&view, cx, "change space icon");
+    bar(&view, cx).simulate_input("👩🏽‍💻");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |w, _| w.browser.space().custom_icon.is_none()));
+    click(cx, "space-0");
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("🧭"));
+    bar(&view, cx).simulate_keystrokes("backspace enter");
+    assert!(view.read_with(cx, |w, _| w.browser.space().custom_icon.is_none()));
+}

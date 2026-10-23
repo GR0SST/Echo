@@ -10,6 +10,7 @@ mod tab_menu;
 mod audio;
 mod split_layout;
 mod split;
+mod icons;
 pub mod pages;
 pub mod text_input;
 pub mod window;

@@ -34,6 +34,8 @@ pub struct SplitView {
     pub weights: Vec<f32>,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub custom_icon: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -159,7 +161,7 @@ impl Browser {
         self.place_tab(scope, other_tab);
         let mut split = self.take_split(anchor).map(|(_, split)| split).unwrap_or_else(|| SplitView {
             id: SplitId(self.next_id()), anchor, panes: vec![anchor], active: anchor,
-            axis: placement.axis(), weights: vec![1.], title: None,
+            axis: placement.axis(), weights: vec![1.], title: None, custom_icon: None,
         });
         let index = split.panes.iter().position(|id| *id == anchor).unwrap_or(0) + usize::from(!placement.before());
         split.panes.insert(index, other);

@@ -184,13 +184,13 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Haptic feedback when reordering tabs | — | missing | Option in Advanced |
 | Multi-selecting tabs (⌘/⇧-click) | — | missing | — |
 | Renaming a tab by double-click ("Double-click to rename") | double-click | done | Double-click or Rename Current Tab… in the Command Bar. Custom names persist through navigation, archive and sessions; Reset Tab Name restores the page title. Custom icons remain a separate missing feature |
-| Custom tab icon ("Customize Tab") | — | missing | — |
+| Custom tab icon ("Customize Tab") | — | partial | One Unicode symbol/emoji for tabs and Split View groups, with grapheme validation and Reset Name and Icon. Persists through pinning, Favorites, moves, duplication, archive and sessions. Graphical icon catalog and uploaded images remain missing |
 | Close button on hover (× for Today, − for Pinned) | hover | done | — |
 | Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
 | Camera/microphone indicator on a tab | — | missing | — |
 | Split View item in the sidebar (tab group) | — | done | One item for 2–4 pages; shared title, Favorites, pinning, archive and last focused pane |
 | Space header (name), Show/Hide Space Header | — | done | Visibility persists per Space; Command Bar and Spaces menu |
-| Spaces dock at the bottom (Space icons) | click | partial | We show colored dots; Arc shows Space icons or emoji |
+| Spaces dock at the bottom (Space icons) | click | partial | User-selected symbols/emoji persist per Space and render in the dock. Default icons remain colored dots; graphical icon catalog remains missing |
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + creates a Space. The multi-action menu remains missing |
 | "Springy" click animation on sidebar items | — | missing | — |
 | Incognito window sidebar ("Incognito Tabs") | — | missing | — |
@@ -264,11 +264,11 @@ in code, so some were reconstructed from translator comments (?).
 
 | Menu / item | Status | What's missing |
 |---|---|---|
-| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Duplicate, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Add Split View, Mute/Unmute, Close/Archive and Archive Other Tabs/Tabs Above/Tabs Below (Today items only; Split Views stay atomic). Up/Down/Enter/Escape, scrolling in short windows and outside dismissal; actions target the clicked tab. Copy/rename/pin/mute preserve other active tabs; Duplicate focuses its independent copy. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
+| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Duplicate, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Customize Tab Icon, Reset Name and Icon, Add Split View, Mute/Unmute, Close/Archive and Archive Other Tabs/Tabs Above/Tabs Below (Today items only; Split Views stay atomic). Up/Down/Enter/Escape, scrolling in short windows and outside dismissal; actions target the clicked tab. Copy/rename/pin/mute preserve other active tabs; Duplicate focuses its independent copy. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
 | **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | missing | — |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
-| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, duplication, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share and custom icons remain |
+| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, duplication, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share and graphical icon catalog remain |
 | **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | partial | GPUI ellipsis and right-click menus target the clicked pane; all listed local actions implemented. Share remains |
 | **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | missing | — |
 | **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |
