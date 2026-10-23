@@ -3800,3 +3800,110 @@ fn dropping_a_split_into_a_scrolled_today_list_reveals_its_new_first_row_and_kee
     });
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn reordering_favorite_icons_preserves_the_current_page_for_both_inactive_and_active_items(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        let pins: Vec<_> = w.browser.space().pinned.iter().map(|tab| tab.id).collect();
+        for tab in pins { w.browser.favorite_tab(tab); }
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "favorite-5", "favorite-4");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>()), vec![5, 4]);
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    click(cx, "favorite-5");
+    fake.take_calls();
+    drag_between(cx, "favorite-5", "favorite-4");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn reordering_a_favorite_split_keeps_pane_focus_and_numbered_navigation_uses_the_new_order(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    run_named_command(&view, cx, "favorite tab");
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        let other = w.browser.space().today[0].id;
+        w.browser.favorite_tab(other);
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let split = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
+    fake.take_calls();
+    drag_between(cx, "favorite-4", "favorite-7");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![7, 4, 5]);
+        assert_eq!(w.browser.active_split().unwrap().id, split);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap().get()), 7);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-2");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap().get()), 5);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_a_new_favorite_on_an_icon_inserts_it_at_that_position_without_copying_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        let pin = w.browser.space().pinned[0].id;
+        w.browser.favorite_tab(pin);
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "tab-8", "favorite-4");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
+        assert_eq!(w.browser.all_tabs().count(), 5);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
+        let loaded = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(loaded.favorites.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![8, 4]);
+    });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn a_full_favorites_dock_still_allows_existing_items_to_be_reordered(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    view.update(cx, |w, cx| {
+        let active = w.browser.space().active_tab.unwrap();
+        for index in 0..browser_core::favorites::MAX_FAVORITES {
+            let id = w.browser.new_tab(format!("https://favorite{index}.example"), std::time::SystemTime::now());
+            w.browser.favorite_tab(id);
+        }
+        w.browser.activate_tab(active, std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "favorite-9", "favorite-20");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.favorite_count(), browser_core::favorites::MAX_FAVORITES);
+        assert_eq!(w.browser.favorites.last().unwrap().id.get(), 9);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
+    });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

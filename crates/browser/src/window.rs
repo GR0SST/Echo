@@ -1745,9 +1745,15 @@ impl BrowserWindow {
         let active = self.browser.space().active_tab.is_some_and(|active| self.browser.item_anchor(active) == id);
         let title = self.browser.item_title(id);
         let url = tab.url.clone();
+        let browser = cx.entity().downgrade();
         div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
             .group(group.clone()).relative().flex().items_center().justify_center()
             .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
+                browser.read_with(cx, |this, _| drag.id != id && (this.browser.is_favorite(drag.id) || this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES)).unwrap_or(false)
+            }))
+            .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_at_favorite(drag.id, id, cx)))
             .w(px(68.0)).h(px(48.0)).rounded_lg()
             .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
             .when(active, |this| this.shadow_sm())

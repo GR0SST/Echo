@@ -15,6 +15,29 @@ pub(crate) struct TabDrag {
 }
 
 impl BrowserWindow {
+    pub(crate) fn drop_tab_at_favorite(
+        &mut self,
+        tab: TabId,
+        target: TabId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(destination) = self
+            .browser
+            .favorites
+            .iter()
+            .filter(|tab| !self.browser.is_split_secondary(tab.id))
+            .position(|tab| tab.id == target)
+        else {
+            return;
+        };
+        if !self.browser.is_favorite(tab) {
+            self.drop_tab_in_favorites(tab, cx);
+        }
+        if self.browser.is_favorite(tab) && self.browser.move_favorite(tab, destination) {
+            cx.notify();
+        }
+    }
+
     pub(crate) fn drop_tab_on_section(
         &mut self,
         tab: TabId,

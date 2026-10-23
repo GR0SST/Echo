@@ -8,6 +8,28 @@ impl Browser {
         self.favorites.iter().any(|tab| tab.id == id)
     }
 
+    /// Reorders logical dock items, keeping all pages of a Split View together
+    /// and retaining every Space's current selection of a shared Favorite.
+    pub fn move_favorite(&mut self, id: TabId, destination: usize) -> bool {
+        let anchor = self.item_anchor(id);
+        let mut order: Vec<_> = self.favorites.iter().filter(|tab| !self.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
+        let Some(source) = order.iter().position(|id| *id == anchor) else { return false; };
+        if source == destination || destination >= order.len() { return false; }
+        order.remove(source);
+        order.insert(destination, anchor);
+        let groups: Vec<_> = order.into_iter().map(|id| self.related_tabs(id)).collect();
+        let mut pages = std::mem::take(&mut self.favorites);
+        for group in groups {
+            for id in group {
+                if let Some(index) = pages.iter().position(|tab| tab.id == id) { self.favorites.push(pages.remove(index)); }
+            }
+        }
+        // Keep any unlisted physical page even if a caller supplied a model
+        // that has not yet gone through session normalization.
+        self.favorites.extend(pages);
+        true
+    }
+
     /// Moves an existing tab into the shared dock, preserving its loaded page.
     /// An existing Pinned tab keeps its original URL; Today captures its URL.
     pub fn favorite_tab(&mut self, id: TabId) -> bool {
@@ -74,6 +96,65 @@ mod tests {
     use crate::{Closed, Section};
     use std::time::{Duration, SystemTime};
     const NOW: SystemTime = SystemTime::UNIX_EPOCH;
+
+    #[test]
+    fn every_dock_move_keeps_split_pages_together_and_preserves_selections_in_all_spaces() {
+        let mut browser = Browser::new();
+        let a = browser.new_tab("https://a", NOW);
+        browser.favorite_tab(a);
+        let b = browser.new_tab("https://b", NOW);
+        let c = browser.new_tab("https://c", NOW);
+        browser.add_split(b, c, crate::splits::Placement::Above, NOW).unwrap();
+        browser.rename_tab(b, "Pair");
+        browser.set_item_icon(b, Some("🧭"));
+        browser.favorite_tab(b);
+        for name in ["d", "e"] { let id = browser.new_tab(format!("https://{name}"), NOW); browser.favorite_tab(id); }
+        browser.add_space("Work", 100.);
+        browser.switch_space(1);
+        browser.activate_tab(c, NOW);
+        browser.switch_space(0);
+        browser.activate_tab(a, NOW);
+        let json = crate::session::to_json(&browser);
+        for source in 0..4 {
+            for destination in 0..4 {
+                let mut browser = crate::session::from_json(&json).unwrap();
+                let spaces = serde_json::to_value(&browser.spaces).unwrap();
+                let splits = serde_json::to_value(&browser.favorite_splits).unwrap();
+                let pages: Vec<_> = browser.favorites.iter().map(|tab| (tab.id, serde_json::to_value(tab).unwrap())).collect();
+                let mut order: Vec<_> = browser.favorites.iter().filter(|tab| !browser.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
+                let moved = order.remove(source);
+                order.insert(destination, moved);
+                // A group can be addressed by a secondary pane as well.
+                let input = if moved == b { c } else { moved };
+                assert_eq!(browser.move_favorite(input, destination), source != destination);
+                assert_eq!(browser.favorites.iter().filter(|tab| !browser.is_split_secondary(tab.id)).map(|tab| tab.id).collect::<Vec<_>>(), order);
+                assert_eq!(serde_json::to_value(&browser.spaces).unwrap(), spaces);
+                assert_eq!(serde_json::to_value(&browser.favorite_splits).unwrap(), splits);
+                assert_eq!(browser.favorites.len(), pages.len());
+                for tab in &browser.favorites { assert_eq!(serde_json::to_value(tab).unwrap(), pages.iter().find(|(id, _)| *id == tab.id).unwrap().1); }
+                let group = browser.related_tabs(b);
+                let start = browser.favorites.iter().position(|tab| tab.id == group[0]).unwrap();
+                assert_eq!(browser.favorites[start..start + group.len()].iter().map(|tab| tab.id).collect::<Vec<_>>(), group);
+                let loaded = crate::session::from_json(&crate::session::to_json(&browser)).unwrap();
+                assert_eq!(loaded.favorites.iter().filter(|tab| !loaded.is_split_secondary(tab.id)).map(|tab| tab.id).collect::<Vec<_>>(), order);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_favorite_moves_leave_the_entire_session_unchanged() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("https://tab", NOW);
+        let original = crate::session::to_json(&browser);
+        assert!(!browser.move_favorite(tab, 0));
+        assert_eq!(crate::session::to_json(&browser), original);
+        browser.favorite_tab(tab);
+        let original = crate::session::to_json(&browser);
+        assert!(!browser.move_favorite(tab, 0));
+        assert!(!browser.move_favorite(tab, 1));
+        assert!(!browser.move_favorite(TabId(u64::MAX), 0));
+        assert_eq!(crate::session::to_json(&browser), original);
+    }
 
     #[test]
     fn favorites_share_identity_and_close_back_to_their_original_page() {
