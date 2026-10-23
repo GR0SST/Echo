@@ -222,3 +222,32 @@ and is not key, while the browser remains key/main. Clicking the covered input
 and typing `Through-overlay` succeeds, and the status disappears. All 332
 workspace tests passed. The expanded pill still truncates targets wider than
 the page; complete long-URL presentation remains unfinished.
+
+### Long-link follow-up — 2026-10-23
+
+A local HTTP fixture exposed a link with 100 path segments plus a query and
+fragment. In a separate installed Arc Blank Window, opening and cancelling
+the link's context menu triggered its status. Both the screenshot and the
+accessibility text confirm a single bounded line: the host and leading path
+segments, `…/`, the final path segment (including a trailing slash), then a
+query prefix ending in `…` when space runs out. Even the expanded Arc status
+does not display arbitrarily long targets in full or wrap them into lines.
+The disposable window was closed after inspection.
+
+Echo now measures with the rendered label's font and applies the same path
+and query shortening order. A fitting target retains its query and fragment;
+shortening changes only the displayed label. Grapheme boundaries keep emoji
+and combining sequences intact. Tests cover unique final filenames, trailing
+slashes, encoded path separators, narrow widths and non-HTTP schemes. Exact
+host/subdomain formatting and the previously recorded theme/transition
+differences remain partial.
+
+Native verification of the follow-up passed with `require-focus` enabled.
+The inspected preview and expanded screenshots show middle-path and tail
+ellipses rather than a hard clip. The exact CEF target still contains the
+encoded query and final fragment. The final window report confirms the
+browser is key/main/on-screen and the passive status window ignores mouse
+events. The run clicked the page before hovering its link. All 336 workspace
+tests passed. The automation driver now routes synthetic moves to the native
+view under the point rather than unconditionally sending them to GPUI.
+`require-focus` aborts interrupted runs, including between typed characters.

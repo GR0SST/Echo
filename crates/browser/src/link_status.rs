@@ -100,19 +100,23 @@ impl BrowserWindow {
         }
     }
 
-    pub(crate) fn render_link_status(&self) -> AnyElement {
+    pub(crate) fn render_link_status(&self, window: &Window) -> AnyElement {
         let Some(status) = &self.link_status else { return div().into_any_element(); };
         let Some(frame) = self.pages.as_ref().and_then(|pages| pages.borrow().surface_layout().into_iter()
             .find_map(|(tab, frame)| (tab == status.tab).then_some(frame))) else { return div().into_any_element(); };
         let available = (frame.width - 16.).max(0.) as f32;
         let width = if status.expanded { available } else { available.min(360.) };
-        let text = status.text.strip_prefix("https://").or_else(|| status.text.strip_prefix("http://")).unwrap_or(&status.text)
-            .chars().filter(|ch| !ch.is_control()).collect::<String>();
+        let text = crate::status_url::elide(&status.text, (width - 16.).max(0.), |text| {
+            f32::from(window.text_system().shape_line(text.to_owned().into(), px(12.), &[gpui::TextRun {
+                len: text.len(), font: gpui::font(".SystemUIFont"), color: gpui::black(),
+                background_color: None, underline: None, strikethrough: None,
+            }], None).width)
+        });
         div().size_full().child(div().id("link-status").debug_selector(|| "link-status".into())
             .absolute().left(px(frame.x as f32 + 8.)).top(px((frame.y + frame.height - 32.).max(frame.y) as f32))
             .max_w(px(width)).h(px(24.)).px_2().flex().items_center().rounded(px(6.))
             .bg(hsla(self.browser.space().hue / 360., 0.28, 0.84, 0.98))
-            .text_color(hsla(0., 0., 0.1, 0.75)).text_size(px(12.))
+            .text_color(hsla(0., 0., 0.1, 0.75)).font_family(".SystemUIFont").text_size(px(12.))
             .child(div().min_w_0().truncate().child(text))).into_any_element()
     }
 }

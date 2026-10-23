@@ -483,7 +483,7 @@ impl Render for Overlay {
                     OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast => browser.render_toast(),
-                    OverlayKind::LinkStatus => browser.render_link_status(),
+                    OverlayKind::LinkStatus => browser.render_link_status(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(cx),
                     OverlayKind::SiteControls => browser.render_site_controls(cx),

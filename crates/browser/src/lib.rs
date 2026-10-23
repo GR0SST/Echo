@@ -22,6 +22,7 @@ mod tab_drag;
 mod folder_drag;
 mod inline_rename;
 mod link_status;
+mod status_url;
 pub mod pages;
 pub mod text_input;
 pub mod window;
