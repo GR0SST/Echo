@@ -35,7 +35,10 @@ const FAVORITE_COLUMNS: usize = 4;
 /// Room for "Tidy | Clear" at the right of the Today divider.
 const TODAY_ACTIONS_WIDTH: f32 = 96.0;
 const SPACE_BAR_HEIGHT: f32 = 42.0;
-const COMMAND_BAR_WIDTH: f32 = 620.0;
+const COMMAND_BAR_WIDTH: f32 = 764.0;
+/// The search field's band, separator included.
+const COMMAND_BAR_HEADER: f32 = 64.0;
+const COMMAND_BAR_RADIUS: f32 = 12.0;
 const MAX_TAB_SUGGESTIONS: usize = 6;
 const MAX_HISTORY_SUGGESTIONS: usize = 4;
 const MAX_COMMAND_SUGGESTIONS: usize = 12;
@@ -1981,12 +1984,16 @@ impl BrowserWindow {
             })).child(crate::icons::control(crate::icons::Icon::Mute))
     }
 
-    pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
+    pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, false) }
+
+    /// `tab`'s favicon for a light surface, or a dark one when `dark`.
+    pub(crate) fn render_favicon_on(&self, tab: &Tab, hue: f32, dark: bool) -> AnyElement {
         if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
         let icon = match self.browser.favicon(&tab.url) {
             Some(png) => {
                 let title = tab.title.clone();
-                gpui::img(self.favicon_styles.borrow_mut().get(png).image)
+                let style = self.favicon_styles.borrow_mut().get(png);
+                gpui::img(if dark { style.on_dark } else { style.image })
                     .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
                     .with_fallback(move || favicon(&title, hue).into_any_element())
                     .into_any_element()
@@ -2617,7 +2624,8 @@ impl BrowserWindow {
         let archive = matches!(bar.target, Target::Archive(_));
         let default_top = 140.0_f32.min(height * 0.2);
         let rows_height = region.map_or((height - default_top - if archive { 150. } else { 90. } - 16.).max(40.), |bounds| (bounds.height as f32 - 96.).max(40.));
-        let panel_height = 72. + (self.suggestions(cx).len() as f32 * 40.).min(rows_height);
+        let count = self.suggestions(cx).len() as f32;
+        let panel_height = COMMAND_BAR_HEADER + if count > 0. { 15. + (count * 50. - 4.).min(rows_height) } else { 0. };
         let top = region.map_or(default_top, |bounds| bounds.y as f32 + ((bounds.height as f32 - panel_height) * 0.5).max(8.));
         let mut previous_date = None;
         let rows: Vec<_> = self
@@ -2630,6 +2638,12 @@ impl BrowserWindow {
                     Suggestion::ArchivedTab { date, .. } if previous_date.as_ref() != Some(date) => { previous_date = Some(date.clone()); Some(date.clone()) }
                     _ => None,
                 };
+                let page = match &suggestion {
+                    Suggestion::SwitchToTab { id, .. } | Suggestion::SplitTab { id, .. } => self.browser.all_tabs().find(|tab| tab.id == *id).map(|tab| self.render_favicon_on(tab, accent, !selected)),
+                    Suggestion::History { url, .. } => self.browser.favicon(url).map(|png| self.favicon_styles.borrow_mut().get(png)).map(|style| gpui::img(if selected { style.image } else { style.on_dark })
+                        .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain).into_any_element()),
+                    _ => None,
+                };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
                 let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
@@ -2639,9 +2653,7 @@ impl BrowserWindow {
                     Suggestion::Load(Resolved::Url(url)) => (crate::icons::Icon::External, display_url(&url), "Open".into()),
                     Suggestion::SplitTab { title, space, .. } => (crate::icons::Icon::Enter, title, space),
                     Suggestion::History { title, url } => (crate::icons::Icon::History, title, format!("History · {}", display_url(&url))),
-                    Suggestion::SwitchToTab { title, space, .. } => {
-                        (crate::icons::Icon::Enter, title, format!("Switch to Tab · {space}"))
-                    }
+                    Suggestion::SwitchToTab { title, .. } => (crate::icons::Icon::Enter, title, "Switch to Tab".into()),
                     Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, "Action".into()),
                     Suggestion::SaveFolderName { name } => (crate::icons::Icon::Folder, name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
                     Suggestion::FolderDestination { label, .. } => (crate::icons::Icon::Folder, label, "Move".into()),
@@ -2653,26 +2665,34 @@ impl BrowserWindow {
                     Suggestion::MoreArchive { remaining } => (crate::icons::Icon::Down, "Show More".into(), format!("{remaining} more archived {}", if remaining == 1 { "tab" } else { "tabs" })),
                     Suggestion::ConfirmClearArchive => (crate::icons::Icon::Close, "Clear Archive".into(), "Permanently delete".into()),
                 };
+                // Pages show their favicon; commands a glyph on a faint tile.
+                // The selected row's tile turns white, as in the reference.
+                let tile = div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(6.0))
+                    .when(selected, |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
+                    .when(!selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
+                    .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
                 let row = div()
                     .id(("suggestion", index))
                     .debug_selector(move || format!("suggestion-{index}"))
                     .flex()
                     .items_center()
-                    .gap_3()
-                    .h(px(40.0)).flex_none()
-                    .px_3()
+                    .gap(px(9.0))
+                    .h(px(46.0)).flex_none()
+                    .pl(px(10.0)).pr(px(11.0))
                     .mx_2()
-                    .rounded_lg()
-                    .when(selected, |this| this.bg(hsla(accent, 0.6, 0.5, 1.0)).text_color(gpui::white()))
-                    .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.05))))
+                    .rounded(px(8.0))
+                    .text_color(hsla(0.0, 0.0, 1.0, if selected { 1.0 } else { 0.82 }))
+                    .when(selected, |this| this.bg(hsla(accent, 0.08, 0.255, 1.0)))
+                    .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.04))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
-                    .child(crate::icons::control(icon))
+                    .child(tile)
                     .child(
                         div()
                             .flex_1()
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
+                            .font_weight(gpui::FontWeight::MEDIUM)
                             .child(label),
                     )
                     .child(
@@ -2682,14 +2702,14 @@ impl BrowserWindow {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .text_xs()
-                            .when(!selected, |this| this.text_color(hsla(0.0, 0.0, 0.0, 0.45)))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(hsla(0.0, 0.0, 1.0, if selected { 0.95 } else { 0.4 }))
                             .child(detail),
                     )
                     .when_some(archived_id, |this, id| this.child(div()
                         .id(("delete-archived", id.get() as usize))
                         .debug_selector(move || format!("delete-archived-{}", id.get()))
-                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.12)))
+                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_archive_entry(id, cx);
@@ -2697,7 +2717,7 @@ impl BrowserWindow {
                     .when_some(history_url, |this, url| this.child(div()
                         .id(("delete-suggestion", index))
                         .debug_selector(move || format!("delete-suggestion-{index}"))
-                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.12)))
+                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.browser.delete_history_entry(&url);
@@ -2706,9 +2726,13 @@ impl BrowserWindow {
                                 bar.selected = bar.selected.min(count.saturating_sub(1));
                             }
                             cx.notify();
-                        })).child(crate::icons::control(crate::icons::Icon::Close))));
+                        })).child(crate::icons::control(crate::icons::Icon::Close))))
+                    .child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
+                        .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, 1.0, 0.06) })
+                        .text_color(if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, 1.0, 0.6) })
+                        .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0)));
                 div().flex().flex_col().flex_none()
-                    .children(date.map(|date| div().debug_selector(move || format!("archive-date-{index}")).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 0., 0.5)).child(date)))
+                    .children(date.map(|date| div().debug_selector(move || format!("archive-date-{index}")).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
                     .child(row).into_any_element()
             })
             .collect();
@@ -2750,34 +2774,43 @@ impl BrowserWindow {
                     // Keep clicks inside the panel from reaching the backdrop.
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .w(px(panel_width))
+                    .relative()
                     .flex()
                     .flex_col()
-                    .pb_2()
-                    .rounded_xl()
-                    .bg(hsla(0.0, 0.0, 0.99, 1.0))
+                    .rounded(px(COMMAND_BAR_RADIUS))
+                    .bg(hsla(200. / 360., 0.05, 0.1, if crate::native::HAS_BACKDROP { 0.88 } else { 0.98 }))
                     .shadow_2xl()
                     .border_1()
-                    .border_color(hsla(0.0, 0.0, 0.0, 0.08))
-                    .text_color(hsla(0.0, 0.0, 0.1, 1.0))
+                    .border_color(hsla(0.0, 0.0, 1.0, 0.2))
+                    .text_color(hsla(0.0, 0.0, 1.0, 0.92))
+                    .font_family(".SystemUIFont")
+                    .child(gpui::canvas(|_, _, _| (), |bounds, _, window, _| crate::panel::backdrop(window, "command-bar", Some(bounds), COMMAND_BAR_RADIUS, crate::native::Material::Hud)).absolute().inset_0())
                     .child(
                         div()
-                            .debug_selector(|| "command-bar-input".into())
-                            .px_4()
-                            .pt_3()
-                            .pb_2()
-                            .text_size(px(20.0))
-                            .line_height(px(32.0))
-                            .child(bar.input.clone()),
+                            .h(px(COMMAND_BAR_HEADER - 1.)).flex_none()
+                            .flex().items_center().gap(px(13.0))
+                            .pl(px(22.0)).pr(px(21.0))
+                            .child(div().text_color(hsla(0.0, 0.0, 1.0, 0.75)).child(crate::icons::control_sized(crate::icons::Icon::Search, 16.0)))
+                            .child(div()
+                                .debug_selector(|| "command-bar-input".into())
+                                .flex_1().min_w_0()
+                                .text_size(px(18.0))
+                                .line_height(px(28.0))
+                                .child(bar.input.clone()))
+                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)), |this| this.child(div()
+                                .size(px(24.0)).flex_none().flex().items_center().justify_center().rounded_full()
+                                .bg(hsla(0.0, 0.0, 0.0, 0.8)).text_color(hsla(0.0, 0.0, 1.0, 0.55))
+                                .child(crate::icons::control_sized(crate::icons::Icon::Info, 17.0)))),
                     )
                     .when(matches!(bar.target, Target::Icon(_)), |this| this.child(div().px_4().pb_2().text_xs().child("Enter one symbol or emoji. Leave blank to restore the default icon.")))
                     .when(matches!(bar.target, Target::Archive(_)), |this| this.child(self.render_archive_controls(cx)))
                     .when(bar.target == Target::ConfirmClearArchive, |this| this.child(div().px_4().pb_2().text_sm().child("This action is permanent. Archived tabs from all Spaces will be deleted.")))
                     .when(!has_rows && matches!(bar.target, Target::Archive(_)), |this| this.child(div().px_4().py_3().text_sm().child("No archived tabs match your search.")))
                     .when(has_rows, |this| {
-                        this.child(div().h(px(1.0)).mb_2().bg(hsla(0.0, 0.0, 0.0, 0.08)))
-                            .text_sm()
+                        this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, 1.0, 0.1)))
+                            .text_size(px(14.0))
                             .child(div().id("command-suggestions").debug_selector(|| "command-suggestions".into())
-                                .flex().flex_col().max_h(px(rows_height)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
+                                .flex().flex_col().gap_1().pt(px(6.0)).pb(px(8.0)).max_h(px(rows_height + 14.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
                     }),
             )
     }

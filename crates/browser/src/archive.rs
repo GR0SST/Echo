@@ -145,8 +145,8 @@ impl BrowserWindow {
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .when(space == selected, |this| this.bg(hsla(0.0, 0.0, 0.0, 0.08)))
-                            .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.12)))
+                            .when(space == selected, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.1)))
+                            .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.14)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(bar) = &mut this.command_bar {
                                     bar.target = Target::Archive(space);
@@ -168,7 +168,7 @@ impl BrowserWindow {
                         .px_2()
                         .py_1()
                         .rounded_md()
-                        .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
+                        .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.08)))
                         .on_click(cx.listener(|this, _, _, cx| this.confirm_clear_archive(cx)))
                         .child("Clear Archive…"),
                 )
@@ -181,8 +181,8 @@ impl BrowserWindow {
                 (Some(ArchiveReason::Manual), "Manually Closed", "archive-reason-manual"),
                 (Some(ArchiveReason::Automatic), "Auto-Closed", "archive-reason-automatic"),
             ].into_iter().map(|(filter, label, selector)| div().id(selector).debug_selector(move || selector.into())
-                .px_2().py_1().rounded_md().when(filter == reason, |this| this.bg(hsla(0., 0., 0., 0.08)))
-                .hover(|this| this.bg(hsla(0., 0., 0., 0.12)))
+                .px_2().py_1().rounded_md().when(filter == reason, |this| this.bg(hsla(0., 0., 1., 0.1)))
+                .hover(|this| this.bg(hsla(0., 0., 1., 0.14)))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(bar) = &mut this.command_bar { bar.archive_reason = filter; bar.archive_limit = 8; bar.selected = 0; bar.rows_scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(0.))); }
                     cx.notify();

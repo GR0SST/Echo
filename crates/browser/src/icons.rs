@@ -47,7 +47,7 @@ pub(crate) fn more() -> AnyElement {
 #[derive(Clone, Copy)]
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
-    Search, External, History, Enter, Restore, Up, Down, Check, Mute, Command, Link,
+    Search, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, Link,
     SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab,
 }
 
@@ -109,6 +109,7 @@ fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
         Icon::Reload => "reload-outline", Icon::Close => "close-outline",
         Icon::Minus => "remove-outline", Icon::Plus => "add-outline",
         Icon::Folder => "folder-outline", Icon::Search => "search-outline",
+        Icon::Info => "information-circle-outline", Icon::Arrow => "arrow-forward-outline",
         Icon::External => "open-outline", Icon::History => "time-outline",
         Icon::Enter => "return-down-back-outline", Icon::Restore => "arrow-undo-outline",
         Icon::Up => "arrow-up-outline", Icon::Down => "arrow-down-outline",

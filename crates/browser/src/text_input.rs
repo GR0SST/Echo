@@ -492,7 +492,7 @@ impl Element for TextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), hsla(0., 0., 0., 0.35))
+            (input.placeholder.clone(), style.color.opacity(0.45))
         } else {
             (content, style.color)
         };
