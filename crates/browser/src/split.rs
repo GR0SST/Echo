@@ -49,7 +49,7 @@ impl BrowserWindow {
                 let Some(split) = this.browser.active_split().filter(|split| split.id == split_id && split.active == pane) else { return; };
                 let index = split.panes.iter().position(|id| *id == pane).unwrap();
                 let extent = if split.axis == Axis::Horizontal {
-                    f64::from(f32::from(size.width)) - f64::from(crate::window::SIDEBAR_WIDTH * this.sidebar_amount()
+                    f64::from(f32::from(size.width)) - f64::from(this.sidebar_width() * this.sidebar_amount()
                         + crate::pages::CONTENT_INSET * (2. - this.sidebar_amount()))
                 } else { f64::from(f32::from(size.height)) - f64::from(2. * crate::pages::CONTENT_INSET) };
                 let weights = crate::split_layout::expanded_weights(extent, split.panes.len(), index);

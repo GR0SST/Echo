@@ -548,6 +548,11 @@ pub struct BrowserWindow {
     pub(crate) sidebar_debug_namespace: Option<String>,
     pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
+    sidebar_width: f32,
+    sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
+    sidebar_resize_generation: u64,
+    sidebar_resize_focus_on_activation: Option<(crate::pages::ResizePageFocus, u64)>,
+    pub(crate) sidebar_render_width: Option<f32>,
     sidebar_reveal: Option<PinnedReveal>,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
@@ -605,7 +610,7 @@ pub struct BrowserWindow {
 
 impl BrowserWindow {
     pub(crate) fn window_controls_offset(&self) -> f32 {
-        if !self.page_content_visible() { 0. } else { SIDEBAR_WIDTH * (self.sidebar_amount() - 1.) }
+        if !self.page_content_visible() { 0. } else { self.sidebar_width() * (self.sidebar_amount() - 1.) }
     }
 
     pub(crate) fn sidebar_debug_name(&self, name: String) -> String {
@@ -684,6 +689,13 @@ impl BrowserWindow {
             if let Some(pages) = closing_pages.as_ref().and_then(std::rc::Weak::upgrade) { pages.borrow_mut().release_host(); }
             true
         });
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() && this.sidebar_resize.is_some() {
+                this.abandon_sidebar_resize();
+                this.queue_floating_resize(cx);
+                cx.notify();
+            }
+        }).detach();
         if let Some(pages) = pages.clone() {
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -693,6 +705,7 @@ impl BrowserWindow {
                         if this.page_content_visible() { if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); } }
                     }
                     if let Some(pages) = &this.pages { pages.borrow_mut().activate_host_with_visibility(&this.browser, this.page_content_visible()); }
+                    this.restore_abandoned_resize_focus();
                     if !this.page_content_visible() && this.sidebar_root_may_take_focus() { this.focus_sidebar_page(window, cx, None); }
                     cx.notify();
                 }
@@ -755,6 +768,11 @@ impl BrowserWindow {
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
+            sidebar_width: SIDEBAR_WIDTH,
+            sidebar_resize: None,
+            sidebar_resize_generation: 0,
+            sidebar_resize_focus_on_activation: None,
+            sidebar_render_width: None,
             sidebar_reveal: None,
             sidebar_scrolls: HashMap::new(),
             pinned_reveals: HashMap::new(),
@@ -835,6 +853,7 @@ impl BrowserWindow {
     /// Child windows can outlive their parent on GPUI's test platform and
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
+        self.discard_sidebar_resize();
         let profile_child = self.take_user_profile_child(cx);
         let children = [
             profile_child.map(|handle| handle.into()),
@@ -1210,6 +1229,7 @@ impl BrowserWindow {
     /// makeKeyAndOrderFront). Minimizing must never enqueue that activation,
     /// including from an earlier dismissal in the same command dispatch.
     pub(crate) fn close_popups_for_window_operation(&mut self, minimize: bool, cx: &mut Context<Self>) {
+        if minimize { self.abandon_sidebar_resize(); self.queue_floating_resize(cx); }
         let focus = if minimize {
             // A root with no popup already owns its responder intent (for
             // example History search or docked DevTools). Only replace it when
@@ -1230,6 +1250,11 @@ impl BrowserWindow {
         self.close_command_bar_with_focus(focus, cx);
         self.close_find_with_focus(focus, cx);
         self.close_tab_menu_with_focus(focus, cx);
+        if minimize {
+            if let Some((_, generation)) = &mut self.sidebar_resize_focus_on_activation {
+                *generation = self.popup_focus_generation;
+            }
+        }
     }
 
     pub(crate) fn close_popup_overlay(&mut self, overlay: Option<WindowHandle<Overlay>>, policy: PopupFocus, sync_pages: bool, cx: &mut Context<Self>) {
@@ -1763,7 +1788,8 @@ impl BrowserWindow {
     }
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        div().size_full().key_context(WINDOW_CONTEXT)
+        div().size_full().key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
@@ -1978,6 +2004,7 @@ impl BrowserWindow {
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.cancel_sidebar_resize_for_active_command(cx);
         self.finish_tab_rename(true, cx);
         let from = self.sidebar_amount();
         self.sidebar_visible = !self.sidebar_visible;
@@ -2016,11 +2043,12 @@ impl BrowserWindow {
         });
         cx.notify();
 
+        let sidebar_width = self.sidebar_width();
         let browser = cx.entity().downgrade();
         let main = window.bounds();
         let bounds = Bounds::new(
             main.origin,
-            size(px(SIDEBAR_WIDTH + 2.0 * FLOATING_SIDEBAR_INSET + FLOATING_SIDEBAR_SHADOW), main.size.height),
+            size(px(self.sidebar_width() + 2.0 * FLOATING_SIDEBAR_INSET + FLOATING_SIDEBAR_SHADOW), main.size.height),
         );
         let parent = self.native_view;
         cx.defer(move |cx| {
@@ -2050,7 +2078,7 @@ impl BrowserWindow {
             let overlay = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(overlay)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, overlay, true);
-                    crate::native::position_traffic_lights(overlay, TRAFFIC_LIGHT_X - SIDEBAR_WIDTH - FLOATING_SIDEBAR_INSET);
+                    crate::native::position_traffic_lights(overlay, TRAFFIC_LIGHT_X - sidebar_width - FLOATING_SIDEBAR_INSET);
                 }
                 cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Sidebar, cx))
             });
@@ -2088,8 +2116,9 @@ impl BrowserWindow {
     }
 
     fn on_floating_sidebar_pointer(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+        if self.sidebar_resize.is_some() { return; }
+        let right = FLOATING_SIDEBAR_INSET + self.sidebar_width();
         let Some(floating) = &mut self.floating_sidebar else { return; };
-        let right = FLOATING_SIDEBAR_INSET + SIDEBAR_WIDTH;
         if (0. ..=right).contains(&x) && (0. ..=floating.height).contains(&y) { floating.entered = true; }
         if floating.entered && (x > right + SIDEBAR_DISMISS_BUFFER || y < 0. || y > floating.height)
             && self.tab_menu.is_none() && self.command_bar.is_none() {
@@ -2130,6 +2159,8 @@ impl BrowserWindow {
             return;
         };
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        if self.sidebar_resize.is_some() { return; }
+        let sidebar_width = self.sidebar_width();
         let page_count = if self.browser.is_private() {
             self.browser.spaces.len()
         } else {
@@ -2159,7 +2190,7 @@ impl BrowserWindow {
                 drag.travel += dx;
                 drag.samples.push((cx.background_executor().now(), dx));
                 // Fingers moving left reveal the space on the right.
-                let raw = drag.start - drag.travel / SIDEBAR_WIDTH;
+                let raw = drag.start - drag.travel / sidebar_width.max(1.);
                 self.pager.position = rubber_band(raw, page_count);
                 cx.notify();
             }
@@ -2474,7 +2505,7 @@ impl BrowserWindow {
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.browser.is_blank() || self.browser.is_private() { return div().h_full().on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))).child(self.render_workspace_sidebar(None, cx)).into_any_element(); }
         if self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::CreateSpace {
-            return div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(SIDEBAR_WIDTH)).h_full().overflow_hidden()
+            return div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(self.sidebar_width())).h_full().overflow_hidden()
                 .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
                 .when_some(self.sidebar_navigation.form.clone(), |this, form| this.child(form))
                 .child(div().absolute().bottom_0().left_0().right_0().child(self.render_space_switcher(cx)))
@@ -2498,16 +2529,16 @@ impl BrowserWindow {
                 }
                 crate::sidebar_pages::SidebarPage::CreateSpace | crate::sidebar_pages::SidebarPage::Library => div().into_any_element(),
             };
-            rendered.push(div().id(("sidebar-page", page_index)).relative().flex_none().w(px(SIDEBAR_WIDTH)).h_full().child(content).into_any_element());
+            rendered.push(div().id(("sidebar-page", page_index)).relative().flex_none().w(px(self.sidebar_width())).h_full().child(content).into_any_element());
         }
         self.browser = saved;
         self.sidebar_debug_namespace = saved_namespace;
         self.sidebar_page_interactive = saved_interactive;
         // Toolbar, Favorites and Space dock remain stationary while the
         // window-local Space contents follow the fingers between real IDs.
-        div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(SIDEBAR_WIDTH)).h_full().overflow_hidden()
+        div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(self.sidebar_width())).h_full().overflow_hidden()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
-            .child(self.render_workspace_sidebar(Some((rendered, -self.pager.position * SIDEBAR_WIDTH)), cx))
+            .child(self.render_workspace_sidebar(Some((rendered, -self.pager.position * self.sidebar_width())), cx))
             .into_any_element()
     }
 
@@ -2535,7 +2566,7 @@ impl BrowserWindow {
         let favorites: Vec<_> = self.browser.active_user_profile().favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).collect();
         // Favorites stretch to fill each row, as in the reference.
         let columns = favorites.len().clamp(1, FAVORITE_COLUMNS) as f32;
-        let favorite_width = ((SIDEBAR_WIDTH - 2. * SIDEBAR_INSET - FAVORITE_GAP * (columns - 1.)) / columns).floor();
+        let favorite_width = ((self.sidebar_width() - 2. * SIDEBAR_INSET - FAVORITE_GAP * (columns - 1.)) / columns).floor();
         div()
             .id("sidebar")
             .debug_selector(|| self.sidebar_debug_name(if private || blank { "sidebar".into() } else { "workspace-sidebar".into() }))
@@ -2547,7 +2578,7 @@ impl BrowserWindow {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.sidebar_width()))
             .h_full()
             .pt(px(SIDEBAR_TOOLBAR_HEIGHT - 1.))
             .gap(px(8.))
@@ -2847,7 +2878,7 @@ impl BrowserWindow {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.sidebar_width()))
             .h_full()
             .px(px(SIDEBAR_INSET))
             .gap(px(SIDEBAR_ROW_GAP))
@@ -3169,7 +3200,7 @@ impl BrowserWindow {
         };
         let closing = floating.closing;
         let hue = self.pager_hue();
-        let width = SIDEBAR_WIDTH;
+        let width = self.sidebar_width();
         let panel = div()
             .id("floating-sidebar")
             .debug_selector(|| self.sidebar_debug_name((|| "floating-sidebar".into())()))
@@ -3188,6 +3219,7 @@ impl BrowserWindow {
             ))
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .child(self.render_sidebar(cx))
+            .child(self.render_sidebar_resize_handle(true, cx))
             // This overlay is its own native window with forwarded controls.
             // Keep its single control mount outside the page renderer too.
             .child(div().absolute().top_0().left_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx)))
@@ -3200,9 +3232,12 @@ impl BrowserWindow {
         let travel = width + FLOATING_SIDEBAR_INSET;
         div()
             .size_full()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if this.sidebar_resize.is_some() { return; }
                 this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);
             }))
+            .child(self.render_sidebar_resize_tracking(cx))
             .child(panel.with_animation(
                 if closing { "slide-out" } else { "slide-in" },
                 slide,
@@ -3237,7 +3272,7 @@ impl BrowserWindow {
         let accent = self.accent();
         let region = self.split_draft.as_ref().and_then(|draft| {
             let split = self.browser.split_for(draft.pane)?;
-            let left = SIDEBAR_WIDTH * self.sidebar_amount() + CONTENT_INSET * (1. - self.sidebar_amount());
+            let left = self.sidebar_width() * self.sidebar_amount() + CONTENT_INSET * (1. - self.sidebar_amount());
             let card = engine::Bounds { x: left.into(), y: CONTENT_INSET.into(), width: (width - left - CONTENT_INSET).max(0.).into(), height: (height - 2. * CONTENT_INSET).max(0.).into() };
             let index = split.panes.iter().position(|id| *id == draft.pane)?;
             crate::split_layout::layout(card, split.axis, &split.weights, true).get(index).map(|bounds| bounds.page)
@@ -3463,7 +3498,7 @@ impl Render for BrowserWindow {
         self.sync_link_status(window, cx);
         let hue = self.pager_hue();
         let sidebar_amount = self.sidebar_amount();
-        let sidebar_offset = SIDEBAR_WIDTH * (sidebar_amount - 1.);
+        let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
         let window_controls_offset = self.window_controls_offset();
         if let Some(view) = self.native_view {
             crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + window_controls_offset);
@@ -3474,10 +3509,13 @@ impl Render for BrowserWindow {
         let library = library_open.then(|| self.render_library_host(cx));
         let content = if library_open { div().into_any_element() } else { self.render_content(cx).into_any_element() };
         div()
-            .key_context(WINDOW_CONTEXT)
+            .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
             .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if this.sidebar_resize.is_some() { return; }
                 this.close_link_status(cx);
                 this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);
                 if !this.sidebar_visible && event.position.x < px(SIDEBAR_REVEAL_EDGE) {
@@ -3579,9 +3617,11 @@ impl Render for BrowserWindow {
             ))
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .when(!library_open, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
-                .relative().flex_none().h_full().w(px(SIDEBAR_WIDTH * sidebar_amount)).overflow_hidden()
+                .relative().flex_none().h_full().w(px(self.sidebar_width() * sidebar_amount)).overflow_hidden()
                 .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(sidebar)))))
+            .child(self.render_sidebar_resize_tracking(cx))
             .child(content)
+            .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
             .when_some(library, |this, library| this.child(library))
             .when(self.page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx)))
@@ -3717,3 +3757,9 @@ fn rubber_band(position: f32, spaces: usize) -> f32 {
 #[cfg(test)]
 #[path = "sidebar_navigation_pager_tests.rs"]
 mod sidebar_navigation_pager_tests;
+
+#[path = "sidebar_resize.rs"]
+mod sidebar_resize;
+#[cfg(test)]
+#[path = "sidebar_resize_tests.rs"]
+mod sidebar_resize_tests;

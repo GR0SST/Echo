@@ -334,6 +334,33 @@ pub(crate) struct InputOrigin {
     inspector: Option<engine::InspectorId>,
 }
 
+/// Focus intent at the start of a sidebar resize. This does not retain an engine
+/// or authorize focus in a replacement Pages/store. UI restoration belongs to
+/// the host, which must also validate its popup/inline generation and FocusHandle.
+#[derive(Clone)]
+pub(crate) struct ResizePageFocus {
+    store: std::rc::Weak<RefCell<PageStore>>,
+    host: u64,
+    parent: *mut c_void,
+    target: ResizeFocusTarget,
+}
+
+#[derive(Clone, Copy)]
+enum ResizeFocusTarget {
+    Ui,
+    Unavailable,
+    Native { origin: InputOrigin, view: ViewId, frontend: Option<(engine::InspectorId, u64)> },
+}
+
+impl ResizePageFocus {
+    /// A live page/inspector intent was captured; restoration still revalidates
+    /// its original owner, attachment, document and frontend generations.
+    pub(crate) fn has_native_focus(&self) -> bool { matches!(self.target, ResizeFocusTarget::Native { .. }) }
+
+    /// Only explicit UI intent permits the host to restore its GPUI handle.
+    pub(crate) fn is_ui(&self) -> bool { matches!(self.target, ResizeFocusTarget::Ui) }
+}
+
 struct PageStore {
     inspector_probe: Option<InspectorProbe>,
     devtools: Option<devtools::Dock>,
@@ -364,6 +391,7 @@ pub struct Pages {
     page_has_focus: bool,
     devtools_focused: bool,
     preserve_ui_focus: bool,
+    resize_focus_suppressed: bool,
     wanted: Vec<PageIntent>,
     wanted_focus: Option<TabId>,
     axis: browser_core::splits::Axis,
@@ -439,6 +467,7 @@ impl Pages {
             page_has_focus: false,
             devtools_focused: false,
             preserve_ui_focus: false,
+            resize_focus_suppressed: false,
             wanted: Vec::new(),
             wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal,
@@ -526,7 +555,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
+        Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
@@ -628,7 +657,7 @@ impl Pages {
                 self.visible.remove(&tab);
                 if self.shown == Some(tab) {
                     self.shown = None;
-                    store.engine.focus_ui_in_host(self.parent);
+                    if !self.resize_focus_suppressed { store.engine.focus_ui_in_host(self.parent); }
                 }
             }
             for (tab, profile) in open {
@@ -703,7 +732,7 @@ impl Pages {
         self.visible.remove(&tab);
         if self.shown == Some(tab) {
             self.shown = None;
-            store.engine.focus_ui_in_host(self.parent);
+            if !self.resize_focus_suppressed { store.engine.focus_ui_in_host(self.parent); }
         }
     }
 
@@ -761,7 +790,7 @@ impl Pages {
         let focused = self.wanted_focus.filter(|id| ids.contains(id));
         if self.shown.is_some() && (focused.is_none() || !self.shown.is_some_and(|id| ids.contains(&id))) {
             self.shown = None;
-            if active { engine.focus_ui_in_host(self.parent); }
+            if active && !self.resize_focus_suppressed { engine.focus_ui_in_host(self.parent); }
         }
         let mut created = false;
         let mut moved = false;
@@ -810,7 +839,7 @@ impl Pages {
         }
         // Creating a native browser may take the responder even when the
         // intended active pane has not changed. Reassert it after all creates.
-        if active && self.page_focus && (!self.devtools_focused || focused != self.shown) && !self.preserve_ui_focus && (focused != self.shown || created || !self.page_has_focus) {
+        if active && !self.resize_focus_suppressed && self.page_focus && (!self.devtools_focused || focused != self.shown) && !self.preserve_ui_focus && (focused != self.shown || created || !self.page_has_focus) {
             if let Some((tab, view)) = focused.and_then(|id| pages.get(&id).filter(|page| page.owner == self.host).map(|page| (id, page.view))) {
                 engine.focus_page(view);
                 self.shown = Some(tab);
@@ -818,13 +847,13 @@ impl Pages {
                 self.page_focus = true;
                 self.page_has_focus = true;
             } else if self.shown.take().is_some() || created {
-                if active { engine.focus_ui_in_host(self.parent); }
+                if active && !self.resize_focus_suppressed { engine.focus_ui_in_host(self.parent); }
             }
         }
-        if active && (!self.page_focus || self.preserve_ui_focus) {
+        if active && (!self.page_focus || self.preserve_ui_focus || self.resize_focus_suppressed) {
             self.page_has_focus = false;
             self.shown = focused.filter(|tab| pages.get(tab).is_some_and(|page| page.owner == self.host));
-            if created { engine.focus_ui_in_host(self.parent); }
+            if created && !self.resize_focus_suppressed { engine.focus_ui_in_host(self.parent); }
         }
         if moved { store.mirror_revision = store.mirror_revision.wrapping_add(1); }
         // Ownership changes remove target photographs and reveal source ones.
@@ -834,7 +863,7 @@ impl Pages {
             store.mirror_revision = store.mirror_revision.wrapping_add(1);
         }
         store.layout_inspector_probe();
-        let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus);
+        let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus && !self.resize_focus_suppressed);
         if closed { self.devtools_focused = false; self.page_has_focus = focused; }
         self.seen_revision = store.mirror_revision;
     }
@@ -881,6 +910,98 @@ impl Pages {
 
     pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) && self.view(tab).is_some() }
 
+    /// Read intent without changing native or GPUI focus, draining events, or
+    /// retaining a native owner. An invalid native target is never UI intent.
+    pub(crate) fn capture_resize_focus(&self) -> ResizePageFocus {
+        let target = if !self.page_focus {
+            ResizeFocusTarget::Ui
+        } else {
+            let store = self.store.borrow();
+            self.shown.filter(|tab| self.wanted_focus == Some(*tab) && self.visible.contains(tab))
+                .and_then(|tab| store.pages.get(&tab))
+                .filter(|page| store.active_host == self.host && store.hosts.get(&self.host) == Some(&self.parent)
+                    && page.owner == self.host && page.visible)
+                .and_then(|page| {
+                    let frontend = if self.devtools_focused {
+                        let dock = store.devtools.filter(|dock| dock.host == self.host && dock.tab == page.identity.tab && dock.view == page.view)?;
+                        let status = store.engine.inspector_status(dock.id).filter(|status|
+                            status.id == dock.id && status.inspected == page.view
+                                && !matches!(status.phase, engine::InspectorPhase::Detached | engine::InspectorPhase::LoadFailed))?;
+                        Some((dock.id, status.generation))
+                    } else { None };
+                    Some(ResizeFocusTarget::Native {
+                        origin: InputOrigin { identity: page.identity, host: self.host, attachment: page.input_attachment,
+                            inspector: frontend.map(|(id, _)| id) },
+                        view: page.view, frontend,
+                    })
+                }).unwrap_or(ResizeFocusTarget::Unavailable)
+        };
+        ResizePageFocus { store: Rc::downgrade(&self.store), host: self.host, parent: self.parent, target }
+    }
+
+    /// Restore only the original live native responder. Returns true only when
+    /// native focus was issued; UI snapshots are a no-op (the host owns GPUI).
+    /// The host must first reject newer UI/popup/inline focus intent.
+    pub(crate) fn restore_resize_focus(&mut self, snapshot: ResizePageFocus) -> bool {
+        self.restore_resize_focus_inner(snapshot, true)
+    }
+
+    /// Validate and resume intent without native focus. This is not safe for
+    /// abandoned resizes: retain their exact snapshot under suppression until
+    /// activation has reconciled the layout, then explicitly restore it.
+    pub(crate) fn resume_resize_focus_intent(&mut self, snapshot: ResizePageFocus) -> bool {
+        self.restore_resize_focus_inner(snapshot, false)
+    }
+
+    fn restore_resize_focus_inner(&mut self, snapshot: ResizePageFocus, focus_native: bool) -> bool {
+        if self.resize_focus_suppressed { return false; }
+        let ResizeFocusTarget::Native { origin, view, frontend } = snapshot.target else { return false; };
+        if !snapshot.store.ptr_eq(&Rc::downgrade(&self.store)) || snapshot.host != self.host
+            || snapshot.parent != self.parent || self.shown != Some(origin.identity.tab)
+            || self.wanted_focus != Some(origin.identity.tab) || !self.visible.contains(&origin.identity.tab)
+            || crate::quit::is_quitting()
+        { return false; }
+        let mut store = self.store.borrow_mut();
+        if store.active_host != self.host || store.hosts.get(&self.host) != Some(&self.parent)
+            || !store.pages.get(&origin.identity.tab).is_some_and(|page|
+                page.identity == origin.identity && page.owner == self.host && page.visible
+                    && page.input_attachment == origin.attachment && page.view == view)
+        { return false; }
+        if let Some((id, generation)) = frontend {
+            if !store.devtools.is_some_and(|dock| dock.id == id && dock.host == self.host
+                && dock.tab == origin.identity.tab && dock.view == view)
+                || !store.engine.inspector_status(id).is_some_and(|status|
+                    status.id == id && status.inspected == view && status.generation == generation
+                        && !matches!(status.phase, engine::InspectorPhase::Detached | engine::InspectorPhase::LoadFailed))
+            { return false; }
+        }
+        if focus_native {
+            if let Some((id, _)) = frontend {
+                store.engine.focus_inspector(id);
+            } else {
+                store.engine.focus_page(view);
+            }
+        }
+        self.page_focus = true;
+        self.devtools_focused = frontend.is_some();
+        self.page_has_focus = focus_native && frontend.is_none();
+        true
+    }
+
+    /// Keep layout reconciliation from changing responders until the host can
+    /// validate its retained resize snapshot after activation.
+    pub(crate) fn suppress_resize_focus(&mut self) {
+        self.resize_focus_suppressed = true;
+        self.request_ui_focus();
+    }
+
+    /// Ending suppression retains UI intent. Only explicit snapshot restoration
+    /// or a subsequent user activation may request page focus again.
+    pub(crate) fn end_resize_focus_suppression(&mut self) {
+        self.resize_focus_suppressed = false;
+        self.request_ui_focus();
+    }
+
     /// Transfers the native responder to GPUI without hiding the page.
     pub fn focus_ui(&mut self) {
         self.request_ui_focus();
@@ -897,10 +1018,11 @@ impl Pages {
 
     /// Records explicit navigation/selection intent without changing the native
     /// responder before layout or an asynchronous handoff is ready.
-    pub fn request_page_focus(&mut self) { self.devtools_focused = false; self.page_focus = true; self.page_has_focus = false; }
+    pub fn request_page_focus(&mut self) { if self.resize_focus_suppressed { return; } self.devtools_focused = false; self.page_focus = true; self.page_has_focus = false; }
 
     /// Gives keyboard focus back to the page on screen.
     pub fn focus_shown(&mut self) {
+        if self.resize_focus_suppressed { return; }
         self.devtools_focused = false;
         self.page_focus = true;
         let target = self.wanted_focus.filter(|tab| self.visible.contains(tab)).and_then(|tab| {
@@ -1123,9 +1245,9 @@ impl Pages {
         store.capture_pending_engine_events();
         // take_events processes inspector load callbacks first. This runs after
         // the regular pump, with no borrow retained across pumping or awaiting.
-        store.handle_devtools_events(self.host, self.page_focus);
+        store.handle_devtools_events(self.host, self.page_focus && !self.resize_focus_suppressed);
         store.layout_inspector_probe();
-        let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus);
+        let (closed, focused) = store.reconcile_devtools(self.host, self.wanted_focus, self.page_focus && !self.preserve_ui_focus && !self.resize_focus_suppressed);
         if closed { self.devtools_focused = false; self.page_has_focus = focused; }
         let recover: Vec<_> = store.metadata.values().filter_map(|(event, delivered)| {
             let page = store.pages.get(&event.identity.tab).filter(|page| page.identity == event.identity)?;
@@ -1164,7 +1286,7 @@ impl Pages {
             Event::EditFocusChanged { view, editable } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
             }
-            Event::Focused { view } => {
+            Event::Focused { view } if !self.resize_focus_suppressed => {
                 if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); self.devtools_focused = false; self.page_focus = true; self.page_has_focus = true; }
             }
             Event::UrlChanged { view, url } => {
@@ -1193,7 +1315,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }
@@ -1371,3 +1493,7 @@ impl PageStore {
 impl Drop for Pages {
     fn drop(&mut self) { self.release_host(); }
 }
+
+#[cfg(test)]
+#[path = "pages_resize_focus_tests.rs"]
+mod resize_focus_tests;

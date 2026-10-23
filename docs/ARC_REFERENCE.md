@@ -1043,3 +1043,28 @@ Native acceptance remains partial overall.
 Theme, icon and draft Profile pickers remain unimplemented. The test process
 completed orderly shutdown with zero CEF owners, browsers and cookie flushes;
 no live Space was deleted.
+
+
+### Sidebar resize foundation and Echo acceptance
+
+Official Arc release notes document edge dragging, double-click reset and
+all-left collapse. Static inspection of installed Arc 1.170.0's x86_64 pan path
+found rounded beginning-width plus translation, an open range of 164–500 raw
+units, changed-state collapse below 82, and a mode-zero end branch at or below
+82. The reset path computes 228. These are raw implementation values; the
+conversion to screenshot interior/outer width and semantic mode-tag identity
+were not established. Snap velocity, eligibility, timing and haptics need native
+comparison. No additional live Arc drag was attempted after unsafe window binding
+was observed.
+
+Echo's isolated macOS resize r2 bundle passed docked edge dragging across CEF,
+minimum/maximum width, double-click reset, reset → collapse → reopen, and held
+mouse-down → Cmd+S cancellation. A local fixture kept one document UUID and one
+load while native page bounds changed; continued typing preserved its input.
+Screenshots were inspected. Full workspace tests passed 751 cases. Window width
+is local and unpersisted; new-window inheritance and exact Arc feel remain open.
+
+The floating panel appeared, but its resize probe used root-window automation
+and an inner-edge coordinate that missed the child handle. It is unverified,
+not a demonstrated product failure. The test process exited normally after CEF
+Complete with zero owners, browsers and cookie flushes. No Space was deleted.

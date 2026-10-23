@@ -455,6 +455,7 @@ impl BrowserWindow {
         model.switch_space(index);
         let projection = model.window_projection(&model.window_selection());
         let saved = std::mem::replace(&mut self.browser, projection);
+        let saved_render_width = self.sidebar_render_width.replace(crate::window::SIDEBAR_WIDTH);
         let saved_interactive = self.sidebar_page_interactive;
         self.sidebar_page_interactive = true;
         let saved_namespace = self
@@ -566,6 +567,7 @@ impl BrowserWindow {
             .into_any_element();
         self.browser = saved;
         self.sidebar_debug_namespace = saved_namespace;
+        self.sidebar_render_width = saved_render_width;
         self.sidebar_page_interactive = saved_interactive;
         content
     }

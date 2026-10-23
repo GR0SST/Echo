@@ -31,6 +31,7 @@ mod status_url;
 mod private;
 mod profile;
 mod sidebar_pages;
+mod sidebar_resize_state;
 mod space_creation;
 mod space_creation_view;
 mod sidebar_navigation;
