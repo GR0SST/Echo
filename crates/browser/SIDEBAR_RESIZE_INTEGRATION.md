@@ -1,9 +1,9 @@
 # Sidebar resizing integration checkpoint
 
-Integrated in the browser. Full workspace validation passed 751 tests. Native
+Integrated in the browser. Full workspace validation passed 767 tests. Native
 macOS acceptance covers docked resizing, retained documents/input, min/max, reset,
-collapse/reopen and active cancellation. Floating native resizing, exact reference
-geometry and remaining platform checks are still open.
+collapse/reopen, active cancellation and floating child resizing. Exact reference
+geometry, external native deactivation and remaining platform checks are still open.
 
 ## Files and ownership
 
@@ -103,3 +103,14 @@ The floating panel appeared, but its attempted resize used a root-window drag
 helper and an incorrect inner-edge coordinate. That probe does not establish a
 product defect or a native pass. Route drag start to the actual child window,
 keep subsequent events bound to that window, and repeat the floating check.
+
+
+## Floating follow-up acceptance
+
+The initial failed floating probe was superseded by exact child-target diagnostics.
+The root resign callback cancelled the newly installed gesture during an owned
+child transition. Root and exact-child observers now validate that hierarchy after
+one GPUI frame, outside the host borrow. Unrelated/external deactivation still
+cancels in tests. Native resizing reached 396 from 240, resized the actual child,
+retained that width on docking, and preserved the fixture UUID, one load and input.
+Temporary diagnostics must be absent from the finished source.

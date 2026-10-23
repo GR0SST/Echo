@@ -4,8 +4,11 @@ use crate::sidebar_resize_state::{SidebarResizeOutcome, SidebarResizeState};
 
 /// The exact native hit-strip width remains a visual acceptance gate.
 const RESIZE_HIT_WIDTH: f32 = 4.;
+
 pub(super) struct SidebarResizeGesture {
     state: SidebarResizeState,
+    activation_id: u64,
+    activation_child: Option<WindowHandle<Overlay>>,
     live_width: f32,
     floating: bool,
     focus: Option<FocusHandle>,
@@ -139,7 +142,16 @@ impl BrowserWindow {
         // Pager positions are fractional Space positions; retaining them keeps
         // identity and animation progress when pixel travel changes.
         self.pager.drag = None;
+        self.sidebar_resize_generation = self.sidebar_resize_generation.wrapping_add(1);
         self.sidebar_resize = Some(SidebarResizeGesture {
+            activation_id: self.sidebar_resize_generation,
+            activation_child: floating
+                .then(|| {
+                    self.floating_sidebar
+                        .as_ref()
+                        .and_then(|sidebar| sidebar.overlay)
+                })
+                .flatten(),
             state: SidebarResizeState::begin(
                 self.sidebar_width,
                 !floating && self.sidebar_visible,
@@ -263,6 +275,84 @@ impl BrowserWindow {
         if let Some(pages) = &self.pages {
             pages.borrow_mut().end_resize_focus_suppression();
         }
+    }
+
+    /// Root and floating sidebar are one resize interaction hierarchy. AppKit
+    /// sends the root's resign-key before the owned child becomes key, so check
+    /// both exact windows after the paired notifications have had a frame to run.
+    /// Never use App::active_window here: on macOS it reports mainWindow.
+    pub(super) fn on_sidebar_resize_activation(
+        &mut self,
+        source: AnyWindowHandle,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if active {
+            return;
+        }
+        let Some(resize) = &self.sidebar_resize else {
+            return;
+        };
+        let main = self.main_window;
+        let child = resize.activation_child;
+        if source != main && child.map(|child| child.into()) != Some(source) {
+            return;
+        }
+        if !resize.floating {
+            if source == main {
+                self.abandon_sidebar_resize();
+                self.queue_floating_resize(cx);
+                cx.notify();
+            }
+            return;
+        }
+        let activation_id = resize.activation_id;
+        let owner = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(PAGER_FRAME).await;
+            if crate::quit::is_quitting() {
+                return;
+            }
+            let Ok(Some(current_child)) = owner.update(cx, |this, _| {
+                this.sidebar_resize
+                    .as_ref()
+                    .filter(|resize| resize.activation_id == activation_id && resize.floating)
+                    .map(|_| {
+                        this.floating_sidebar
+                            .as_ref()
+                            .filter(|sidebar| !sidebar.closing)
+                            .and_then(|sidebar| sidebar.overlay)
+                    })
+            }) else {
+                return;
+            };
+            // Each native window is queried after releasing the BrowserWindow
+            // borrow; its key-status callback state is the cross-platform seam.
+            let main_active = main
+                .update(cx, |_, window, _| window.is_window_active())
+                .unwrap_or(false);
+            let child_matches = current_child == child && child.is_some();
+            let child_active = child
+                .filter(|_| child_matches)
+                .and_then(|child| {
+                    child
+                        .update(cx, |_, window, _| window.is_window_active())
+                        .ok()
+                })
+                .unwrap_or(false);
+            let _ =
+                owner.update(cx, |this, cx| {
+                    if this.sidebar_resize.as_ref().is_some_and(|resize| {
+                        resize.activation_id == activation_id && resize.floating
+                    }) && (!child_matches || (!main_active && !child_active))
+                    {
+                        this.abandon_sidebar_resize();
+                        this.queue_floating_resize(cx);
+                        cx.notify();
+                    }
+                });
+        })
+        .detach();
     }
 
     /// Deactivation/minimization cancels without activating a responder.

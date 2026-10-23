@@ -914,3 +914,92 @@ fn cmd_s_during_resize_cancels_and_releases_native_focus_without_reactivation(
     assert_eq!(engine.0.borrow().documents, documents);
     assert_eq!(session(&view, visual), before);
 }
+
+#[gpui::test]
+fn floating_resize_survives_root_to_owned_child_key_transition_but_cancels_external_focus(
+    cx: &mut TestAppContext,
+) {
+    let (view, visual, engine) = open(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    let mut child = floating(&view, visual);
+    let initial_viewport = viewport(&mut child);
+    let documents = engine.0.borrow().documents;
+    let before = session(&view, visual);
+    let start = begin_floating(&mut child);
+    assert!(view.read_with(visual, |view, _| view.sidebar_resize.is_some()));
+    // Native evidence: child MouseDown installs the gesture before AppKit
+    // delivers root resign-key and owned-child become-key notifications.
+    child.update(|window, _| window.activate_window());
+    child.run_until_parked();
+    assert!(!visual.update(|window, _| window.is_window_active()));
+    assert!(child.update(|window, _| window.is_window_active()));
+    child.executor().advance_clock(Duration::from_millis(40));
+    child.run_until_parked();
+    assert!(
+        view.read_with(visual, |view, _| view.sidebar_resize.is_some()),
+        "owned-child key transition keeps the exact gesture"
+    );
+    let at = move_to(&mut child, start, 240., 400.);
+    assert_eq!(width(&view, visual), 400.);
+    deliver_requested_resize(&mut child, initial_viewport.width + px(160.));
+    assert_eq!(
+        child.debug_bounds("floating-sidebar").unwrap().size.width,
+        px(400.)
+    );
+    end(&mut child, at);
+    assert_eq!(width(&view, visual), 400.);
+    assert!(view.read_with(visual, |view, _| view.sidebar_resize.is_none()));
+
+    // An external app loses the child's key status too. The root remaining a
+    // native mainWindow is deliberately irrelevant to this cancellation.
+    let start = begin_floating(&mut child);
+    move_to(&mut child, start, 400., 480.);
+    assert_eq!(width(&view, visual), 480.);
+    child.deactivate_window();
+    child.executor().advance_clock(Duration::from_millis(40));
+    child.run_until_parked();
+    assert!(!visual.update(|window, _| window.is_window_active()));
+    assert!(!child.update(|window, _| window.is_window_active()));
+    assert!(view.read_with(visual, |view, _| view.sidebar_resize.is_none()));
+    assert_eq!(width(&view, visual), 400.);
+    deliver_requested_resize(&mut child, initial_viewport.width + px(160.));
+    assert_eq!(engine.0.borrow().documents, documents);
+    assert_eq!(session(&view, visual), before);
+}
+
+#[gpui::test]
+fn unrelated_browser_key_window_cannot_preserve_a_floating_resize(cx: &mut TestAppContext) {
+    let (view, visual, engine) = open(cx);
+    let documents = engine.0.borrow().documents;
+    let mut child = floating(&view, visual);
+    let start = begin_floating(&mut child);
+    child.update(|window, _| window.activate_window());
+    child.run_until_parked();
+    child.executor().advance_clock(Duration::from_millis(40));
+    child.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.sidebar_resize.is_some()));
+    move_to(&mut child, start, 240., 380.);
+    assert_eq!(width(&view, visual), 380.);
+    let profile = view.read_with(visual, |view, _| view.profile.handle.clone());
+    let other = visual.cx.update(|cx| {
+        use gpui::AppContext;
+        cx.open_window(gpui::WindowOptions::default(), |window, cx| {
+            cx.new(|cx| BrowserWindow::with_profile(profile, None, None, window, cx))
+        })
+        .unwrap()
+    });
+    other
+        .update(&mut visual.cx, |_, window, _| window.activate_window())
+        .unwrap();
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(40));
+    visual.run_until_parked();
+    assert!(!child.update(|window, _| window.is_window_active()));
+    assert!(
+        view.read_with(visual, |view, _| view.sidebar_resize.is_none()),
+        "a shared-workspace host is not this gesture's owned child"
+    );
+    assert_eq!(width(&view, visual), 240.);
+    assert_eq!(engine.0.borrow().documents, documents);
+}

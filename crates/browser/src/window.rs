@@ -690,11 +690,7 @@ impl BrowserWindow {
             true
         });
         cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() && this.sidebar_resize.is_some() {
-                this.abandon_sidebar_resize();
-                this.queue_floating_resize(cx);
-                cx.notify();
-            }
+            this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
         }).detach();
         if let Some(pages) = pages.clone() {
             cx.observe_window_activation(window, |this, window, cx| {
@@ -2080,7 +2076,14 @@ impl BrowserWindow {
                     crate::native::attach_overlay(parent, overlay, true);
                     crate::native::position_traffic_lights(overlay, TRAFFIC_LIGHT_X - sidebar_width - FLOATING_SIDEBAR_INSET);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Sidebar, cx))
+                cx.new(|cx| {
+                    cx.observe_window_activation(window, |overlay: &mut Overlay, window, cx| {
+                        let source = window.window_handle();
+                        let active = window.is_window_active();
+                        let _ = overlay.browser.update(cx, |this, cx| this.on_sidebar_resize_activation(source, active, cx));
+                    }).detach();
+                    Overlay::new(browser.clone(), OverlayKind::Sidebar, cx)
+                })
             });
             if let Ok(overlay) = overlay {
                 let _ = browser.update(cx, |this, cx| {

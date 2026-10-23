@@ -1085,3 +1085,25 @@ colors still use the existing host palette. File enumeration, result matching,
 file actions and the Learn more target remain unimplemented. Material foundation
 registration introduces no palette or visible opacity change by itself.
 Full workspace tests passed 765 cases. No Space was deleted.
+
+
+### Floating resize key-window transition correction
+
+A later diagnostic probe established actual child targeting: the drag reached
+the floating handle and installed a resize gesture, but the parent root's resign
+notification immediately abandoned it before the first move. The failure was
+therefore confirmed in Echo, beyond the earlier harness limitation.
+
+The corrected owner tracks activation of its root and exact floating child,
+allows their paired key transitions to settle for one GPUI frame, and preserves
+only that same gesture/hierarchy when either window remains active. Moving to
+an unrelated window or leaving the application still cancels in regression tests.
+It does not use GPUI's `App::active_window` as focus evidence: that macOS API
+returns mainWindow rather than keyWindow.
+
+The immutable hierarchy r1 bundle passed native floating resize from 240 to 396,
+including actual child-window size updates and docking at the retained 396 width.
+Screenshots were inspected. The fixture retained UUID
+`66374c7b-45bb-411c-aebd-e5bb792519d6`, one load, and continued input afterward.
+The process exited normally after CEF Complete. Full tests passed 767 cases;
+external native deactivation and exact Arc floating-mode semantics remain open.

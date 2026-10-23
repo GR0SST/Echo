@@ -187,7 +187,7 @@ Folder duplication follows the right-click action documented in the
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
 | Vertical sidebar with tabs | — | done | CEF site favicons are cached for unloaded/restored tabs, with letter fallback. |
-| Resize sidebar | Drag edge; double-click to reset | partial | Window-local live width, 164–500 bounds, 228 reset and all-left collapse; native checks preserve the CEF document and input across width changes. Exact hit area, snapping/haptics, persistence, new-window inheritance and remaining platform parity are unverified |
+| Resize sidebar | Drag edge; double-click to reset | partial | Window-local live width, 164–500 bounds, 228 reset and all-left collapse; native docked/floating checks preserve the CEF document and input across width changes. Exact hit area, snapping/haptics, persistence, new-window inheritance and remaining platform parity are unverified |
 | Window buttons (traffic lights) inside the sidebar | — | done | Native buttons aligned with the toolbar row; idle as neutral dots with tinted rims and show their colors only while hovered |
 | Reopen after closing the last window | Dock | done | Restores the saved session in a new window; keeps CEF initialized across window lifetimes |
 | Address field at the top of the sidebar (click opens the Command Bar with the URL) | — | done | Shows only the site host; back/forward/reload in the toolbar row; Copy URL and site controls buttons appear on sidebar hover; the site controls button opens the Site Control Center panel (see section 16) |
