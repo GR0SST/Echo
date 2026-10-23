@@ -1,4 +1,4 @@
-# browser
+# Echo
 
 The Browser Company is shutting down the Arc browser on December 22, 2026.
 This project is a cross-platform browser that recreates Arc one to one:
