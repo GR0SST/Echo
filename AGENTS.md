@@ -13,6 +13,14 @@ Anything beyond that (our own features, departures from Arc) comes after.
   should work, do what Arc does. That includes the feel: gestures,
   animations, physics (e.g. a swipe on the sidebar drags Spaces along with
   the fingers instead of switching with a jump).
+- Match Arc 1:1 in behavior and visual presentation, including menus,
+  dropdowns, sidebar items, spacing, and interaction states. Inspect the
+  installed Arc app/reference before implementing a UI flow; do not invent
+  replacement pickers or controls. Functional similarity alone is not parity.
+- Split View parity must include a new empty pane with the Command Bar open,
+  closing only the focused pane with Cmd+W, Arc's grouped sidebar presentation,
+  and retaining original Favorites/Pinned items when Arc duplicates them into
+  a split. Verify these flows in Arc and keep regression coverage.
 - Parity with Arc by the deadline comes first. Don't spend time on features
   Arc doesn't have until parity is reached.
 - Key Arc features we must have: vertical sidebar with tabs, Spaces and

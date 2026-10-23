@@ -297,22 +297,25 @@ in code, so some were reconstructed from translator comments (?).
 
 ## 8. Split View
 
-The persistent core model supports 2–4 pages as one sidebar item, including
-grouped pinning, Favorites, moving, renaming, closing, archive/restore and
-auto-archiving. Pane order, axis, focus and weights survive sessions. GPUI
-provides pane headers, focus/close/separate controls and a Command Bar picker
-for existing tabs or new URLs. CEF renders all panes
-at once, lays them out horizontally or vertically and reports native focus;
-loaded pages survive pane focus and orientation changes. Native surface geometry
-is checked; page-click focus and fresh pixels await an unlocked desktop. The unit behavior
-follows Arc's [2022 release notes](https://resources.arc.net/hc/en-us/articles/20498417809815-Arc-for-macOS-2022-Release-Notes);
-the four-pane limit and preserving Pinned placement are confirmed in its
-[2024–2026 release notes](https://resources.arc.net/hc/en-us/articles/20498293324823-Arc-for-macOS-2024-2026-Release-Notes).
+The persistent model supports 2–4 independently focused pages, grouped pinning,
+Favorites, moving, renaming, archive/restore and auto-archiving. Pane order,
+axis, focus and weights survive sessions. CEF renders the pages together and
+keeps loaded views through focus and orientation changes.
+
+The installed Arc 1.169.0 was inspected on 2026-10-23 in a separate Blank
+Window. Add Split View immediately creates an empty pane with the ordinary
+Command Bar centered inside that pane; Escape cancels it. Cmd+W closes only
+the focused pane. The sidebar displays one segmented row, with one target per
+pane, and the page headers have centered addresses without a shared title bar.
+These flows now have GPUI regression coverage and real-app CEF checks. See
+`docs/ARC_REFERENCE.md` for observed states and the visual parity rule.
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Command Bar picker, native menu, shortcut and four-pane limit toast; existing tabs and new URLs are supported. Fresh native visual review remains pending |
-| Close a pane | ⌃⇧- | done | GPUI header, Command Bar, menu and shortcut; the remaining panes keep their pages |
+| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Immediately shows an empty pane and the ordinary URL/search input centered inside it. Escape, outside dismissal and Cmd+W cancel without archiving the source; drafts are excluded from saved sessions. Existing tabs, history and new URLs are supported. Exact menu glyphs and full theme/animation fidelity remain |
+| Close a pane | ⌘W / ⌃⇧- | done | Closes only the focused pane from GPUI and native page focus; the other pages stay loaded. Sidebar group close still closes the entire item |
+| Split sidebar item | — | partial | Segmented row with independent pane focus targets and favicons; custom group names are retained. Exact Favorite-group treatment and remaining visual states need comparison |
+| Split from a Pinned tab or Favorite | — | done | Creates independent copies in Today and retains the original pin/Favorite, including its URL, placement and identity. Selecting an existing protected tab for a pane also copies it |
 | Create by dragging a tab to the middle of the window | drag | missing | — |
 | Horizontal/vertical layout, Move Left/Right/Up/Down | — | done | Command Bar actions preserve loaded page views |
 | Separate Page / Separate All Tabs / Expand Current Split | — | partial | Separate Page and Separate All Tabs are implemented; expanding a pane is missing |

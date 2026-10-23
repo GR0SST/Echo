@@ -4,8 +4,8 @@ use engine::Bounds;
 
 pub(crate) const GAP: f64 = 8.;
 /// Keep pane controls below the window's draggable titlebar region.
-pub(crate) const TITLE_HEIGHT: f64 = 24.;
-pub(crate) const HEADER_HEIGHT: f64 = 28.;
+pub(crate) const TITLE_HEIGHT: f64 = 0.;
+pub(crate) const HEADER_HEIGHT: f64 = 32.;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PaneBounds {
@@ -50,8 +50,8 @@ mod tests {
         let panes = layout(card, Axis::Horizontal, &[0.25, 0.75], true);
         assert_eq!(panes[0].frame.width, 234.);
         assert_eq!(panes[1].frame.x, 490.);
-        assert_eq!(panes[0].page.y, 60.);
-        assert_eq!(panes[0].page.height, 732.);
+        assert_eq!(panes[0].page.y, 40.);
+        assert_eq!(panes[0].page.height, 752.);
         assert_eq!(panes[1].frame.x + panes[1].frame.width, card.x + card.width);
         assert_eq!(layout(card, Axis::Horizontal, &[1.], false)[0].page, card);
     }

@@ -449,7 +449,7 @@ impl Render for Overlay {
         self.browser
             .update(cx, |browser, cx| {
                 let content = match kind {
-                    OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().height), cx),
+                    OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast => browser.render_toast(),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
@@ -485,6 +485,7 @@ pub struct BrowserWindow {
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
+    pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -559,6 +560,7 @@ impl BrowserWindow {
             sidebar_scrolls: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
             space_drag_hover: None,
+            split_draft: None,
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -582,8 +584,8 @@ impl BrowserWindow {
         let saved = Rc::new(RefCell::new(String::new()));
         let save = {
             let saved = saved.clone();
-            move |browser: &Browser| {
-                let json = browser_core::session::to_json(browser);
+            move |this: &BrowserWindow| {
+                let json = this.session_json();
                 if *saved.borrow() == json {
                     return;
                 }
@@ -594,15 +596,15 @@ impl BrowserWindow {
             }
         };
         let on_release = save.clone();
-        cx.on_release(move |this, _| on_release(&this.browser)).detach();
+        cx.on_release(move |this, _| on_release(this)).detach();
         let on_quit = save.clone();
         self._save_on_quit = Some(cx.on_app_quit(move |this, _| {
-            on_quit(&this.browser);
+            on_quit(this);
             async {}
         }));
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(SESSION_SAVE_INTERVAL).await;
-            if this.update(cx, |this, _| save(&this.browser)).is_err() {
+            if this.update(cx, |this, _| save(this)).is_err() {
                 break;
             }
         })
@@ -721,7 +723,7 @@ impl BrowserWindow {
         self.close_find(cx);
         let input = cx.new(|cx| {
             let placeholder = match target {
-                Target::Split { .. } => "Add a page to Split View…",
+                Target::Split { .. } => "Search or Enter URL…",
                 Target::NewFolder { .. } => "Name your Folder…",
                 Target::RenameFolder(_) => "Rename Folder…",
                 Target::MoveToFolder(_) | Target::MoveFolder(_) => "Choose a destination folder…",
@@ -803,6 +805,7 @@ impl BrowserWindow {
     }
 
     fn reset_command_bar(&mut self, target: Target, text: &str, cx: &mut Context<Self>) {
+        if !matches!(target, Target::Split { .. }) { self.cancel_split_draft(); }
         if let Some(bar) = &mut self.command_bar {
             bar.target = target;
             bar.selected = 0;
@@ -827,6 +830,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn close_command_bar(&mut self, cx: &mut Context<Self>) {
+        self.cancel_split_draft();
         let Some(bar) = self.command_bar.take() else {
             return;
         };
@@ -1079,10 +1083,11 @@ impl BrowserWindow {
                     Resolved::Url(url) => display_url(url),
                 };
                 let id = match target {
-                    Target::Split { anchor, placement } => {
-                        if !self.can_add_split(anchor) || omnibox::is_internal_url(resolved.url()) { return; }
-                        let id = self.browser.new_tab(resolved.url(), now);
-                        self.browser.add_split(anchor, id, placement, now).expect("validated Split View");
+                    Target::Split { .. } => {
+                        if omnibox::is_internal_url(resolved.url()) { return; }
+                        let Some(draft) = self.split_draft.take() else { return; };
+                        let id = draft.pane;
+                        self.browser.navigate(id, resolved.url());
                         id
                     }
                     Target::NewTab => self.browser.new_tab(resolved.url(), now),
@@ -1098,13 +1103,25 @@ impl BrowserWindow {
                 let id = match target {
                     Target::NewTab => self.browser.new_tab(&url, now),
                     Target::Tab(id) => { self.browser.navigate(id, &url); id }
+                    Target::Split { .. } => {
+                        let Some(draft) = self.split_draft.take() else { return; };
+                        self.browser.navigate(draft.pane, &url);
+                        draft.pane
+                    }
                     _ => return,
                 };
                 self.browser.set_title(id, title);
             }
             Suggestion::SplitTab { id, .. } => {
                 if let Target::Split { anchor, placement } = target {
-                    if self.browser.add_split(anchor, id, placement, now).is_err() { return; }
+                    let Some(draft) = self.split_draft.take() else { return; };
+                    let id = if self.browser.is_favorite(id) || self.browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == id)) {
+                        self.browser.copy_item_to_today(id, now).expect("existing suggested tab")
+                    } else { id };
+                    let archived = self.browser.archive.len();
+                    self.browser.close_split_pane(draft.pane, now);
+                    self.browser.archive.truncate(archived);
+                    self.browser.add_split(anchor, id, placement, now).expect("validated suggested pane");
                 } else { return; }
             }
             Suggestion::SwitchToTab { id, .. } => {
@@ -1262,9 +1279,7 @@ impl BrowserWindow {
             Command::MuteAllTabs => self.set_all_tabs_muted(true, cx),
             Command::UnmuteAllTabs => self.set_all_tabs_muted(false, cx),
             Command::TogglePinnedSection => self.toggle_pinned_section(self.browser.active_space, cx),
-            Command::CloseTab => {
-                if let Some(id) = self.browser.space().active_tab { self.close_tab(id, cx); }
-            }
+            Command::CloseTab => self.close_focused_tab(cx),
             Command::ArchiveRelative(relative) => { if let Some(id) = self.browser.space().active_tab { self.archive_relative(id, relative, cx); } }
             Command::ClearToday => { self.browser.clear_today(SystemTime::now()); }
             Command::RestoreTab => {
@@ -1318,6 +1333,10 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
+                if this.command_bar.is_some() { this.close_command_bar(cx); }
+                else { this.close_focused_tab(cx); }
+            }))
             .on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx)))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
             .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))
@@ -1358,8 +1377,14 @@ impl BrowserWindow {
     }
 
     fn on_close_tab(&mut self, _: &CloseTab, _: &mut Window, cx: &mut Context<Self>) {
+        self.close_focused_tab(cx);
+    }
+
+    fn close_focused_tab(&mut self, cx: &mut Context<Self>) {
+        if self.split_draft.is_some() { self.close_command_bar(cx); return; }
         if let Some(id) = self.browser.space().active_tab {
-            self.close_tab(id, cx);
+            if self.browser.split_for(id).is_some() { self.close_split_pane(id, cx); }
+            else { self.close_tab(id, cx); }
         }
     }
 
@@ -1750,16 +1775,7 @@ impl BrowserWindow {
                 }
                 cx.notify();
             }))
-            .child(self.render_item_icon(tab, hue))
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_sm()
-                    .child(self.browser.item_title(id)),
-            )
+            .child(self.render_sidebar_item_contents(tab, hue, cx))
             .when(tab.muted, |this| this.child(self.render_mute_control(tab, false, cx)))
             .child(
                 div()
@@ -1862,7 +1878,7 @@ impl BrowserWindow {
         let url = self
             .browser
             .active_tab()
-            .map(|t| display_url(&t.url))
+            .map(|t| if t.url == crate::split::EMPTY_PANE_URL { "Search or Enter URL…".into() } else { display_url(&t.url) })
             .unwrap_or_default();
         let pages: Vec<_> = (0..self.browser.spaces.len())
             .map(|index| self.render_space_page(index, cx).into_any_element())
@@ -2139,6 +2155,7 @@ impl BrowserWindow {
                     .overflow_hidden()
                     .rounded(px(CONTENT_CORNER_RADIUS))
                     .bg(gpui::white())
+                    .when(split_open, |this| this.bg(tint(self.pager_hue(), 0.8)))
                     .shadow_md()
                     .relative()
                     .when(split_open, |this| this.child(self.render_split(cx)))
@@ -2246,18 +2263,28 @@ impl BrowserWindow {
             .into_any_element()
     }
 
-    fn render_command_bar_overlay(&self, height: f32, cx: &mut Context<Self>) -> AnyElement {
+    fn render_command_bar_overlay(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
         match &self.command_bar {
-            Some(bar) => self.render_command_bar(bar, height, cx).into_any_element(),
+            Some(bar) => self.render_command_bar(bar, width, height, cx).into_any_element(),
             None => div().into_any_element(),
         }
     }
 
-    fn render_command_bar(&self, bar: &CommandBar, height: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_command_bar(&self, bar: &CommandBar, width: f32, height: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let accent = self.accent();
-        let top = 140.0_f32.min(height * 0.2);
+        let region = self.split_draft.as_ref().and_then(|draft| {
+            let split = self.browser.split_for(draft.pane)?;
+            let left = if self.sidebar_visible { SIDEBAR_WIDTH } else { CONTENT_INSET };
+            let card = engine::Bounds { x: left.into(), y: CONTENT_INSET.into(), width: (width - left - CONTENT_INSET).max(0.).into(), height: (height - 2. * CONTENT_INSET).max(0.).into() };
+            let index = split.panes.iter().position(|id| *id == draft.pane)?;
+            crate::split_layout::layout(card, split.axis, &split.weights, true).get(index).map(|bounds| bounds.page)
+        });
+        let panel_width = region.map_or(COMMAND_BAR_WIDTH.min((width - 32.).max(0.)), |bounds| COMMAND_BAR_WIDTH.min((bounds.width as f32 - 32.).max(0.)));
         let archive = matches!(bar.target, Target::Archive(_));
-        let rows_height = (height - top - if archive { 150. } else { 90. } - 16.).max(40.);
+        let default_top = 140.0_f32.min(height * 0.2);
+        let rows_height = region.map_or((height - default_top - if archive { 150. } else { 90. } - 16.).max(40.), |bounds| (bounds.height as f32 - 96.).max(40.));
+        let panel_height = 72. + (self.suggestions(cx).len() as f32 * 40.).min(rows_height);
+        let top = region.map_or(default_top, |bounds| bounds.y as f32 + ((bounds.height as f32 - panel_height) * 0.5).max(8.));
         let mut previous_date = None;
         let rows: Vec<_> = self
             .suggestions(cx)
@@ -2276,7 +2303,7 @@ impl BrowserWindow {
                         ("⌕", query, "Google Search".into())
                     }
                     Suggestion::Load(Resolved::Url(url)) => ("↗", display_url(&url), "Open".into()),
-                    Suggestion::SplitTab { title, space, .. } => ("▥", title, format!("Add to Split View · {space}")),
+                    Suggestion::SplitTab { title, space, .. } => ("⇥", title, space),
                     Suggestion::History { title, url } => ("◷", title, format!("History · {}", display_url(&url))),
                     Suggestion::SwitchToTab { title, space, .. } => {
                         ("⇥", title, format!("Switch to Tab · {space}"))
@@ -2364,7 +2391,8 @@ impl BrowserWindow {
             .flex_col()
             .items_center()
             .pt(px(top))
-            .bg(hsla(0.0, 0.0, 0.0, 0.15))
+            .when_some(region, |this, bounds| this.pl(px(bounds.x as f32)).pr(px((width - bounds.x as f32 - bounds.width as f32).max(0.))))
+            .bg(hsla(0.0, 0.0, 0.0, if region.is_some() { 0.0 } else { 0.15 }))
             .on_click(cx.listener(|this, _, _, cx| this.close_command_bar(cx)))
             .child(
                 div()
@@ -2387,7 +2415,7 @@ impl BrowserWindow {
                     }))
                     // Keep clicks inside the panel from reaching the backdrop.
                     .on_click(|_, _, cx| cx.stop_propagation())
-                    .w(px(COMMAND_BAR_WIDTH))
+                    .w(px(panel_width))
                     .flex()
                     .flex_col()
                     .pb_2()

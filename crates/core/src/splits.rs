@@ -222,6 +222,37 @@ impl Browser {
         Some(active)
     }
 
+    /// Copies an item into Today while retaining its original pin or Favorite.
+    /// Split panes receive independent identities and preserve their selected pane.
+    pub fn copy_item_to_today(&mut self, tab: TabId, now: SystemTime) -> Option<TabId> {
+        let source = self.split_for(tab).cloned();
+        let originals: Vec<_> = self.related_tabs(tab).iter().map(|id|
+            self.all_tabs().find(|page| page.id == *id).cloned()
+        ).collect::<Option<_>>()?;
+        let mut mapping = HashMap::new();
+        let mut copies = Vec::new();
+        for mut page in originals {
+            let id = TabId(self.next_id());
+            mapping.insert(page.id, id);
+            page.id = id;
+            page.last_active = now;
+            page.pinned_url = None;
+            page.pinned_title = None;
+            copies.push(page);
+        }
+        self.space_mut().today.splice(0..0, copies);
+        if let Some(mut split) = source {
+            split.id = SplitId(self.next_id());
+            split.anchor = mapping[&split.anchor];
+            split.active = mapping[&split.active];
+            split.panes = split.panes.iter().map(|id| mapping[id]).collect();
+            self.space_mut().splits.push(split);
+        }
+        let active = mapping[&tab];
+        self.activate_tab(active, now);
+        Some(active)
+    }
+
     pub fn set_split_axis(&mut self, tab: TabId, axis: Axis) -> bool {
         let Some(split) = self.split_mut(tab) else { return false; };
         split.axis = axis;

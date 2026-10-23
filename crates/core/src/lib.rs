@@ -152,7 +152,7 @@ pub enum Closed {
     Unloaded,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Browser {
     pub spaces: Vec<Space>,
     pub active_space: usize,

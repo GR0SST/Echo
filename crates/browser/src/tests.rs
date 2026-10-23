@@ -144,6 +144,9 @@ fn page(id: u64) -> ViewId {
     ViewId::from_raw(id)
 }
 
+// GPUI's test platform requires static selectors, including generated tab ids.
+fn test_selector(selector: String) -> &'static str { Box::leak(selector.into_boxed_str()) }
+
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
     let bounds = cx
@@ -2168,7 +2171,8 @@ fn switching_split_orientation_keeps_existing_views_and_navigation_state(cx: &mu
 fn closing_and_restoring_a_split_closes_and_recreates_all_its_engine_views(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 2);
     fake.take_calls();
-    cx.simulate_keystrokes("cmd-w");
+    let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor.get());
+    click(cx, test_selector(format!("close-{anchor}")));
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Close(1)) && calls.contains(&Call::Close(2)));
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
@@ -2214,8 +2218,10 @@ fn split_picker_is_cancelable_and_can_use_an_existing_tab(cx: &mut TestAppContex
     bar(&view, cx).simulate_keystrokes("down enter");
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
-        assert_eq!(w.browser.active_tab().unwrap().id.get(), 4);
-        assert_eq!(w.browser.all_tabs().count(), before);
+        assert_ne!(w.browser.active_tab().unwrap().id.get(), 4);
+        assert_eq!(w.browser.active_tab().unwrap().url, "https://github.com");
+        assert!(w.browser.space().pinned.iter().any(|tab| tab.id.get() == 4));
+        assert_eq!(w.browser.all_tabs().count(), before + 1);
     });
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.browser.is_split_secondary(w.browser.active_tab().unwrap().id)));
@@ -2261,7 +2267,7 @@ fn pane_header_focus_and_chrome_match_native_geometry_in_both_axes(cx: &mut Test
         for (id, body) in surfaces {
             let selector = match id.get() { 2 => "pane-header-2", 3 => "pane-header-3", 5 => "pane-header-5", _ => panic!("unexpected pane") };
             let header = cx.debug_bounds(selector).unwrap();
-            assert!(header.origin.y >= gpui::px(32.));
+            assert!(header.origin.y >= gpui::px(8.));
             assert!((f64::from(f32::from(header.origin.x)) - body.x).abs() < 0.6);
             assert!((f64::from(f32::from(header.bottom())) - body.y).abs() < 0.6, "vertical={vertical} header={header:?} body={body:?}");
             assert!((f64::from(f32::from(header.size.width)) - body.width).abs() < 0.6);
@@ -2279,7 +2285,8 @@ fn pane_close_shortcut_archives_only_the_selected_page_and_header_separates_with
         assert_eq!(w.browser.archive.last().unwrap().tab.id, closed);
     });
     fake.take_calls();
-    click(cx, "pane-separate-2");
+    click(cx, "pane-menu-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-separate-pane");
     assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 2);
     assert!(cx.debug_bounds("tab-2").is_some());
@@ -2333,7 +2340,8 @@ fn command_search_and_archive_search_preserve_group_name_and_match_secondary_url
     assert_eq!(rows.iter().filter(|row| matches!(row, Suggestion::SwitchToTab { .. })).count(), 1);
     assert!(rows.iter().any(|row| matches!(row, Suggestion::SwitchToTab { title, .. } if title == "Comparison")));
     bar(&view, cx).simulate_keystrokes("escape");
-    cx.simulate_keystrokes("cmd-w");
+    let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor.get());
+    click(cx, test_selector(format!("close-{anchor}")));
     open_archive(&view, cx);
     bar(&view, cx).simulate_input("pane1");
     assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).first(), Some(Suggestion::ArchivedTab { title, .. }) if title == "Comparison")));
@@ -2502,7 +2510,8 @@ fn duplicate_menu_copies_the_whole_split_and_closing_it_keeps_original_pages(cx:
         assert!(copy.panes.iter().all(|id| !source.panes.contains(id)));
     });
     assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 3);
-    cx.simulate_keystrokes("cmd-w");
+    let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor.get());
+    click(cx, test_selector(format!("close-{anchor}")));
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.active_split().unwrap().id, source.id);
@@ -2524,7 +2533,11 @@ fn native_duplicate_menu_dismisses_command_input_and_regular_context_menu_can_st
     assert!(bar_input_focused(&view, cx));
     bar(&view, cx).simulate_input("https://beside-pin.example");
     bar(&view, cx).simulate_keystrokes("enter");
-    view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().anchor.get(), 4));
+    view.read_with(cx, |w, _| {
+        assert_ne!(w.browser.active_split().unwrap().anchor.get(), 4);
+        assert!(w.browser.space().pinned.iter().any(|tab| tab.id.get() == 4));
+        assert_eq!(w.browser.space().today.iter().filter(|tab| w.browser.related_tabs(w.browser.active_tab().unwrap().id).contains(&tab.id)).count(), 2);
+    });
 }
 
 #[gpui::test]
@@ -4320,4 +4333,145 @@ fn closing_the_window_saves_changes_before_the_periodic_save(cx: &mut TestAppCon
     let restored = browser_core::session::load(&path).unwrap().unwrap();
     assert_eq!(restored.active_tab().unwrap().url, "https://example.com/just-before-close");
     std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn cmd_w_closes_only_the_focused_split_pane_from_ui_and_native_page_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    let first = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-w");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.browser.archive.last().unwrap().tab.id, first);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Close(..))).count(), 1);
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+    fake.send(cx, Event::Shortcut(Shortcut { cmd: true, key: "w".into(), ..Default::default() }));
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 1);
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Close(..))).count(), 1);
+}
+
+#[gpui::test]
+fn add_split_immediately_shows_an_empty_pane_with_search_inside_it_and_escape_rolls_back(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = view.read_with(cx, |w, _| w.browser.all_tabs().count());
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("ctrl-shift-=");
+    let (anchor, pane) = view.read_with(cx, |w, _| {
+        let draft = w.split_draft.as_ref().unwrap();
+        assert_eq!(w.browser.active_tab().unwrap().url, crate::split::EMPTY_PANE_URL);
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.browser.all_tabs().count(), before + 1);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 1);
+        (draft.anchor, draft.pane)
+    });
+    assert!(cx.debug_bounds(test_selector(format!("sidebar-pane-{}", anchor.get()))).is_some());
+    assert!(cx.debug_bounds(test_selector(format!("sidebar-pane-{}", pane.get()))).is_some());
+    let pane_header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
+    let command = bar(&view, cx).debug_bounds("command-bar").unwrap();
+    assert!(command.origin.x >= pane_header.origin.x);
+    assert!(command.right() <= pane_header.right());
+    assert!(bar_input_focused(&view, cx));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(active_url(&view, cx), active);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), before);
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty() && w.browser.active_split().is_none()));
+}
+
+#[gpui::test]
+fn splitting_a_pin_or_favorite_keeps_the_original_and_creates_independent_today_panes(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    click(cx, "tab-4");
+    let source = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().clone());
+    cx.simulate_keystrokes("ctrl-shift-=");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), source.id);
+    for favorite in [false, true] {
+        if favorite { run_named_command(&view, cx, "favorite tab"); }
+        cx.simulate_keystrokes("ctrl-shift-=");
+        bar(&view, cx).simulate_input("https://second.example");
+        bar(&view, cx).simulate_keystrokes("enter");
+        let anchor = view.read_with(cx, |w, _| {
+            let split = w.browser.active_split().unwrap();
+            assert!(!split.panes.contains(&source.id));
+            assert!(split.panes.iter().all(|id| w.browser.space().today.iter().any(|tab| tab.id == *id)));
+            let original = w.browser.all_tabs().find(|tab| tab.id == source.id).unwrap();
+            assert_eq!(original.url, source.url);
+            assert_eq!(original.pinned_url, source.pinned_url);
+            assert!(w.browser.split_for(source.id).is_none());
+            split.anchor
+        });
+        click(cx, test_selector(format!("close-{}", anchor.get())));
+        if favorite { click(cx, "favorite-4"); } else { click(cx, "tab-4"); }
+    }
+}
+
+#[gpui::test]
+fn pending_split_is_excluded_from_sessions_and_cancel_restores_axis_weights_and_focus(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 3);
+    view.update(cx, |w, _| {
+        let active = w.browser.space().active_tab.unwrap();
+        w.browser.set_split_weights(active, &[0.2, 0.3, 0.5]);
+    });
+    let original = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
+    run_named_command(&view, cx, "add bottom split");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 4);
+        let saved = browser_core::session::from_json(&w.session_json()).unwrap();
+        let split = saved.active_split().unwrap();
+        assert_eq!(split.panes, original.panes);
+        assert_eq!(split.axis, original.axis);
+        assert_eq!(split.weights, original.weights);
+        assert!(!saved.all_tabs().any(|tab| tab.url == crate::split::EMPTY_PANE_URL));
+    });
+    bar(&view, cx).simulate_keystrokes("escape");
+    view.read_with(cx, |w, _| {
+        let split = w.browser.active_split().unwrap();
+        assert_eq!(split.panes, original.panes);
+        assert_eq!(split.axis, original.axis);
+        assert_eq!(split.weights, original.weights);
+        assert_eq!(split.active, original.active);
+        assert!(w.browser.archive.is_empty());
+    });
+}
+
+#[gpui::test]
+fn sidebar_split_segments_focus_individual_panes_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    fake.take_calls();
+    click(cx, "sidebar-pane-2");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane0.example"));
+    click(cx, "sidebar-pane-3");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane1.example"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn cmd_w_in_the_empty_split_search_cancels_without_archiving_the_source(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let original = active_url(&view, cx);
+    cx.simulate_keystrokes("ctrl-shift-=");
+    bar(&view, cx).simulate_keystrokes("cmd-w");
+    assert_eq!(bar_text(&view, cx), None);
+    assert_eq!(active_url(&view, cx), original);
+    assert!(view.read_with(cx, |w, _| w.split_draft.is_none() && w.browser.active_split().is_none() && w.browser.archive.is_empty()));
+}
+
+#[gpui::test]
+fn empty_vertical_pane_search_stays_inside_the_pane(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    run_named_command(&view, cx, "add bottom split");
+    let pane = view.read_with(cx, |w, _| w.split_draft.as_ref().unwrap().pane);
+    let header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
+    let search = bar(&view, cx).debug_bounds("command-bar").unwrap();
+    assert!(search.origin.y >= header.bottom());
+    let pane_bounds = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
+    assert!(search.bottom() <= pane_bounds.bottom());
+    bar(&view, cx).simulate_keystrokes("escape");
 }

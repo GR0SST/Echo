@@ -476,3 +476,28 @@ fn favorite_duplication_is_one_dock_item_and_capacity_failure_is_atomic() {
     assert!(browser.duplicate_item(TabId(u64::MAX), NOW).is_none());
     assert_eq!(session::to_json(&browser), before);
 }
+
+#[test]
+fn copying_a_pinned_split_into_today_preserves_the_original_tree_and_pane_state() {
+    let mut browser = Browser::new();
+    let a = page(&mut browser, "a");
+    let b = page(&mut browser, "b");
+    browser.add_split(a, b, Placement::Right, NOW).unwrap();
+    browser.toggle_pin(a);
+    let original = browser.active_split().unwrap().clone();
+    browser.set_tab_muted(b, true);
+    let copy = browser.copy_item_to_today(b, NOW).unwrap();
+    let split = browser.active_split().unwrap();
+    assert_ne!(split.id, original.id);
+    assert!(split.panes.iter().all(|id| !original.panes.contains(id)));
+    assert_eq!(split.panes.len(), 2);
+    assert_eq!(split.active, copy);
+    assert_eq!(browser.space().pinned.len(), 2);
+    assert_eq!(browser.space().today.len(), 2);
+    assert!(browser.active_tab().unwrap().muted);
+    assert!(browser.space().today.iter().all(|tab| tab.pinned_url.is_none()));
+    assert_eq!(browser.split_for(a).unwrap().id, original.id);
+    let restored = session::from_json(&session::to_json(&browser)).unwrap();
+    assert_eq!(restored.space().splits.len(), 2);
+    assert_eq!(restored.space().pinned.len(), 2);
+}

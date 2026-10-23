@@ -6,7 +6,7 @@ use url::Url;
 pub const MAX_FAVICON_BYTES: usize = 64 * 1024;
 const MAX_ICONS: usize = 256;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SiteIcon {
     page: String,
     origin: Option<String>,

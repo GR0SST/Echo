@@ -209,7 +209,8 @@ impl BrowserWindow {
                 if !self.can_add_split(id) { self.show_toast("Cannot Add New Pane".into(), cx); }
                 else {
                     if !pane_menu && self.browser.split_for(id).is_some_and(|split| split.axis == Axis::Vertical) { placement = Placement::Below; }
-                    self.open_command_bar(Target::Split { anchor: id, placement }, "", window, cx);
+                    self.open_command_bar(Target::NewTab, "", window, cx);
+                    self.begin_split(id, placement, cx);
                 }
             }
             Command::Axis(axis) => { self.browser.set_split_axis(id, axis); }
