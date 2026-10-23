@@ -3584,3 +3584,69 @@ fn cancelling_an_inactive_tab_drag_does_not_activate_or_load_it(cx: &mut TestApp
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn dragging_a_folder_with_the_focused_split_moves_its_subtree_without_recreating_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let destination = view.update(cx, |w, cx| {
+        let folder = w.browser.create_folder(w.browser.space().id, None, "Saved").unwrap();
+        w.browser.set_folder_collapsed(folder, true);
+        cx.notify();
+        folder
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "folder-2", "folder-8");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().panes.iter().map(|id| id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.browser.folder_ancestors(w.browser.space().active_tab.unwrap()).iter().map(|id| id.get()).collect::<Vec<_>>(), vec![8, 2, 3]);
+        assert_eq!(w.browser.folder_tabs(destination).iter().map(|id| id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert!(w.browser.folder(destination).unwrap().collapsed);
+        assert_eq!(w.browser.all_tabs().count(), 3);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        let loaded = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(loaded.folder_tabs(destination), w.browser.folder_tabs(destination));
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn folder_drags_onto_self_or_descendants_are_rejected_without_toggling_disclosure(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let before = view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser));
+    fake.take_calls();
+    drag_between(cx, "folder-2", "folder-3");
+    assert_eq!(view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser)), before);
+    drag_between(cx, "folder-2", "folder-2");
+    assert_eq!(view.read_with(cx, |w, _| browser_core::session::to_json(&w.browser)), before);
+    click(cx, "folder-3");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders[1].collapsed));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap().get()), 5);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dragging_an_empty_inactive_folder_preserves_the_active_item_and_the_destination_stays_closed(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let (empty, destination) = view.update(cx, |w, cx| {
+        let empty = w.browser.create_folder(w.browser.space().id, None, "Empty").unwrap();
+        let destination = w.browser.create_folder(w.browser.space().id, None, "Destination").unwrap();
+        w.browser.set_folder_collapsed(destination, true);
+        cx.notify();
+        (empty, destination)
+    });
+    cx.run_until_parked();
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "folder-8", "folder-9");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.folder_path(empty), "Destination / Empty");
+        assert!(w.browser.folder(destination).unwrap().collapsed);
+        assert!(w.browser.folder(empty).unwrap().items.is_empty());
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
