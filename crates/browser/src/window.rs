@@ -466,6 +466,13 @@ pub enum OverlayKind {
     NewMenu,
 }
 
+/// Who restores native focus after an overlay has been removed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopupFocus {
+    Restore,
+    OnActivation,
+}
+
 /// Root of a transparent child window over the browser window. Pages are
 /// native views that cover anything the browser window draws, so UI that
 /// lies over a page lives in one of these. Draws from the browser window.
@@ -582,6 +589,9 @@ pub struct BrowserWindow {
     mouse_tracking: Rc<RefCell<MouseTracking>>,
     pub pager: Pager,
     pub(crate) focus_handle: FocusHandle,
+    popup_focus_generation: u64,
+    popup_focus_pending: usize,
+    popup_focus_on_activation: bool,
 }
 
 impl BrowserWindow {
@@ -639,6 +649,10 @@ impl BrowserWindow {
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
                     this.refresh_profile_projection();
+                    if std::mem::take(&mut this.popup_focus_on_activation) && !this.popup_owns_focus() {
+                        this.focus_handle.focus(window);
+                        if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
+                    }
                     if let Some(pages) = &this.pages { pages.borrow_mut().activate_host(&this.browser); }
                     cx.notify();
                 }
@@ -729,6 +743,9 @@ impl BrowserWindow {
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
             focus_handle: cx.focus_handle(),
+            popup_focus_generation: 0,
+            popup_focus_pending: 0,
+            popup_focus_on_activation: false,
         }
     }
 
@@ -1044,33 +1061,73 @@ impl BrowserWindow {
     }
 
     pub(crate) fn close_command_bar(&mut self, cx: &mut Context<Self>) {
+        self.close_command_bar_with_focus(PopupFocus::Restore, cx);
+    }
+
+    pub(crate) fn close_command_bar_with_focus(&mut self, focus: PopupFocus, cx: &mut Context<Self>) {
         self.cancel_split_draft();
-        let Some(bar) = self.command_bar.take() else {
-            return;
+        let Some(bar) = self.command_bar.take() else { return; };
+        self.close_popup_overlay(bar.overlay, focus, true, cx);
+        cx.notify();
+    }
+
+    fn popup_owns_focus(&self) -> bool {
+        self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+            || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
+    }
+
+    /// Native activation may be asynchronous (GPUI's macOS backend queues
+    /// makeKeyAndOrderFront). Minimizing must never enqueue that activation,
+    /// including from an earlier dismissal in the same command dispatch.
+    pub(crate) fn close_popups_for_window_operation(&mut self, minimize: bool, cx: &mut Context<Self>) {
+        let focus = if minimize {
+            // A root with no popup already owns its responder intent (for
+            // example History search or docked DevTools). Only replace it when
+            // this operation actually takes over a popup's restoration.
+            self.popup_focus_on_activation |= self.command_bar.is_some()
+                || self.find_bar.is_some() || self.tab_menu.is_some()
+                || self.popup_focus_pending > 0;
+            self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
+            self.popup_focus_pending = 0;
+            PopupFocus::OnActivation
+        } else {
+            PopupFocus::Restore
         };
-        let main_window = self.main_window;
+        self.close_command_bar_with_focus(focus, cx);
+        self.close_find_with_focus(focus, cx);
+        self.close_tab_menu_with_focus(focus, cx);
+    }
+
+    pub(crate) fn close_popup_overlay(&mut self, overlay: Option<WindowHandle<Overlay>>, policy: PopupFocus, sync_pages: bool, cx: &mut Context<Self>) {
+        let generation = self.popup_focus_generation;
+        if policy == PopupFocus::Restore { self.popup_focus_pending += 1; }
+        let main = self.main_window;
         let focus = self.focus_handle.clone();
-        let pages = self.pages.clone();
         let browser = cx.entity().downgrade();
         // Deferred: this may run inside the overlay window's own event.
         cx.defer(move |cx| {
-            if let Some(overlay) = bar.overlay {
+            if let Some(overlay) = overlay {
                 let _ = overlay.update(cx, |_, window, _| window.remove_window());
             }
-            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some() || this.tab_rename.is_some() || this.tab_rename_pending.is_some()).unwrap_or(false) { return; }
-            let _ = main_window.update(cx, |_, window, _| {
+            if policy == PopupFocus::OnActivation { return; }
+            let restore = browser.update(cx, |this, _| {
+                if this.popup_focus_generation != generation { return false; }
+                this.popup_focus_pending -= 1;
+                !this.popup_owns_focus()
+            }).unwrap_or(false);
+            if !restore { return; }
+            let _ = main.update(cx, |_, window, _| {
                 window.activate_window();
                 focus.focus(window);
             });
-            if let Some(pages) = pages {
-                let _ = browser.read_with(cx, |this, _| {
+            let _ = browser.read_with(cx, |this, _| {
+                if let Some(pages) = &this.pages {
                     let mut pages = pages.borrow_mut();
-                    pages.sync(&this.browser, true);
+                    if sync_pages { pages.sync(&this.browser, true); }
                     pages.focus_shown();
-                });
-            }
+                }
+            });
         });
-        cx.notify();
     }
 
     pub fn suggestions(&self, cx: &App) -> Vec<Suggestion> {

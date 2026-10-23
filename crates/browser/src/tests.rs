@@ -2231,6 +2231,111 @@ fn menu_actions_open_editors_and_edit_the_command_input(cx: &mut TestAppContext)
     assert_eq!(bar_text(&view, cx).as_deref(), Some("clipboard text"));
 }
 
+// TestPlatform::minimize is unimplemented. Exercise the production teardown
+// separately; real Cmd+M/action routing and native miniaturization need drive.sh.
+#[gpui::test]
+fn minimizing_popup_teardown_waits_for_activation_before_focusing_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    for popup in ["command", "find", "tab-menu"] {
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        let mut overlay = match popup {
+            "command" => { cx.simulate_keystrokes("cmd-t"); bar(&view, cx) }
+            "find" => { cx.simulate_keystrokes("cmd-f"); find_overlay(&view, cx) }
+            _ => { right_click(cx, "tab-4"); tab_menu(&view, cx) }
+        };
+        overlay.update(|window, _| window.activate_window());
+        overlay.run_until_parked();
+        fake.take_calls();
+        view.update(cx, |w, cx| w.close_popups_for_window_operation(true, cx));
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |w, _| w.command_bar.is_none() && w.find_bar.is_none() && w.tab_menu.is_none()));
+        assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
+        let calls = fake.take_calls();
+        assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))), "{popup}: {calls:?}");
+        if popup == "find" { assert!(calls.contains(&Call::StopFinding(1))); }
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert!(fake.take_calls().contains(&Call::FocusPage(1)), "{popup}: activation must restore the page responder");
+    }
+    // Ordinary dismissal must still immediately restore the page responder.
+    cx.simulate_keystrokes("cmd-t");
+    fake.take_calls();
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert!(fake.take_calls().contains(&Call::FocusPage(1)));
+}
+
+#[gpui::test]
+fn minimize_teardown_invalidates_focus_restoration_already_queued_by_dismissal(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    fake.take_calls();
+    // Both updates belong to one dispatch, before deferred overlay teardown.
+    view.update(cx, |w, cx| {
+        w.close_command_bar(cx);
+        w.close_popups_for_window_operation(true, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(bar_text(&view, cx), None);
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), 1);
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))), "{calls:?}");
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::FocusPage(1)), "cancelled pending restoration must resume on activation");
+}
+
+#[gpui::test]
+fn minimize_without_popup_preserves_history_search_focus_on_activation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.simulate_keystrokes("cmd-y");
+    cx.simulate_input("retained");
+    let (_, mut other) = another_profile_window(&view, cx);
+    other.update(|window, _| window.activate_window());
+    other.run_until_parked();
+    fake.take_calls();
+    view.update(cx, |w, cx| w.close_popups_for_window_operation(true, cx));
+    cx.run_until_parked();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| view.read(cx).history_page.input.read(cx).focus_handle(cx).is_focused(window)));
+    cx.simulate_input(" search");
+    assert_eq!(view.read_with(cx, |w, cx| w.history_page.input.read(cx).text().to_string()), "retained search");
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_) | Call::InspectorFocus(_))), "{calls:?}");
+}
+
+#[gpui::test]
+fn minimize_without_popup_preserves_docked_devtools_focus_on_activation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.update(|window, _| window.activate_window());
+    accept_recording_inspector(&view, cx, &fake);
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let inspector = inspector_status(&view, cx).unwrap().id;
+    inspector_event(&fake, cx, engine::InspectorEvent::Focused { inspector });
+    let (_, mut other) = another_profile_window(&view, cx);
+    other.update(|window, _| window.activate_window());
+    other.run_until_parked();
+    fake.take_calls();
+    view.update(cx, |w, cx| w.close_popups_for_window_operation(true, cx));
+    cx.run_until_parked();
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert_eq!(inspector_status(&view, cx).unwrap().id, inspector);
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))), "activation must not replace the frontend responder: {calls:?}");
+    // Reconciliation after activation must continue respecting frontend focus.
+    cx.cx.refresh().unwrap();
+    cx.run_until_parked();
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))), "{calls:?}");
+}
+
 #[gpui::test]
 fn fullscreen_targets_the_main_window_from_pages_and_overlays(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);

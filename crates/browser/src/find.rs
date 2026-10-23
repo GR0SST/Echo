@@ -126,29 +126,15 @@ impl BrowserWindow {
     }
 
     pub(crate) fn close_find(&mut self, cx: &mut Context<Self>) {
-        let Some(bar) = self.find_bar.take() else {
-            return;
-        };
+        self.close_find_with_focus(crate::window::PopupFocus::Restore, cx);
+    }
+
+    pub(crate) fn close_find_with_focus(&mut self, focus: crate::window::PopupFocus, cx: &mut Context<Self>) {
+        let Some(bar) = self.find_bar.take() else { return; };
         if let Some(pages) = &self.pages {
             pages.borrow_mut().stop_finding(bar.tab);
         }
-        let main = self.main_window;
-        let focus = self.focus_handle.clone();
-        let pages = self.pages.clone();
-        let browser = cx.entity().downgrade();
-        cx.defer(move |cx| {
-            if let Some(overlay) = bar.overlay {
-                let _ = overlay.update(cx, |_, window, _| window.remove_window());
-            }
-            if browser.read_with(cx, |this, _| this.command_bar.is_some() || this.tab_menu.is_some() || this.find_bar.is_some()).unwrap_or(false) { return; }
-            let _ = main.update(cx, |_, window, _| {
-                window.activate_window();
-                focus.focus(window);
-            });
-            if let Some(pages) = pages {
-                pages.borrow_mut().focus_shown();
-            }
-        });
+        self.close_popup_overlay(bar.overlay, focus, false, cx);
         cx.notify();
     }
 

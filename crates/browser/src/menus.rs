@@ -195,7 +195,7 @@ pub(crate) fn build() -> Vec<Menu> {
         Menu {
             name: "Window".into(),
             items: vec![
-                MenuItem::action("Minimize", Minimize),
+                MenuItem::action("Minimize Window", Minimize),
                 MenuItem::action("Zoom", ZoomWindow),
                 MenuItem::separator(),
                 MenuItem::action("Bring All to Front", BringAllToFront),
@@ -218,9 +218,7 @@ impl window::BrowserWindow {
         operation: WindowOperation,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.close_command_bar(cx);
-        self.close_find(cx);
-        self.close_tab_menu(cx);
+        self.close_popups_for_window_operation(matches!(operation, WindowOperation::Minimize), cx);
         let main = self.main_window;
         cx.defer(move |cx| {
             let _ = main.update(cx, |_, window, _| match operation {

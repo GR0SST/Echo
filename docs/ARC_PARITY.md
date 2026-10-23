@@ -161,7 +161,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
-| Minimize / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar actions wired through GPUI. The locked desktop did not confirm minimization; final native behavior check remains |
+| Minimize Window / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar target the main window. Bundled macOS checks verified minimization from page, Command Bar, Find and the Minimize Window command, plus restored document/input and History/DevTools responder retention. Popup teardown cancels deferred activation that would undo minimization. Native Zoom/Bring All ordering and remaining platforms still need verification |
 | View Library | ⇧⌘L | missing | The Library button sits at the left of the Space bar but does nothing yet. See "Library" |
 | View Downloads | ⇧⌘J | missing | — |
 | View Media / View Boosts | — | missing | — |
