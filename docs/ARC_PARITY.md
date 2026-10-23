@@ -213,7 +213,7 @@ Folder duplication follows the right-click action documented in the
 | Renaming a Space | — | done | Name editor via the Command Bar, Spaces menu or header/dock context menu; persisted with the same Space identity. Context actions can target an inactive Space without changing the current page |
 | Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | — | partial | Persistent Unicode symbol/emoji editor via Spaces menu, Command Bar or the clicked Space's context menu; blank input removes the icon. Graphical icon catalog remains missing |
 | Deleting a Space (with Undo) | — | missing | — |
-| Reordering Spaces ("Move Space") | drag | missing | — |
+| Reordering Spaces ("Move Space") | drag | done | Drag dock icons onto another Space to move them to that position. Stable Space/page/group identities and active pane are preserved; the pager stays on the selected Space without animating through unrelated Spaces. Dropping outside the dock cancels; order persists in the session |
 | Turning a Space into a folder ("Export “%@” into Folder") | — | missing | — |
 | Live Folders for a Space | — | missing | — |
 | Space Manager (Library → Spaces) | — | missing | — |

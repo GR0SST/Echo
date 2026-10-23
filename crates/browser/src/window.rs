@@ -1642,6 +1642,17 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    fn reorder_space(&mut self, id: SpaceId, destination: usize, cx: &mut Context<Self>) {
+        if self.browser.move_space(id, destination) {
+            // The selected Space is the same object at a new index. A pager
+            // animation here would briefly display a different Space's tabs.
+            self.pager.settle = None;
+            self.pager.drag = None;
+            self.pager.position = self.browser.active_space as f32;
+            cx.notify();
+        }
+    }
+
     fn cycle_space(&mut self, delta: isize, cx: &mut Context<Self>) {
         let n = self.browser.spaces.len() as isize;
         let index = (self.browser.active_space as isize + delta).rem_euclid(n);
@@ -1987,6 +1998,7 @@ impl BrowserWindow {
                 let active = index == self.pager.position.round() as usize;
                 let space_id = space.id;
                 let hue = space.hue / 360.0;
+                let drag = crate::space_drag::SpaceDrag { id: space_id, name: space.name.clone(), icon: space.custom_icon.clone(), hue: space.hue };
                 div()
                     .id(("space", index))
                     .debug_selector(move || format!("space-{index}"))
@@ -1996,6 +2008,9 @@ impl BrowserWindow {
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.5))).hover(|this| this.bg(hsla(0., 0., 1., 0.3)))
                         .child(div().debug_selector(move || format!("space-icon-{index}")).child(crate::icons::glyph(&icon))))
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_space(index, cx)))
+                    .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                    .drag_over::<crate::space_drag::SpaceDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
+                    .on_drop(cx.listener(move |this, drag: &crate::space_drag::SpaceDrag, _, cx| this.reorder_space(drag.id, index, cx)))
                     .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         this.open_space_menu(space_id, event.position, window, cx);

@@ -3384,3 +3384,74 @@ fn new_folder_from_an_inactive_space_menu_uses_that_space_and_retains_the_source
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+fn drag_between(cx: &mut VisualTestContext, source: &'static str, destination: &'static str) {
+    cx.run_until_parked();
+    let start = cx.debug_bounds(source).unwrap().center();
+    let end = cx.debug_bounds(destination).unwrap().center();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(start + gpui::point(gpui::px(5.), gpui::px(0.)), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn dragging_the_active_space_reorders_the_dock_without_switching_pages_or_animating_other_spaces(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "space-0", "space-2");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.spaces.iter().map(|space| space.name.as_str()).collect::<Vec<_>>(), vec!["Work", "Research", "Personal"]);
+        assert_eq!(w.browser.active_space, 2);
+        let loaded = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(loaded.space().name, "Personal");
+        assert_eq!(loaded.active_space, 2);
+    });
+    let header = cx.debug_bounds("space-header-2").unwrap();
+    assert!(header.left() >= gpui::px(0.) && header.right() <= gpui::px(240.));
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dragging_an_inactive_space_keeps_the_focused_split_and_all_its_page_views(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); w.browser.add_space("Research", 200.); cx.notify(); });
+    cx.run_until_parked();
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "space-2", "space-0");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.spaces.iter().map(|space| space.name.as_str()).collect::<Vec<_>>(), vec!["Research", "Personal", "Work"]);
+        assert_eq!(w.browser.active_space, 1);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    let header = cx.debug_bounds("space-header-1").unwrap();
+    assert!(header.left() >= gpui::px(0.) && header.right() <= gpui::px(240.));
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_a_space_outside_the_dock_cancels_and_leaves_click_navigation_working(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "space-2", "address");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.spaces.iter().map(|space| space.name.as_str()).collect::<Vec<_>>(), vec!["Personal", "Work", "Research"]);
+        assert_eq!(w.browser.active_space, 0);
+        assert!(w.command_bar.is_none());
+    });
+    assert_eq!(active_url(&view, cx), original);
+    click(cx, "space-1");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Work");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

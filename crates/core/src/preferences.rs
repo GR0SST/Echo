@@ -17,6 +17,56 @@ mod tests {
     use std::time::SystemTime;
 
     #[test]
+    fn every_space_move_preserves_active_identity_and_each_spaces_complete_model() {
+        let mut browser = Browser::new();
+        browser.add_space("Work", 100.);
+        browser.add_space("Research", 200.);
+        for index in 0..3 {
+            browser.switch_space(index);
+            let a = browser.new_tab(format!("https://{index}-a.example"), SystemTime::UNIX_EPOCH);
+            let b = browser.new_tab(format!("https://{index}-b.example"), SystemTime::UNIX_EPOCH);
+            browser.add_split(a, b, Placement::Right, SystemTime::UNIX_EPOCH).unwrap();
+            let folder = browser.create_folder(browser.space().id, None, "Folder").unwrap();
+            browser.move_item_to_folder(a, folder);
+        }
+        let json = session::to_json(&browser);
+        for active in 0..3 {
+            for source in 0..3 {
+                for destination in 0..3 {
+                    let mut browser = session::from_json(&json).unwrap();
+                    browser.switch_space(active);
+                    let active_id = browser.space().id;
+                    let active_tab = browser.space().active_tab;
+                    let snapshots: Vec<_> = browser.spaces.iter().map(|space| (space.id, serde_json::to_value(space).unwrap())).collect();
+                    let mut expected: Vec<_> = browser.spaces.iter().map(|space| space.id).collect();
+                    let moved = expected.remove(source);
+                    expected.insert(destination, moved);
+                    assert_eq!(browser.move_space(moved, destination), source != destination);
+                    assert_eq!(browser.spaces.iter().map(|space| space.id).collect::<Vec<_>>(), expected);
+                    assert_eq!(browser.space().id, active_id);
+                    assert_eq!(browser.space().active_tab, active_tab);
+                    for space in &browser.spaces {
+                        assert_eq!(serde_json::to_value(space).unwrap(), snapshots.iter().find(|(id, _)| *id == space.id).unwrap().1);
+                    }
+                    let loaded = session::from_json(&session::to_json(&browser)).unwrap();
+                    assert_eq!(loaded.space().id, active_id);
+                    assert_eq!(loaded.spaces.iter().map(|space| space.id).collect::<Vec<_>>(), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_space_moves_are_no_ops() {
+        let mut browser = Browser::new();
+        let before = session::to_json(&browser);
+        assert!(!browser.move_space(browser.space().id, 0));
+        assert!(!browser.move_space(browser.space().id, 1));
+        assert!(!browser.move_space(SpaceId(u64::MAX), 0));
+        assert_eq!(session::to_json(&browser), before);
+    }
+
+    #[test]
     fn old_sessions_enable_headers_and_favorites_ordering_and_new_preferences_persist() {
         let browser = Browser::new();
         let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();

@@ -266,6 +266,17 @@ impl Browser {
         true
     }
 
+    /// Reorders Spaces while keeping the active Space and all tab identities.
+    pub fn move_space(&mut self, id: SpaceId, destination: usize) -> bool {
+        let Some(source) = self.spaces.iter().position(|space| space.id == id) else { return false; };
+        if destination >= self.spaces.len() || source == destination { return false; }
+        let active = self.space().id;
+        let space = self.spaces.remove(source);
+        self.spaces.insert(destination, space);
+        self.active_space = self.spaces.iter().position(|space| space.id == active).unwrap();
+        true
+    }
+
     pub fn switch_space(&mut self, index: usize) {
         if index < self.spaces.len() {
             self.active_space = index;
