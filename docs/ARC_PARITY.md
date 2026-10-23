@@ -110,7 +110,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Space… | — | partial | Create a named Space from the dock + button or Command Bar. Icon, theme and profile choices in the creation dialog remain missing |
+| New Space… | — | partial | Create a named Space from the dock + menu or Command Bar. Icon, theme and profile choices in the creation dialog remain missing |
 | Edit Theme… | — | missing | See "Space themes" |
 | Rename Space | — | done | Command Bar action opens a focused name editor; Escape cancels |
 | Change Profile | — | missing | — |
@@ -198,7 +198,7 @@ Folder duplication follows the right-click action documented in the
 | Space header (name), Show/Hide Space Header | — | done | Visibility persists per Space; Command Bar and Spaces menu. The name and Space icon form the collapse/expand control for Pinned tabs and folders; hover replaces the icon with a vector chevron and reveals Space actions at the right. Collapsed state keeps the rightward chevron visible; the actions button does not toggle pins |
 | Browser chrome iconography | — | partial | 1108 MIT-licensed non-brand Ionicons from the installed Arc reference are embedded as portable contours. Existing navigation, folder, search, sound, history and action controls use this catalog; reference-specific sidebar/split/key controls use fixed vector geometry. Font look-alikes and default folder/mute emoji are removed. Sidebar navigation and toggle controls are visible beside native window buttons. User-selected emoji and website favicons remain content. Graphical Space icon picker is still missing |
 | Spaces dock at the bottom (Space icons) | click | partial | User-selected symbols/emoji persist per Space and render in the dock. Default icons remain colored dots; the bundled graphical catalog is not yet wired to a Space icon picker |
-| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + creates a Space. The multi-action menu remains missing |
+| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost does nothing yet; New Easel is left out |
 | "Springy" click animation on sidebar items | — | missing | — |
 | Incognito window sidebar ("Incognito Tabs") | — | missing | — |
 | Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | — |

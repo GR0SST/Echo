@@ -114,6 +114,86 @@ mod mac {
         }
     }
 
+    /// Places a rounded dark vibrancy view behind the GPUI content of
+    /// `view`'s window at `rect` (x, y, width, height; top-left origin),
+    /// creating it on first use. `None` removes it.
+    pub fn set_backdrop(view: *mut c_void, rect: Option<[f64; 4]>, radius: f64) {
+        use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+        const HUD_WINDOW: isize = 13;
+        const BEHIND_WINDOW: isize = 0;
+        const ACTIVE: isize = 1;
+        let view = view as *mut AnyObject;
+        if view.is_null() { return; }
+        unsafe {
+            let frame_view: *mut AnyObject = msg_send![view, superview];
+            if frame_view.is_null() { return; }
+            let identifier = NSString::from_str("echo.backdrop");
+            let subviews: *mut AnyObject = msg_send![frame_view, subviews];
+            let count: usize = msg_send![subviews, count];
+            let mut backdrop: *mut AnyObject = std::ptr::null_mut();
+            for index in 0..count {
+                let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: index];
+                let id: *mut NSString = msg_send![subview, identifier];
+                if !id.is_null() && (*id).to_string() == "echo.backdrop" { backdrop = subview; break; }
+            }
+            let Some([x, y, width, height]) = rect else {
+                if !backdrop.is_null() { let _: () = msg_send![backdrop, removeFromSuperview]; }
+                return;
+            };
+            if backdrop.is_null() {
+                backdrop = msg_send![objc2::class!(NSVisualEffectView), alloc];
+                backdrop = msg_send![backdrop, init];
+                let _: () = msg_send![backdrop, setIdentifier: &*identifier];
+                let _: () = msg_send![backdrop, setMaterial: HUD_WINDOW];
+                let _: () = msg_send![backdrop, setBlendingMode: BEHIND_WINDOW];
+                let _: () = msg_send![backdrop, setState: ACTIVE];
+                let name = NSString::from_str("NSAppearanceNameVibrantDark");
+                let appearance: *mut AnyObject = msg_send![objc2::class!(NSAppearance), appearanceNamed: &*name];
+                let _: () = msg_send![backdrop, setAppearance: appearance];
+                let _: () = msg_send![backdrop, setWantsLayer: Bool::YES];
+                let below: isize = -1;
+                let _: () = msg_send![frame_view, addSubview: backdrop, positioned: below, relativeTo: view];
+                objc2::ffi::objc_release(backdrop as *mut _);
+            }
+            let bounds: NSRect = msg_send![frame_view, bounds];
+            let flipped: Bool = msg_send![frame_view, isFlipped];
+            let y = if flipped.as_bool() { y } else { bounds.size.height - y - height };
+            let _: () = msg_send![backdrop, setFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))];
+            let layer: *mut AnyObject = msg_send![backdrop, layer];
+            if !layer.is_null() {
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
+            }
+        }
+    }
+
+    pub fn replay_pointer(view: *mut c_void) {
+        use objc2_foundation::NSPoint;
+        const MOUSE_MOVED: usize = 5;
+        let window = window(view);
+        if window.is_null() { return; }
+        unsafe {
+            let location: NSPoint = msg_send![window, mouseLocationOutsideOfEventStream];
+            let number: isize = msg_send![window, windowNumber];
+            let nil: *mut AnyObject = std::ptr::null_mut();
+            let event: *mut AnyObject = msg_send![
+                objc2::class!(NSEvent),
+                mouseEventWithType: MOUSE_MOVED,
+                location: location,
+                modifierFlags: 0usize,
+                timestamp: 0.0f64,
+                windowNumber: number,
+                context: nil,
+                eventNumber: 0isize,
+                clickCount: 0isize,
+                pressure: 0.0f32
+            ];
+            if event.is_null() { return; }
+            // Deliver from the run loop, outside the toolkit's event handling.
+            let _: () = msg_send![view as *mut AnyObject, performSelector: sel!(mouseMoved:), withObject: event, afterDelay: 0.0f64];
+        }
+    }
+
     pub fn pointer_position(view: *mut c_void) -> Option<[f32; 2]> {
         use objc2_foundation::{NSPoint, NSRect};
         let window = window(view);
@@ -229,6 +309,28 @@ pub fn traffic_light_frames(view: *mut c_void) -> Option<[[f32; 4]; 3]> {
     { mac::traffic_light_frames(view) }
     #[cfg(not(target_os = "macos"))]
     { let _ = view; None }
+}
+
+/// A blurred, translucent backdrop behind a floating panel, as macOS
+/// vibrancy. Returns whether the platform draws one; elsewhere panels stay
+/// opaque.
+pub fn set_backdrop(view: *mut c_void, rect: Option<[f64; 4]>, radius: f64) -> bool {
+    #[cfg(target_os = "macos")]
+    { mac::set_backdrop(view, rect, radius); true }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = (view, rect, radius); false }
+}
+
+/// Whether panels get a translucent native backdrop.
+pub const HAS_BACKDROP: bool = cfg!(target_os = "macos");
+
+/// Sends the window's view a move to where the pointer is now, so the
+/// toolkit refreshes hover after the pointer went over a native page.
+pub fn replay_pointer(view: *mut c_void) {
+    #[cfg(target_os = "macos")]
+    mac::replay_pointer(view);
+    #[cfg(not(target_os = "macos"))]
+    let _ = view;
 }
 
 /// Pointer in window coordinates, including positions over native web pages.

@@ -48,7 +48,7 @@ pub(crate) fn more() -> AnyElement {
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
     Search, External, History, Enter, Restore, Up, Down, Check, Mute, Command, Link,
-    SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock,
+    SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab,
 }
 
 fn arc(x: f32, y: f32, radius: f32, from: f32, to: f32) -> Vec<(f32, f32)> {
@@ -110,9 +110,9 @@ pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement {
         Icon::Check => "checkmark-outline", Icon::Mute => "volume-mute-outline",
         Icon::Share => "share-outline", Icon::Boost => "color-wand-outline",
         Icon::Capture => "camera-outline", Icon::Screenshot => "scan-outline",
-        Icon::Lock => "lock-closed", Icon::Unlock => "lock-open",
+        Icon::NewSpace => "duplicate-outline", Icon::Lock => "lock-closed", Icon::Unlock => "lock-open",
         Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
-        Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy => return drawn(icon, size),
+        Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size),
     };
     ionicon(name, size)
 }
@@ -167,6 +167,8 @@ fn drawn(icon: Icon, size: f32) -> AnyElement {
                 vec![(5.6, 7.2), (9., 7.2)], vec![(11.6, 7.2), (12.4, 7.2)], circle(10.3, 7.2, 1.3),
                 vec![(5.6, 10.8), (6.4, 10.8)], vec![(9., 10.8), (12.4, 10.8)], circle(7.7, 10.8, 1.3),
             ], vec![]),
+            // A plus inside a rounded square.
+            Icon::NewTab => (vec![rounded_rect(2.5, 2.5, 13., 13., 3.), vec![(9., 6.), (9., 12.)], vec![(6., 9.), (12., 9.)]], vec![]),
             // A filled storage box with a handle slot and items peeking out.
             Icon::Library => (vec![], vec![
                 {

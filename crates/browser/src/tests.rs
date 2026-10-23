@@ -168,6 +168,14 @@ fn click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
 }
 
+/// The Space bar plus opens the New menu; New Space opens the name editor.
+fn open_new_space_from_menu(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
+    click(cx, "new-space");
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.new_menu.as_ref().and_then(|menu| menu.overlay)).expect("new menu is open");
+    click(&mut VisualTestContext::from_window(overlay.into(), cx), "new-menu-space");
+}
+
 fn today_urls(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Vec<String> {
     view.read_with(cx, |w, _| {
         w.browser.space().today.iter().map(|t| t.url.clone()).collect()
@@ -1020,9 +1028,10 @@ fn clear_button_archives_today_without_touching_pinned_or_other_spaces(cx: &mut 
     let (view, cx) = open(cx);
     // Tidy and Clear appear only while the pointer is over the sidebar.
     move_mouse(cx, 600., 400.);
-    assert!(cx.debug_bounds("clear-today").is_none());
+    assert!(!view.read_with(cx, |w, _| w.sidebar_hovered));
     let sidebar = cx.debug_bounds("sidebar").unwrap();
     move_mouse(cx, f32::from(sidebar.center().x), f32::from(sidebar.center().y));
+    assert!(view.read_with(cx, |w, _| w.sidebar_hovered));
     assert!(cx.debug_bounds("tidy-today").is_some());
     click(cx, "clear-today");
     assert!(today_urls(&view, cx).is_empty());
@@ -1062,7 +1071,7 @@ fn pinned_section_collapse_is_local_persistent_and_available_by_name(cx: &mut Te
 #[gpui::test]
 fn dock_creates_named_space_and_rejects_blank_names(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
-    click(cx, "new-space");
+    open_new_space_from_menu(&view, cx);
     assert!(bar_input_focused(&view, cx));
     bar(&view, cx).simulate_input("   ");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -1108,7 +1117,7 @@ fn create_and_rename_space_actions_keep_focus_and_can_be_cancelled(cx: &mut Test
     bar(&view, cx).simulate_input("Cancelled");
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Research Archive");
-    click(cx, "new-space");
+    open_new_space_from_menu(&view, cx);
     bar(&view, cx).simulate_input("Cancelled Space");
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 4);
@@ -4789,4 +4798,31 @@ fn space_bar_and_site_controls_match_the_reference_layout(cx: &mut TestAppContex
     assert!(view.read_with(cx, |w, _| w.site_controls.is_some()));
     view.update(cx, |w, cx| w.close_site_controls(cx));
     assert!(view.read_with(cx, |w, _| w.site_controls.is_none()));
+}
+
+#[gpui::test]
+fn new_menu_offers_reference_items_and_opens_the_matching_editor(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let menu = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        let overlay = view.read_with(cx, |w, _| w.new_menu.as_ref().and_then(|menu| menu.overlay)).expect("new menu is open");
+        VisualTestContext::from_window(overlay.into(), cx)
+    };
+    click(cx, "new-space");
+    let mut overlay = menu(&view, cx);
+    for item in ["new-menu-space", "new-menu-folder", "new-menu-boost", "new-menu-split", "new-menu-tab"] {
+        assert!(overlay.debug_bounds(item).is_some(), "{item}");
+    }
+    assert!(overlay.debug_bounds("new-menu-easel").is_none());
+    click(&mut overlay, "new-menu-tab");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.new_menu.is_none()));
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    bar(&view, cx).simulate_keystrokes("escape");
+    // The keyboard walks the rows; Enter runs the selected one.
+    click(cx, "new-space");
+    let mut overlay = menu(&view, cx);
+    overlay.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.new_menu.is_none() && matches!(w.command_bar.as_ref().map(|bar| bar.target), Some(crate::window::Target::NewSpace))));
 }
