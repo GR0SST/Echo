@@ -153,3 +153,20 @@ pub fn track_mouse_outside(view: *mut c_void, hole: [f64; 4], areas: &mut Vec<us
     #[cfg(not(target_os = "macos"))]
     let _ = (view, hole, areas);
 }
+
+
+/// App-wide visibility is a native menu convention supported by macOS.
+/// GPUI's Windows implementation of Hide Others currently panics.
+pub fn supports_app_visibility() -> bool { cfg!(target_os = "macos") }
+
+pub enum AppVisibility { Hide, HideOthers, ShowAll }
+
+pub fn set_app_visibility(action: AppVisibility, cx: &gpui::App) {
+    if supports_app_visibility() {
+        match action {
+            AppVisibility::Hide => cx.hide(),
+            AppVisibility::HideOthers => cx.hide_other_apps(),
+            AppVisibility::ShowAll => cx.unhide_other_apps(),
+        }
+    }
+}

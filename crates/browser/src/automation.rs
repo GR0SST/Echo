@@ -94,6 +94,18 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                     Ok(()) => eprintln!("[automation] saved {arg}"),
                     Err(error) => eprintln!("[automation] screenshot failed: {error}"),
                 },
+                "menus" => {
+                    let _ = view.update(cx, |_, cx| {
+                        if let Some(menus) = cx.get_menus() {
+                            for menu in menus {
+                                let names: Vec<_> = menu.items.into_iter().filter_map(|item| match item {
+                                    gpui::OwnedMenuItem::Action { name, .. } => Some(name.to_string()), _ => None,
+                                }).collect();
+                                eprintln!("[menus] {}: {}", menu.name, names.join(" | "));
+                            }
+                        }
+                    });
+                }
                 "windows" => unsafe {
                     let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
                     let windows: *mut AnyObject = msg_send![app, windows];
@@ -105,14 +117,15 @@ pub fn start(script: String, view: WeakEntity<BrowserWindow>, ns_view: *mut c_vo
                         let visible: Bool = msg_send![window, isVisible];
                         let ignores: Bool = msg_send![window, ignoresMouseEvents];
                         let key: Bool = msg_send![window, isKeyWindow];
+                        let minimized: Bool = msg_send![window, isMiniaturized];
                         // NSWindowOcclusionStateVisible: macOS stops drawing
                         // windows hidden behind others, e.g. other apps'.
                         let occlusion: usize = msg_send![window, occlusionState];
                         eprintln!(
-                            "[windows] {i} {} frame=({:.0},{:.0} {:.0}x{:.0}) visible={} ignoresMouse={} key={} onScreen={}",
+                            "[windows] {i} {} frame=({:.0},{:.0} {:.0}x{:.0}) visible={} ignoresMouse={} key={} minimized={} onScreen={}",
                             (*class).name().to_string_lossy(),
                             frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
-                            visible.as_bool(), ignores.as_bool(), key.as_bool(), occlusion & 2 != 0,
+                            visible.as_bool(), ignores.as_bool(), key.as_bool(), minimized.as_bool(), occlusion & 2 != 0,
                         );
                     }
                 },

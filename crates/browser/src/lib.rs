@@ -4,6 +4,7 @@ mod native;
 mod find;
 mod toast;
 mod archive;
+mod menus;
 pub mod pages;
 pub mod text_input;
 pub mod window;
@@ -16,7 +17,7 @@ use std::time::SystemTime;
 
 use browser_core::Browser;
 use gpui::{
-    actions, point, prelude::*, px, size, App, Application, Bounds, KeyBinding, Menu, MenuItem,
+    actions, point, prelude::*, px, size, App, Application, Bounds, KeyBinding,
     TitlebarOptions, WindowBounds, WindowOptions,
 };
 
@@ -30,6 +31,7 @@ pub fn init(cx: &mut App) {
     text_input::bind_keys(cx);
     window::bind_keys(cx);
     find::bind_keys(cx);
+    menus::init(cx);
 }
 
 /// Content of the first launch.
@@ -103,11 +105,6 @@ const APP_NAME: &str = "Browser";
 pub fn run() {
     Application::new().run(|cx: &mut App| {
         init(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus(vec![Menu {
-            name: "Browser".into(),
-            items: vec![MenuItem::action("Quit", Quit)],
-        }]);
 
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         cx.open_window(

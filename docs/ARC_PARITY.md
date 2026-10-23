@@ -42,7 +42,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Import from Another Browser… | — | missing | See "Onboarding and import" |
 | Check for Updates… | — | missing | Auto-update |
 | Privacy Policy | — | missing | — |
-| Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | missing | Standard menu items not set up (our menu only has Quit) |
+| Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
 | Sign Out | — | missing | No account |
 | Quit | ⌘Q | done | No "Warn before quitting" confirmation |
 
@@ -74,7 +74,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | ⌘Z / ⇧⌘Z | missing | No undo manager for the sidebar. Undo in the Command Bar input not checked either (?) |
-| Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in our `TextInput` and on pages through CEF (?). No menu items |
+| Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in `TextInput`; Edit menu includes OS editing selectors for native page responders. Page editing through CEF still needs an unlocked visual check |
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
 | Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | missing | — |
@@ -102,7 +102,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
 | Developer: Allow JavaScript from Apple Events | — | missing | — |
 | Toggle Developer Mode (per site) | ⌃D | missing | — |
-| Enter/Exit Full Screen | ⌃⌘F | missing | Full screen through the window's green button not checked (?) |
+| Enter/Exit Full Screen | ⌃⌘F | partial | View menu, page shortcuts and overlays target the main window; Enter/Exit commands work in GPUI tests. Final native behavior check awaits an unlocked desktop |
 | Exit (leave a context: Peek, full screen) | ⌘Esc | missing | — |
 
 ### Spaces
@@ -153,7 +153,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
-| Minimize / Zoom / Bring All to Front | ⌘M | missing | — |
+| Minimize / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar actions wired through GPUI. The locked desktop did not confirm minimization; final native behavior check remains |
 | View Library | ⇧⌘L | missing | See "Library" |
 | View Downloads | ⇧⌘J | missing | — |
 | View Media / View Boosts | — | missing | — |
@@ -242,7 +242,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
 | Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
 | Removing a suggestion ("Delete Suggestion") | — | missing | — |
-| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab. Remaining menu actions follow their features |
+| **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab, window controls, Space/tab management and archive. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
 | Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | partial | Move to Pinned/Today in any Space and Pin to <space> are implemented. Identity, custom name and loaded page are preserved; destination is focused. Move to Folder remains missing |
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
@@ -499,8 +499,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 49
-- **partial**: 26
-- **missing**: 220
+- **partial**: 29
+- **missing**: 217
 
 ### Biggest gaps (by importance for parity)
 

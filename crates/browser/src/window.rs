@@ -112,6 +112,8 @@ macro_rules! window_shortcuts {
 
 window_shortcuts! {
     "cmd-t" => OpenCommandBar,
+    "cmd-m" => crate::menus::Minimize,
+    "ctrl-cmd-f" => crate::menus::ToggleFullscreen,
     "cmd-l" => EditCurrentUrl,
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
@@ -303,6 +305,10 @@ pub enum Command {
     ZoomIn,
     ZoomOut,
     ResetZoom,
+    EnterFullscreen,
+    ExitFullscreen,
+    MinimizeWindow,
+    ZoomWindow,
     GoBack,
     GoForward,
     NextTab,
@@ -370,11 +376,14 @@ impl Render for Overlay {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = self.kind;
         self.browser
-            .update(cx, |browser, cx| match kind {
-                OverlayKind::CommandBar => browser.render_command_bar_overlay(cx),
-                OverlayKind::Find => browser.render_find_bar(cx),
-                OverlayKind::Toast => browser.render_toast(),
-                OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
+            .update(cx, |browser, cx| {
+                let content = match kind {
+                    OverlayKind::CommandBar => browser.render_command_bar_overlay(cx),
+                    OverlayKind::Find => browser.render_find_bar(cx),
+                    OverlayKind::Toast => browser.render_toast(),
+                    OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
+                };
+                browser.render_overlay_shell(content, cx)
             })
             .unwrap_or_else(|_| div().into_any_element())
     }
@@ -760,6 +769,10 @@ impl BrowserWindow {
                 (Command::ZoomIn, "Zoom In", "zoom in|increase zoom", active.is_some()),
                 (Command::ZoomOut, "Zoom Out", "zoom out|decrease zoom", active.is_some()),
                 (Command::ResetZoom, "Zoom to Actual Size", "zoom actual size|reset zoom|100%", active.is_some()),
+                (Command::EnterFullscreen, "Enter Full Screen", "enter full screen|full screen", true),
+                (Command::ExitFullscreen, "Exit Full Screen", "exit full screen|leave full screen", true),
+                (Command::MinimizeWindow, "Minimize Window", "minimize window|minimize browser", true),
+                (Command::ZoomWindow, "Zoom Window", "zoom window", true),
                 (Command::GoBack, "Go Back", "go back", active.is_some()),
                 (Command::GoForward, "Go Forward", "go forward", active.is_some()),
                 (Command::NextTab, "Next Tab", "next tab", active.is_some()),
@@ -957,6 +970,10 @@ impl BrowserWindow {
             Command::ZoomIn => self.with_active_page(|pages, tab| pages.zoom(tab, 1)),
             Command::ZoomOut => self.with_active_page(|pages, tab| pages.zoom(tab, -1)),
             Command::ResetZoom => self.with_active_page(|pages, tab| pages.zoom(tab, 0)),
+            Command::EnterFullscreen => self.perform_window_operation(crate::menus::WindowOperation::Fullscreen(true), cx),
+            Command::ExitFullscreen => self.perform_window_operation(crate::menus::WindowOperation::Fullscreen(false), cx),
+            Command::MinimizeWindow => self.perform_window_operation(crate::menus::WindowOperation::Minimize, cx),
+            Command::ZoomWindow => self.perform_window_operation(crate::menus::WindowOperation::Zoom, cx),
             Command::GoBack => self.with_active_page(|pages, tab| pages.go_back(tab)),
             Command::GoForward => self.with_active_page(|pages, tab| pages.go_forward(tab)),
             Command::NextTab => self.cycle_tab(1, cx),
@@ -991,6 +1008,19 @@ impl BrowserWindow {
             });
         }
         cx.notify();
+    }
+
+    fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
+            .child(content).into_any_element()
+    }
+
+    fn open_command_action(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_command_bar(Target::NewTab, "", window, cx);
+        self.run_command(command, cx);
     }
 
     // Window actions.
@@ -1812,6 +1842,18 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
+            .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::RenameSpace, window, cx| this.open_command_action(Command::RenameSpace, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::RenameTab, window, cx| this.open_command_action(Command::RenameTab, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ViewArchive, window, cx| this.open_command_action(Command::ViewArchive, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ClearArchive, window, cx| this.open_command_action(Command::RequestClearArchive, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ArchiveSettings, window, cx| this.open_command_action(Command::ArchiveSettings, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ResetTabName, _, cx| this.run_command(Command::ResetTabName, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ResetPinnedTab, _, cx| this.run_command(Command::ResetPinnedTab, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ReplacePinnedUrl, _, cx| this.run_command(Command::ReplacePinnedUrl, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ResetSpace, _, cx| this.run_command(Command::ResetSpace, cx)))
             .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.open_command_bar(Target::NewSpace, "", window, cx)))
             .on_action(cx.listener(Self::on_edit_current_url))
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))

@@ -1432,3 +1432,78 @@ fn pin_to_space_command_preserves_a_custom_tab_name(cx: &mut TestAppContext) {
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Engine notes");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 1);
 }
+
+fn menu_action(menu: &str, label: &str) -> Box<dyn gpui::Action> {
+    crate::menus::build().into_iter().find(|item| item.name.as_ref() == menu).unwrap()
+        .items.into_iter().find_map(|item| match item {
+            gpui::MenuItem::Action { name, action, .. } if name.as_ref() == label => Some(action),
+            _ => None,
+        }).unwrap_or_else(|| panic!("menu item missing: {menu} / {label}"))
+}
+
+fn dispatch_menu(cx: &mut VisualTestContext, menu: &str, label: &str) {
+    let action = menu_action(menu, label);
+    cx.update(|window, cx| window.dispatch_action(action, cx));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn application_menu_actions_are_reachable_from_the_browser_window(cx: &mut TestAppContext) {
+    let (_, cx) = open(cx);
+    for menu in crate::menus::build() {
+        for item in menu.items {
+            if let gpui::MenuItem::Action { name, action, os_action: None } = item {
+                // TestPlatform does not automatically activate newly opened windows.
+                let available = cx.update(|window, cx| window.is_action_available(action.as_ref(), cx))
+                    || cx.cx.update(|cx| cx.is_action_available(action.as_ref()));
+                assert!(available, "unreachable menu action: {} / {name}", menu.name);
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn menu_actions_open_editors_and_edit_the_command_input(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "New Space…");
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("Menu Space");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Menu Space");
+    dispatch_menu(cx, "Spaces", "Rename Space…");
+    bar(&view, cx).simulate_input("Renamed Space");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Renamed Space");
+    dispatch_menu(cx, "File", "New Tab…");
+    let mut input = bar(&view, cx);
+    input.simulate_input("clipboard text");
+    dispatch_menu(&mut input, "Edit", "Select All");
+    dispatch_menu(&mut input, "Edit", "Copy");
+    dispatch_menu(&mut input, "Edit", "Cut");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    dispatch_menu(&mut input, "Edit", "Paste");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("clipboard text"));
+}
+
+#[gpui::test]
+fn fullscreen_targets_the_main_window_from_pages_and_overlays(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("ctrl-cmd-f");
+    assert!(cx.update(|window, _| window.is_fullscreen()));
+    fake.send(cx, Event::Shortcut(Shortcut { ctrl: true, cmd: true, key: "f".into(), ..Default::default() }));
+    assert!(!cx.update(|window, _| window.is_fullscreen()));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_keystrokes("ctrl-cmd-f");
+    assert_eq!(bar_text(&view, cx), None);
+    assert!(cx.update(|window, _| window.is_fullscreen()));
+    cx.simulate_keystrokes("cmd-f");
+    find_overlay(&view, cx).simulate_keystrokes("ctrl-cmd-f");
+    assert!(view.read_with(cx, |w, _| w.find_bar.is_none()));
+    assert!(!cx.update(|window, _| window.is_fullscreen()));
+    for (query, expected) in [("enter full screen", true), ("enter full screen", true), ("exit full screen", false)] {
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input(query);
+        bar(&view, cx).simulate_keystrokes("enter");
+        assert_eq!(cx.update(|window, _| window.is_fullscreen()), expected);
+    }
+}
