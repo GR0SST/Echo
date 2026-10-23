@@ -35,6 +35,10 @@ pub(super) struct ConsumerLease {
     failures: RefCell<Vec<String>>,
 }
 impl ConsumerLease {
+    /// Pure check immediately before an outside-borrows destination effect.
+    pub(super) fn allows_destination(&self) -> bool {
+        self.gate.is_running()
+    }
     /// Only genuine errors from THIS batch, never historical service diagnostics
     /// or effects intentionally suppressed by the quit seal.
     pub(super) fn with_service_errors<T: Copy + Eq + Hash, H: Clone, R>(
@@ -57,7 +61,9 @@ impl Drop for ConsumerLease {
             let failures = self.failures.borrow();
             if !failures.is_empty() {
                 let mut sticky = self.gate.handoff_failure.borrow_mut();
-                if sticky.is_none() { *sticky = Some(failures.join("; ")); }
+                if sticky.is_none() {
+                    *sticky = Some(failures.join("; "));
+                }
             }
         }
         self.gate.busy.set(false);
@@ -93,7 +99,10 @@ impl ConsumerGate {
                 return Err(ShutdownDownloadError::Failure(error.clone()));
             }
         }
-        Ok(ConsumerLease { gate: self.clone(), failures: RefCell::new(Vec::new()) })
+        Ok(ConsumerLease {
+            gate: self.clone(),
+            failures: RefCell::new(Vec::new()),
+        })
     }
 }
 
@@ -128,6 +137,38 @@ impl<T: Copy + Eq + Hash, H: Clone> ShutdownDownloads<T, H> {
             gate,
             needs_flush: Cell::new(true),
         })
+    }
+    pub(super) fn publish_staged_with(
+        &self,
+        writer: impl FnMut(
+            &H,
+            UserProfileId,
+            DownloadCompletion,
+            &crate::downloads_publication::PublishedPath,
+        ) -> staged::WriteOutcome,
+    ) -> Result<(), ShutdownDownloadError> {
+        let lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        let (_lease, result) = staged::drive(
+            &self.service,
+            lease,
+            |_, _| Err("Shutdown cannot authorize a destination".into()),
+            writer,
+        );
+        result.map_err(ShutdownDownloadError::Failure)
+    }
+    /// Fault-injection tests may detach an exact item without running the batch.
+    /// Production always transfers its existing lease through staged::drive.
+    #[cfg(test)]
+    pub(super) fn detach_staged_work(
+        &self,
+        token: T,
+    ) -> Result<staged::Work<T, H>, ShutdownDownloadError> {
+        let lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
+        self.service
+            .borrow()
+            .staged
+            .detach(token, lease)
+            .map_err(ShutdownDownloadError::Failure)
     }
     fn ingest_copied(
         &self,
@@ -180,7 +221,7 @@ impl<T: Copy + Eq + Hash, H: Clone> ShutdownDownloads<T, H> {
     ) -> Result<(), ShutdownDownloadError> {
         let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
         self.needs_flush.set(true);
-        if self.service.borrow().router.has_pending_records() {
+        if self.service.borrow().has_pending_records() {
             return Err(ShutdownDownloadError::Failure(
                 "Download records remain uncommitted".into(),
             ));
@@ -194,7 +235,7 @@ impl<T: Copy + Eq + Hash, H: Clone> ShutdownDownloads<T, H> {
     }
     pub(crate) fn finish(&self) -> Result<(), ShutdownDownloadError> {
         let _lease = self.gate.acquire(ConsumerOwner::Shutdown)?;
-        if self.needs_flush.get() || self.service.borrow().router.has_pending_records() {
+        if self.needs_flush.get() || self.service.borrow().has_pending_records() {
             return Err(ShutdownDownloadError::Failure(
                 "Final download persistence/session flush is pending".into(),
             ));
@@ -204,6 +245,12 @@ impl<T: Copy + Eq + Hash, H: Clone> ShutdownDownloads<T, H> {
     }
 }
 impl ShutdownDownloads {
+    /// Complete already-authorized publications before final writer flush.
+    /// Shutdown cannot Continue a new destination. The same capability is held
+    /// through publication, proof validation, canonical mutation and return.
+    fn publish_staged(&self) -> Result<(), ShutdownDownloadError> {
+        self.publish_staged_with(staged::record_profile)
+    }
     /// Public quit ingress remains usable after the app seal; no new effect policy.
     pub(crate) fn ingest_and_persist(
         &self,
@@ -212,7 +259,8 @@ impl ShutdownDownloads {
         self.ingest_copied_and_persist_with(
             events.into_iter().map(TransferEvent::from),
             |handle, profile, completion| handle.record_completed_download(profile, completion),
-        )
+        )?;
+        self.publish_staged()
     }
     /// Requires a SEPARATELY ACCEPTED shutdown-safe engine copied-event source.
     /// Engine::take_download_events is NOT available after Engine::begin_shutdown.
@@ -223,7 +271,8 @@ impl ShutdownDownloads {
         self.drain_copied_and_persist_with(
             || drain().map(|events| events.into_iter().map(TransferEvent::from).collect()),
             |handle, profile, completion| handle.record_completed_download(profile, completion),
-        )
+        )?;
+        self.publish_staged()
     }
     pub(crate) fn retained_normal_handles(
         &self,

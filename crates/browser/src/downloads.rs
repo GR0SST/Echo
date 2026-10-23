@@ -3,6 +3,8 @@
 //! and starts the pump. No page/window identity is consulted here.
 #[path = "downloads_shutdown.rs"]
 mod shutdown;
+#[path = "downloads_staged.rs"]
+mod staged;
 use crate::profile::ProfileHandle;
 use browser_core::{
     UserProfileId,
@@ -326,6 +328,7 @@ pub(crate) type DestinationPolicy =
     Rc<dyn Fn(UserProfileId, &DestinationRequest) -> DestinationDecision>;
 pub(crate) struct DownloadService<T = DownloadToken, H = ProfileHandle> {
     router: DownloadRouter<T, H>,
+    staged: staged::StagedTransfers<T, H>,
     policy: Option<DestinationPolicy>,
     fixture: Option<Rc<RefCell<crate::download_acceptance::FixtureAudit<T>>>>,
     pub errors: Vec<String>,
@@ -334,6 +337,7 @@ impl<T, H> Default for DownloadService<T, H> {
     fn default() -> Self {
         Self {
             router: DownloadRouter::default(),
+            staged: staged::StagedTransfers::default(),
             policy: None,
             fixture: None,
             errors: Vec::new(),
@@ -354,10 +358,23 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
                 Some(FixtureVerdict::Quarantine(error)) => errors.push(error),
             }
         }
-        (accepted, errors)
+        // Both Running and quit pass through this exact pure filter. Staged
+        // events never reach the legacy completion builder (which trusts CEF's
+        // full_path); only validated PublishedPath may become a staged record.
+        let mut direct = Vec::new();
+        for event in accepted {
+            match self.staged.ingest(event) {
+                Ok(staged_errors) => errors.extend(staged_errors),
+                Err(direct_event) => direct.push(direct_event),
+            }
+        }
+        (direct, errors)
+    }
+    fn has_pending_records(&self) -> bool {
+        self.router.has_pending_records() || self.staged.has_pending()
     }
     pub(crate) fn attach_fixture(&mut self, audit: Rc<RefCell<crate::download_acceptance::FixtureAudit<T>>>) -> Result<(), String> {
-        if self.fixture.is_some() || self.policy.is_some() || !self.router.ledger.is_empty() || !self.errors.is_empty() || self.router.owners.len() != 1 {
+        if self.fixture.is_some() || self.policy.is_some() || !self.router.ledger.is_empty() || !self.errors.is_empty() || self.router.owners.len() != 1 || self.staged.has_pending() {
             return Err("Fixture service is occupied".into());
         }
         {
@@ -677,6 +694,13 @@ impl AppDownloads {
                         service.errors.push(error);
                     }
                 }
+                // Transfer THIS batch's capability into staged Work and back.
+                // Reentrant quit observes InFlight until effects/state/errors return.
+                let (lease, staged_result) = staged::drive(
+                    &this.service, lease, Engine::resolve_download_destination,
+                    staged::record_profile,
+                );
+                if staged_result.is_err() { break; }
                 // Native parking must not run under App/service/model/audit borrows.
                 // Keep THIS batch's lease until any reentrant quit sees its errors.
                 if crate::quit::is_quitting() || !this.consumer.is_running() { break; }
@@ -699,7 +723,7 @@ impl AppDownloads {
                     let service = this.service.borrow();
                     continue_running(&this.consumer, crate::quit::is_quitting(), &service, RunningTurn {
                         drained_empty, effects_empty, retirement_pending, engine_pending,
-                        records_pending: service.router.has_pending_records(),
+                        records_pending: service.has_pending_records(),
                     })
                 };
                 if !keep_running { break; }

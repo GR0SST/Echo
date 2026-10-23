@@ -492,3 +492,61 @@ R7 recognizes bound cancellation separately from completion; empty/wrong-path
 Complete still fails. A separate R6 launch hit a CEF/libdispatch SIGTRAP before
 automation or arm; it is recorded as a startup failure, not fixed by the audit
 change. The successful R7 run does not establish a final-poll completion race.
+
+## Staged publication through the existing consumer
+
+The service retains an explicit staging reservation against the frozen callback
+request, original opaque token/full provenance and canonical normal ProfileHandle.
+No default destination, filename suffix policy, picker, startup or production
+admission is installed. The direct disposable acceptance fixture remains separate.
+
+Both Running and shutdown divert retained staged events before the legacy
+completion constructor. A stage path cannot become a canonical completed record.
+Only a genuine bound Updated Complete after acknowledged Continue creates owned
+Publication work. Cancellation retains bytes and cannot be resurrected; interrupted
+transfers remain resumable.
+
+Running moves its current ConsumerLease into staged Work and receives that same
+lease back before retirement preparation and the timer. There is no second lease,
+event drain, task or collector. The shared driver detaches eligible work under a
+short service borrow, then releases that borrow before filesystem operations,
+Continue, proof validation or the canonical writer. Queued observations overtake
+every subsequent effect. State and failures return before the lease can be released;
+reentrant quit continues to observe InFlight until this boundary.
+
+Production shutdown ingestion invokes the same driver after copied-event reduction
+and before retained-writer flush/finish. It can publish an already completed,
+authorized stage but cannot Continue an unresolved destination. An unresolved
+stage blocks final persistence until cancellation or accepted completion resolves
+it. Genuine cancellation is disposal, not a synthetic persistence failure.
+
+The private proof supplies the exact final native path. After outside-borrows
+validation, record_profile calls the captured ProfileHandle. Its Result errors
+occur before core mutation; an unwind remains Unknown because Work marks the
+writer uncertain before entry. A definite writer failure requires explicit retry
+and revalidates the same retained proof; uncertain native/filesystem/writer outcomes
+block replay. Historical diagnostics and genuine quit handoff failures remain.
+
+Reservation and policy integration are still open: production must create and
+retain staging outside all borrows under the existing batch capability, preserving
+ownership through reserve failure, cancellation and quit. Stage-aware active
+projection/control/retry/scheduling and a separately audited staged native fixture
+remain necessary. The direct fixture does not establish native staged acceptance.
+
+Filesystem gates remain as documented in crates/browser/DOWNLOAD_PUBLICATION.md:
+crash recovery, durability, hostile concurrent path replacement, platform filesystem
+qualification and service-level quarantine preservation. General source-close
+admission still requires the custom engine's proven early correlation/seal fence;
+known-ID probes and these service tests do not establish that fence.
+
+
+Validation of the staged service runtime (macOS, 2026-10-24): root `cargo test`
+passed 999 tests, including 23 staged filesystem/lease/writer scenarios. The six
+runtime additions cover lease return, reentrant quit/cancellation, sticky identity
+failure, final shutdown publication before flush, unresolved-stage suppression and
+the real ProfileHandle proof adapter. Existing seventeen staged tests are retained.
+A bundled direct-fixture regression completed 32 MiB after source-tab closure,
+verified the exact file hash, reloaded one canonical record under the captured
+named profile and none under Default, and exited normally after CEF Complete.
+The screenshot was inspected. This direct-fixture run is regression evidence;
+it does not establish native staged publication or a full admission fence.
