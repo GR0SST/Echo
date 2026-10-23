@@ -35,7 +35,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PageIdentity {
+pub struct PageIdentity {
     pub tab: TabId,
     pub profile: UserProfileId,
     pub generation: u64,
@@ -59,6 +59,11 @@ pub trait WebEngine {
     }
     fn create_page_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
         self.create_in_storage(storage, parent, url, bounds).map_or(PageCreation::Failed, PageCreation::Created)
+    }
+    /// Captured creation identity; default preserves existing storage behavior.
+    fn create_page_with_identity(&mut self, _identity: PageIdentity, _source_space: browser_core::SpaceId,
+        storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        self.create_page_in_storage(storage, parent, url, bounds)
     }
     /// Product commands stay disabled until the renderer host bridge is ready.
     fn supports_inspector(&self) -> bool { false }
@@ -157,6 +162,32 @@ impl WebEngine for Chromium {
         match self.engine.create_view_in_context(&context, parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS)) {
             Ok(view) => PageCreation::Created(view),
             Err(error) => { eprintln!("Cannot create page: {error}"); PageCreation::Failed }
+        }
+    }
+
+    fn create_page_with_identity(&mut self, identity: PageIdentity, source_space: browser_core::SpaceId,
+        storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        use crate::window::download_probe::admission::{self, Decision};
+        let parent = if parent.is_null() { self.parent } else { parent };
+        let candidate = match admission::inspect(identity, source_space, storage, parent as usize, url) {
+            Decision::Ordinary => return self.create_page_in_storage(storage, parent, url, bounds),
+            Decision::Rejected => return PageCreation::Failed,
+            Decision::Candidate(candidate) => candidate,
+        };
+        // Uses the same guarded synchronous creator as ordinary pages. No pump,
+        // destination/control effects, parking, or close preparation runs here.
+        let context = match self.resolve_storage(storage) {
+            Ok(context) => context,
+            Err(_) => { admission::fail(&candidate); return PageCreation::Failed; }
+        };
+        if !context.is_ready() { return PageCreation::Pending; }
+        let Some(owner) = admission::begin(&candidate) else { return PageCreation::Failed; };
+        let result = self.engine.create_view_in_context_with_download_owner(
+            &context, owner, parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS));
+        admission::finish(&candidate, result.is_ok());
+        match result {
+            Ok(view) => PageCreation::Created(view),
+            Err(_) => { eprintln!("[download-probe] explicit fixture creation failed"); PageCreation::Failed }
         }
     }
 
@@ -672,6 +703,29 @@ impl Pages {
         self.store.borrow_mut().prune();
     }
 
+    /// Pure source capture after inventory reconciliation and before creation.
+    /// Only the explicitly created Today fixture is eligible; no existing page
+    /// receives a capability and no storage/profile identifier is reconstructed.
+    pub(crate) fn download_probe_source(&self, browser: &Browser, tab: TabId,
+        config: &crate::window::download_probe::Config)
+        -> Result<crate::window::download_probe::admission::Source, String> {
+        if browser.is_private() || browser.is_blank() || self.parent.is_null() {
+            return Err("Probe requires a normal native workspace".into());
+        }
+        let profile = browser.active_user_profile_id();
+        let space = browser.space();
+        if space.user_profile_id != profile || !space.today.iter().any(|entry| entry.id == tab && entry.url == config.fixture_url()) {
+            return Err("Probe source is not the captured Today fixture".into());
+        }
+        let store = self.store.borrow();
+        if store.pages.contains_key(&tab) { return Err("Probe cannot adopt an existing page".into()); }
+        let identity = store.identities.get(&tab).copied().filter(|identity| identity.profile == profile)
+            .ok_or("Probe source identity is unavailable")?;
+        Ok(crate::window::download_probe::admission::Source {
+            identity, space: space.id, storage: StorageSelection::for_profile(profile), parent: self.parent as usize,
+        })
+    }
+
     pub fn sync(&mut self, browser: &Browser, visible: bool) {
         if crate::quit::is_quitting() { return; }
         self.reconcile_inventory(browser);
@@ -822,7 +876,7 @@ impl Pages {
                 None => {
                     if !active { continue; }
                     if retry_requires_model { continue; }
-                    let view = match engine.create_page_in_storage(&storage, self.parent, &url, bounds) {
+                    let view = match engine.create_page_with_identity(identity, source_space, &storage, self.parent, &url, bounds) {
                         PageCreation::Created(view) => view,
                         PageCreation::Pending => { self.creation_pending = true; continue; }
                         PageCreation::Failed => continue,

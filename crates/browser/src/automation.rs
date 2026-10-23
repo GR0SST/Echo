@@ -27,6 +27,7 @@
 
 use std::ffi::{c_void, CString};
 use std::time::Duration;
+use std::sync::Arc;
 
 use gpui::{App, AppContext, AsyncApp, WeakEntity};
 use objc2::runtime::{AnyClass, AnyObject, Bool};
@@ -45,6 +46,59 @@ const CONTROL: usize = 1 << 18;
 const OPTION: usize = 1 << 19;
 const COMMAND: usize = 1 << 20;
 const EVENT_GAP: Duration = Duration::from_millis(60);
+
+/// Entity ownership is not native-window ownership: a retained Entity can
+/// outlive removal of its root. This inventory check never dereferences native
+/// pointers and must run again after every scheduling/dispatch boundary.
+fn live_source_root(view: &WeakEntity<BrowserWindow>, native: usize, cx: &App) -> Option<gpui::AnyWindowHandle> {
+    let (root, current_native) = view.read_with(cx, |view, _| (view.main_window, view.native_view.map(|p| p as usize))).ok()?;
+    (native != 0 && current_native == Some(native)
+        && cx.windows().iter().any(|window| window.window_id() == root.window_id())).then_some(root)
+}
+
+fn with_live_source<R>(view: &WeakEntity<BrowserWindow>, native: *mut AnyObject,
+    cx: &mut AsyncApp, effect: impl FnOnce(*mut AnyObject) -> R) -> Option<R> {
+    let live = cx.update(|cx| !crate::quit::is_quitting() && live_source_root(view, native as usize, cx).is_some()).unwrap_or(false);
+    // The App/Entity borrow has ended before native dispatch can reenter.
+    live.then(|| effect(native))
+}
+
+#[path = "input_worker.rs"]
+mod input_worker;
+use input_worker::{Completion, PostGate};
+
+/// The script retains this subscription until its actual worker completes,
+/// independently of nominal hold time or OS worker scheduling latency.
+struct NativeInputLease { gate: Arc<PostGate>, _closed: gpui::Subscription }
+impl Drop for NativeInputLease {
+    fn drop(&mut self) { self.gate.revoke(); }
+}
+impl NativeInputLease {
+    async fn wait(&self, cx: &mut AsyncApp) -> Completion {
+        loop {
+            let (live, completion) = self.gate.status();
+            if completion != Completion::Pending { return completion; }
+            if !live { return Completion::Cancelled; }
+            // Never join a worker on the AppKit tracking thread. No nominal
+            // delay authorizes dropping a still-live pending worker lease.
+            cx.background_executor().timer(Duration::from_millis(5)).await;
+        }
+    }
+}
+fn input_lease(view: &WeakEntity<BrowserWindow>, native: *mut AnyObject, cx: &mut AsyncApp) -> Option<NativeInputLease> {
+    cx.update(|cx| {
+        let root = live_source_root(view, native as usize, cx)?;
+        let gate = PostGate::new();
+        let revoked = gate.clone();
+        let closed = cx.on_window_closed(move |cx| {
+            if !cx.windows().iter().any(|window| window.window_id() == root.window_id()) {
+                revoked.revoke();
+            }
+        });
+        Some(NativeInputLease { gate, _closed: closed })
+    }).ok().flatten()
+}
+fn while_input_live(gate: &PostGate, enqueue: impl FnOnce()) -> bool { gate.post(enqueue) }
 
 struct HostTransfer {
     source: WeakEntity<BrowserWindow>,
@@ -97,7 +151,7 @@ async fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp
 }
 
 async fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
-    if transfer.source.upgrade().is_none() { return false; }
+    if cx.update(|cx| live_source_root(&transfer.source, transfer.source_view, cx).is_none()).unwrap_or(true) { return false; }
     if !cx.update(|cx| transfer.source_window.update(cx, |_, _, _| ()).is_ok()).unwrap_or(false) { return false; }
     let restored_page = cx.update(|cx| transfer.source.update(cx, |view, _| {
         view.refresh_profile_projection();
@@ -106,10 +160,13 @@ async fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
     }).is_ok()).unwrap_or(false);
     if !restored_page || !wait_for_page(&transfer.source, transfer.tab, cx).await { return false; }
     let restored = cx.update(|cx| {
+        if live_source_root(&transfer.source, transfer.source_view, cx).is_none() { return false; }
         let _ = transfer.target.update(cx, |_, window, _| window.remove_window());
         let _ = transfer.source_window.update(cx, |_, window, _| window.activate_window());
+        if live_source_root(&transfer.source, transfer.source_view, cx).is_none() { return false; }
         transfer.pages.borrow_mut().focus_shown();
-    }).is_ok();
+        true
+    }).unwrap_or(false);
     restored
 }
 
@@ -117,6 +174,8 @@ async fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
 // a window or Pages borrow while waiting for the regular engine pump.
 async fn wait_for_page(view: &WeakEntity<BrowserWindow>, tab: browser_core::TabId, cx: &mut AsyncApp) -> bool {
     for _ in 0..100 {
+        if !cx.update(|cx| view.read_with(cx, |view, _| view.main_window).ok()
+            .is_some_and(|root| cx.windows().iter().any(|window| window.window_id() == root.window_id()))).unwrap_or(false) { return false; }
         if view.read_with(cx, |view, _| view.pages.as_ref().is_some_and(|pages| pages.borrow().is_visible(tab))).unwrap_or(false) { return true; }
         cx.background_executor().timer(Duration::from_millis(20)).await;
     }
@@ -127,10 +186,20 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
     let ns_view = ns_view as usize;
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut ns_view = ns_view as *mut AnyObject;
-        unsafe { make_key(ns_view) };
+        let _ = with_live_source(&view, ns_view, cx, |native| unsafe { make_key(native) });
         let mut require_focus = false;
         let mut transfer = None;
-        for command in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
+        // Each use checks the current root outside native code, including the
+        // next character/scroll step after an await. Focus is a separate policy.
+        'commands: for command in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
+            macro_rules! source_native {
+                ($effect:expr) => {
+                    match with_live_source(&view, ns_view, cx, $effect) {
+                        Some(result) => result,
+                        None => { eprintln!("[automation] rejected: source root is closed"); continue 'commands; }
+                    }
+                };
+            }
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
             if name == "require-focus" { require_focus = true; }
@@ -138,13 +207,54 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             // Input and screenshots still require focus after the wait.
             // Explicit window selection/activation also remains usable after
             // a deliberate window switch or Close Window.
-            let after_close = matches!(name, "wait" | "windows" | "reopen" | "window" | "activate" | "quit");
-            if require_focus && !after_close && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
-                eprintln!("[automation] aborted: browser lost focus or is not on screen");
-                let _ = cx.update(|cx| crate::quit::request(cx));
-                return;
+            let after_close = matches!(name, "wait" | "windows" | "reopen" | "window" | "activate" | "quit" | "download-probe-status" | "download-probe-control" | "download-probe-wait-active");
+            if !after_close {
+                let Some(focused) = with_live_source(&view, ns_view, cx, |native| !require_focus || unsafe { has_browser_focus(native) }) else {
+                    eprintln!("[automation] rejected: source root is closed");
+                    continue;
+                };
+                if !focused {
+                    eprintln!("[automation] aborted: browser lost focus or is not on screen");
+                    let _ = cx.update(|cx| crate::quit::request(cx));
+                    return;
+                }
             }
             match name {
+                "download-probe-arm" => {
+                    match crate::window::download_probe::Config::parse(arg) {
+                        Ok(config) => {
+                            match view.update(cx, |view, cx| view.arm_download_probe(config, cx)) {
+                                Ok(Ok(())) => {},
+                                _ => eprintln!("[download-probe] normal fixture arm rejected"),
+                            }
+                        }
+                        Err(error) => eprintln!("[download-probe] {error}"),
+                    }
+                }
+                "download-probe-wait-active" => {
+                    let Some(seconds) = arg.parse::<u64>().ok().filter(|seconds| (1..=30).contains(seconds)) else {
+                        eprintln!("[automation] aborted: download-probe-wait-active requires 1..30 seconds");
+                        return;
+                    };
+                    let deadline = std::time::Instant::now() + Duration::from_secs(seconds);
+                    let accepted = loop {
+                        if cx.update(|cx| crate::window::download_probe::active(cx)).unwrap_or(false) { break true; }
+                        if crate::quit::is_quitting() || std::time::Instant::now() >= deadline { break false; }
+                        cx.background_executor().timer(Duration::from_millis(20)).await;
+                    };
+                    if !accepted {
+                        eprintln!("[automation] aborted: fixture did not reach copied nonzero progress with its exact resolved destination");
+                        return;
+                    }
+                    eprintln!("[download-probe] active acceptance barrier passed");
+                }
+                "download-probe-status" if arg.is_empty() => {
+                    let _ = cx.update(crate::window::download_probe::status);
+                }
+                "download-probe-control" => {
+                    let _ = cx.update(|cx| crate::window::download_probe::control(arg, cx));
+                }
+
                 "require-focus" => {},
                 "transfer-new-host" => {
                     let moved = if transfer.is_none() { transfer_new_host(&view, cx).await } else { None };
@@ -236,7 +346,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     cx.background_executor().timer(Duration::from_millis(300)).await;
                 }
                 "activate" => {
-                    unsafe { make_key(ns_view) };
+                    source_native!(|native| unsafe { make_key(native) });
                     cx.background_executor().timer(Duration::from_millis(300)).await;
                 }
                 "wait" => {
@@ -246,17 +356,20 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         .await;
                 }
                 "key" => {
-                    unsafe { post_key(ns_view, arg) };
+                    source_native!(|native| unsafe { post_key(native, arg) });
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "type" => {
                     for ch in arg.chars() {
-                        if require_focus && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
+                        // Revalidate even without require-focus: the previous
+                        // character's native event may have closed the root.
+                        let focused = source_native!(|native| !require_focus || unsafe { has_browser_focus(native) });
+                        if !focused {
                             eprintln!("[automation] aborted: browser lost focus or is not on screen");
                             let _ = cx.update(|cx| crate::quit::request(cx));
                             return;
                         }
-                        unsafe { post_key(ns_view, &ch.to_string()) };
+                        source_native!(|native| unsafe { post_key(native, &ch.to_string()) });
                         cx.background_executor().timer(Duration::from_millis(15)).await;
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
@@ -264,16 +377,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 "compose" => {
                     let overlay = view.update(cx, |this, _| this.command_bar.as_ref().and_then(|bar| bar.overlay)).ok().flatten();
                     let target = overlay.and_then(|handle| handle.update(cx, |_, window, _| crate::native::view_of(window)).ok().flatten()).map_or(ns_view, |view| view.cast());
-                    unsafe { compose_text(target, arg); }
+                    source_native!(|_| unsafe { compose_text(target, arg) });
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "pointer" | "move" => {
                     let v: Vec<f64> = arg.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                     if let [x, y] = v[..] {
-                        unsafe {
-                            if name == "pointer" { warp_pointer(ns_view, x, y); }
-                            post_mouse(ns_view, MOUSE_MOVED, x, y);
-                        };
+                        if name == "pointer" { source_native!(|native| unsafe { warp_pointer(native, x, y) }); }
+                        source_native!(|native| unsafe { post_mouse(native, MOUSE_MOVED, x, y) });
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
@@ -283,19 +394,26 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let v: Vec<f64> = arg.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                     let hold = v.get(4).copied().filter(|ms| ms.is_finite() && *ms >= 0.).map(|ms| Duration::from_secs_f64(ms / 1000.)).unwrap_or_default();
                     if v.len() == 4 || v.len() == 5 {
-                        unsafe { post_drag(ns_view, (v[0], v[1]), (v[2], v[3]), hold) };
+                        let Some(lease) = input_lease(&view, ns_view, cx) else { continue; };
+                        source_native!(|native| unsafe { post_drag(native, (v[0], v[1]), (v[2], v[3]), hold, lease.gate.clone()) });
+                        if lease.wait(cx).await == Completion::Failed {
+                            eprintln!("[automation] aborted: native drag worker failed");
+                            return;
+                        }
+                        cx.background_executor().timer(EVENT_GAP).await;
+                        continue;
                     }
                     cx.background_executor().timer(Duration::from_millis(500) + hold).await;
                 }
                 "doubleclick" => {
                     let coords: Vec<f64> = arg.split_whitespace().filter_map(|value| value.parse().ok()).collect();
-                    if let [x, y] = coords[..] { unsafe { post_double_click(ns_view, x, y) }; }
+                    if let [x, y] = coords[..] { source_native!(|native| unsafe { post_double_click(native, x, y) }); }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "rightclick" => {
                     let coords: Vec<f64> = arg.split_whitespace().filter_map(|value| value.parse().ok()).collect();
                     if let [x, y] = coords[..] {
-                        unsafe { send_right_click(ns_view, x, y); }
+                        source_native!(|native| unsafe { send_right_click(native, x, y) });
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
@@ -304,11 +422,18 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let mut coords = arg.split_whitespace().filter_map(|v| v.parse::<f64>().ok());
                     if let (Some(x), Some(y)) = (coords.next(), coords.next()) {
                         let hold = coords.next().map(|ms| Duration::from_secs_f64(ms / 1000.0));
-                        unsafe { post_click(ns_view, x, y, hold) };
+                        let Some(lease) = input_lease(&view, ns_view, cx) else { continue; };
+                        source_native!(|native| unsafe { post_click(native, x, y, hold, Some(lease.gate.clone())) });
+                        if lease.wait(cx).await == Completion::Failed {
+                            eprintln!("[automation] aborted: native click worker failed");
+                            return;
+                        }
+                        cx.background_executor().timer(EVENT_GAP).await;
+                        continue;
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
-                "shot" => match unsafe { screenshot(ns_view, arg) } {
+                "shot" => match source_native!(|native| unsafe { screenshot(native, arg) }) {
                     Ok(()) => eprintln!("[automation] saved {arg}"),
                     Err(error) => eprintln!("[automation] screenshot failed: {error}"),
                 },
@@ -348,8 +473,8 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         );
                     }
                 },
-                "views" => unsafe {
-                    let window = window_of(ns_view);
+                "views" => source_native!(|native| unsafe {
+                    let window = window_of(native);
                     let mask: usize = msg_send![window, styleMask];
                     let min: objc2_foundation::NSSize = msg_send![window, minSize];
                     let max: objc2_foundation::NSSize = msg_send![window, maxSize];
@@ -357,7 +482,7 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let content: *mut AnyObject = msg_send![window, contentView];
                     let frame_view: *mut AnyObject = msg_send![content, superview];
                     print_views(if frame_view.is_null() { content } else { frame_view }, 0);
-                },
+                }),
                 "inspector-open" | "inspector-status" | "inspector-eval" | "inspector-close" => {
                     // No arbitrary JS, protocol JSON, view IDs or parent pointers
                     // are accepted from the script. Events are logged centrally
@@ -418,14 +543,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         return;
                     }
                 },
-                "shotstack" => unsafe {
+                "shotstack" => source_native!(|native| unsafe {
                     // All our windows composited over the main window's frame,
                     // e.g. to see overlays such as the command bar.
-                    match screenshot_stack(ns_view, arg) {
+                    match screenshot_stack(native, arg) {
                         Ok(()) => eprintln!("[automation] saved {arg}"),
                         Err(error) => eprintln!("[automation] screenshot failed: {error}"),
                     }
-                },
+                }),
                 "shotall" => unsafe {
                     let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
                     let windows: *mut AnyObject = msg_send![app, windows];
@@ -448,14 +573,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let hold = words.next() == Some("hold");
                     if let [x, y, dx] = v[..] {
                         const STEPS: usize = 12;
-                        unsafe { send_scroll(ns_view, x, y, 0.0, SCROLL_BEGAN) };
+                        source_native!(|native| unsafe { send_scroll(native, x, y, 0.0, SCROLL_BEGAN) });
                         for _ in 0..STEPS {
                             cx.background_executor().timer(Duration::from_millis(16)).await;
-                            unsafe { send_scroll(ns_view, x, y, dx / STEPS as f64, SCROLL_CHANGED) };
+                            source_native!(|native| unsafe { send_scroll(native, x, y, dx / STEPS as f64, SCROLL_CHANGED) });
                         }
                         if !hold {
                             cx.background_executor().timer(Duration::from_millis(16)).await;
-                            unsafe { send_scroll(ns_view, x, y, 0.0, SCROLL_ENDED) };
+                            source_native!(|native| unsafe { send_scroll(native, x, y, 0.0, SCROLL_ENDED) });
                         }
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
@@ -463,23 +588,27 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 "release" => {
                     let v: Vec<f64> = arg.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                     if let [x, y] = v[..] {
-                        unsafe { send_scroll(ns_view, x, y, 0.0, SCROLL_ENDED) };
+                        source_native!(|native| unsafe { send_scroll(native, x, y, 0.0, SCROLL_ENDED) });
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
-                "position" => unsafe {
+                "position" => {
                     let mut origin = arg.split_whitespace().filter_map(|v| v.parse::<f64>().ok());
                     if let (Some(x), Some(y)) = (origin.next(), origin.next()) {
-                        let window = window_of(ns_view);
-                        let _: () = msg_send![window, setFrameOrigin: NSPoint::new(x, y)];
+                        source_native!(|native| unsafe {
+                            let window = window_of(native);
+                            let _: () = msg_send![window, setFrameOrigin: NSPoint::new(x, y)];
+                        });
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 },
-                "resize" => unsafe {
+                "resize" => {
                     let mut size = arg.split_whitespace().filter_map(|v| v.parse::<f64>().ok());
                     if let (Some(w), Some(h)) = (size.next(), size.next()) {
-                        let window = window_of(ns_view);
-                        let _: () = msg_send![window, setContentSize: objc2_foundation::NSSize::new(w, h)];
+                        source_native!(|native| unsafe {
+                            let window = window_of(native);
+                            let _: () = msg_send![window, setContentSize: objc2_foundation::NSSize::new(w, h)];
+                        });
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 },
@@ -700,6 +829,8 @@ unsafe fn has_browser_focus(view: *mut AnyObject) -> bool {
 }
 
 unsafe fn make_key(view: *mut AnyObject) {
+    #[cfg(test)]
+    if liveness_tests::native_call("make-key") { return; }
     unsafe {
         let window = window_of(view);
         let nil: *mut AnyObject = std::ptr::null_mut();
@@ -799,6 +930,8 @@ unsafe fn compose_text(view: *mut AnyObject, text: &str) {
 }
 
 unsafe fn post_key(view: *mut AnyObject, spec: &str) {
+    #[cfg(test)]
+    if liveness_tests::native_call("key") { return; }
     let (flags, chars, code) = parse_key(spec);
     let shifted = if flags & SHIFT != 0 { chars.to_uppercase() } else { chars.clone() };
     unsafe {
@@ -829,27 +962,46 @@ unsafe fn post_key(view: *mut AnyObject, spec: &str) {
 /// Clicks at window point (x, y). With `hold`, the button is released
 /// that much later from another thread, like a real hand: AppKit's own
 /// tracking loops (window buttons, resizing) then wait for it.
-unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64, hold: Option<Duration>) {
+unsafe fn post_click(view: *mut AnyObject, x: f64, y: f64, hold: Option<Duration>, gate: Option<Arc<PostGate>>) {
+    #[cfg(test)]
+    if liveness_tests::native_call("click") {
+        if let Some(gate) = gate { gate.finish(Completion::Posted); }
+        return;
+    }
     unsafe {
         let (window, location) = mouse_target(view, x, y);
         let number: isize = msg_send![window, windowNumber];
         let location = (location.x, location.y);
-        post_mouse_button(MOUSE_DOWN, location, number);
-        match hold {
-            None => post_mouse_button(MOUSE_UP, location, number),
-            Some(hold) => {
-                std::thread::spawn(move || {
-                    std::thread::sleep(hold);
-                    post_mouse_button(MOUSE_UP, location, number);
-                });
+        if let Some(gate) = gate {
+            if !while_input_live(&gate, || post_mouse_button(MOUSE_DOWN, location, number)) {
+                gate.finish(Completion::Cancelled);
+                return;
             }
+            match hold {
+                None => {
+                    let posted = while_input_live(&gate, || post_mouse_button(MOUSE_UP, location, number));
+                    gate.finish(if posted { Completion::Posted } else { Completion::Cancelled });
+                }
+                Some(hold) => {
+                    input_worker::spawn(gate, move |gate| {
+                        std::thread::sleep(hold);
+                        while_input_live(gate, || post_mouse_button(MOUSE_UP, location, number))
+                    });
+                }
+            }
+        } else {
+            // Synchronous double-click path only; no delayed work or pointer
+            // crosses a sleep. Held callers always supply a lease.
+            debug_assert!(hold.is_none());
+            post_mouse_button(MOUSE_DOWN, location, number);
+            post_mouse_button(MOUSE_UP, location, number);
         }
     }
 }
 
 unsafe fn post_double_click(view: *mut AnyObject, x: f64, y: f64) {
     unsafe {
-        post_click(view, x, y, None);
+        post_click(view, x, y, None, None);
         let (window, location) = mouse_target(view, x, y);
         let number: isize = msg_send![window, windowNumber];
         let location = (location.x, location.y);
@@ -925,6 +1077,8 @@ unsafe fn send_right_click(view: *mut AnyObject, x: f64, y: f64) {
 /// straight to the toolkit view: AppKit drops synthesized scroll events
 /// posted to the queue, since they belong to no window.
 unsafe fn send_scroll(view: *mut AnyObject, x: f64, y: f64, dx: f64, phase: i64) {
+    #[cfg(test)]
+    if liveness_tests::native_call("scroll") { return; }
     const UNIT_PIXEL: u32 = 0;
     const IS_CONTINUOUS: u32 = 88;
     const FIXED_DELTA_AXIS_2: u32 = 94;
@@ -1070,7 +1224,7 @@ unsafe fn mouse_target(view: *mut AnyObject, x: f64, y: f64) -> (*mut AnyObject,
 
 /// Presses at `from`, moves to `to` and releases, paced like a hand from
 /// another thread, so AppKit's tracking loops (e.g. resizing) see it.
-unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64), hold: Duration) {
+unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64), hold: Duration, gate: Arc<PostGate>) {
     const DRAGGED: usize = 6;
     const STEPS: usize = 10;
     unsafe {
@@ -1079,6 +1233,7 @@ unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64), hold
         let (window, start) = mouse_target(view, from.0, from.1);
         if window.is_null() {
             eprintln!("[automation] skipped drag: no native start window");
+            gate.finish(Completion::Failed);
             return;
         }
         let number: isize = msg_send![window, windowNumber];
@@ -1090,14 +1245,17 @@ unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64), hold
         // AppKit tracking). Only scalars cross into the background thread.
         let (from, to) = ((start.x, start.y), (end.x, end.y));
         let at = move |t: f64| (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
-        post_mouse_button(MOUSE_DOWN, at(0.0), number);
-        std::thread::spawn(move || {
+        if !while_input_live(&gate, || post_mouse_button(MOUSE_DOWN, at(0.0), number)) {
+            gate.finish(Completion::Cancelled);
+            return;
+        }
+        input_worker::spawn(gate, move |gate| {
             for i in 1..=STEPS {
                 std::thread::sleep(Duration::from_millis(30));
-                post_mouse_button(DRAGGED, at(i as f64 / STEPS as f64), number);
+                if !while_input_live(gate, || post_mouse_button(DRAGGED, at(i as f64 / STEPS as f64), number)) { return false; }
             }
             std::thread::sleep(Duration::from_millis(30) + hold);
-            post_mouse_button(MOUSE_UP, at(1.0), number);
+            while_input_live(gate, || post_mouse_button(MOUSE_UP, at(1.0), number))
         });
     }
 }
@@ -1139,6 +1297,8 @@ const BOUNDS_IGNORE_FRAMING: u32 = 1 << 0;
 /// Layers hosted by Chromium's GPU process are not included; run the app with
 /// `--in-process-gpu` (as `scripts/drive.sh` does) to see page content.
 unsafe fn screenshot(view: *mut AnyObject, path: &str) -> Result<(), String> {
+    #[cfg(test)]
+    if liveness_tests::native_call("shot") { return Ok(()); }
     unsafe {
         let window = window_of(view);
         let number: isize = msg_send![window, windowNumber];
@@ -1266,3 +1426,7 @@ mod key_parsing_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "automation_liveness_tests.rs"]
+mod liveness_tests;

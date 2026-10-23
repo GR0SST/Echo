@@ -22,6 +22,11 @@ use gpui::{
 use crate::pages::{Pages, WebEngine, CONTENT_CORNER_RADIUS, CONTENT_INSET, WINDOW_CORNER_RADIUS};
 use crate::text_input::{self, TextInput};
 
+#[path = "window_close.rs"]
+pub(crate) mod window_close;
+#[path = "download_probe.rs"]
+pub(crate) mod download_probe;
+
 pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
 /// Sidebar metrics measured from the reference at 1x.
 const SIDEBAR_INSET: f32 = 7.0;
@@ -686,11 +691,12 @@ impl BrowserWindow {
             if let Some(parent) = crate::native::view_of(window) { pages.set_parent(parent); }
             Rc::new(RefCell::new(pages))
         });
-        let closing_pages = pages.as_ref().map(Rc::downgrade);
+        let closing_root = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
-            if crate::quit::is_quitting() || crate::quit::last_window_close(cx) { return false; }
-            if let Some(pages) = closing_pages.as_ref().and_then(std::rc::Weak::upgrade) { pages.borrow_mut().release_host(); }
-            true
+            // AppKit must not destroy the parent before the outside-App
+            // preparation boundary. Red close and Cmd+Shift+W share one path.
+            let _ = closing_root.update(cx, |this, cx| this.close_window(cx));
+            false
         });
         cx.observe_window_activation(window, |this, window, cx| {
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
@@ -839,14 +845,37 @@ impl BrowserWindow {
     /// Closing a window keeps its tabs in the session, unlike Archive Tab.
     pub(crate) fn close_window(&mut self, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() || crate::quit::last_window_close(cx) { return; }
+        if !window_close::claim(self.main_window, cx) { return; }
         self.cancel_split_draft();
+        // Parent remains alive. release_host only queues retirement; the
+        // engine's native handoff must run in the task, outside this update.
         if let Some(pages) = &self.pages { pages.borrow_mut().release_host(); }
         self.remove_child_windows(cx);
-        let main = self.main_window;
-        cx.defer(move |cx| {
-            if crate::quit::is_quitting() { return; }
-            let _ = main.update(cx, |_, window, _| window.remove_window());
-        });
+        window_close::prepare(self.main_window, cx);
+    }
+
+    /// Automation-only explicit admission. Ordinary creators remain denied.
+    pub(crate) fn arm_download_probe(&mut self, config: download_probe::Config,
+        cx: &mut Context<Self>) -> Result<(), String> {
+        download_probe::init(cx);
+        if crate::quit::is_quitting() || self.browser.is_private() || self.browser.is_blank() {
+            return Err("Probe requires a normal workspace".into());
+        }
+        if !download_probe::can_arm(cx) { return Err("Probe is already armed".into()); }
+        let pages = self.pages.clone().ok_or("Probe requires native pages")?;
+        // No sync/creation happens inside edit_browser. Record the new Today
+        // TabId before installing the one-source descriptor and calling sync.
+        let url = config.fixture_url();
+        let tab = self.edit_browser(|browser| browser.new_tab(&url, SystemTime::now()));
+        let source = {
+            let mut pages = pages.borrow_mut();
+            pages.reconcile_inventory(&self.browser);
+            pages.download_probe_source(&self.browser, tab, &config)?
+        };
+        download_probe::arm(config, source, cx)?;
+        pages.borrow_mut().sync(&self.browser, self.page_content_visible());
+        cx.notify();
+        Ok(())
     }
 
     /// Child windows can outlive their parent on GPUI's test platform and

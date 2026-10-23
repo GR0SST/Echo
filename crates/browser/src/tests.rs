@@ -237,6 +237,7 @@ struct FakeState {
     reject_create: bool,
     pending_storage: std::collections::HashSet<crate::pages::StorageSelection>,
     storage_attempts: Vec<crate::pages::StorageSelection>,
+    identity_attempts: Vec<(crate::pages::PageIdentity, browser_core::SpaceId, crate::pages::StorageSelection, String)>,
     snapshots: Vec<engine::PageSnapshot>,
 }
 
@@ -264,6 +265,11 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn create_page_with_identity(&mut self, identity: crate::pages::PageIdentity, source_space: browser_core::SpaceId,
+        storage: &crate::pages::StorageSelection, parent: *mut std::ffi::c_void, url: &str, bounds: Bounds) -> crate::pages::PageCreation {
+        self.0.borrow_mut().identity_attempts.push((identity, source_space, storage.clone(), url.into()));
+        self.create_page_in_storage(storage, parent, url, bounds)
+    }
     fn create_page_in_storage(&mut self, storage: &crate::pages::StorageSelection, parent: *mut std::ffi::c_void, url: &str, bounds: Bounds) -> crate::pages::PageCreation {
         if self.0.borrow().pending_storage.contains(storage) {
             self.0.borrow_mut().storage_attempts.push(storage.clone());
@@ -7128,3 +7134,6 @@ fn quit_retires_every_pool_even_while_stale_layout_closures_hold_pages() {
 
 #[path = "library_route_tests.rs"]
 mod library_route_tests;
+
+#[path = "download_probe_page_tests.rs"]
+mod download_probe_page_tests;
