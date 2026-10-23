@@ -3214,3 +3214,82 @@ fn turning_an_empty_folder_into_a_space_leaves_other_tabs_and_their_engine_views
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn pin_to_a_named_nested_folder_in_another_space_preserves_the_active_split_and_closed_folders(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let destination = view.update(cx, |w, _| {
+        let work = w.browser.add_space("Work", 100.);
+        let root = w.browser.create_folder(work, None, "Saved").unwrap();
+        let nested = w.browser.create_folder(work, Some(root), "Reference").unwrap();
+        w.browser.set_folder_collapsed(root, true);
+        w.browser.set_folder_collapsed(nested, true);
+        nested
+    });
+    fake.take_calls();
+    run_named_command(&view, cx, "pin to saved / reference");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.folder_ancestors(w.browser.space().active_tab.unwrap()).last(), Some(&destination));
+        assert!(w.browser.space().folders.iter().all(|folder| folder.collapsed));
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        assert!(w.command_bar.is_none());
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn pin_to_new_folder_edits_a_name_then_pins_the_current_page_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    run_named_command(&view, cx, "pin to new folder");
+    assert!(bar_input_focused(&view, cx));
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    bar(&view, cx).simulate_input("Reading");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders.is_empty()));
+    run_named_command(&view, cx, "pin to new folder");
+    bar(&view, cx).simulate_input("Reading");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        let folder = &w.browser.space().folders[0];
+        assert_eq!(folder.name, "Reading");
+        assert_eq!(w.browser.folder_tabs(folder.id), vec![w.browser.space().active_tab.unwrap()]);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
+    });
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn named_folder_commands_disambiguate_duplicate_names_by_space_and_skip_the_current_parent(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let destination = view.update(cx, |w, cx| {
+        let work = w.browser.add_space("Work", 100.);
+        let folder = w.browser.create_folder(work, None, "Research").unwrap();
+        let outside = w.browser.space().today[0].id;
+        w.browser.activate_tab(outside, std::time::SystemTime::now());
+        cx.notify();
+        folder
+    });
+    cx.run_until_parked();
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("pin to research");
+    let index = view.read_with(cx, |w, cx| {
+        let suggestions = w.suggestions(cx);
+        let labels: Vec<_> = suggestions.iter().filter_map(|row| match row { Suggestion::Action { command: crate::window::Command::PinToFolder(_), label } => Some(label.as_str()), _ => None }).collect();
+        assert_eq!(labels, vec!["Pin to Projects / Research · Personal", "Pin to Research · Work"]);
+        suggestions.iter().position(|row| matches!(row, Suggestion::Action { command: crate::window::Command::PinToFolder(id), .. } if *id == destination)).unwrap()
+    });
+    for _ in 0..index { bar(&view, cx).simulate_keystrokes("down"); }
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Work");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("pin to research");
+    assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::Action { command: crate::window::Command::PinToFolder(id), .. } if *id == destination))));
+}

@@ -329,6 +329,8 @@ pub enum Command {
     DuplicateTab,
     NewFolder,
     MoveToFolder,
+    PinToFolder(FolderId),
+    NewFolderWithTab,
     CollapseAllFolders,
     ExpandAllFolders,
     RenameFolder(FolderId),
@@ -897,6 +899,7 @@ impl BrowserWindow {
             let commands = [
                 (Command::NewFolder, "New Folder…", "new folder|create folder|add folder", true),
                 (Command::MoveToFolder, "Move to Folder…", "move to folder|pin to folder", active.is_some()),
+                (Command::NewFolderWithTab, "Pin to New Folder…", "pin to new folder|new folder with current tab", active.is_some()),
                 (Command::CollapseAllFolders, "Collapse All Folders", "collapse all folders", self.browser.space().folders.iter().any(|folder| !folder.collapsed)),
                 (Command::ExpandAllFolders, "Expand All Folders", "expand all folders", self.browser.space().folders.iter().any(|folder| folder.collapsed)),
                 (Command::DuplicateTab, "Duplicate Current Tab", "duplicate current tab|duplicate tab|duplicate current item|duplicate split view", active.is_some()),
@@ -974,6 +977,12 @@ impl BrowserWindow {
                         (Command::RenameFolder(folder.id), format!("Rename Folder {path}…"), format!("rename folder {path}")),
                     ] {
                         if let Some(score) = command_match_score(&query, &names) { matches.push((score, Suggestion::Action { command, label })); }
+                    }
+                    if active.is_some_and(|tab| self.browser.folder_ancestors(tab.id).last() != Some(&folder.id)) {
+                        let names = format!("pin to {path}|pin to folder {path}|move to folder {path}|pin to {}|pin to {} {path}", folder.name, space.name);
+                        if let Some(score) = command_match_score(&query, &names) {
+                            matches.push((score, Suggestion::Action { command: Command::PinToFolder(folder.id), label: format!("Pin to {path} · {}", space.name) }));
+                        }
                     }
                 }
             }
@@ -1153,6 +1162,12 @@ impl BrowserWindow {
     pub(crate) fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
             Command::NewFolder => self.edit_new_folder(None, None, cx),
+            Command::NewFolderWithTab => { if let Some(id) = self.browser.space().active_tab { self.edit_new_folder(None, Some(id), cx); } }
+            Command::PinToFolder(folder) => {
+                if let (Some(tab), Some(space)) = (self.browser.space().active_tab, self.browser.folder_space(folder)) {
+                    self.confirm_folder_destination(Target::MoveToFolder(tab), space, Some(folder), cx);
+                }
+            }
             Command::MoveToFolder => { if let Some(id) = self.browser.space().active_tab { self.edit_folder_destination(Target::MoveToFolder(id), cx); } }
             Command::CollapseAllFolders => { self.browser.set_all_folders_collapsed(self.browser.space().id, true); }
             Command::ExpandAllFolders => { self.browser.set_all_folders_collapsed(self.browser.space().id, false); }
