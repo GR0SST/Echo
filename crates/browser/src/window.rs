@@ -75,6 +75,9 @@ actions!(
         ResetZoom,
         TogglePin,
         ToggleFavorite,
+        ToggleMute,
+        MuteAllTabs,
+        UnmuteAllTabs,
         TogglePinnedSection,
         ToggleSidebar,
         NextSpace,
@@ -303,6 +306,9 @@ pub enum Command {
     ToggleSidebar,
     TogglePin,
     ToggleFavorite,
+    ToggleMute,
+    MuteAllTabs,
+    UnmuteAllTabs,
     TogglePinnedSection,
     CloseTab,
     ClearToday,
@@ -808,6 +814,9 @@ impl BrowserWindow {
                 (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar|sidebar" } else { "toggle sidebar|show sidebar|sidebar" }, true),
                 (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some() && !favorite),
                 (Command::ToggleFavorite, if favorite { "Unfavorite Tab" } else { "Favorite Tab" }, if favorite { "unfavorite tab|remove from favorites|unfavorite current tab" } else { "favorite tab|favorite current tab|pin to top apps|add to favorites" }, active.is_some()),
+                (Command::ToggleMute, if active.is_some_and(|tab| tab.muted) { "Unmute Tab" } else { "Mute Tab" }, if active.is_some_and(|tab| tab.muted) { "unmute tab|unmute current tab" } else { "mute tab|mute current tab" }, active.is_some_and(|tab| !omnibox::is_internal_url(&tab.url))),
+                (Command::MuteAllTabs, "Mute All Tabs", "mute all tabs|mute all", self.browser.all_tabs().any(|tab| !tab.muted && !omnibox::is_internal_url(&tab.url))),
+                (Command::UnmuteAllTabs, "Unmute All Tabs", "unmute all tabs|unmute all", self.browser.all_tabs().any(|tab| tab.muted && !omnibox::is_internal_url(&tab.url))),
                 (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned.is_empty()),
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
                 (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
@@ -1042,6 +1051,11 @@ impl BrowserWindow {
                     else if !self.browser.favorite_tab(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); }
                 }
             }
+            Command::ToggleMute => {
+                if let Some(tab) = self.browser.active_tab() { self.set_tab_muted(tab.id, !tab.muted, cx); }
+            }
+            Command::MuteAllTabs => self.set_all_tabs_muted(true, cx),
+            Command::UnmuteAllTabs => self.set_all_tabs_muted(false, cx),
             Command::TogglePinnedSection => self.toggle_pinned_section(self.browser.active_space, cx),
             Command::CloseTab => {
                 if let Some(id) = self.browser.space().active_tab { self.close_tab(id, cx); }
@@ -1440,6 +1454,7 @@ impl BrowserWindow {
                     .text_sm()
                     .child(tab.title.clone()),
             )
+            .when(tab.muted, |this| this.child(self.render_mute_control(tab, false, cx)))
             .child(
                 div()
                     .id(("close", key))
@@ -1490,6 +1505,7 @@ impl BrowserWindow {
                 cx.notify();
             }))
             .child(self.render_favicon(tab, self.accent()))
+            .when(tab.muted, |this| this.child(self.render_mute_control(tab, true, cx)))
             .child(div().id(("close-favorite", key)).debug_selector(move || format!("close-favorite-{key}"))
                 .absolute().right(px(2.0)).top(px(1.0)).px_1().rounded_sm().text_xs()
                 .invisible().group_hover(group, |s| s.visible())
@@ -1498,6 +1514,21 @@ impl BrowserWindow {
                     cx.stop_propagation();
                     this.close_tab(id, cx);
                 })).child("−"))
+    }
+
+    fn render_mute_control(&self, tab: &Tab, favorite: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = tab.id;
+        let key = id.get() as usize;
+        let title = tab.title.clone();
+        div().id(("unmute", key)).debug_selector(move || format!("unmute-{key}"))
+            .flex_none().px_1().rounded_sm().text_sm()
+            .when(favorite, |this| this.absolute().bottom(px(1.)).left(px(1.)))
+            .hover(|s| s.bg(hsla(0., 0., 0., 0.1)))
+            .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: "Unmute Tab".into(), url: title.clone() }).into())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.set_tab_muted(id, false, cx);
+            })).child("🔇")
     }
 
     fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
@@ -2045,6 +2076,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
             .on_action(cx.listener(Self::on_toggle_pin))
             .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| this.run_command(Command::ToggleFavorite, cx)))
+            .on_action(cx.listener(|this, _: &ToggleMute, _, cx| this.run_command(Command::ToggleMute, cx)))
+            .on_action(cx.listener(|this, _: &MuteAllTabs, _, cx| this.run_command(Command::MuteAllTabs, cx)))
+            .on_action(cx.listener(|this, _: &UnmuteAllTabs, _, cx| this.run_command(Command::UnmuteAllTabs, cx)))
             .on_action(cx.listener(|this, _: &TogglePinnedSection, _, cx| this.toggle_pinned_section(this.browser.active_space, cx)))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))

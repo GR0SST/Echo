@@ -254,7 +254,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 .map(|pages| pages.borrow().state(tab.id))
                 .unwrap_or_default();
             out += &format!(
-                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={}\n",
+                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?}\n",
                 if active { "*" } else { " " },
                 if shown == Some(tab.id) { "shown" } else { "     " },
                 tab.title,
@@ -262,6 +262,8 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 state.loading,
                 state.can_go_back,
                 this.browser.favicon(&tab.url).map_or(0, |png| png.len()),
+                tab.muted,
+                this.pages.as_ref().and_then(|pages| pages.borrow().audio_muted(tab.id)),
             );
         }
     }

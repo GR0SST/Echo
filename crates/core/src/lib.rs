@@ -10,6 +10,7 @@ pub mod links;
 pub mod history;
 pub mod favorites;
 pub mod favicons;
+pub mod audio;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
@@ -50,6 +51,8 @@ pub struct Tab {
     /// The page a pinned tab returns to when closed, like Arc's.
     #[serde(default)]
     pub pinned_url: Option<String>,
+    #[serde(default)]
+    pub muted: bool,
 }
 
 impl Tab {
@@ -250,6 +253,7 @@ impl Browser {
                 url,
                 last_active: now,
                 pinned_url: None,
+                muted: false,
             },
         );
         space.active_tab = Some(id);
@@ -506,9 +510,13 @@ impl Browser {
     }
 
     fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        self.all_tabs_mut().find(|tab| tab.id == id)
+    }
+
+    fn all_tabs_mut(&mut self) -> impl Iterator<Item = &mut Tab> {
         self.favorites.iter_mut().chain(self.spaces.iter_mut().flat_map(|space| {
             space.pinned.iter_mut().chain(&mut space.today)
-        })).find(|tab| tab.id == id)
+        }))
     }
 
     pub fn set_title(&mut self, id: TabId, title: impl Into<String>) {

@@ -373,6 +373,14 @@ impl Engine {
         if let Some(view) = self.views.get(&id) { view.browser.stop_load(); }
     }
 
+    pub fn set_audio_muted(&mut self, id: ViewId, muted: bool) {
+        if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) { host.set_audio_muted(muted.into()); }
+    }
+
+    pub fn audio_muted(&self, id: ViewId) -> Option<bool> {
+        self.views.get(&id).and_then(|view| view.browser.host()).map(|host| host.is_audio_muted() != 0)
+    }
+
     /// Steps through Chromium's standard zoom factors. Zero resets to 100%.
     pub fn zoom(&mut self, id: ViewId, direction: i32) {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {

@@ -7,6 +7,7 @@ mod archive;
 mod menus;
 mod history;
 mod tab_menu;
+mod audio;
 pub mod pages;
 pub mod text_input;
 pub mod window;

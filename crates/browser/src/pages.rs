@@ -23,6 +23,8 @@ pub trait WebEngine {
     fn reload(&mut self, view: ViewId);
     fn force_reload(&mut self, view: ViewId);
     fn stop_loading(&mut self, view: ViewId);
+    fn set_audio_muted(&mut self, view: ViewId, muted: bool);
+    fn audio_muted(&self, view: ViewId) -> Option<bool>;
     fn zoom(&mut self, view: ViewId, direction: i32);
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool);
     fn stop_finding(&mut self, view: ViewId);
@@ -77,6 +79,8 @@ impl WebEngine for Chromium {
     }
     fn force_reload(&mut self, view: ViewId) { self.engine.force_reload(view) }
     fn stop_loading(&mut self, view: ViewId) { self.engine.stop_loading(view) }
+    fn set_audio_muted(&mut self, view: ViewId, muted: bool) { self.engine.set_audio_muted(view, muted) }
+    fn audio_muted(&self, view: ViewId) -> Option<bool> { self.engine.audio_muted(view) }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.engine.zoom(view, direction) }
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.engine.find(view, text, forward, next) }
     fn stop_finding(&mut self, view: ViewId) { self.engine.stop_finding(view) }
@@ -103,13 +107,14 @@ struct Page {
     /// The URL the engine is showing or was last told to load.
     url: String,
     state: PageState,
+    muted: bool,
 }
 
 pub struct Pages {
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
     /// Tab whose page should be on screen, with the URL it should show.
-    wanted: Option<(TabId, String)>,
+    wanted: Option<(TabId, String, bool)>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
 }
@@ -160,8 +165,25 @@ impl Pages {
         self.wanted = browser
             .active_tab()
             .filter(|tab| visible && !browser_core::omnibox::is_internal_url(&tab.url))
-            .map(|tab| (tab.id, tab.url.clone()));
+            .map(|tab| (tab.id, tab.url.clone(), tab.muted));
         self.apply();
+        self.sync_audio(browser);
+    }
+
+    /// Applies mute intent even when an occluded window is not rendering.
+    pub fn sync_audio(&mut self, browser: &Browser) {
+        if let Some((id, _, muted)) = &mut self.wanted {
+            if let Some(tab) = browser.all_tabs().find(|tab| tab.id == *id) { *muted = tab.muted; }
+        }
+        // Muting a background tab must not activate or load it.
+        for tab in browser.all_tabs() {
+            if let Some(page) = self.pages.get_mut(&tab.id) {
+                if page.muted != tab.muted {
+                    self.engine.set_audio_muted(page.view, tab.muted);
+                    page.muted = tab.muted;
+                }
+            }
+        }
     }
 
     /// Unloads a tab's page, e.g. a closed pinned tab that stays in the
@@ -188,7 +210,7 @@ impl Pages {
 
     fn apply(&mut self) {
         let wanted = self.wanted.clone();
-        let wanted_tab = wanted.as_ref().map(|(tab, _)| *tab);
+        let wanted_tab = wanted.as_ref().map(|(tab, _, _)| *tab);
 
         if self.shown.is_some() && self.shown != wanted_tab {
             let shown = self.shown.take().unwrap();
@@ -198,11 +220,15 @@ impl Pages {
             self.engine.focus_ui();
         }
 
-        let (Some((tab, url)), Some(bounds)) = (wanted, self.bounds) else {
+        let (Some((tab, url, muted)), Some(bounds)) = (wanted, self.bounds) else {
             return;
         };
         match self.pages.get_mut(&tab) {
             Some(page) => {
+                if page.muted != muted {
+                    self.engine.set_audio_muted(page.view, muted);
+                    page.muted = muted;
+                }
                 if page.url != url {
                     self.engine.navigate(page.view, &url);
                     page.url = url;
@@ -213,12 +239,14 @@ impl Pages {
                 let Some(view) = self.engine.create(&url, bounds) else {
                     return;
                 };
+                if muted { self.engine.set_audio_muted(view, true); }
                 self.pages.insert(
                     tab,
                     Page {
                         view,
                         url,
                         state: PageState::default(),
+                        muted,
                     },
                 );
             }
@@ -236,6 +264,10 @@ impl Pages {
         if let Some(view) = self.shown.and_then(|tab| self.view(tab)) {
             self.engine.focus_page(view);
         }
+    }
+
+    pub fn audio_muted(&self, tab: TabId) -> Option<bool> {
+        self.view(tab).and_then(|view| self.engine.audio_muted(view))
     }
 
     pub fn shown(&self) -> Option<TabId> {

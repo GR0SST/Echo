@@ -186,7 +186,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Renaming a tab by double-click ("Double-click to rename") | double-click | done | Double-click or Rename Current Tab… in the Command Bar. Custom names persist through navigation, archive and sessions; Reset Tab Name restores the page title. Custom icons remain a separate missing feature |
 | Custom tab icon ("Customize Tab") | — | missing | — |
 | Close button on hover (× for Today, − for Pinned) | hover | done | — |
-| Audio indicator, Mute/Unmute in the context menu | — | missing | — |
+| Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
 | Camera/microphone indicator on a tab | — | missing | — |
 | Split View item in the sidebar (tab group) | — | missing | — |
 | Space header (name), Show/Hide Space Header | — | partial | The name is shown but can't be hidden |
@@ -249,7 +249,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | done | Command Bar and Tabs menu; Unfavorite returns the tab to Today in the current Space |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
-| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab and Reset Tab Name are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate and mute remain missing |
+| Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab, Reset Tab Name and Mute/Unmute All are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate remains missing |
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
@@ -264,7 +264,7 @@ in code, so some were reconstructed from translator comments (?).
 
 | Menu / item | Status | What's missing |
 |---|---|---|
-| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Close/Archive. Up/Down/Enter/Escape and outside dismissal; actions target the clicked tab while preserving other active tabs. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
+| **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Mute/Unmute, Close/Archive. Up/Down/Enter/Escape and outside dismissal; actions target the clicked tab while preserving other active tabs. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
 | **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | missing | — |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
@@ -416,7 +416,7 @@ rows marked partial expose the setting from the Command Bar instead.
 | Automatic PiP when leaving a tab with video (option) | missing | — |
 | PiP window: Back to Tab, ±15 seconds, seeking by dragging up, Keep Window on Top, minimize or close, remembered position | missing | — |
 | PiP for Google Meet (with chat) and Document PiP | missing | — |
-| Mute/Unmute a tab, Mute All / Unmute All | missing | — |
+| Mute/Unmute a tab, Mute All / Unmute All | done | CEF tab audio control through Command Bar, Tabs menu and tab context menus. Persists per tab and applies before a restored page is shown; Mute All preserves unloaded tabs without loading them |
 
 ## 18. Notifications and toasts
 

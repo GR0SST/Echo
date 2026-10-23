@@ -131,6 +131,9 @@ pub(crate) fn build() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Pin/Unpin Tab", window::TogglePin),
                 MenuItem::action("Favorite/Unfavorite Tab", window::ToggleFavorite),
+                MenuItem::action("Mute/Unmute Tab", window::ToggleMute),
+                MenuItem::action("Mute All Tabs", window::MuteAllTabs),
+                MenuItem::action("Unmute All Tabs", window::UnmuteAllTabs),
                 MenuItem::action("Rename Current Tab…", RenameTab),
                 MenuItem::action("Reset Tab Name", ResetTabName),
                 MenuItem::action("Reset Tab to Original URL", ResetPinnedTab),

@@ -41,6 +41,7 @@ enum Call {
     Forward(u64),
     ForceReload(u64),
     StopLoading(u64),
+    Mute(u64, bool),
     Zoom(u64, i32),
     Find(u64, String, bool, bool),
     StopFinding(u64),
@@ -57,6 +58,7 @@ struct FakeState {
     bounds: std::collections::HashMap<u64, Bounds>,
     next_view: u64,
     events: Vec<Event>,
+    muted: std::collections::HashSet<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -111,6 +113,11 @@ impl WebEngine for FakeEngine {
     }
     fn force_reload(&mut self, view: ViewId) { self.call(Call::ForceReload(raw(view))); }
     fn stop_loading(&mut self, view: ViewId) { self.call(Call::StopLoading(raw(view))); }
+    fn set_audio_muted(&mut self, view: ViewId, muted: bool) {
+        if muted { self.0.borrow_mut().muted.insert(raw(view)); } else { self.0.borrow_mut().muted.remove(&raw(view)); }
+        self.call(Call::Mute(raw(view), muted));
+    }
+    fn audio_muted(&self, view: ViewId) -> Option<bool> { Some(self.0.borrow().muted.contains(&raw(view))) }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.call(Call::Zoom(raw(view), direction)); }
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.call(Call::Find(raw(view), text.into(), forward, next)); }
     fn stop_finding(&mut self, view: ViewId) { self.call(Call::StopFinding(raw(view))); }
@@ -1963,4 +1970,84 @@ fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mu
     assert!(fake.take_calls().contains(&Call::Close(3)));
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].url.clone()), "https://github.com/new-original");
+}
+
+#[gpui::test]
+fn mute_command_and_sidebar_button_control_the_current_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("mute tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert!(fake.take_calls().contains(&Call::Mute(1, true)));
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+    click(cx, "unmute-8");
+    assert!(fake.take_calls().contains(&Call::Mute(1, false)));
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+}
+
+#[gpui::test]
+fn context_muting_a_background_page_does_not_activate_it(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-7");
+    click(cx, "tab-8");
+    fake.take_calls();
+    let original = active_url(&view, cx);
+    right_click(cx, "tab-7");
+    click(&mut tab_menu(&view, cx), "tab-menu-row-5");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Mute(2, true)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::FocusPage(2))));
+    assert_eq!(active_url(&view, cx), original);
+    click(cx, "unmute-7");
+    assert!(fake.take_calls().contains(&Call::Mute(2, false)));
+    assert_eq!(active_url(&view, cx), original);
+}
+
+#[gpui::test]
+fn mute_all_reaches_unloaded_tabs_and_unmute_all_updates_background_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    dispatch_menu(cx, "Tabs", "Mute All Tabs");
+    assert!(view.read_with(cx, |w, _| w.browser.all_tabs().all(|tab| tab.muted)));
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Mute(1, true)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..))));
+    cx.simulate_keystrokes("cmd-1");
+    let calls = fake.take_calls();
+    let mute = calls.iter().position(|call| *call == Call::Mute(2, true)).unwrap();
+    let show = calls.iter().position(|call| *call == Call::Visible(2, true)).unwrap();
+    assert!(mute < show, "a restored muted page is muted before being shown: {calls:?}");
+    dispatch_menu(cx, "Tabs", "Unmute All Tabs");
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Mute(1, false)) && calls.contains(&Call::Mute(2, false)));
+    assert!(!view.read_with(cx, |w, _| w.browser.all_tabs().any(|tab| tab.muted)));
+}
+
+#[gpui::test]
+fn a_closed_muted_favorite_reopens_muted(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    dispatch_menu(cx, "Tabs", "Mute/Unmute Tab");
+    cx.simulate_keystrokes("ctrl-2 cmd-1 cmd-w");
+    fake.take_calls();
+    click(cx, "favorite-8");
+    let calls = fake.take_calls();
+    let mute = calls.iter().position(|call| *call == Call::Mute(2, true)).unwrap();
+    let focus = calls.iter().position(|call| *call == Call::FocusPage(2)).unwrap();
+    assert!(mute < focus, "mute is applied before returning keyboard focus: {calls:?}");
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+}
+
+#[gpui::test]
+fn internal_history_pages_do_not_offer_mute_commands(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-y");
+    dispatch_menu(cx, "Tabs", "Mute/Unmute Tab");
+    assert!(!view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("mute tab");
+    assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::Action { command: crate::window::Command::ToggleMute, .. }))));
 }

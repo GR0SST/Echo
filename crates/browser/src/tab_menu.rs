@@ -29,7 +29,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-enum Command { Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Close }
+enum Command { Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close }
 
 impl BrowserWindow {
     pub(crate) fn open_tab_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -83,7 +83,7 @@ impl BrowserWindow {
 
     fn tab_menu_commands(&self) -> Vec<(&'static str, Command)> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
-        let Some(tab) = self.browser.all_tabs().find(|tab| tab.id == menu.tab) else { return Vec::new(); };
+        let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == menu.tab) else { return Vec::new(); };
         let favorite = self.browser.is_favorite(tab.id);
         let pinned = tab.pinned_url.is_some();
         let mut rows = vec![("Copy Link", Command::Copy), ("Copy Link as Markdown", Command::CopyMarkdown), ("Rename…", Command::Rename)];
@@ -93,6 +93,7 @@ impl BrowserWindow {
             rows.push(("Reset Tab to Original URL", Command::Reset));
             rows.push(("Replace Pinned URL with Current", Command::Replace));
         }
+        if !browser_core::omnibox::is_internal_url(&tab.url) { rows.push((if tab.muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute)); }
         rows.push((if pinned { "Close Tab" } else { "Archive Tab" }, Command::Close));
         rows
     }
@@ -129,6 +130,10 @@ impl BrowserWindow {
                 }
             }
             Command::Replace => { self.browser.replace_pinned_url(id); }
+            Command::Mute => {
+                let muted = self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| !tab.muted);
+                if let Some(muted) = muted { self.set_tab_muted(id, muted, cx); }
+            }
             Command::Close => self.close_tab(id, cx),
         }
         cx.notify();
