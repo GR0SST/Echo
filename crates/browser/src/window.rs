@@ -2170,9 +2170,16 @@ impl BrowserWindow {
             .when(active, |layer| layer.bg(color))
             .group_hover(name, |style| style.bg(color));
         let Some((_, count, started)) = self.pressed_control.filter(|(pressed, _, _)| *pressed == name) else { return layer.into_any_element(); };
-        clocked(layer, format!("{name}-highlight-{count}"), started, PRESS_BOUNCE, |layer, t| {
-            let inset = px(12. * (1. - press_scale(t)));
-            layer.top(inset).bottom(inset).left(inset).right(inset)
+        if started.elapsed() >= PRESS_BOUNCE { return layer.into_any_element(); }
+        // While it bounces the pointer is on the control, so the background
+        // shows; it is painted directly for smooth sub-pixel scaling.
+        clocked(div().absolute().inset_0(), format!("{name}-highlight-{count}"), started, PRESS_BOUNCE, move |slot, t| {
+            let scale = press_scale(t, HIGHLIGHT_DIP);
+            slot.child(canvas(|_, _, _| (), move |bounds, _, window, _| {
+                let size = bounds.size.map(|side| side * scale);
+                let origin = bounds.center() - gpui::point(size.width / 2., size.height / 2.);
+                window.paint_quad(gpui::fill(Bounds::new(origin, size), color).corner_radii(px(6. * scale)));
+            }).size_full())
         })
     }
 
@@ -2180,7 +2187,7 @@ impl BrowserWindow {
     fn render_pressed_icon(&self, name: &'static str, icon: crate::icons::Icon) -> AnyElement {
         let Some((_, count, started)) = self.pressed_control.filter(|(pressed, _, _)| *pressed == name) else { return crate::icons::control(icon); };
         clocked(div().size(px(18.)).flex_none(), format!("{name}-press-{count}"), started, PRESS_BOUNCE,
-            move |slot, t| slot.child(crate::icons::scaled(icon, press_scale(t))))
+            move |slot, t| slot.child(crate::icons::scaled(icon, press_scale(t, ICON_DIP))))
     }
 
     /// Copy URL feedback: the link crossfades into a checkmark, the check
@@ -2200,7 +2207,7 @@ impl BrowserWindow {
                 ((r * 2.).min(1.), 0.6 + 0.4 * back_out(r, 1.4))
             };
             // The click itself gets the same light press bounce as other controls.
-            let press = press_scale(phase(0., PRESS_BOUNCE.as_secs_f32() * 1000.));
+            let press = press_scale(phase(0., PRESS_BOUNCE.as_secs_f32() * 1000.), ICON_DIP);
             let link_scale = if ms < 960. { link_scale * press } else { link_scale };
             let appear = phase(0., 160.);
             let erase = phase(700., 960.);
@@ -2217,8 +2224,9 @@ impl BrowserWindow {
         let quarter = std::f32::consts::FRAC_PI_4;
         let Some(started) = self.new_menu_toggled_at else { return crate::icons::plus(0., 1.); };
         clocked(div().size(px(18.)).flex_none(), format!("new-menu-plus-{}", self.new_menu_toggles), started, PLUS_TURN, move |slot, t| {
+            // An elastic turn with a slight overshoot; the plus keeps its size.
             let turn = back_out(t, 1.3);
-            slot.child(crate::icons::plus(quarter * if open { turn } else { 1. - turn }, press_scale(t)))
+            slot.child(crate::icons::plus(quarter * if open { turn } else { 1. - turn }, 1.))
         })
     }
 
@@ -2971,14 +2979,16 @@ fn back_out(t: f32, overshoot: f32) -> f32 {
     1. + (overshoot + 1.) * u * u * u + overshoot * u * u
 }
 
-/// A soft press: ease down to 92 %, then spring back just past full size.
-fn press_scale(t: f32) -> f32 {
-    const DIP: f32 = 0.08;
+const ICON_DIP: f32 = 0.08;
+const HIGHLIGHT_DIP: f32 = 0.1;
+
+/// A soft press: ease down by `dip`, then spring back just past full size.
+fn press_scale(t: f32, dip: f32) -> f32 {
     if t < 0.3 {
         let p = t / 0.3;
-        1. - DIP * p * (2. - p)
+        1. - dip * p * (2. - p)
     } else {
-        1. - DIP + DIP * back_out((t - 0.3) / 0.7, 0.9)
+        1. - dip + dip * back_out((t - 0.3) / 0.7, 0.9)
     }
 }
 

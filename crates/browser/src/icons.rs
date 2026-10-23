@@ -75,11 +75,12 @@ static IONICONS: std::sync::LazyLock<IconContours> = std::sync::LazyLock::new(||
     serde_json::from_str(include_str!("../assets/ionicons/paths.json")).expect("embedded Ionicons geometry is valid")
 });
 
-fn ionicon(name: &'static str, size: f32) -> AnyElement {
+fn ionicon(name: &'static str, size: f32, zoom: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let Some(commands) = IONICONS.get(name) else { return; };
-        let scale = f32::from(bounds.size.width) / 512.;
-        let at = |x, y| bounds.origin + gpui::point(px(x * scale), px((511. - y) * scale));
+        let scale = f32::from(bounds.size.width) / 512. * zoom;
+        let center = bounds.center();
+        let at = |x, y| center + gpui::point(px((x - 256.) * scale), px((255. - y) * scale));
         let mut path = gpui::PathBuilder::fill();
         for command in commands {
             match command.as_slice() {
@@ -98,7 +99,11 @@ fn ionicon(name: &'static str, size: f32) -> AnyElement {
 pub(crate) fn control(icon: Icon) -> AnyElement { control_sized(icon, 18.) }
 
 /// A catalog-backed control scaled to `size`; frame controls keep the 18 px grid.
-pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement {
+pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement { zoomed(icon, size, 1.) }
+
+/// `icon` in a `size` slot, drawn at `zoom` around the slot's center. The
+/// slot keeps its layout size so animated zoom stays smooth and sub-pixel.
+fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
     let name = match icon {
         Icon::Back => "arrow-back-outline", Icon::Forward => "arrow-forward-outline",
         Icon::Reload => "reload-outline", Icon::Close => "close-outline",
@@ -112,9 +117,9 @@ pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement {
         Icon::Capture => "camera-outline", Icon::Screenshot => "scan-outline",
         Icon::NewSpace => "duplicate-outline", Icon::Lock => "lock-closed", Icon::Unlock => "lock-open",
         Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
-        Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size),
+        Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size, zoom),
     };
-    ionicon(name, size)
+    ionicon(name, size, zoom)
 }
 
 /// Reference-specific frame/key controls absent from the Ionicons catalog.
@@ -156,7 +161,7 @@ fn circle(x: f32, y: f32, radius: f32) -> Vec<(f32, f32)> {
 /// Controls drawn on an 18 px grid to match the reference's symbols:
 /// `strokes` are 1.5 px outlines, `fills` are solid contours (a reversed
 /// inner contour cuts a hole).
-fn drawn(icon: Icon, size: f32) -> AnyElement {
+fn drawn(icon: Icon, size: f32, zoom: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let (strokes, fills): (Vec<Vec<(f32, f32)>>, Vec<Vec<Vec<(f32, f32)>>>) = match icon {
             // Two interlocking links on the rising diagonal.
@@ -186,8 +191,9 @@ fn drawn(icon: Icon, size: f32) -> AnyElement {
             ]),
             _ => unreachable!("drawn control"),
         };
-        let scale = size / 18.;
-        let at = |(x, y): (f32, f32)| bounds.origin + gpui::point(px(x * scale), px(y * scale));
+        let scale = size / 18. * zoom;
+        let center = bounds.center();
+        let at = |(x, y): (f32, f32)| center + gpui::point(px((x - 9.) * scale), px((y - 9.) * scale));
         let color = window.text_style().color;
         for points in strokes {
             let width = if matches!(icon, Icon::SiteControls) { 1.25 } else { 1.5 };
@@ -213,8 +219,7 @@ fn drawn(icon: Icon, size: f32) -> AnyElement {
 /// `icon` drawn at `scale` around the center of its 18 px slot, for
 /// press and appear animations.
 pub(crate) fn scaled(icon: Icon, scale: f32) -> AnyElement {
-    div().size(px(18.)).flex_none().flex().items_center().justify_center()
-        .child(control_sized(icon, 18. * scale.max(0.01))).into_any_element()
+    zoomed(icon, 18., scale.max(0.01))
 }
 
 /// The plus as two strokes turned by `angle` radians: open menus show it as a cross.
