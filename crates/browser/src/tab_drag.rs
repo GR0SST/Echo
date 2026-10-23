@@ -8,6 +8,7 @@ use std::time::SystemTime;
 #[derive(Clone)]
 pub(crate) struct TabDrag {
     pub id: TabId,
+    focus: TabId,
     title: String,
     icon: Option<String>,
     favicon: Option<Vec<u8>>,
@@ -15,15 +16,36 @@ pub(crate) struct TabDrag {
 }
 
 impl BrowserWindow {
+    pub(crate) fn drop_tab_on_space(
+        &mut self,
+        drag: &TabDrag,
+        space: SpaceId,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = drag.id;
+        self.cancel_space_drag_hover();
+        let section = if self.browser.is_favorite(tab)
+            || self
+                .browser
+                .spaces
+                .iter()
+                .any(|space| space.pinned.iter().any(|entry| entry.id == tab))
+        {
+            Section::Pinned
+        } else {
+            Section::Today
+        };
+        self.drop_tab_on_section(drag, space, section, cx);
+    }
+
     pub(crate) fn drop_tab_relative(
         &mut self,
-        tab: TabId,
+        drag: &TabDrag,
         target: TabId,
         after: bool,
         cx: &mut Context<Self>,
     ) {
-        let active = self.browser.space().active_tab;
-        let pages = self.browser.related_tabs(tab);
+        let tab = drag.id;
         if !self.browser.move_tab_relative(tab, target, after) {
             return;
         }
@@ -36,11 +58,7 @@ impl BrowserWindow {
         }) {
             self.switch_space(index, cx);
         }
-        if let Some(active) = active.filter(|tab| pages.contains(tab)) {
-            self.browser.activate_tab(active, SystemTime::now());
-        } else {
-            self.browser.activate_sidebar_item(tab, SystemTime::now());
-        }
+        self.activate_dragged_tab(drag);
         if self
             .browser
             .space()
@@ -57,10 +75,11 @@ impl BrowserWindow {
 
     pub(crate) fn drop_tab_at_favorite(
         &mut self,
-        tab: TabId,
+        drag: &TabDrag,
         target: TabId,
         cx: &mut Context<Self>,
     ) {
+        let tab = drag.id;
         let Some(destination) = self
             .browser
             .favorites
@@ -71,7 +90,7 @@ impl BrowserWindow {
             return;
         };
         if !self.browser.is_favorite(tab) {
-            self.drop_tab_in_favorites(tab, cx);
+            self.drop_tab_in_favorites(drag, cx);
         }
         if self.browser.is_favorite(tab) && self.browser.move_favorite(tab, destination) {
             cx.notify();
@@ -80,13 +99,12 @@ impl BrowserWindow {
 
     pub(crate) fn drop_tab_on_section(
         &mut self,
-        tab: TabId,
+        drag: &TabDrag,
         space: SpaceId,
         section: Section,
         cx: &mut Context<Self>,
     ) {
-        let active = self.browser.space().active_tab;
-        let pages = self.browser.related_tabs(tab);
+        let tab = drag.id;
         let changed = match section {
             Section::Pinned => self.browser.move_item_to_pinned_root(tab, space),
             Section::Today => self.browser.move_tab(tab, space, section),
@@ -102,11 +120,7 @@ impl BrowserWindow {
         {
             self.switch_space(index, cx);
         }
-        if let Some(active) = active.filter(|tab| pages.contains(tab)) {
-            self.browser.activate_tab(active, SystemTime::now());
-        } else {
-            self.browser.activate_sidebar_item(tab, SystemTime::now());
-        }
+        self.activate_dragged_tab(drag);
         match section {
             Section::Pinned => self.scroll_to_pinned_item(self.browser.pinned_item(tab), cx),
             Section::Today => self.scroll_to_today_start(cx),
@@ -114,22 +128,37 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    pub(crate) fn drop_tab_in_favorites(&mut self, tab: TabId, cx: &mut Context<Self>) {
-        let active = self.browser.space().active_tab;
-        let pages = self.browser.related_tabs(tab);
-        if self.browser.favorite_tab(tab) {
-            if let Some(active) = active.filter(|tab| pages.contains(tab)) {
-                self.browser.activate_tab(active, SystemTime::now());
-            } else {
-                self.browser.activate_sidebar_item(tab, SystemTime::now());
-            }
+    pub(crate) fn drop_tab_in_favorites(&mut self, drag: &TabDrag, cx: &mut Context<Self>) {
+        if self.browser.favorite_tab(drag.id) {
+            self.activate_dragged_tab(drag);
             cx.notify();
         }
     }
 
+    fn activate_dragged_tab(&mut self, drag: &TabDrag) {
+        if self.browser.related_tabs(drag.id).contains(&drag.focus) {
+            self.browser.activate_tab(drag.focus, SystemTime::now());
+        } else {
+            self.browser
+                .activate_sidebar_item(drag.id, SystemTime::now());
+        }
+    }
+
     pub(crate) fn tab_drag(&self, tab: &Tab) -> TabDrag {
+        let pages = self.browser.related_tabs(tab.id);
+        let focus = self
+            .browser
+            .space()
+            .active_tab
+            .filter(|id| pages.contains(id))
+            .unwrap_or_else(|| {
+                self.browser
+                    .split_for(tab.id)
+                    .map_or(tab.id, |split| split.active)
+            });
         TabDrag {
             id: self.browser.item_anchor(tab.id),
+            focus,
             title: self.browser.item_title(tab.id),
             icon: self.browser.item_icon(tab.id).map(str::to_string),
             favicon: self.browser.favicon(&tab.url).map(|bytes| bytes.to_vec()),
@@ -139,12 +168,20 @@ impl BrowserWindow {
 
     pub(crate) fn drop_tab_in_folder(
         &mut self,
-        tab: TabId,
+        drag: &TabDrag,
         folder: FolderId,
         cx: &mut Context<Self>,
     ) {
         if let Some(space) = self.browser.folder_space(folder) {
-            self.confirm_folder_destination(Target::MoveToFolder(tab), space, Some(folder), cx);
+            if self.confirm_folder_destination(
+                Target::MoveToFolder(drag.id),
+                space,
+                Some(folder),
+                cx,
+            ) {
+                self.activate_dragged_tab(drag);
+                cx.notify();
+            }
         }
     }
 }

@@ -484,6 +484,7 @@ pub struct BrowserWindow {
     pub sidebar_visible: bool,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
+    space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -557,6 +558,7 @@ impl BrowserWindow {
             sidebar_visible: true,
             sidebar_scrolls: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
+            space_drag_hover: None,
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -1673,6 +1675,24 @@ impl BrowserWindow {
         }
     }
 
+    pub(crate) fn cancel_space_drag_hover(&mut self) { self.space_drag_hover = None; }
+
+    fn hover_space_drag(&mut self, space: SpaceId, hovered: bool, cx: &mut Context<Self>) {
+        if !hovered {
+            if self.space_drag_hover.as_ref().is_some_and(|(id, _)| *id == space) { self.space_drag_hover = None; }
+            return;
+        }
+        if self.browser.space().id == space || self.space_drag_hover.as_ref().is_some_and(|(id, _)| *id == space) { return; }
+        self.space_drag_hover = Some((space, cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(500)).await;
+            let _ = this.update(cx, |this, cx| {
+                if !this.space_drag_hover.as_ref().is_some_and(|(id, _)| *id == space) { return; }
+                if !cx.has_active_drag() { this.space_drag_hover = None; return; }
+                if let Some(index) = this.browser.spaces.iter().position(|entry| entry.id == space) { this.switch_space(index, cx); }
+            });
+        })));
+    }
+
     fn cycle_space(&mut self, delta: isize, cx: &mut Context<Self>) {
         let n = self.browser.spaces.len() as isize;
         let index = (self.browser.active_space as isize + delta).rem_euclid(n);
@@ -1708,7 +1728,7 @@ impl BrowserWindow {
                 let style = style.border_color(hsla(0., 0., 0.2, 0.6));
                 if paint_edge.get() { style.border_b_2() } else { style.border_t_2() }
             })
-            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_relative(drag.id, id, edge.get(), cx)))
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_relative(drag, id, edge.get(), cx)))
             .flex_none()
             .flex()
             .items_center()
@@ -1779,7 +1799,7 @@ impl BrowserWindow {
                 browser.read_with(cx, |this, _| drag.id != id && (this.browser.is_favorite(drag.id) || this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES)).unwrap_or(false)
             }))
             .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
-            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_at_favorite(drag.id, id, cx)))
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_at_favorite(drag, id, cx)))
             .w(px(68.0)).h(px(48.0)).rounded_lg()
             .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
             .when(active, |this| this.shadow_sm())
@@ -1893,7 +1913,7 @@ impl BrowserWindow {
                     .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
                         browser.read_with(cx, |this, _| !this.browser.is_favorite(drag.id) && this.browser.favorite_count() < browser_core::favorites::MAX_FAVORITES).unwrap_or(false)
                     }))
-                    .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_favorites(drag.id, cx)))
+                    .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_favorites(drag, cx)))
                     .children(self.browser.favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| self.render_favorite(tab, cx))),
             ))
             // Spaces side by side, shifted to the pager position.
@@ -1957,7 +1977,7 @@ impl BrowserWindow {
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag.id, space_id, Section::Pinned, cx)))
+                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Pinned, cx)))
                     .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         this.open_space_menu(space_id, event.position, window, cx);
@@ -1978,9 +1998,9 @@ impl BrowserWindow {
                     .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.2)))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_pinned_section(index, cx)))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag.id, space_id, Section::Pinned, cx)))
+                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Pinned, cx)))
                     .drag_over::<crate::folder_drag::FolderDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::folder_drag::FolderDrag, _, cx| { this.confirm_folder_destination(Target::MoveFolder(drag.id), space_id, None, cx); }))
+                    .on_drop(cx.listener(move |this, drag: &crate::folder_drag::FolderDrag, _, cx| this.drop_folder_to(drag, space_id, None, cx)))
                     .child(if space.pinned_collapsed { "›" } else { "⌄" })
                     .child("Pinned"))
             })
@@ -1994,7 +2014,7 @@ impl BrowserWindow {
             .when(!space.today.is_empty(), |this| {
                 this.child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| "today-header".into())).flex().items_center().justify_between().px_2().h(px(24.0))
                     .rounded_md().drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag.id, space_id, Section::Today, cx)))
+                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
                     .text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .child("Today")
                     .child(div().id(("clear-today", index))
@@ -2014,7 +2034,7 @@ impl BrowserWindow {
                     .id(("new-tab", index))
                     .when(current, |this| this.debug_selector(|| "new-tab".into()))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
-                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag.id, space_id, Section::Today, cx)))
+                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -2046,6 +2066,7 @@ impl BrowserWindow {
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
+            .items_center()
             .justify_center()
             .gap_2()
             .pt_2()
@@ -2066,6 +2087,12 @@ impl BrowserWindow {
                     .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
                     .drag_over::<crate::space_drag::SpaceDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
                     .on_drop(cx.listener(move |this, drag: &crate::space_drag::SpaceDrag, _, cx| this.reorder_space(drag.id, index, cx)))
+                    .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, _, cx| this.hover_space_drag(space_id, event.bounds.contains(&event.event.position), cx)))
+                    .on_drag_move::<crate::folder_drag::FolderDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::folder_drag::FolderDrag>, _, cx| this.hover_space_drag(space_id, event.bounds.contains(&event.event.position), cx)))
+                    .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
+                    .drag_over::<crate::folder_drag::FolderDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.8)))
+                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_space(drag, space_id, cx)))
+                    .on_drop(cx.listener(move |this, drag: &crate::folder_drag::FolderDrag, _, cx| this.drop_folder_on_space(drag, space_id, cx)))
                     .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         this.open_space_menu(space_id, event.position, window, cx);

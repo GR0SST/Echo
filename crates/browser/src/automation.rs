@@ -9,6 +9,7 @@
 //! `compose <text>` (native IME/emoji text insertion into the focused responder),
 //! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
+//! `drag <x1> <y1> <x2> <y2> [hold_ms]` (hold at the destination before releasing),
 //! `swipe <x> <y> <dx>` (two-finger trackpad swipe), `resize <w> <h>`, `shot <file.png>`,
 //! `dump` (prints the model), `quit`.
 
@@ -97,13 +98,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
                 "drag" => {
-                    // drag <x1> <y1> <x2> <y2>: press, move and release the mouse
+                    // drag <x1> <y1> <x2> <y2> [hold_ms]: press, move and release the mouse
                     // (window coordinates, may lie on the window's edge).
                     let v: Vec<f64> = arg.split_whitespace().filter_map(|v| v.parse().ok()).collect();
-                    if let [x1, y1, x2, y2] = v[..] {
-                        unsafe { post_drag(ns_view, (x1, y1), (x2, y2)) };
+                    let hold = v.get(4).copied().filter(|ms| ms.is_finite() && *ms >= 0.).map(|ms| Duration::from_secs_f64(ms / 1000.)).unwrap_or_default();
+                    if v.len() == 4 || v.len() == 5 {
+                        unsafe { post_drag(ns_view, (v[0], v[1]), (v[2], v[3]), hold) };
                     }
-                    cx.background_executor().timer(Duration::from_millis(500)).await;
+                    cx.background_executor().timer(Duration::from_millis(500) + hold).await;
                 }
                 "doubleclick" => {
                     let coords: Vec<f64> = arg.split_whitespace().filter_map(|value| value.parse().ok()).collect();
@@ -695,7 +697,7 @@ unsafe fn mouse_target(view: *mut AnyObject, x: f64, y: f64) -> (*mut AnyObject,
 
 /// Presses at `from`, moves to `to` and releases, paced like a hand from
 /// another thread, so AppKit's tracking loops (e.g. resizing) see it.
-unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64)) {
+unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64), hold: Duration) {
     const DRAGGED: usize = 6;
     const STEPS: usize = 10;
     unsafe {
@@ -711,7 +713,7 @@ unsafe fn post_drag(view: *mut AnyObject, from: (f64, f64), to: (f64, f64)) {
                 std::thread::sleep(Duration::from_millis(30));
                 post_mouse_button(DRAGGED, at(i as f64 / STEPS as f64), number);
             }
-            std::thread::sleep(Duration::from_millis(30));
+            std::thread::sleep(Duration::from_millis(30) + hold);
             post_mouse_button(MOUSE_UP, at(1.0), number);
         });
     }

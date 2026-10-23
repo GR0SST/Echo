@@ -3428,6 +3428,12 @@ fn drag_between(cx: &mut VisualTestContext, source: &'static str, destination: &
 }
 
 fn drag_to_point(cx: &mut VisualTestContext, source: &'static str, end: gpui::Point<gpui::Pixels>) {
+    begin_drag_to_point(cx, source, end);
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+}
+
+fn begin_drag_to_point(cx: &mut VisualTestContext, source: &'static str, end: gpui::Point<gpui::Pixels>) {
     cx.run_until_parked();
     let start = cx.debug_bounds(source).unwrap().center();
     cx.simulate_mouse_move(start, None, Modifiers::none());
@@ -3435,8 +3441,6 @@ fn drag_to_point(cx: &mut VisualTestContext, source: &'static str, end: gpui::Po
     cx.simulate_mouse_move(start + gpui::point(gpui::px(5.), gpui::px(0.)), gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
-    cx.run_until_parked();
-    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
 }
 
@@ -4022,6 +4026,241 @@ fn dropping_an_inactive_today_tab_focuses_the_moved_page_and_keeps_the_previous_
     assert!(!calls.iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..))));
     click(cx, "tab-8");
     assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_a_today_tab_on_a_space_icon_preserves_its_section_and_live_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    drag_between(cx, "tab-8", "space-1");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().today[0].id.get(), 8);
+        assert!(w.browser.space().pinned.is_empty());
+        assert!(w.browser.space().today[0].pinned_url.is_none());
+    });
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Work");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_a_pinned_split_on_a_space_icon_moves_all_panes_without_recreating_them(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    cx.run_until_parked();
+    let split = view.read_with(cx, |w, _| w.browser.active_split().unwrap().id);
+    fake.take_calls();
+    drag_between(cx, "tab-4", "space-1");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().pinned.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().id, split);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        assert!(w.browser.spaces[0].pinned.is_empty());
+        assert_eq!(w.browser.spaces[0].today[0].id.get(), 7);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+fn add_drag_destination(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
+    view.update(cx, |w, cx| {
+        let work = w.browser.add_space("Work", 100.);
+        let folder = w.browser.create_folder(work, None, "Saved").unwrap();
+        w.browser.set_folder_collapsed(folder, true);
+        w.browser.switch_space(1);
+        w.browser.new_tab("https://work.example", std::time::SystemTime::now());
+        w.browser.switch_space(0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn hovering_a_space_during_drag_waits_then_opens_it_and_accepts_a_split_in_its_closed_folder(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    add_drag_destination(&view, cx);
+    fake.take_calls();
+    let dock = cx.debug_bounds("space-1").unwrap().center();
+    begin_drag_to_point(cx, "tab-4", dock);
+    cx.executor().advance_clock(Duration::from_millis(400));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Personal");
+    cx.executor().advance_clock(Duration::from_millis(150));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Work");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 1, "hover loads only the destination's current page");
+    let destination = cx.debug_bounds("folder-9").unwrap().center();
+    cx.simulate_mouse_move(destination, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(destination, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert!(w.browser.space().folders[0].collapsed);
+        assert_eq!(w.browser.folder_tabs(w.browser.space().folders[0].id).iter().map(|id| id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        assert!(w.browser.spaces[0].pinned.is_empty());
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn leaving_a_space_icon_before_its_drag_hover_delay_cancels_navigation_and_loading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    cx.run_until_parked();
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    let dock = cx.debug_bounds("space-1").unwrap().center();
+    begin_drag_to_point(cx, "tab-7", dock);
+    cx.executor().advance_clock(Duration::from_millis(250));
+    let outside = cx.debug_bounds("address").unwrap().center();
+    cx.simulate_mouse_move(outside, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Personal");
+    cx.simulate_mouse_up(outside, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx), original);
+    assert!(bar_text(&view, cx).is_none());
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dropping_a_folder_on_another_space_moves_the_complete_focused_subtree(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "folder-2", "space-1");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.space().folders.len(), 2);
+        assert!(w.browser.spaces[0].folders.is_empty());
+        assert_eq!(w.browser.active_split().unwrap().panes.iter().map(|id| id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn hovering_with_an_empty_folder_then_nesting_it_preserves_the_destinations_current_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    add_drag_destination(&view, cx);
+    view.update(cx, |w, cx| { w.browser.create_folder(w.browser.space().id, None, "Empty"); cx.notify(); });
+    cx.run_until_parked();
+    fake.take_calls();
+    let dock = cx.debug_bounds("space-1").unwrap().center();
+    begin_drag_to_point(cx, "folder-11", dock);
+    cx.executor().advance_clock(Duration::from_millis(550));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Work");
+    fake.take_calls();
+    let destination = cx.debug_bounds("folder-9").unwrap().center();
+    cx.simulate_mouse_move(destination, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(destination, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 10);
+        assert!(w.browser.space().folders[0].collapsed);
+        assert_eq!(w.browser.folder_path(w.browser.space().folders[1].id), "Saved / Empty");
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    cx.simulate_keystrokes("alt-cmd-left");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap().get()), 5);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn dragging_a_favorite_split_to_a_space_icon_turns_it_into_local_pins_without_losing_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    run_named_command(&view, cx, "favorite tab");
+    view.update(cx, |w, cx| { w.browser.add_space("Work", 100.); cx.notify(); });
+    cx.run_until_parked();
+    fake.take_calls();
+    drag_between(cx, "favorite-4", "space-1");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert!(w.browser.favorites.is_empty());
+        assert_eq!(w.browser.space().pinned.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn hovering_with_a_focused_folder_then_dropping_it_restores_its_original_split_pane(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    add_drag_destination(&view, cx);
+    let dock = cx.debug_bounds("space-1").unwrap().center();
+    begin_drag_to_point(cx, "folder-2", dock);
+    cx.executor().advance_clock(Duration::from_millis(550));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap().get()), 10);
+    fake.take_calls();
+    cx.simulate_mouse_up(dock, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        assert!(w.browser.spaces[0].pinned.is_empty());
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn a_shared_favorite_drag_keeps_its_source_pane_when_hovering_another_spaces_pane(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    run_named_command(&view, cx, "favorite tab");
+    view.update(cx, |w, cx| {
+        w.browser.add_space("Work", 100.);
+        let panes = w.browser.favorite_splits[0].panes.clone();
+        w.browser.switch_space(1);
+        w.browser.activate_tab(panes[0], std::time::SystemTime::now());
+        w.browser.switch_space(0);
+        w.browser.activate_tab(panes[1], std::time::SystemTime::now());
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let dock = cx.debug_bounds("space-1").unwrap().center();
+    begin_drag_to_point(cx, "favorite-4", dock);
+    cx.executor().advance_clock(Duration::from_millis(550));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    // Native focus follows the destination Space's other pane while hovering.
+    fake.send(cx, Event::Focused { view: page(1) });
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap().get()), 4);
+    fake.take_calls();
+    cx.simulate_mouse_up(dock, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Work");
+        assert!(w.browser.favorites.is_empty());
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().active.get(), 5);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+    });
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
 
