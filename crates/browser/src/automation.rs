@@ -5,7 +5,8 @@
 //!
 //! `BROWSER_SCRIPT="wait 3; shot /tmp/a.png; key cmd-t; type github.com; key enter; dump; quit"`
 //!
-//! Commands: `reopen` (Dock request), `activate`, `wait <seconds>`, `key <keystroke>`, `type <text>`,
+//! Commands: `reopen` (Dock request), `activate`, `require-focus` (abort on focus loss or occlusion),
+//! `wait <seconds>`, `key <keystroke>`, `type <text>`,
 //! `compose <text>` (native IME/emoji text insertion into the focused responder),
 //! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
@@ -40,10 +41,18 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut ns_view = ns_view as *mut AnyObject;
         unsafe { make_key(ns_view) };
+        let mut require_focus = false;
         for command in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
+            if name == "require-focus" { require_focus = true; }
+            if require_focus && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
+                eprintln!("[automation] aborted: browser lost focus or is not on screen");
+                let _ = cx.update(|cx| cx.quit());
+                return;
+            }
             match name {
+                "require-focus" => {},
                 "reopen" => {
                     // Deliver the same delegate request AppKit sends for a Dock click.
                     unsafe {
@@ -80,6 +89,11 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 }
                 "type" => {
                     for ch in arg.chars() {
+                        if require_focus && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
+                            eprintln!("[automation] aborted: browser lost focus or is not on screen");
+                            let _ = cx.update(|cx| cx.quit());
+                            return;
+                        }
                         unsafe { post_key(ns_view, &ch.to_string()) };
                         cx.background_executor().timer(Duration::from_millis(15)).await;
                     }
@@ -382,6 +396,25 @@ unsafe fn print_layers(layer: *mut AnyObject, depth: usize) {
 
 unsafe fn window_of(view: *mut AnyObject) -> *mut AnyObject {
     unsafe { msg_send![view, window] }
+}
+
+/// Command Bar and menu child windows belong to the same test browser.
+unsafe fn has_browser_focus(view: *mut AnyObject) -> bool {
+    unsafe {
+        let root = window_of(view);
+        if root.is_null() { return false; }
+        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+        let active: Bool = msg_send![app, isActive];
+        let visible: Bool = msg_send![root, isVisible];
+        let occlusion: usize = msg_send![root, occlusionState];
+        if !active.as_bool() || !visible.as_bool() || occlusion & 2 == 0 { return false; }
+        let mut key: *mut AnyObject = msg_send![app, keyWindow];
+        while !key.is_null() {
+            if key == root { return true; }
+            key = msg_send![key, parentWindow];
+        }
+        false
+    }
 }
 
 unsafe fn make_key(view: *mut AnyObject) {
@@ -692,9 +725,11 @@ unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
         // Queued mouse moves only reach the first responder (often the page);
         // real ones also reach tracking-area owners like this view.
         if !event.is_null() {
-            // CEF embedding wraps GPUIView in an NSView. NSView's default
-            // mouseMoved implementation does not forward to that child.
-            let target = toolkit_view(content).unwrap_or(content);
+            // A synthetic move must reach the view under the pointer. Sending
+            // every move to GPUI makes it look like the pointer left CEF and
+            // dismisses page hover UI, even after a real cursor warp.
+            let hit: *mut AnyObject = msg_send![content, hitTest: location];
+            let target = if hit.is_null() { toolkit_view(content).unwrap_or(content) } else { hit };
             let _: () = msg_send![target, mouseMoved: event];
         }
     }

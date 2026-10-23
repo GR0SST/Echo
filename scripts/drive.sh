@@ -22,3 +22,6 @@ for _ in $(seq 1 "$LIMIT"); do
 done
 kill "$PID" 2>/dev/null
 cat "$LOG"
+if rg -q '^\[automation\] aborted:' "$LOG"; then
+  exit 1
+fi
