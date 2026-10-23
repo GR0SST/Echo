@@ -60,6 +60,39 @@ mod mac {
         }
     }
 
+    /// Keep native controls on the same horizontal track as the GPUI sidebar.
+    pub fn position_traffic_lights(view: *mut c_void, left: f32) {
+        use objc2_foundation::{NSPoint, NSRect};
+        let window = window(view);
+        if window.is_null() { return; }
+        unsafe {
+            let buttons = [button(window, CLOSE), button(window, MINIATURIZE), button(window, ZOOM)];
+            if buttons.iter().any(|button| button.is_null()) { return; }
+            let frames: Vec<NSRect> = buttons.iter().map(|button| msg_send![*button, frame]).collect();
+            let spacing = frames[2].origin.x - frames[1].origin.x;
+            // Hide the group together: hiding individual AppKit buttons can
+            // trigger titlebar layout between frame updates and alter spacing.
+            let hidden = f64::from(left) + spacing * 2. + frames[2].size.width <= 0.;
+            set_traffic_lights_hidden(view, hidden);
+            for (index, button) in buttons.into_iter().enumerate() {
+                let x = f64::from(left) + spacing * index as f64;
+                let _: () = msg_send![button, setFrameOrigin: NSPoint::new(x, frames[index].origin.y)];
+            }
+        }
+    }
+
+    pub fn pointer_position(view: *mut c_void) -> Option<[f32; 2]> {
+        use objc2_foundation::{NSPoint, NSRect};
+        let window = window(view);
+        if window.is_null() { return None; }
+        unsafe {
+            let point: NSPoint = msg_send![window, mouseLocationOutsideOfEventStream];
+            let content: *mut AnyObject = msg_send![window, contentView];
+            let bounds: NSRect = msg_send![content, bounds];
+            Some([point.x as f32, (bounds.size.height - point.y) as f32])
+        }
+    }
+
     /// Replaces `areas` with tracking areas covering `view` except `holes`
     /// (x, y, width, height; top-left origin), so the view gets mouse moves
     /// there even while a page (inside the hole) is first responder.
@@ -140,12 +173,20 @@ pub fn attach_overlay(parent_view: *mut c_void, overlay_view: *mut c_void, traff
     let _ = (parent_view, overlay_view, traffic_lights);
 }
 
-/// Shows or hides the window's close/minimize/zoom buttons.
-pub fn set_traffic_lights_hidden(view: *mut c_void, hidden: bool) {
+/// Position native window controls along the sidebar's horizontal track.
+pub fn position_traffic_lights(view: *mut c_void, left: f32) {
     #[cfg(target_os = "macos")]
-    mac::set_traffic_lights_hidden(view, hidden);
+    mac::position_traffic_lights(view, left);
     #[cfg(not(target_os = "macos"))]
-    let _ = (view, hidden);
+    let _ = (view, left);
+}
+
+/// Pointer in window coordinates, including positions over native web pages.
+pub fn pointer_position(view: *mut c_void) -> Option<[f32; 2]> {
+    #[cfg(target_os = "macos")]
+    { mac::pointer_position(view) }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = view; None }
 }
 
 /// Makes `view` receive mouse moves everywhere except over native page surfaces,

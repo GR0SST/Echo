@@ -455,7 +455,9 @@ fn cmd_s_hides_the_sidebar(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-s");
     assert!(!view.read_with(cx, |w, _| w.sidebar_visible));
     cx.run_until_parked();
-    assert!(cx.debug_bounds("new-tab").is_none());
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("sidebar-clip").unwrap().size.width, gpui::px(0.));
 }
 
 // Web pages, through the fake engine.
@@ -864,7 +866,7 @@ fn the_hidden_sidebar_floats_in_from_the_left_edge(cx: &mut TestAppContext) {
     move_mouse(&mut overlay, 100.0, 300.0);
     // Clicking a tab in it works like in the sidebar.
     assert!(overlay.debug_bounds("new-tab").is_some());
-    move_mouse(&mut overlay, f32::from(panel.right()) + 10.0, 300.0);
+    move_mouse(cx, f32::from(panel.right()) + 360.0, 300.0);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.floating_sidebar.is_none()));
@@ -4607,4 +4609,43 @@ fn space_header_matches_reference_control_positions_and_more_does_not_toggle_pin
     assert_eq!(cx.debug_bounds("space-header-name-0").unwrap(), name);
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+
+#[gpui::test]
+fn sidebar_slide_reverses_without_jumping_and_moves_content_with_it(cx: &mut TestAppContext) {
+    let (_, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-s");
+    cx.executor().advance_clock(Duration::from_millis(48));
+    cx.run_until_parked();
+    let closing = cx.debug_bounds("sidebar-clip").unwrap();
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    assert!(closing.size.width > gpui::px(0.) && closing.size.width < gpui::px(240.));
+    assert_eq!(sidebar.right(), closing.right());
+    cx.simulate_keystrokes("cmd-s");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("sidebar-clip").unwrap(), closing, "reverses from the visible position");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("sidebar-clip").unwrap().size.width, gpui::px(240.));
+}
+
+#[gpui::test]
+fn floating_sidebar_keeps_a_pointer_buffer_without_covering_the_page(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-s");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    move_mouse(cx, 2., 300.);
+    let mut overlay = floating(&view, cx).unwrap();
+    move_mouse(&mut overlay, 100., 300.);
+    move_mouse(cx, 300., 300.);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(floating(&view, cx).is_some(), "54 px outside the panel stays open");
+    assert_eq!(overlay.update(|window, _| window.viewport_size().width), gpui::px(270.));
+    move_mouse(cx, 350., 300.);
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert!(floating(&view, cx).is_none(), "beyond the buffer it closes");
 }

@@ -45,6 +45,8 @@ const PAGER_RUBBER_BAND: f32 = 0.3;
 const PAGER_FRAME: Duration = Duration::from_millis(16);
 /// Pointer distance (px) from the window's left edge that reveals a hidden sidebar.
 const SIDEBAR_REVEAL_EDGE: f32 = 8.0;
+/// Logical pixels beyond the revealed panel; this does not intercept page input.
+const SIDEBAR_DISMISS_BUFFER: f32 = 100.0;
 const FLOATING_SIDEBAR_INSET: f32 = 6.0;
 /// Room for the floating sidebar's shadow inside its window.
 const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
@@ -479,6 +481,8 @@ pub struct FloatingSidebar {
     /// The pointer has been over it; leaving then hides it.
     entered: bool,
     closing: bool,
+    height: f32,
+    _pointer_task: Option<Task<()>>,
 }
 
 
@@ -488,6 +492,7 @@ struct SidebarScrolls { pinned: gpui::ScrollHandle, today: gpui::ScrollHandle, p
 pub struct BrowserWindow {
     pub browser: Browser,
     pub sidebar_visible: bool,
+    sidebar_reveal: Option<PinnedReveal>,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
@@ -564,6 +569,7 @@ impl BrowserWindow {
             },
             browser,
             sidebar_visible: true,
+            sidebar_reveal: None,
             sidebar_scrolls: HashMap::new(),
             pinned_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
@@ -1502,14 +1508,30 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    fn sidebar_amount(&self) -> f32 {
+        self.sidebar_reveal.as_ref().filter(|reveal| reveal.collapsed == !self.sidebar_visible)
+            .map_or(if self.sidebar_visible { 1. } else { 0. }, |reveal| reveal.amount)
+    }
+
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        let from = self.sidebar_amount();
         self.sidebar_visible = !self.sidebar_visible;
-        // Window buttons live in the sidebar, like Arc's.
-        if let Some(view) = self.native_view {
-            crate::native::set_traffic_lights_hidden(view, !self.sidebar_visible);
-        }
-        if self.sidebar_visible {
-            self.close_floating_sidebar(cx);
+        self.sidebar_reveal = None;
+        if self.sidebar_visible { self.close_floating_sidebar(cx); }
+        if !crate::native::prefers_reduced_motion() {
+            let collapsed = !self.sidebar_visible;
+            let to = if collapsed { 0. } else { 1. };
+            let started = cx.background_executor().now();
+            let task = cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(PAGER_FRAME).await;
+                let progress = (cx.background_executor().now().duration_since(started).as_secs_f32() / FLOATING_SIDEBAR_SLIDE.as_secs_f32()).clamp(0., 1.);
+                let amount = from + (to - from) * (1. - (1. - progress).powi(5));
+                if this.update(cx, |this, cx| {
+                    if let Some(reveal) = &mut this.sidebar_reveal { reveal.amount = amount; }
+                    cx.notify();
+                }).is_err() || progress >= 1. { break; }
+            });
+            self.sidebar_reveal = Some(PinnedReveal { amount: from, collapsed, _task: task });
         }
         cx.notify();
     }
@@ -1524,6 +1546,8 @@ impl BrowserWindow {
             overlay: None,
             entered: false,
             closing: false,
+            height: f32::from(window.viewport_size().height),
+            _pointer_task: None,
         });
         cx.notify();
 
@@ -1561,6 +1585,7 @@ impl BrowserWindow {
             let overlay = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(overlay)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, overlay, true);
+                    crate::native::position_traffic_lights(overlay, TRAFFIC_LIGHT_X - SIDEBAR_WIDTH - FLOATING_SIDEBAR_INSET);
                 }
                 cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Sidebar, cx))
             });
@@ -1568,6 +1593,19 @@ impl BrowserWindow {
                 let _ = browser.update(cx, |this, cx| {
                     if let Some(floating) = &mut this.floating_sidebar {
                         floating.overlay = Some(overlay);
+                        // Native pages cover GPUI. Read pointer position without extending
+                        // the child window into an invisible input-blocking region.
+                        if let Some(parent) = this.native_view {
+                            floating._pointer_task = Some(cx.spawn(async move |this, cx| loop {
+                                cx.background_executor().timer(PAGER_FRAME).await;
+                                let keep = this.update(cx, |this, cx| {
+                                    if this.floating_sidebar.as_ref().is_none_or(|floating| floating.closing) { return false; }
+                                    if let Some([x, y]) = crate::native::pointer_position(parent) { this.on_floating_sidebar_pointer(x, y, cx); }
+                                    true
+                                }).unwrap_or(false);
+                                if !keep { break; }
+                            }));
+                        }
                     }
                     // Hide again if the pointer never comes over it.
                     cx.spawn(async move |this, cx| {
@@ -1584,13 +1622,12 @@ impl BrowserWindow {
         });
     }
 
-    fn on_floating_sidebar_hover(&mut self, hovered: bool, cx: &mut Context<Self>) {
-        let Some(floating) = &mut self.floating_sidebar else {
-            return;
-        };
-        if hovered {
-            floating.entered = true;
-        } else if floating.entered {
+    fn on_floating_sidebar_pointer(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+        let Some(floating) = &mut self.floating_sidebar else { return; };
+        let right = FLOATING_SIDEBAR_INSET + SIDEBAR_WIDTH;
+        if (0. ..=right).contains(&x) && (0. ..=floating.height).contains(&y) { floating.entered = true; }
+        if floating.entered && (x > right + SIDEBAR_DISMISS_BUFFER || y < 0. || y > floating.height)
+            && self.tab_menu.is_none() && self.command_bar.is_none() {
             self.close_floating_sidebar(cx);
         }
     }
@@ -2190,7 +2227,7 @@ impl BrowserWindow {
             .h_full()
             .py(px(CONTENT_INSET))
             .pr(px(CONTENT_INSET))
-            .when(!self.sidebar_visible, |this| this.pl(px(CONTENT_INSET)))
+            .pl(px(CONTENT_INSET * (1. - self.sidebar_amount())))
             .child(
                 div()
                     .size_full()
@@ -2276,9 +2313,6 @@ impl BrowserWindow {
         let panel = div()
             .id("floating-sidebar")
             .debug_selector(|| "floating-sidebar".into())
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                this.on_floating_sidebar_hover(*hovered, cx)
-            }))
             .absolute()
             .top(px(FLOATING_SIDEBAR_INSET))
             .bottom(px(FLOATING_SIDEBAR_INSET))
@@ -2292,11 +2326,19 @@ impl BrowserWindow {
                 linear_color_stop(tint(hue, 0.82), 0.0),
                 linear_color_stop(tint(hue, 0.72), 1.0),
             ))
-            .child(self.render_sidebar(cx));
-        let slide = Animation::new(FLOATING_SIDEBAR_SLIDE).with_easing(ease_out_quint());
+            .child(self.render_sidebar(cx))
+            .child(canvas(|_, _, _| (), |bounds, _, window, _| {
+                if let Some(view) = crate::native::view_of(window) {
+                    crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + f32::from(bounds.origin.x) - FLOATING_SIDEBAR_INSET);
+                }
+            }).absolute().top_0().left_0().size_full());
+        let slide = Animation::new(if crate::native::prefers_reduced_motion() { Duration::ZERO } else { FLOATING_SIDEBAR_SLIDE }).with_easing(ease_out_quint());
         let travel = width + FLOATING_SIDEBAR_INSET;
         div()
             .size_full()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);
+            }))
             .child(panel.with_animation(
                 if closing { "slide-out" } else { "slide-in" },
                 slide,
@@ -2319,7 +2361,7 @@ impl BrowserWindow {
         let accent = self.accent();
         let region = self.split_draft.as_ref().and_then(|draft| {
             let split = self.browser.split_for(draft.pane)?;
-            let left = if self.sidebar_visible { SIDEBAR_WIDTH } else { CONTENT_INSET };
+            let left = SIDEBAR_WIDTH * self.sidebar_amount() + CONTENT_INSET * (1. - self.sidebar_amount());
             let card = engine::Bounds { x: left.into(), y: CONTENT_INSET.into(), width: (width - left - CONTENT_INSET).max(0.).into(), height: (height - 2. * CONTENT_INSET).max(0.).into() };
             let index = split.panes.iter().position(|id| *id == draft.pane)?;
             crate::split_layout::layout(card, split.axis, &split.weights, true).get(index).map(|bounds| bounds.page)
@@ -2514,11 +2556,17 @@ impl Render for BrowserWindow {
             }
         }
         let hue = self.pager_hue();
+        let sidebar_amount = self.sidebar_amount();
+        let sidebar_offset = SIDEBAR_WIDTH * (sidebar_amount - 1.);
+        if let Some(view) = self.native_view {
+            crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + sidebar_offset);
+        }
 
         div()
             .key_context(WINDOW_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);
                 if !this.sidebar_visible && event.position.x < px(SIDEBAR_REVEAL_EDGE) {
                     this.reveal_sidebar(window, cx);
                 }
@@ -2600,7 +2648,9 @@ impl Render for BrowserWindow {
                 linear_color_stop(tint(hue, 0.82), 0.0),
                 linear_color_stop(tint(hue, 0.72), 1.0),
             ))
-            .when(self.sidebar_visible, |this| this.child(self.render_sidebar(cx)))
+            .child(div().debug_selector(|| "sidebar-clip".into())
+                .relative().flex_none().h_full().w(px(SIDEBAR_WIDTH * sidebar_amount)).overflow_hidden()
+                .when(sidebar_amount > 0., |this| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(self.render_sidebar(cx)))))
             .child(self.render_content(cx))
 
     }

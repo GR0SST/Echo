@@ -80,3 +80,21 @@ toggling Pinned. The 36 px row has a 12 px corner radius, 12 px horizontal
 insets, an 18 px leading icon slot and an 8 px title gap. Chevron and
 ellipsis use fixed vector geometry rather than font glyphs. The hover
 background and controls remain visible while the Space menu is open.
+
+## Sidebar motion and pointer tolerance — 2026-10-23
+
+Reference: the user's Arc observation and sidebar screenshot. Native window
+buttons move with the panel instead of remaining at the window origin until
+it disappears. Both docked toggles and floating panels drive native button
+positions from the panel's current horizontal offset.
+
+A revealed sidebar remains open beyond its visible right edge. We use a
+100 logical px dismissal buffer (a tuning value from the user's distance
+estimate, not an independently measured Arc constant). Native pointer reads
+keep this working over CEF without making the transparent overlay wider or
+blocking page input. Open menus and the Command Bar keep it alive.
+
+Online discussion confirms deliberate hover timing, but does not document
+Arc's dismissal distance or animation implementation:
+https://www.reddit.com/r/ArcBrowser/comments/17ewxo7/
+The supplied reference takes precedence over inferred online behavior.

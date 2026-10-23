@@ -90,10 +90,13 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     unsafe { compose_text(target, arg); }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
-                "move" => {
+                "pointer" | "move" => {
                     let v: Vec<f64> = arg.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                     if let [x, y] = v[..] {
-                        unsafe { post_mouse(ns_view, MOUSE_MOVED, x, y) };
+                        unsafe {
+                            if name == "pointer" { warp_pointer(ns_view, x, y); }
+                            post_mouse(ns_view, MOUSE_MOVED, x, y);
+                        };
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
@@ -581,6 +584,7 @@ unsafe extern "C" {
     fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
     fn CGEventSetDoubleValueField(event: *mut c_void, field: u32, value: f64);
     fn CGEventSetLocation(event: *mut c_void, location: NSPoint);
+    fn CGWarpMouseCursorPosition(position: NSPoint) -> i32;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
 }
@@ -633,6 +637,20 @@ unsafe fn send_scroll(view: *mut AnyObject, x: f64, y: f64, dx: f64, phase: i64)
 }
 
 const MOUSE_MOVED: usize = 5;
+
+/// Align the physical pointer for native hover/tracking checks over CEF.
+unsafe fn warp_pointer(view: *mut AnyObject, x: f64, y: f64) {
+    unsafe {
+        let window = window_of(view);
+        let content: *mut AnyObject = msg_send![window, contentView];
+        let bounds: NSRect = msg_send![content, bounds];
+        let screen: NSPoint = msg_send![window, convertPointToScreen: NSPoint::new(x, bounds.size.height - y)];
+        let screens: *mut AnyObject = msg_send![AnyClass::get(c"NSScreen").unwrap(), screens];
+        let primary: *mut AnyObject = msg_send![screens, objectAtIndex: 0usize];
+        let frame: NSRect = msg_send![primary, frame];
+        CGWarpMouseCursorPosition(NSPoint::new(screen.x, frame.size.height - screen.y));
+    }
+}
 
 /// A mouse event at window point (x, y), top-left origin.
 unsafe fn post_mouse(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
