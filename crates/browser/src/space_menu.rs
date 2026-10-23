@@ -1,7 +1,7 @@
 //! Space context actions refer to the clicked Space, even when it is inactive.
 use crate::{
     icons::IconTarget,
-    tab_menu::{Command, MenuTarget},
+    tab_menu::{item, pending, Command, Entry, MenuTarget},
     window::{BrowserWindow, Target},
 };
 use browser_core::SpaceId;
@@ -18,22 +18,27 @@ impl BrowserWindow {
         self.open_sidebar_menu(MenuTarget::Space(space), position, window, cx);
     }
 
-    pub(crate) fn space_menu_commands(&self, id: SpaceId) -> Vec<(&'static str, Command)> {
+    pub(crate) fn space_menu_commands(&self, id: SpaceId) -> Vec<Entry> {
         let Some(space) = self.browser.spaces.iter().find(|space| space.id == id) else {
             return Vec::new();
         };
+        let others: Vec<Entry> = self.browser.spaces.iter().filter(|other| other.id != id)
+            .map(|other| pending(other.name.clone()).into()).collect();
         vec![
-            ("Rename…", Command::SpaceRename),
-            ("Change Space Icon…", Command::SpaceIcon),
-            (
-                if space.show_header {
-                    "Hide Space Header"
-                } else {
-                    "Show Space Header"
-                },
-                Command::SpaceHeader,
-            ),
-            ("New Folder…", Command::SpaceNewFolder),
+            item("Change Space Icon…", Command::SpaceIcon).into(),
+            item("Rename Space…", Command::SpaceRename).into(),
+            pending("Edit Theme Color…").into(),
+            pending("Set Profile").submenu(vec![pending("Default").checked(true).into()]).into(),
+            Entry::Separator,
+            item("New Folder", Command::SpaceNewFolder).into(),
+            pending("Live Folders").submenu(vec![pending("GitHub Pull Requests").into(), pending("GitHub Issues").into()]).into(),
+            Entry::Separator,
+            pending("Share Space…").into(),
+            pending(format!("Export \u{201c}{}\u{201d} into Folder", space.name)).submenu(others).into(),
+            Entry::Separator,
+            pending("Manage Spaces…").into(),
+            Entry::Separator,
+            pending("Delete Space").into(),
         ]
     }
 
@@ -55,9 +60,6 @@ impl BrowserWindow {
             Command::SpaceIcon => {
                 let icon = space.custom_icon.clone().unwrap_or_default();
                 self.open_command_bar(Target::Icon(IconTarget::Space(id)), &icon, window, cx);
-            }
-            Command::SpaceHeader => {
-                self.browser.set_space_header(id, !space.show_header);
             }
             Command::SpaceNewFolder => self.open_command_bar(
                 Target::NewFolder {

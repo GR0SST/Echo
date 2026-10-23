@@ -279,7 +279,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
     if let Some(bar) = &this.command_bar {
         out += &format!("[dump] command_target={:?} selected={} suggestions={}\n", bar.target, bar.selected, this.suggestions(cx).len());
     }
-    if let Some(menu) = &this.tab_menu { out += &format!("[dump] sidebar_menu={:?} selected={}\n", menu.target, menu.selected); }
+    if let Some(menu) = &this.tab_menu { out += &format!("[dump] sidebar_menu={:?} selected={:?}\n", menu.target, menu.selected); }
     out += &format!("[dump] archive_after_seconds={:?}\n", browser.archive_after.map(|duration| duration.as_secs()));
     if let Some(toast) = &this.toast {
         out += &format!("[dump] toast={:?}\n", toast.message);

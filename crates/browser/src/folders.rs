@@ -249,37 +249,31 @@ impl BrowserWindow {
         self.scroll_to_pinned_item(PinnedItem::Folder(id), cx);
     }
 
-    pub(crate) fn folder_menu_commands(&self, id: FolderId) -> Vec<(&'static str, MenuCommand)> {
+    pub(crate) fn folder_menu_commands(&self, id: FolderId) -> Vec<crate::tab_menu::Entry> {
+        use crate::tab_menu::{item, Entry};
         let Some(folder) = self.browser.folder(id) else {
             return Vec::new();
         };
-        let mut rows = vec![
-            ("Rename…", MenuCommand::FolderRename),
-            ("New Nested Folder…", MenuCommand::FolderNew),
-            ("Move to…", MenuCommand::FolderMove),
-            ("Change Folder Icon…", MenuCommand::FolderIcon),
-            (
-                if folder.collapsed {
-                    "Expand Folder"
-                } else {
-                    "Collapse Folder"
-                },
-                MenuCommand::FolderCollapse,
-            ),
+        let mut rows: Vec<Entry> = vec![
+            item("Rename…", MenuCommand::FolderRename).into(),
+            item("Change Folder Icon…", MenuCommand::FolderIcon).into(),
+            item("New Nested Folder…", MenuCommand::FolderNew).into(),
+            item(if folder.collapsed { "Expand Folder" } else { "Collapse Folder" }, MenuCommand::FolderCollapse).into(),
+            Entry::Separator,
+            item("Move to…", MenuCommand::FolderMove).into(),
+            item("Duplicate", MenuCommand::FolderDuplicate).into(),
+            item("Turn into Space", MenuCommand::FolderIntoSpace).into(),
+            Entry::Separator,
         ];
-        rows.push(("Duplicate", MenuCommand::FolderDuplicate));
-        rows.push(("Turn into Space", MenuCommand::FolderIntoSpace));
-        if folder.items.is_empty() {
-            rows.push(("Delete Empty Folder", MenuCommand::FolderDelete));
-        }
         if !self.browser.folder_tabs(id).is_empty() {
             rows.extend([
-                ("Copy All Links", MenuCommand::FolderCopy),
-                (
-                    "Copy All Links as Markdown",
-                    MenuCommand::FolderCopyMarkdown,
-                ),
+                item("Copy All Links", MenuCommand::FolderCopy).into(),
+                item("Copy All Links as Markdown", MenuCommand::FolderCopyMarkdown).into(),
+                Entry::Separator,
             ]);
+        }
+        if folder.items.is_empty() {
+            rows.push(item("Delete Empty Folder", MenuCommand::FolderDelete).into());
         }
         rows
     }

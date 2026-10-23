@@ -752,7 +752,7 @@ impl BrowserWindow {
         self.focus_handle.focus(window);
     }
 
-    fn accent(&self) -> f32 {
+    pub(crate) fn accent(&self) -> f32 {
         self.browser.space().hue / 360.0
     }
 
@@ -2081,6 +2081,10 @@ impl BrowserWindow {
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_edit_current_url(&EditCurrentUrl, window, cx)
                         }))
+                        .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_sidebar_menu(crate::tab_menu::MenuTarget::Address, event.position, window, cx);
+                        }))
                         .child(div().flex_1().min_w_0().overflow_hidden().child(url))
                         // Page actions appear only while the pointer is over the sidebar.
                         .when(self.browser.active_tab().is_some(), |this| this.child(hover_fade(div().flex().items_center().gap(px(4.))
@@ -2274,6 +2278,8 @@ impl BrowserWindow {
         let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
 
         div()
+            .id(("space-page", index))
+            .when(current, |this| this.debug_selector(|| "space-page".into()))
             .flex()
             .flex_col()
             .flex_none()
@@ -2281,6 +2287,11 @@ impl BrowserWindow {
             .h_full()
             .px(px(SIDEBAR_INSET))
             .gap(px(SIDEBAR_ROW_GAP))
+            // Empty sidebar space opens the Space's menu, as in the reference.
+            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_space_menu(space_id, event.position, window, cx);
+            }))
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(move || format!("space-header-{index}"))
                     .group(header_group.clone())

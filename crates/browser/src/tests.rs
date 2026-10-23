@@ -1948,7 +1948,7 @@ fn context_copy_uses_the_clicked_tab_and_keeps_the_current_page(cx: &mut TestApp
     let size = menu.update(|window, _| window.bounds().size);
     assert!(panel.origin.x >= gpui::px(0.) && panel.right() <= size.width);
     assert!(panel.origin.y >= gpui::px(0.) && panel.bottom() <= size.height);
-    menu.simulate_keystrokes("enter");
+    menu.simulate_keystrokes("down enter");
     assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("https://github.com"));
     assert_eq!(active_url(&view, cx), original);
     assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
@@ -1964,7 +1964,7 @@ fn context_pin_and_rename_do_not_activate_the_clicked_tab(cx: &mut TestAppContex
     assert!(view.read_with(cx, |w, _| w.browser.space().pinned.iter().any(|tab| tab.id.get() == 7)));
     assert_eq!(active_url(&view, cx), original);
     right_click(cx, "tab-7");
-    tab_menu(&view, cx).simulate_keystrokes("down down enter");
+    click(&mut tab_menu(&view, cx), "tab-menu-rename");
     assert_eq!(bar_text(&view, cx).as_deref(), Some("GPUI"));
     bar(&view, cx).simulate_input("Renamed from menu");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -2005,7 +2005,7 @@ fn context_archive_targets_the_clicked_tab_and_escape_or_outside_click_cancel(cx
     assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
     assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
     right_click(cx, "tab-7");
-    tab_menu(&view, cx).simulate_keystrokes("up enter");
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive[0].tab.id.get()), 7);
 }
@@ -2021,7 +2021,9 @@ fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mu
     let original = active_url(&view, cx);
     fake.take_calls();
     right_click(cx, "tab-4");
-    click(&mut tab_menu(&view, cx), "tab-menu-reset");
+    let mut menu = tab_menu(&view, cx);
+    click(&mut menu, "tab-menu-edit-pinned-page");
+    click(&mut menu, "tab-menu-reset");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].url.clone()), "https://github.com");
     assert!(fake.take_calls().contains(&Call::Close(2)), "reset unloads an inactive page immediately");
@@ -2031,11 +2033,13 @@ fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mu
     bar(&view, cx).simulate_keystrokes("enter");
     click(cx, "tab-8");
     right_click(cx, "tab-4");
-    click(&mut tab_menu(&view, cx), "tab-menu-replace");
+    let mut menu = tab_menu(&view, cx);
+    click(&mut menu, "tab-menu-edit-pinned-page");
+    click(&mut menu, "tab-menu-replace");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].pinned_url.clone()).as_deref(), Some("https://github.com/new-original"));
     right_click(cx, "tab-4");
-    tab_menu(&view, cx).simulate_keystrokes("up enter");
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
     assert!(fake.take_calls().contains(&Call::Close(3)));
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned[0].url.clone()), "https://github.com/new-original");
@@ -2425,7 +2429,7 @@ fn pane_menu_targets_an_inactive_pane_and_moves_it_without_changing_focus(cx: &m
 }
 
 #[gpui::test]
-fn pane_menu_mutes_or_closes_only_its_target_while_sidebar_menu_mutes_the_group(cx: &mut TestAppContext) {
+fn pane_menu_and_sidebar_tab_options_mute_or_close_only_their_pane(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 3);
     click(cx, "pane-menu-2");
     click(&mut tab_menu(&view, cx), "tab-menu-mute");
@@ -2433,10 +2437,19 @@ fn pane_menu_mutes_or_closes_only_its_target_while_sidebar_menu_mutes_the_group(
         assert!(w.browser.all_tabs().find(|tab| tab.id.get() == 2).unwrap().muted);
         assert_eq!(w.browser.all_tabs().filter(|tab| tab.muted).count(), 1);
     });
+    // The sidebar row's Tab Options submenu acts on one pane.
     right_click(cx, "tab-2");
-    click(&mut tab_menu(&view, cx), "tab-menu-mute");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().filter(|tab| tab.muted).count()), 3);
-    assert!(fake.take_calls().contains(&Call::Mute(1, true)));
+    let mut menu = tab_menu(&view, cx);
+    let pane = view.read_with(cx, |w, _| *w.browser.active_split().unwrap().panes.iter().find(|id| id.get() != 2).unwrap());
+    let title = view.read_with(cx, |w, _| crate::tab_menu::short_title(&w.browser.all_tabs().find(|tab| tab.id == pane).unwrap().title));
+    let selector = format!("tab-menu-{}", title.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>());
+    let selector = selector.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+    let row = menu.debug_bounds(test_selector(selector)).unwrap();
+    menu.simulate_mouse_move(row.center(), None, Modifiers::none());
+    menu.run_until_parked();
+    click(&mut menu, "tab-menu-mute");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().filter(|tab| tab.muted).count()), 2);
+    assert!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id == pane).unwrap().muted));
     let active = active_url(&view, cx);
     click(cx, "pane-menu-2");
     click(&mut tab_menu(&view, cx), "tab-menu-close-pane");
@@ -3018,7 +3031,9 @@ fn context_new_folder_pins_the_clicked_tab_while_preserving_the_other_active_pag
     let active = active_url(&view, cx);
     fake.take_calls();
     right_click(cx, "tab-7");
-    click(&mut tab_menu(&view, cx), "tab-menu-new-folder-with-tab");
+    let mut menu = tab_menu(&view, cx);
+    click(&mut menu, "tab-menu-move-to");
+    click(&mut menu, "tab-menu-new-folder-with-tab");
     bar(&view, cx).simulate_input("Reading");
     bar(&view, cx).simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -3106,7 +3121,7 @@ fn folder_context_actions_rename_customize_and_copy_all_nested_page_links(cx: &m
     let active = active_url(&view, cx);
     fake.take_calls();
     right_click(cx, "folder-3");
-    tab_menu(&view, cx).simulate_keystrokes("enter");
+    tab_menu(&view, cx).simulate_keystrokes("down enter");
     assert_eq!(bar_text(&view, cx).as_deref(), Some("Research"));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))), "the closing menu must not focus Chromium behind its replacement editor");
     bar(&view, cx).simulate_input("References");
@@ -3379,14 +3394,14 @@ fn space_header_context_menu_can_rename_or_cancel_without_changing_the_active_pa
     let active = active_url(&view, cx);
     fake.take_calls();
     right_click(cx, "space-header-0");
-    tab_menu(&view, cx).simulate_keystrokes("enter");
+    click(&mut tab_menu(&view, cx), "tab-menu-space-rename");
     assert!(bar_input_focused(&view, cx));
     assert_eq!(bar_text(&view, cx).as_deref(), Some("Personal"));
     bar(&view, cx).simulate_input("Cancel this");
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Personal");
     right_click(cx, "space-header-0");
-    tab_menu(&view, cx).simulate_keystrokes("enter");
+    click(&mut tab_menu(&view, cx), "tab-menu-space-rename");
     bar(&view, cx).simulate_input("Home");
     bar(&view, cx).simulate_keystrokes("enter");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Home");
@@ -3405,7 +3420,7 @@ fn inactive_space_context_actions_change_only_the_clicked_spaces_name_and_icon(c
     bar(&view, cx).simulate_input("🧭");
     bar(&view, cx).simulate_keystrokes("enter");
     right_click(cx, "space-1");
-    tab_menu(&view, cx).simulate_keystrokes("enter");
+    click(&mut tab_menu(&view, cx), "tab-menu-space-rename");
     assert_eq!(bar_text(&view, cx).as_deref(), Some("Work"));
     bar(&view, cx).simulate_input("Office");
     bar(&view, cx).simulate_keystrokes("enter");
@@ -3425,15 +3440,16 @@ fn space_context_menu_remains_available_in_the_dock_after_hiding_its_header(cx: 
     let active = active_url(&view, cx);
     let pinned_top = cx.debug_bounds("pinned-list").unwrap().top();
     fake.take_calls();
-    right_click(cx, "space-header-0");
-    click(&mut tab_menu(&view, cx), "tab-menu-space-header");
-    cx.run_until_parked();
+    // The reference's Space menu has no header toggle; the command remains.
+    run_named_command(&view, cx, "hide space header");
     assert!(!view.read_with(cx, |w, _| w.browser.space().show_header));
     assert!(cx.debug_bounds("pinned-list").unwrap().top() < pinned_top);
     right_click(cx, "space-0");
-    assert!(view.read_with(cx, |w, _| w.space_menu_commands(w.browser.space().id).iter().any(|(label, _)| *label == "Show Space Header")));
-    click(&mut tab_menu(&view, cx), "tab-menu-space-header");
+    assert!(tab_menu(&view, cx).debug_bounds("tab-menu-space-rename").is_some());
+    cx.simulate_keystrokes("escape");
+    view.update(cx, |w, cx| w.close_tab_menu(cx));
     cx.run_until_parked();
+    run_named_command(&view, cx, "show space header");
     assert!(view.read_with(cx, |w, _| w.browser.space().show_header));
     assert_eq!(cx.debug_bounds("pinned-list").unwrap().top(), pinned_top);
     assert_eq!(active_url(&view, cx), active);
@@ -4860,4 +4876,40 @@ fn finished_copy_feedback_does_not_replay_when_the_controls_reappear(cx: &mut Te
     let sidebar = cx.debug_bounds("sidebar").unwrap();
     move_mouse(cx, f32::from(sidebar.center().x), f32::from(sidebar.center().y));
     assert!(cx.debug_bounds("copy-check").is_none());
+}
+
+#[gpui::test]
+fn sidebar_context_menus_follow_the_reference_layout(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    // The address field has its own menu; Copy URL copies the current page.
+    right_click(cx, "address");
+    let mut menu = tab_menu(&view, cx);
+    for row in ["tab-menu-copy", "tab-menu-share", "tab-menu-capture", "tab-menu-capture-full-page", "tab-menu-show-as-toolbar", "tab-menu-disable-shared-quotes"] {
+        assert!(menu.debug_bounds(row).is_some(), "{row}");
+    }
+    click(&mut menu, "tab-menu-copy");
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())), active_url(&view, cx));
+    // Empty sidebar space opens the Space menu.
+    let page = cx.debug_bounds("space-page").unwrap();
+    let empty = gpui::point(page.center().x, page.bottom() - gpui::px(4.));
+    cx.simulate_mouse_move(empty, None, Modifiers::none());
+    cx.simulate_mouse_down(empty, gpui::MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(empty, gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.tab_menu.as_ref().map(|menu| menu.target)), Some(crate::tab_menu::MenuTarget::Space(view.read_with(cx, |w, _| w.browser.space().id))));
+    let mut menu = tab_menu(&view, cx);
+    for row in ["tab-menu-space-icon", "tab-menu-space-rename", "tab-menu-edit-theme-color", "tab-menu-set-profile", "tab-menu-space-new-folder", "tab-menu-live-folders", "tab-menu-share-space", "tab-menu-manage-spaces", "tab-menu-delete-space"] {
+        assert!(menu.debug_bounds(row).is_some(), "{row}");
+    }
+    // Submenus open with the right arrow and close with the left one.
+    assert!(menu.debug_bounds("tab-context-submenu").is_none());
+    menu.simulate_keystrokes("down down down down right");
+    menu.run_until_parked();
+    assert!(menu.debug_bounds("tab-context-submenu").is_some());
+    assert!(menu.debug_bounds("tab-menu-default").is_some());
+    menu.simulate_keystrokes("left");
+    menu.run_until_parked();
+    assert!(menu.debug_bounds("tab-context-submenu").is_none());
+    menu.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
 }

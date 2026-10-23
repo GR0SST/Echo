@@ -117,9 +117,9 @@ mod mac {
     /// Places a rounded dark vibrancy view behind the GPUI content of
     /// `view`'s window at `rect` (x, y, width, height; top-left origin),
     /// creating it on first use. `None` removes it.
-    pub fn set_backdrop(view: *mut c_void, rect: Option<[f64; 4]>, radius: f64) {
+    pub fn set_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, material: super::Material) {
         use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-        const HUD_WINDOW: isize = 13;
+        let material: isize = match material { super::Material::Hud => 13, super::Material::Menu => 5 };
         const BEHIND_WINDOW: isize = 0;
         const ACTIVE: isize = 1;
         let view = view as *mut AnyObject;
@@ -127,14 +127,15 @@ mod mac {
         unsafe {
             let frame_view: *mut AnyObject = msg_send![view, superview];
             if frame_view.is_null() { return; }
-            let identifier = NSString::from_str("echo.backdrop");
+            let name = format!("echo.backdrop.{key}");
+            let identifier = NSString::from_str(&name);
             let subviews: *mut AnyObject = msg_send![frame_view, subviews];
             let count: usize = msg_send![subviews, count];
             let mut backdrop: *mut AnyObject = std::ptr::null_mut();
             for index in 0..count {
                 let subview: *mut AnyObject = msg_send![subviews, objectAtIndex: index];
                 let id: *mut NSString = msg_send![subview, identifier];
-                if !id.is_null() && (*id).to_string() == "echo.backdrop" { backdrop = subview; break; }
+                if !id.is_null() && (*id).to_string() == name { backdrop = subview; break; }
             }
             let Some([x, y, width, height]) = rect else {
                 if !backdrop.is_null() { let _: () = msg_send![backdrop, removeFromSuperview]; }
@@ -144,7 +145,7 @@ mod mac {
                 backdrop = msg_send![objc2::class!(NSVisualEffectView), alloc];
                 backdrop = msg_send![backdrop, init];
                 let _: () = msg_send![backdrop, setIdentifier: &*identifier];
-                let _: () = msg_send![backdrop, setMaterial: HUD_WINDOW];
+                let _: () = msg_send![backdrop, setMaterial: material];
                 let _: () = msg_send![backdrop, setBlendingMode: BEHIND_WINDOW];
                 let _: () = msg_send![backdrop, setState: ACTIVE];
                 let name = NSString::from_str("NSAppearanceNameVibrantDark");
@@ -314,11 +315,17 @@ pub fn traffic_light_frames(view: *mut c_void) -> Option<[[f32; 4]; 3]> {
 /// A blurred, translucent backdrop behind a floating panel, as macOS
 /// vibrancy. Returns whether the platform draws one; elsewhere panels stay
 /// opaque.
-pub fn set_backdrop(view: *mut c_void, rect: Option<[f64; 4]>, radius: f64) -> bool {
+/// Backdrop styles: the HUD panels' darker blur, or the system menu material.
+#[derive(Clone, Copy)]
+pub enum Material { Hud, Menu }
+
+/// `key` names the backdrop so one window can hold several (a menu and its
+/// submenu); `None` removes it.
+pub fn set_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, material: Material) -> bool {
     #[cfg(target_os = "macos")]
-    { mac::set_backdrop(view, rect, radius); true }
+    { mac::set_backdrop(view, key, rect, radius, material); true }
     #[cfg(not(target_os = "macos"))]
-    { let _ = (view, rect, radius); false }
+    { let _ = (view, key, rect, radius, material); false }
 }
 
 /// Whether panels get a translucent native backdrop.

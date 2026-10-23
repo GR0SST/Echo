@@ -1,15 +1,27 @@
-//! Sidebar context menus target the clicked tab without activating it.
+//! Sidebar context menus target the clicked item without activating it.
+//! They are drawn like the reference's native menus: translucent, with
+//! separators, section headers, checkmarks, shortcuts and submenus.
 use crate::window::{BrowserWindow, Overlay, OverlayKind, Target};
 use browser_core::{SpaceId, TabId, folders::FolderId, splits::{Axis, Placement}};
 use gpui::{
-    actions, div, hsla, point, prelude::*, px, AnyElement, App, Context, FocusHandle,
-    KeyBinding, Pixels, Point, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions,
+    actions, canvas, div, hsla, point, prelude::*, px, AnyElement, App, Bounds, Context, FocusHandle,
+    KeyBinding, Pixels, Point, SharedString, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
 };
+use std::{cell::Cell, rc::Rc};
 
 const CONTEXT: &str = "TabContextMenu";
-const WIDTH: f32 = 260.0;
-actions!(tab_menu, [Dismiss, Next, Previous, Confirm]);
+/// Used only to keep a menu inside the window before it is measured.
+const ESTIMATED_WIDTH: f32 = 260.0;
+const ROW_HEIGHT: f32 = 24.0;
+const SEPARATOR_HEIGHT: f32 = 11.0;
+const PADDING: f32 = 5.0;
+/// Text starts here; a checkmark column moves it right.
+const TEXT_INSET: f32 = 16.0;
+const CHECK_INSET: f32 = 31.0;
+const SUBMENU_OVERLAP: f32 = 5.0;
+const MIN_WIDTH: f32 = 180.0;
+actions!(tab_menu, [Dismiss, Next, Previous, Confirm, OpenSubmenu, CloseSubmenu]);
 
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -17,32 +29,41 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", Next, Some(CONTEXT)),
         KeyBinding::new("up", Previous, Some(CONTEXT)),
         KeyBinding::new("enter", Confirm, Some(CONTEXT)),
+        KeyBinding::new("right", OpenSubmenu, Some(CONTEXT)),
+        KeyBinding::new("left", CloseSubmenu, Some(CONTEXT)),
     ]);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId) }
+pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), Address }
 
 pub(crate) struct TabMenu {
     pub target: MenuTarget,
-    pub selected: usize,
+    /// Highlighted row of the top level.
+    pub selected: Option<usize>,
+    /// Top-level row whose submenu is open, and the highlighted row in it.
+    pub submenu: Option<usize>,
+    pub sub_selected: Option<usize>,
     max_height: Pixels,
+    window_width: Pixels,
     scroll: gpui::ScrollHandle,
     pane: bool,
     position: Point<Pixels>,
     focus: FocusHandle,
     pub overlay: Option<WindowHandle<Overlay>>,
+    /// Where the top level was painted, to place its submenu.
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum Command { NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
-    SpaceRename, SpaceIcon, SpaceHeader, SpaceNewFolder,
+    SpaceRename, SpaceIcon, SpaceNewFolder,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
-            Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceHeader => "space-header", Self::SpaceNewFolder => "space-new-folder",
+            Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceNewFolder => "space-new-folder",
             Self::FolderDuplicate => "folder-duplicate",
             Self::FolderIntoSpace => "folder-into-space",
             Self::NewFolderWithTab => "new-folder-with-tab", Self::MoveToFolder => "move-to-folder",
@@ -60,6 +81,94 @@ impl Command {
     }
 }
 
+#[derive(Clone)]
+pub(crate) enum Entry { Item(Item), Separator, Header(&'static str) }
+
+#[derive(Clone)]
+pub(crate) struct Item {
+    pub label: SharedString,
+    /// `None` for rows kept for parity whose action is not built yet.
+    pub command: Option<Command>,
+    pub shortcut: Option<&'static str>,
+    pub checked: bool,
+    pub enabled: bool,
+    /// A tab whose favicon leads the row.
+    pub icon: Option<TabId>,
+    /// The split pane the command acts on, instead of the menu's target.
+    pub pane: Option<TabId>,
+    pub submenu: Vec<Entry>,
+}
+
+pub(crate) fn item(label: impl Into<SharedString>, command: Command) -> Item {
+    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, pane: None, submenu: Vec::new() }
+}
+
+/// A row the reference has whose action is not built yet.
+pub(crate) fn pending(label: impl Into<SharedString>) -> Item {
+    Item { command: None, ..item(label, Command::Copy) }
+}
+
+impl Item {
+    pub(crate) fn shortcut(mut self, shortcut: &'static str) -> Self { self.shortcut = Some(shortcut); self }
+    pub(crate) fn checked(mut self, checked: bool) -> Self { self.checked = checked; self }
+    pub(crate) fn enabled(mut self, enabled: bool) -> Self { self.enabled = enabled; self }
+    pub(crate) fn icon(mut self, tab: TabId) -> Self { self.icon = Some(tab); self }
+    pub(crate) fn pane(mut self, tab: TabId) -> Self { self.pane = Some(tab); self }
+    pub(crate) fn submenu(mut self, entries: Vec<Entry>) -> Self { self.submenu = entries; self }
+    fn selector(&self) -> String {
+        match (self.command, self.submenu.is_empty()) {
+            (Some(command), true) => format!("tab-menu-{}", command.selector()),
+            _ => format!("tab-menu-{}", slug(&self.label)),
+        }
+    }
+}
+
+impl From<Item> for Entry { fn from(item: Item) -> Self { Entry::Item(item) } }
+
+fn slug(label: &str) -> String {
+    let mut slug = String::new();
+    for c in label.chars() {
+        if c.is_ascii_alphanumeric() { slug.push(c.to_ascii_lowercase()); }
+        else if !slug.ends_with('-') && !slug.is_empty() { slug.push('-'); }
+    }
+    slug.trim_end_matches('-').to_string()
+}
+
+fn selectable(entry: &Entry) -> bool { matches!(entry, Entry::Item(item) if item.enabled) }
+
+fn entry_height(entry: &Entry) -> f32 { if matches!(entry, Entry::Separator) { SEPARATOR_HEIGHT } else { ROW_HEIGHT } }
+
+fn entries_height(entries: &[Entry]) -> f32 { PADDING * 2. + entries.iter().map(entry_height).sum::<f32>() }
+
+/// Removes separators at the ends and doubled ones left by conditional rows.
+pub(crate) fn tidy(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = Vec::new();
+    for entry in entries {
+        if matches!(entry, Entry::Separator) && out.last().is_none_or(|last| matches!(last, Entry::Separator)) { continue; }
+        out.push(entry);
+    }
+    while out.last().is_some_and(|last| matches!(last, Entry::Separator)) { out.pop(); }
+    out
+}
+
+/// Moves `from` by `delta` over selectable rows, wrapping.
+fn step(entries: &[Entry], from: Option<usize>, delta: isize) -> Option<usize> {
+    let count = entries.len() as isize;
+    if count == 0 { return None; }
+    let mut index = from.map_or(if delta > 0 { -1 } else { count }, |index| index as isize);
+    for _ in 0..count {
+        index = (index + delta).rem_euclid(count);
+        if selectable(&entries[index as usize]) { return Some(index as usize); }
+    }
+    None
+}
+
+/// Shortens long page titles the way the reference's menus do.
+pub(crate) fn short_title(title: &str) -> String {
+    const MAX: usize = 30;
+    if title.chars().count() <= MAX { title.to_string() } else { format!("{}…", title.chars().take(MAX).collect::<String>().trim_end()) }
+}
+
 impl BrowserWindow {
     pub(crate) fn open_tab_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         self.open_sidebar_menu(MenuTarget::Tab(tab), position, window, cx);
@@ -74,6 +183,7 @@ impl BrowserWindow {
             MenuTarget::Tab(tab) => self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
             MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
+            MenuTarget::Address => self.browser.active_tab().is_some(),
         }
     }
 
@@ -82,7 +192,7 @@ impl BrowserWindow {
         self.close_tab_menu(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { target, selected: 0, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None });
+        self.tab_menu = Some(TabMenu { target, selected: None, submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), window_width: window.bounds().size.width, scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None, bounds: Default::default() });
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -92,11 +202,12 @@ impl BrowserWindow {
             if !browser.read_with(cx, |this, _| this.tab_menu.as_ref().is_some_and(|menu| menu.focus == focus)).unwrap_or(false) { return; }
             let Ok(bounds) = main.update(cx, |_, window, _| window.bounds()) else { return; };
             let _ = browser.update(cx, |this, _| {
-                let height = px(this.tab_menu_commands().len() as f32 * 32.0 + 10.0).min((bounds.size.height - px(16.)).max(px(32.)));
+                let height = px(entries_height(&this.menu_entries())).min((bounds.size.height - px(16.)).max(px(32.)));
                 if let Some(menu) = &mut this.tab_menu {
                     menu.max_height = (bounds.size.height - px(16.)).max(px(32.));
+                    menu.window_width = bounds.size.width;
                     let at = position + (origin - bounds.origin);
-                    menu.position = point(at.x.clamp(px(8.), (bounds.size.width - px(WIDTH + 8.)).max(px(8.))), at.y.clamp(px(8.), (bounds.size.height - height - px(8.)).max(px(8.))));
+                    menu.position = point(at.x.clamp(px(8.), (bounds.size.width - px(ESTIMATED_WIDTH + 8.)).max(px(8.))), at.y.clamp(px(8.), (bounds.size.height - height - px(8.)).max(px(8.))));
                 }
             });
             let options = WindowOptions {
@@ -138,70 +249,177 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    fn tab_menu_commands(&self) -> Vec<(&'static str, Command)> {
+
+    pub(crate) fn menu_entries(&self) -> Vec<Entry> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
-        let id = match menu.target { MenuTarget::Space(id) => return self.space_menu_commands(id), MenuTarget::Folder(id) => return self.folder_menu_commands(id), MenuTarget::Tab(id) => id };
+        tidy(match menu.target {
+            MenuTarget::Space(id) => self.space_menu_commands(id),
+            MenuTarget::Folder(id) => self.folder_menu_commands(id),
+            MenuTarget::Address => vec![
+                item("Copy URL", Command::Copy).into(),
+                pending("Share").submenu(vec![item("Copy URL as Markdown", Command::CopyMarkdown).into()]).into(),
+                pending("Capture…").into(),
+                pending("Capture Full Page").into(),
+                Entry::Separator,
+                pending("Show as Toolbar").into(),
+                pending("Disable Shared Quotes").into(),
+            ],
+            MenuTarget::Tab(id) => self.tab_entries(id, menu.pane),
+        })
+    }
+
+    fn move_to_entries(&self) -> Vec<Entry> {
+        vec![
+            item("New Folder…", Command::NewFolderWithTab).into(),
+            item("Folder…", Command::MoveToFolder).into(),
+        ]
+    }
+
+    fn tab_entries(&self, id: TabId, pane_menu: bool) -> Vec<Entry> {
         let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == id) else { return Vec::new(); };
         let split = self.browser.split_for(tab.id);
+        let internal = browser_core::omnibox::is_internal_url(&tab.url);
         let orientation = if split.is_some_and(|split| split.axis == Axis::Horizontal) {
-            ("Convert to Vertical Split", Command::Axis(Axis::Vertical))
-        } else { ("Convert to Horizontal Split", Command::Axis(Axis::Horizontal)) };
-        if menu.pane {
+            item("Convert to Vertical Split View", Command::Axis(Axis::Vertical))
+        } else { item("Convert to Horizontal Split View", Command::Axis(Axis::Horizontal)) };
+        let archive_relative = |rows: &mut Vec<Entry>| {
+            for (relative, label) in [(browser_core::bulk_archive::Relative::Other, "Archive Other Tabs"), (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above"), (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below")] {
+                if !self.browser.tabs_to_archive(tab.id, relative).is_empty() { rows.push(item(label, Command::ArchiveRelative(relative)).into()); }
+            }
+        };
+        if pane_menu {
             let Some(split) = split else { return Vec::new(); };
             let horizontal = split.axis == Axis::Horizontal;
             let index = split.panes.iter().position(|id| *id == tab.id).unwrap();
-            let mut rows = vec![("Separate Tab from Split", Command::SeparatePane), orientation];
-            if index > 0 { rows.push((if horizontal { "Move Left" } else { "Move Up" }, Command::Move(-1))); }
-            if index + 1 < split.panes.len() { rows.push((if horizontal { "Move Right" } else { "Move Down" }, Command::Move(1))); }
-            rows.extend([("Add Left Split…", Command::Add(Placement::Left)), ("Add Right Split…", Command::Add(Placement::Right)),
-                ("Add Top Split…", Command::Add(Placement::Above)), ("Add Bottom Split…", Command::Add(Placement::Below))]);
-            if !browser_core::omnibox::is_internal_url(&tab.url) { rows.push((if tab.muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute)); }
-            rows.push(("Close Pane", Command::ClosePane));
+            let mut rows: Vec<Entry> = vec![item("Separate from Split View", Command::SeparatePane).into(), orientation.into(), Entry::Separator];
+            if index > 0 { rows.push(item(if horizontal { "Move Left" } else { "Move Up" }, Command::Move(-1)).into()); }
+            if index + 1 < split.panes.len() { rows.push(item(if horizontal { "Move Right" } else { "Move Down" }, Command::Move(1)).into()); }
+            rows.extend([Entry::Separator, item("Add Left Split…", Command::Add(Placement::Left)).into(), item("Add Right Split…", Command::Add(Placement::Right)).into(),
+                item("Add Top Split…", Command::Add(Placement::Above)).into(), item("Add Bottom Split…", Command::Add(Placement::Below)).into(), Entry::Separator]);
+            if !internal { rows.push(item(if tab.muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute).into()); }
+            rows.extend([item("Copy Link", Command::Copy).shortcut("⇧⌘C").into(), item("Copy Link as Markdown", Command::CopyMarkdown).into(), Entry::Separator, item("Close Pane", Command::ClosePane).into()]);
+            return rows;
+        }
+        if let Some(split) = split {
+            let mut rows: Vec<Entry> = vec![pending("Share Split View…").into(), Entry::Separator,
+                item("Separate All Tabs", Command::SeparateAll).into(), item("Add Tab…", Command::Add(Placement::Right)).into(), orientation.into(),
+                Entry::Separator, Entry::Header("Tab Options")];
+            for pane in split.panes.iter().filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == *id)) {
+                let pane_internal = browser_core::omnibox::is_internal_url(&pane.url);
+                rows.push(Item { label: short_title(&pane.title).into(), ..pending("") }.icon(pane.id).submenu(vec![
+                    item("Separate from Split View", Command::SeparatePane).pane(pane.id).into(),
+                    Entry::Separator,
+                    pending("Share").submenu(vec![item("Copy Link as Markdown", Command::CopyMarkdown).pane(pane.id).into()]).into(),
+                    item(if pane.muted { "Unmute" } else { "Mute" }, Command::Mute).pane(pane.id).enabled(!pane_internal).into(),
+                    item("Copy Link", Command::Copy).shortcut("⇧⌘C").pane(pane.id).into(),
+                    item("Copy link as Markdown", Command::CopyMarkdown).pane(pane.id).into(),
+                    Entry::Separator,
+                    item("Archive Item", Command::ClosePane).pane(pane.id).into(),
+                ]).into());
+            }
+            rows.extend([Entry::Separator, item("Change Icon…", Command::Icon).into(), item("Rename…", Command::Rename).into()]);
+            if self.browser.item_has_custom_name(tab.id) { rows.push(item("Reset Name", Command::ResetName).into()); }
+            rows.extend([Entry::Separator, item("Duplicate", Command::Duplicate).shortcut("⌥D").into(),
+                pending("Move to").submenu(self.move_to_entries()).into(), Entry::Separator,
+                item(if tab.pinned_url.is_some() { "Close Tab" } else { "Archive Item" }, Command::Close).into()]);
+            archive_relative(&mut rows);
             return rows;
         }
         let favorite = self.browser.is_favorite(tab.id);
         let pinned = tab.pinned_url.is_some();
-        let mut rows = vec![("Copy Link", Command::Copy), ("Copy Link as Markdown", Command::CopyMarkdown), ("Rename…", Command::Rename)];
-        if !favorite { rows.push((if pinned { "Unpin Tab" } else { "Pin Tab" }, Command::Pin)); }
-        rows.push((if favorite { "Unfavorite Tab" } else { "Favorite Tab" }, Command::Favorite));
-        if tab.pinned_url.as_ref().is_some_and(|url| *url != tab.url) {
-            rows.push(("Reset Tab to Original URL", Command::Reset));
-            rows.push(("Replace Pinned URL with Current", Command::Replace));
+        let mut rows: Vec<Entry> = vec![
+            item("Copy Link", Command::Copy).shortcut("⇧⌘C").into(),
+            pending("Share").submenu(vec![item("Copy Link as Markdown", Command::CopyMarkdown).into()]).into(),
+            Entry::Separator,
+        ];
+        if favorite { rows.extend([pending("Show Unread Badge").checked(true).into(), Entry::Separator]); }
+        rows.extend([item("Change Icon…", Command::Icon).into(), item("Rename…", Command::Rename).into()]);
+        if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(item("Reset Name and Icon", Command::ResetCustomization).into()); }
+        rows.push(item(if tab.muted { "Unmute" } else { "Mute" }, Command::Mute).enabled(!internal).into());
+        rows.push(pending("Customize Page…").into());
+        if pinned {
+            let moved = tab.pinned_url.as_ref().is_some_and(|url| *url != tab.url);
+            rows.push(pending("Edit Pinned Page").submenu(vec![
+                item("Reset to Original URL", Command::Reset).enabled(moved).into(),
+                item("Replace with Current URL", Command::Replace).enabled(moved).into(),
+            ]).into());
         }
-        rows.push(("Move to Folder…", Command::MoveToFolder));
-        rows.push(("New Folder with This Tab…", Command::NewFolderWithTab));
-        rows.push(("Customize Tab Icon…", Command::Icon));
-        if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(("Reset Name and Icon", Command::ResetCustomization)); }
-        for (relative, label) in [(browser_core::bulk_archive::Relative::Other, "Archive Other Tabs"), (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above"), (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below")] {
-            if !self.browser.tabs_to_archive(tab.id, relative).is_empty() { rows.push((label, Command::ArchiveRelative(relative))); }
-        }
-        rows.push(("Duplicate", Command::Duplicate));
-        if split.is_none() && !browser_core::omnibox::is_internal_url(&tab.url) { rows.push(("Add Split View…", Command::Add(Placement::Right))); }
-        if !browser_core::omnibox::is_internal_url(&tab.url) {
-            let muted = if let Some(split) = split { split.panes.iter().all(|id| self.browser.all_tabs().any(|tab| tab.id == *id && tab.muted)) } else { tab.muted };
-            rows.push((if split.is_some() { if muted { "Unmute Split View" } else { "Mute Split View" } } else if muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute));
-        }
-        if split.is_some() {
-            rows.extend([("Separate All Tabs", Command::SeparateAll), ("Add Split View…", Command::Add(Placement::Right)), orientation]);
-            if self.browser.item_has_custom_name(tab.id) { rows.push(("Reset Name", Command::ResetName)); }
-        }
-        rows.push((if pinned { "Close Tab" } else { "Archive Tab" }, Command::Close));
+        rows.push(Entry::Separator);
+        if !internal { rows.push(item("Add Split View", Command::Add(Placement::Right)).into()); }
+        rows.extend([item("Duplicate", Command::Duplicate).shortcut("⌥D").into(), pending("Move to").submenu(self.move_to_entries()).into(), Entry::Separator]);
+        archive_relative(&mut rows);
+        rows.push(Entry::Separator);
+        rows.push(item(if pinned { "Close Tab" } else { "Archive Tab" }, Command::Close).shortcut("⌘W").into());
+        if !favorite { rows.push(item(if pinned { "Unpin Tab" } else { "Pin Tab" }, Command::Pin).into()); }
+        rows.push(item(if favorite { "Remove Favorite" } else { "Add to Favorites" }, Command::Favorite).into());
         rows
     }
 
+    fn current_level(&self) -> (Vec<Entry>, bool) {
+        let entries = self.menu_entries();
+        match self.tab_menu.as_ref().and_then(|menu| menu.submenu.filter(|_| menu.sub_selected.is_some())) {
+            Some(index) => (match entries.get(index) { Some(Entry::Item(item)) => item.submenu.clone(), _ => Vec::new() }, true),
+            None => (entries, false),
+        }
+    }
+
     fn select_tab_menu(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.tab_menu_commands().len();
+        let (entries, nested) = self.current_level();
         if let Some(menu) = &mut self.tab_menu {
-            if count > 0 { menu.selected = (menu.selected as isize + delta).rem_euclid(count as isize) as usize; menu.scroll.scroll_to_item(menu.selected); }
+            if nested { menu.sub_selected = step(&entries, menu.sub_selected, delta); }
+            else {
+                menu.selected = step(&entries, menu.selected, delta);
+                menu.submenu = None;
+                if let Some(index) = menu.selected { menu.scroll.scroll_to_item(index); }
+            }
         }
         cx.notify();
     }
 
-    fn confirm_tab_menu(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_tab_submenu(&mut self, cx: &mut Context<Self>) {
+        let entries = self.menu_entries();
+        if let Some(menu) = &mut self.tab_menu {
+            if let Some(index) = menu.selected.filter(|index| matches!(entries.get(*index), Some(Entry::Item(item)) if !item.submenu.is_empty())) {
+                let Some(Entry::Item(item)) = entries.get(index) else { return; };
+                menu.submenu = Some(index);
+                menu.sub_selected = step(&item.submenu, None, 1);
+            }
+        }
+        cx.notify();
+    }
+
+    fn close_tab_submenu(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.tab_menu { menu.submenu = None; menu.sub_selected = None; }
+        cx.notify();
+    }
+
+    fn confirm_selected_tab_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (entries, nested) = self.current_level();
+        let selected = self.tab_menu.as_ref().and_then(|menu| if nested { menu.sub_selected } else { menu.selected });
+        match selected.and_then(|index| entries.get(index)) {
+            Some(Entry::Item(item)) if !item.submenu.is_empty() => self.open_tab_submenu(cx),
+            Some(Entry::Item(item)) => self.confirm_menu_item(item.clone(), window, cx),
+            _ => {}
+        }
+    }
+
+    fn confirm_menu_item(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        if !item.enabled { return; }
+        if !item.submenu.is_empty() { return; }
         let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
-        let Some((_, command)) = self.tab_menu_commands().get(index).copied() else { self.close_tab_menu(cx); return; };
         self.close_tab_menu(cx);
-        let id = match target { MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }, MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }, MenuTarget::Tab(id) => id };
+        // Items without a command are shown for parity but not built yet.
+        let Some(command) = item.command else { return; };
+        let pane_menu = pane_menu || item.pane.is_some();
+        let id = match target {
+            MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
+            MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }
+            MenuTarget::Address => {
+                match command { Command::Copy => self.copy_url(false, cx), Command::CopyMarkdown => self.copy_url(true, cx), _ => {} }
+                return;
+            }
+            MenuTarget::Tab(id) => item.pane.unwrap_or(id),
+        };
         match command {
             Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),
             Command::MoveToFolder => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
@@ -257,33 +475,111 @@ impl BrowserWindow {
         cx.notify();
     }
 
+
     pub(crate) fn render_tab_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(menu) = &self.tab_menu else { return div().into_any_element(); };
-        let rows = self.tab_menu_commands().into_iter().enumerate().map(|(index, (label, command))| {
-            div().id(("tab-menu-row", index)).debug_selector(move || format!("tab-menu-row-{index}"))
-                .h(px(32.)).flex_none().px_3().flex().items_center().rounded_md()
-                .when(menu.selected == index, |this| this.bg(hsla(0.6, 0.7, 0.5, 1.)).text_color(gpui::white()))
-                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                    if *hovered { if let Some(menu) = &mut this.tab_menu { menu.selected = index; } cx.notify(); }
-                }))
-                .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.confirm_tab_menu(index, window, cx); }))
-                .child(div().debug_selector(move || format!("tab-menu-{}", command.selector())).child(label))
+        let entries = self.menu_entries();
+        let top = self.render_menu_level(&entries, menu.selected, menu.submenu, false, cx)
+            .absolute().left(menu.position.x).top(menu.position.y).max_h(menu.max_height)
+            .overflow_y_scroll().track_scroll(&menu.scroll);
+        let bounds = menu.bounds.clone();
+        let submenu = menu.submenu.and_then(|index| match entries.get(index) { Some(Entry::Item(item)) if !item.submenu.is_empty() => Some((index, item.submenu.clone())), _ => None });
+        let sub = submenu.as_ref().and_then(|(index, sub_entries)| {
+            let parent = menu.bounds.get()?;
+            let row_top: f32 = PADDING + entries[..*index].iter().map(entry_height).sum::<f32>();
+            let width = px(ESTIMATED_WIDTH);
+            let right = parent.right() - px(SUBMENU_OVERLAP);
+            let left = if right + width > menu.window_width - px(8.) { parent.left() - width + px(SUBMENU_OVERLAP) } else { right };
+            Some(self.render_menu_level(sub_entries, menu.sub_selected, None, true, cx)
+                .absolute().left(left).top(parent.top() + px(row_top - PADDING)))
         });
+        let has_sub = sub.is_some();
         div().id("tab-menu-backdrop").debug_selector(|| "tab-menu-backdrop".into()).size_full().key_context(CONTEXT).track_focus(&menu.focus)
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, _, _, cx| this.close_tab_menu(cx)))
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.close_tab_menu(cx)))
             .on_action(cx.listener(|this, _: &Next, _, cx| this.select_tab_menu(1, cx)))
             .on_action(cx.listener(|this, _: &Previous, _, cx| this.select_tab_menu(-1, cx)))
-            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
-                let index = this.tab_menu.as_ref().map_or(0, |menu| menu.selected);
-                this.confirm_tab_menu(index, window, cx);
-            }))
+            .on_action(cx.listener(|this, _: &OpenSubmenu, _, cx| this.open_tab_submenu(cx)))
+            .on_action(cx.listener(|this, _: &CloseSubmenu, _, cx| this.close_tab_submenu(cx)))
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| this.confirm_selected_tab_menu(window, cx)))
             .on_click(cx.listener(|this, _, _, cx| this.close_tab_menu(cx)))
-            .child(div().id("tab-context-menu").debug_selector(|| "tab-context-menu".into())
-                .absolute().left(menu.position.x).top(menu.position.y).w(px(WIDTH)).p_1()
-                .rounded_lg().bg(gpui::white()).shadow_lg().border_1().border_color(hsla(0., 0., 0., 0.15))
-                .flex().flex_col().max_h(menu.max_height).overflow_y_scroll().track_scroll(&menu.scroll).text_sm().text_color(gpui::black()).children(rows)
-                .on_click(|_, _, cx| cx.stop_propagation()))
+            .child(top.on_click(|_, _, cx| cx.stop_propagation())
+                .child(canvas(|_, _, _| (), move |painted, _, window, _| {
+                    bounds.set(Some(painted));
+                    if !has_sub { crate::panel::backdrop(window, "submenu", None, 0., crate::native::Material::Menu); }
+                }).absolute().inset_0()))
+            .children(sub.map(|sub| sub.on_click(|_, _, cx| cx.stop_propagation())))
             .into_any_element()
     }
+
+    /// One menu panel: rows, separators and headers; `nested` is a submenu.
+    fn render_menu_level(&self, entries: &[Entry], selected: Option<usize>, open: Option<usize>, nested: bool, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let checks = entries.iter().any(|entry| matches!(entry, Entry::Item(item) if item.checked));
+        let inset = if checks { CHECK_INSET } else { TEXT_INSET };
+        let rows = entries.iter().enumerate().map(|(index, entry)| match entry {
+            Entry::Separator => div().h(px(SEPARATOR_HEIGHT)).flex().items_center().pl(px(inset)).pr(px(17.))
+                .child(div().w_full().h(px(1.)).bg(hsla(0., 0., 1., 0.14))).into_any_element(),
+            Entry::Header(label) => div().h(px(ROW_HEIGHT)).flex().items_center().pl(px(inset)).pr(px(17.))
+                .text_color(hsla(0., 0., 1., 0.35)).child(*label).into_any_element(),
+            Entry::Item(item) => {
+                let highlighted = selected == Some(index) || open == Some(index);
+                let enabled = item.enabled;
+                let has_submenu = !item.submenu.is_empty();
+                let selector = item.selector();
+                let item_for_click = item.clone();
+                let id = SharedString::from(format!("{}-row-{index}", if nested { "submenu" } else { "menu" }));
+                div().id(id).h(px(ROW_HEIGHT)).mx(px(PADDING)).rounded(px(6.)).flex().items_center()
+                    .pl(px(inset - PADDING)).pr(px(12.)).gap(px(6.))
+                    .when(highlighted && enabled, |row| row.bg(hsla(211. / 360., 1., 0.5, 1.)).text_color(gpui::white()))
+                    .when(!enabled, |row| row.text_color(hsla(0., 0., 1., 0.3)))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        let Some(menu) = &mut this.tab_menu else { return; };
+                        if nested {
+                            if *hovered { menu.sub_selected = enabled.then_some(index); }
+                            else if menu.sub_selected == Some(index) { menu.sub_selected = None; }
+                        } else if *hovered {
+                            menu.selected = enabled.then_some(index);
+                            menu.submenu = (has_submenu && enabled).then_some(index);
+                            menu.sub_selected = None;
+                        } else if menu.selected == Some(index) && menu.submenu != Some(index) {
+                            menu.selected = None;
+                        }
+                        cx.notify();
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        if has_submenu {
+                            if let Some(menu) = &mut this.tab_menu { menu.selected = Some(index); menu.submenu = Some(index); }
+                            cx.notify();
+                        } else { this.confirm_menu_item(item_for_click.clone(), window, cx); }
+                    }))
+                    .when(checks, |row| row.child(div().absolute().left(px(PADDING + 4.)).top(px(3.))
+                        .when(item.checked, |slot| slot.child(crate::icons::check(0., 0.8)))))
+                    .when_some(item.icon.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id)), |row, tab| row.child(div().size(px(16.)).flex_none().flex().items_center().justify_center()
+                        .child(self.render_favicon(tab, self.accent()))))
+                    .child(div().debug_selector(move || selector.clone()).flex_1().whitespace_nowrap().child(item.label.clone()))
+                    .when_some(item.shortcut, |row, shortcut| row.child(div().ml(px(24.)).whitespace_nowrap()
+                        .text_color(if highlighted && enabled { hsla(0., 0., 1., 0.85) } else { hsla(0., 0., 1., 0.4) }).child(shortcut)))
+                    .when(has_submenu, |row| row.child(div().ml(px(24.)).child(submenu_chevron())))
+                    .relative()
+                    .into_any_element()
+            }
+        });
+        let id = if nested { "tab-context-submenu" } else { "tab-context-menu" };
+        crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }).debug_selector(move || id.into())
+            .min_w(px(MIN_WIDTH)).py(px(PADDING)).flex().flex_col().children(rows)
+    }
+}
+
+/// The submenu arrow: a fixed vector chevron, never a font glyph.
+fn submenu_chevron() -> AnyElement {
+    canvas(|_, _, _| (), |bounds, _, window, _| {
+        let color = window.text_style().color;
+        let at = |x: f32, y: f32| bounds.origin + point(px(x), px(y));
+        let mut path = gpui::PathBuilder::stroke(px(1.5));
+        path.move_to(at(2.5, 2.));
+        path.line_to(at(6.5, 6.));
+        path.line_to(at(2.5, 10.));
+        if let Ok(path) = path.build() { window.paint_path(path, color); }
+    }).w(px(9.)).h(px(12.)).flex_none().into_any_element()
 }
