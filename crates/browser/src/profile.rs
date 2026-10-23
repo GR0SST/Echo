@@ -16,6 +16,7 @@ pub(crate) struct Profile {
     path: Option<PathBuf>,
     saved: Option<String>,
     _save_on_quit: Option<Subscription>,
+    _observe_history: Option<Subscription>,
 }
 
 impl Profile {
@@ -32,7 +33,7 @@ impl Profile {
     }
 
     fn save_session_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if self.data.borrow().is_private() || self.path.is_some() { return; }
+        if self.data.borrow().is_private() || self.data.borrow().is_blank() || self.path.is_some() { return; }
         self.path = Some(path);
         self._save_on_quit = Some(cx.on_app_quit(|this, _| { this.flush(); async {} }));
         cx.spawn(async move |this, cx| loop {
@@ -59,6 +60,8 @@ pub(crate) struct ProfileHandle {
     pending: Rc<Cell<bool>>,
     executor: ForegroundExecutor,
     app: AsyncApp,
+    // Retains the actual normal profile (and its session writer), never a window snapshot.
+    history_source: Option<Box<ProfileHandle>>,
 }
 
 impl ProfileHandle {
@@ -79,15 +82,67 @@ impl ProfileHandle {
                 }).is_err() { break; }
             }).detach();
             Profile { data: data.clone(), drafts: drafts.clone(), selections: selections.clone(), revision: revision.clone(),
-                path: None, saved: None, _save_on_quit: None }
+                path: None, saved: None, _save_on_quit: None, _observe_history: None }
         });
         Self { owner, data, drafts, selections, revision, pending: Rc::default(),
-            executor: cx.foreground_executor().clone(), app: cx.to_async() }
+            executor: cx.foreground_executor().clone(), app: cx.to_async(), history_source: None }
+    }
+
+    /// Blank owns its tabs, archive, IDs and selections; only browsing history
+    /// belongs to this specific retained normal profile, across all its Spaces.
+    /// Other normal profiles remain isolated. Callers launching from Incognito
+    /// must pass their retained normal handle, never the private window's handle.
+    pub(crate) fn new_with_shared_history(browser: Browser, normal_source: &ProfileHandle, cx: &mut App) -> Self {
+        assert!(browser.is_blank() && !browser.is_private(), "Shared history requires a Blank model");
+        assert!(!normal_source.data.borrow().is_private() && !normal_source.data.borrow().is_blank(),
+            "Blank history must come from the retained normal profile");
+        let mut handle = Self::new(browser, cx);
+        handle.history_source = Some(Box::new(normal_source.clone()));
+        handle.sync_history();
+        let source = normal_source.data.clone();
+        handle.owner.update(cx, |profile, cx| {
+            profile._observe_history = Some(cx.observe(&normal_source.owner, move |profile, _, cx| {
+                let history = source.borrow().history.clone();
+                let mut browser = profile.data.borrow_mut();
+                browser.history = history;
+                drop(browser);
+                profile.revision.set(profile.revision.get().wrapping_add(1));
+                cx.notify();
+            }));
+        });
+        handle
+    }
+
+    fn sync_history(&self) {
+        if let Some(source) = &self.history_source {
+            self.data.borrow_mut().history = source.data.borrow().history.clone();
+        }
+    }
+
+    /// Sync before every edit, including edits unrelated to history: an older
+    /// Blank projection must never overwrite visits recorded by another window.
+    fn edit<R>(&self, edit: impl FnOnce(&mut Browser) -> R) -> R {
+        self.sync_history();
+        let result = edit(&mut self.data.borrow_mut());
+        if let Some(source) = &self.history_source {
+            let history = self.data.borrow().history.clone();
+            let mut normal = source.data.borrow_mut();
+            if !same_history(&normal.history, &history) {
+                normal.history = history;
+                drop(normal);
+                source.revision.set(source.revision.get().wrapping_add(1));
+                source.notify();
+            }
+        }
+        result
     }
 
     pub(crate) fn selection(&self) -> WindowSelection { self.data.borrow().window_selection() }
     pub(crate) fn new_window_selection(&self) -> WindowSelection { self.data.borrow().new_window_selection() }
-    pub(crate) fn projection(&self, selection: &WindowSelection) -> WindowProjection { self.data.borrow().window_projection(selection) }
+    pub(crate) fn projection(&self, selection: &WindowSelection) -> WindowProjection {
+        self.sync_history();
+        self.data.borrow().window_projection(selection)
+    }
 
     fn notify(&self) {
         if self.pending.replace(true) { return; }
@@ -155,12 +210,11 @@ impl BrowserWindow {
     }
 
     pub(crate) fn edit_browser<R>(&mut self, edit: impl FnOnce(&mut Browser) -> R) -> R {
-        let (result, projection) = {
-            let mut browser = self.profile.handle.data.borrow_mut();
+        let (result, projection) = self.profile.handle.edit(|browser| {
             let result = browser.edit_in_window(&mut self.profile.selection, edit);
             let projection = browser.window_projection(&self.profile.selection);
             (result, projection)
-        };
+        });
         let selection_changed = self.browser.space().id != projection.space().id
             || self.browser.space().active_tab != projection.space().active_tab;
         if selection_changed && self.command_bar.is_none() && self.tab_rename.is_none() {
@@ -177,11 +231,10 @@ impl BrowserWindow {
     /// Renderer metadata changes shared data without choosing this window as
     /// the session's active window. Background loads must not steal selection.
     pub(crate) fn edit_profile<R>(&mut self, edit: impl FnOnce(&mut Browser) -> R) -> R {
-        let (result, projection) = {
-            let mut browser = self.profile.handle.data.borrow_mut();
-            let result = edit(&mut browser);
+        let (result, projection) = self.profile.handle.edit(|browser| {
+            let result = edit(browser);
             (result, browser.window_projection(&self.profile.selection))
-        };
+        });
         self.publish_profile_edit(projection);
         result
     }
@@ -215,3 +268,12 @@ fn session_json(data: &RefCell<Browser>, drafts: &RefCell<Vec<Weak<RefCell<Optio
     }
     browser_core::session::to_json(&browser)
 }
+
+fn same_history(a: &[browser_core::history::HistoryEntry], b: &[browser_core::history::HistoryEntry]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)|
+        a.url == b.url && a.title == b.title && a.visited_at == b.visited_at)
+}
+
+#[cfg(test)]
+#[path = "blank_history_tests.rs"]
+mod blank_history_tests;
