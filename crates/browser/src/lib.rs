@@ -11,6 +11,7 @@ mod site_controls;
 mod panel;
 mod favicon_style;
 mod new_menu;
+mod new_window;
 mod audio;
 mod split_layout;
 mod split;
@@ -31,6 +32,8 @@ pub mod window;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod new_window_tests;
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -137,22 +140,18 @@ const APP_NAME: &str = "Echo";
 /// The profile folder used before the app was named.
 const LEGACY_APP_NAME: &str = "Browser";
 
-/// Opens the main browser window, restoring the last saved session.
+/// Opens the main browser window, retaining the normal profile across reopen.
 fn open_browser_window(cx: &mut App) {
-    open_window_with_privacy(false, cx);
+    new_window::open(false, cx);
 }
 
 fn open_incognito_window(cx: &mut App) {
-    open_window_with_privacy(true, cx);
-}
-
-fn open_window_with_privacy(private: bool, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
-                title: Some(if private { "Echo — Incognito" } else { APP_NAME }.into()),
+                title: Some("Echo — Incognito".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))),
             }),
@@ -160,13 +159,9 @@ fn open_window_with_privacy(private: bool, cx: &mut App) {
         },
         |window, cx| {
             let profile = profile_dir();
-            let session = profile.join("session.json");
-            let engine = start_engine(window, &profile.join("Chromium"), private);
+            let engine = start_engine(window, &profile.join("Chromium"), true);
             let view = cx.new(|cx| {
-                let browser = if private { Browser::new_private() } else { load_session(&session) };
-                let mut view = BrowserWindow::new(browser, engine, window, cx);
-                if !private { view.save_session_to(session, cx); }
-                view
+                BrowserWindow::new(Browser::new_private(), engine, window, cx)
             });
             view.read(cx).focus(window);
             view
@@ -174,16 +169,14 @@ fn open_window_with_privacy(private: bool, cx: &mut App) {
     )
     .unwrap();
     cx.activate(true);
-    if private {
-        // AppKit finishes returning focus from the old Command Bar after
-        // its key event unwinds. Present the input on the next event-loop turn.
-        cx.spawn(async move |cx| {
-            let _ = handle.update(cx, |view, window, cx| {
-                window.activate_window();
-                view.open_private_command_bar(window, cx);
-            });
-        }).detach();
-    }
+    // AppKit finishes returning focus from the old Command Bar after
+    // its key event unwinds. Present the input on the next event-loop turn.
+    cx.spawn(async move |cx| {
+        let _ = handle.update(cx, |view, window, cx| {
+            window.activate_window();
+            view.open_private_command_bar(window, cx);
+        });
+    }).detach();
 }
 
 /// Handles platform reopen requests, including clicks on the macOS Dock icon.

@@ -13,6 +13,7 @@ actions!(
         ZoomWindow,
         ToggleFullscreen,
         CloseWindow,
+        NewWindow,
         NewIncognitoWindow,
         RenameSpace,
         RenameTab,
@@ -27,6 +28,8 @@ actions!(
 );
 
 pub(crate) fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None)]);
+    cx.on_action(|_: &NewWindow, cx| { cx.defer(|cx| crate::new_window::open(true, cx)); });
     cx.on_action(|_: &NewIncognitoWindow, cx| { cx.defer(crate::open_incognito_window); });
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &HideApp, cx| native::set_app_visibility(native::AppVisibility::Hide, cx));
@@ -75,6 +78,7 @@ pub(crate) fn build() -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Tab…", window::OpenCommandBar),
+                MenuItem::action("New Window", NewWindow),
                 MenuItem::action("New Incognito Window", NewIncognitoWindow),
                 MenuItem::action("Open Location…", window::EditCurrentUrl),
                 MenuItem::action("Restore Last Closed Tab", window::RestoreTab),

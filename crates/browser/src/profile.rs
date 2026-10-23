@@ -19,10 +19,6 @@ pub(crate) struct Profile {
 }
 
 impl Profile {
-    fn projection(&self, selection: &WindowSelection) -> WindowProjection {
-        self.data.borrow().window_projection(selection)
-    }
-
     fn session_json(&self) -> String { session_json(&self.data, &self.drafts) }
 
     fn flush(&mut self) {
@@ -123,14 +119,8 @@ impl ProfileBinding {
         let protected = Rc::new(RefCell::new(selection.selected_tabs().collect()));
         handle.drafts.borrow_mut().push(Rc::downgrade(&draft));
         handle.selections.borrow_mut().push(Rc::downgrade(&protected));
-        let observe_profile = cx.observe(&handle.owner, |window, owner, cx| {
-            if window.profile.revision != window.profile.handle.revision.get() {
-                let projection = owner.read(cx).projection(&window.profile.selection);
-                window.receive_profile_projection(projection);
-                window.profile.selection = window.browser.window_selection();
-                window.profile.remember_selection();
-                window.profile.revision = window.profile.handle.revision.get();
-            }
+        let observe_profile = cx.observe(&handle.owner, |window, _, cx| {
+            window.refresh_profile_projection();
             cx.notify();
         });
         let observe_window = cx.observe_self(|window, _| window.profile.remember_draft(&window.split_draft));
@@ -155,6 +145,15 @@ impl ProfileBinding {
 }
 
 impl BrowserWindow {
+    pub(crate) fn refresh_profile_projection(&mut self) {
+        if self.profile.revision == self.profile.handle.revision.get() { return; }
+        let projection = self.profile.handle.projection(&self.profile.selection);
+        self.receive_profile_projection(projection);
+        self.profile.selection = self.browser.window_selection();
+        self.profile.remember_selection();
+        self.profile.revision = self.profile.handle.revision.get();
+    }
+
     pub(crate) fn edit_browser<R>(&mut self, edit: impl FnOnce(&mut Browser) -> R) -> R {
         let (result, projection) = {
             let mut browser = self.profile.handle.data.borrow_mut();
@@ -162,6 +161,23 @@ impl BrowserWindow {
             let projection = browser.window_projection(&self.profile.selection);
             (result, projection)
         };
+        self.publish_profile_edit(projection);
+        result
+    }
+
+    /// Renderer metadata changes shared data without choosing this window as
+    /// the session's active window. Background loads must not steal selection.
+    pub(crate) fn edit_profile<R>(&mut self, edit: impl FnOnce(&mut Browser) -> R) -> R {
+        let (result, projection) = {
+            let mut browser = self.profile.handle.data.borrow_mut();
+            let result = edit(&mut browser);
+            (result, browser.window_projection(&self.profile.selection))
+        };
+        self.publish_profile_edit(projection);
+        result
+    }
+
+    fn publish_profile_edit(&mut self, projection: WindowProjection) {
         if self.browser.space().id == projection.space().id && self.browser.active_space != projection.active_space {
             self.reset_profile_pager(projection.active_space);
         }
@@ -172,7 +188,6 @@ impl BrowserWindow {
         self.profile.handle.revision.set(revision);
         self.profile.revision = revision;
         self.profile.handle.notify();
-        result
     }
 }
 

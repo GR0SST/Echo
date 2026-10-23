@@ -52,7 +52,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Tab… (opens the Command Bar) | ⌘T | done | — |
-| New Window | ⌘N | missing | GPUI uses one editable profile/session owner and read-only window projections. CEF has a live host-transfer API; a macOS native probe retained the renderer identity, form input and navigation without reloading the page. Windows/X11 shims still need native verification. The shared page pool and menu/shortcut action are not wired yet |
+| New Window | ⌘N | partial | File menu, shortcut and Command Bar open normal windows sharing the profile and one live CEF page per TabId. The source Space is inherited with no selected page in any Space and the Command Bar focused. Selection is independent; transferring and closing a hosting window retain document input and navigation history. Normal state survives Dock reopen and stays separate from private windows. Verified in bundled Echo on macOS. Inactive windows still need a visual representation of a page hosted elsewhere; Windows/X11 hosting and remaining window states need native verification |
 | Blank Window | ⌃⌘N | missing | — |
 | New Incognito Window | ⇧⌘N | partial | File menu, shortcut and Command Bar open independent private tab lists. CEF cookies and localStorage are shared only among live private windows, isolated from regular browsing and discarded after the last private window closes. Private visits and sessions are not saved; closed tabs can be restored in memory. Verified against installed Arc and bundled Echo. Private menu/action availability and remaining visual states still need parity work |
 | New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
@@ -530,8 +530,8 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted.
 
 - **done**: 72
-- **partial**: 52
-- **missing**: 177
+- **partial**: 53
+- **missing**: 176
 
 ### Biggest gaps (by importance for parity)
 

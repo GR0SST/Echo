@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::{cell::RefCell, rc::Rc};
 
 use browser_core::{Browser, TabId};
 use engine::{Bounds, Engine, Event, ViewId};
@@ -11,6 +12,8 @@ use engine::{Bounds, Engine, Event, ViewId};
 /// app and by a recording fake in tests.
 pub trait WebEngine {
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId>;
+    fn create_in_host(&mut self, _parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> { self.create(url, bounds) }
+    fn focus_ui_in_host(&mut self, _parent: *mut c_void) { self.focus_ui(); }
     /// Transfer an existing native page. Engines without native hosting reject it.
     fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
@@ -54,6 +57,11 @@ pub const CONTENT_INSET: f32 = 8.0;
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
 impl WebEngine for Chromium {
+    fn create_in_host(&mut self, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
+        let parent = if parent.is_null() { self.parent } else { parent };
+        self.engine.create_view(parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS))
+    }
+    fn focus_ui_in_host(&mut self, parent: *mut c_void) { self.engine.focus_parent(if parent.is_null() { self.parent } else { parent }); }
     fn create(&mut self, url: &str, bounds: Bounds) -> Option<ViewId> {
         self.engine
             .create_view(self.parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS))
@@ -118,6 +126,9 @@ pub struct PageState {
 }
 
 struct Page {
+    owner: u64,
+    frame: Bounds,
+    visible: bool,
     view: ViewId,
     /// The URL the engine is showing or was last told to load.
     url: String,
@@ -134,9 +145,21 @@ struct PageIntent {
     internal: bool,
 }
 
-pub struct Pages {
+struct PageStore {
     engine: Box<dyn WebEngine>,
     pages: HashMap<TabId, Page>,
+    hosts: HashMap<u64, *mut c_void>,
+    next_host: u64,
+    active_host: u64,
+    events: Vec<Event>,
+}
+
+pub struct Pages {
+    store: Rc<RefCell<PageStore>>,
+    host: u64,
+    parent: *mut c_void,
+    page_focus: bool,
+    preserve_ui_focus: bool,
     wanted: Vec<PageIntent>,
     wanted_focus: Option<TabId>,
     axis: browser_core::splits::Axis,
@@ -149,8 +172,12 @@ pub struct Pages {
 impl Pages {
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
         Self {
-            engine,
-            pages: HashMap::new(),
+            store: Rc::new(RefCell::new(PageStore { engine, pages: HashMap::new(), hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+                events: Vec::new() })),
+            host: 1,
+            parent: std::ptr::null_mut(),
+            page_focus: true,
+            preserve_ui_focus: false,
             wanted: Vec::new(),
             wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal,
@@ -161,15 +188,73 @@ impl Pages {
         }
     }
 
+    /// Creates an independent layout over the same live pages and engine.
+    /// The new host cannot take another window's page until explicitly activated.
+    pub fn for_host(&self, parent: *mut c_void) -> Self {
+        let mut store = self.store.borrow_mut();
+        store.next_host += 1;
+        let host = store.next_host;
+        store.hosts.insert(host, parent);
+        Self { store: self.store.clone(), host, parent, page_focus: true, preserve_ui_focus: false, wanted: Vec::new(), wanted_focus: None,
+            axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None }
+    }
+
+    pub fn set_parent(&mut self, parent: *mut c_void) {
+        self.parent = parent;
+        self.store.borrow_mut().hosts.insert(self.host, parent);
+    }
+
+    /// Called when a browser root becomes active, before reconciling its layout.
+    pub fn activate_host(&mut self, browser: &Browser) {
+        {
+            let mut store = self.store.borrow_mut();
+            if store.active_host != self.host { self.shown = None; }
+            store.active_host = self.host;
+        }
+        // Rebuild intent from the freshly projected model before transferring:
+        // the previous window may have navigated while this host was inactive.
+        self.preserve_ui_focus = !self.page_focus;
+        self.sync(browser, true);
+        self.preserve_ui_focus = false;
+    }
+
+    /// Call before destroying the native parent. Unselected live pages are
+    /// parked, hidden, in another surviving host until selected there.
+    pub fn release_host(&mut self) {
+        let mut store = self.store.borrow_mut();
+        if store.hosts.remove(&self.host).is_none() { return; }
+        let destination = store.hosts.iter().filter(|(_, parent)| !parent.is_null())
+            .min_by_key(|(host, _)| **host).map(|(host, parent)| (*host, *parent));
+        let owned: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(tab, _)| *tab).collect();
+        for tab in owned {
+            let PageStore { engine, pages, .. } = &mut *store;
+            let page = pages.get_mut(&tab).unwrap();
+            if let Some((host, _)) = destination.filter(|(_, parent)| engine.move_view(page.view, *parent, page.frame)) {
+                engine.set_visible(page.view, false);
+                page.visible = false;
+                page.state.status.clear();
+                page.owner = host;
+            } else {
+                // A rejected native transfer must never leave a child attached
+                // to a window that is about to be destroyed.
+                engine.close(page.view);
+                pages.remove(&tab);
+            }
+        }
+        if store.active_host == self.host { store.active_host = destination.map_or(0, |(host, _)| host); }
+        self.visible.clear();
+        self.shown = None;
+    }
+
     pub fn state(&self, tab: TabId) -> PageState {
-        self.pages
+        self.store.borrow().pages
             .get(&tab)
             .map(|page| page.state.clone())
             .unwrap_or_default()
     }
 
     pub fn tab_for(&self, view: ViewId) -> Option<TabId> {
-        self.pages
+        self.store.borrow().pages
             .iter()
             .find_map(|(tab, page)| (page.view == view).then_some(*tab))
     }
@@ -177,20 +262,23 @@ impl Pages {
     /// Reconciles views with the model. `visible` is false while UI covers
     /// the page (the command bar), since native views draw above the UI.
     pub fn sync(&mut self, browser: &Browser, visible: bool) {
-        let open: Vec<TabId> = browser.all_tabs().filter(|tab| !browser_core::omnibox::is_internal_url(&tab.url)).map(|tab| tab.id).collect();
-        let closed: Vec<TabId> = self
-            .pages
-            .keys()
-            .filter(|tab| !open.contains(tab))
-            .copied()
-            .collect();
-        for tab in closed {
-            let page = self.pages.remove(&tab).unwrap();
-            self.engine.close(page.view);
-            self.visible.remove(&tab);
-            if self.shown == Some(tab) {
-                self.shown = None;
-                self.engine.focus_ui();
+        {
+            let mut store = self.store.borrow_mut();
+            let PageStore { engine, pages, .. } = &mut *store;
+            let open: Vec<TabId> = browser.all_tabs().filter(|tab| !browser_core::omnibox::is_internal_url(&tab.url)).map(|tab| tab.id).collect();
+            let closed: Vec<TabId> = pages
+                .keys()
+                .filter(|tab| !open.contains(tab))
+                .copied()
+                .collect();
+            for tab in closed {
+                let page = pages.remove(&tab).unwrap();
+                engine.close(page.view);
+                self.visible.remove(&tab);
+                if self.shown == Some(tab) {
+                    self.shown = None;
+                    if page.owner == self.host { engine.focus_ui_in_host(self.parent); }
+                }
             }
         }
 
@@ -220,14 +308,16 @@ impl Pages {
 
     /// Applies mute intent even when an occluded window is not rendering.
     pub fn sync_audio(&mut self, browser: &Browser) {
+        let mut store = self.store.borrow_mut();
+        let PageStore { engine, pages, .. } = &mut *store;
         for intent in &mut self.wanted {
             if let Some(tab) = browser.all_tabs().find(|tab| tab.id == intent.tab) { intent.muted = tab.muted; }
         }
         // Muting a background tab must not activate or load it.
         for tab in browser.all_tabs() {
-            if let Some(page) = self.pages.get_mut(&tab.id) {
-                if page.muted != tab.muted || self.engine.audio_muted(page.view).is_some_and(|actual| actual != tab.muted) {
-                    self.engine.set_audio_muted(page.view, tab.muted);
+            if let Some(page) = pages.get_mut(&tab.id) {
+                if page.muted != tab.muted || engine.audio_muted(page.view).is_some_and(|actual| actual != tab.muted) {
+                    engine.set_audio_muted(page.view, tab.muted);
                     page.muted = tab.muted;
                 }
             }
@@ -237,14 +327,16 @@ impl Pages {
     /// Unloads a tab's page, e.g. a closed pinned tab that stays in the
     /// sidebar. It loads again when the tab is next shown.
     pub fn discard(&mut self, tab: TabId) {
-        let Some(page) = self.pages.remove(&tab) else {
+        let mut store = self.store.borrow_mut();
+        let PageStore { engine, pages, .. } = &mut *store;
+        let Some(page) = pages.remove(&tab) else {
             return;
         };
-        self.engine.close(page.view);
+        engine.close(page.view);
         self.visible.remove(&tab);
         if self.shown == Some(tab) {
             self.shown = None;
-            self.engine.focus_ui();
+            engine.focus_ui_in_host(self.parent);
         }
     }
 
@@ -261,55 +353,74 @@ impl Pages {
         let frames = self.pane_bounds();
         let wanted: Vec<_> = self.wanted.iter().zip(frames).filter(|(intent, frame)| !intent.internal && frame.page.width >= 1. && frame.page.height >= 1.)
             .map(|(intent, frame)| (intent.clone(), frame.page)).collect();
+        let mut store = self.store.borrow_mut();
+        let active = store.active_host == self.host;
+        let PageStore { engine, pages, .. } = &mut *store;
         let ids: HashSet<_> = wanted.iter().map(|(intent, _)| intent.tab).collect();
         let hidden: Vec<_> = self.visible.difference(&ids).copied().collect();
         for tab in hidden {
-            if let Some(page) = self.pages.get_mut(&tab) {
+            if let Some(page) = pages.get_mut(&tab).filter(|page| page.owner == self.host) {
                 page.state.status.clear();
-                self.engine.set_visible(page.view, false);
+                engine.set_visible(page.view, false);
+                page.visible = false;
             }
             self.visible.remove(&tab);
         }
         let focused = self.wanted_focus.filter(|id| ids.contains(id));
         if self.shown.is_some() && (focused.is_none() || !self.shown.is_some_and(|id| ids.contains(&id))) {
             self.shown = None;
-            self.engine.focus_ui();
+            if active { engine.focus_ui_in_host(self.parent); }
         }
         let mut created = false;
         for (intent, bounds) in wanted {
             let PageIntent { tab, url, muted, .. } = intent;
-            match self.pages.get_mut(&tab) {
+            match pages.get_mut(&tab) {
                 Some(page) => {
+                    if page.owner != self.host {
+                        if !active || self.parent.is_null() || !engine.move_view(page.view, self.parent, bounds) { self.visible.remove(&tab); continue; }
+                        page.owner = self.host;
+                        self.visible.remove(&tab);
+                        created = true;
+                    }
                     if page.muted != muted {
-                        self.engine.set_audio_muted(page.view, muted);
+                        engine.set_audio_muted(page.view, muted);
                         page.muted = muted;
                     }
                     if page.url != url {
                         page.state.status.clear();
-                        self.engine.navigate(page.view, &url);
+                        engine.navigate(page.view, &url);
                         page.url = url;
                     }
-                    self.engine.set_bounds(page.view, bounds);
+                    engine.set_bounds(page.view, bounds);
+                    page.frame = bounds;
                 }
                 None => {
-                    let Some(view) = self.engine.create(&url, bounds) else { continue; };
+                    if !active { continue; }
+                    let Some(view) = engine.create_in_host(self.parent, &url, bounds) else { continue; };
                     created = true;
-                    if muted { self.engine.set_audio_muted(view, true); }
-                    self.pages.insert(tab, Page { view, url, state: PageState::default(), muted });
+                    if muted { engine.set_audio_muted(view, true); }
+                    pages.insert(tab, Page { owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted });
                 }
             }
-            self.engine.set_top_corners_rounded(self.pages[&tab].view, !self.split);
-            if self.visible.insert(tab) { self.engine.set_visible(self.pages[&tab].view, true); }
+            engine.set_top_corners_rounded(pages[&tab].view, !self.split);
+            let page = pages.get_mut(&tab).unwrap();
+            if !page.visible { engine.set_visible(page.view, true); page.visible = true; created = true; }
+            self.visible.insert(tab);
         }
         // Creating a native browser may take the responder even when the
         // intended active pane has not changed. Reassert it after all creates.
-        if focused != self.shown || created {
-            if let Some((tab, view)) = focused.and_then(|id| self.view(id).map(|view| (id, view))) {
-                self.engine.focus_page(view);
+        if active && !self.preserve_ui_focus && (focused != self.shown || created) {
+            if let Some((tab, view)) = focused.and_then(|id| pages.get(&id).filter(|page| page.owner == self.host).map(|page| (id, page.view))) {
+                engine.focus_page(view);
                 self.shown = Some(tab);
+                self.page_focus = true;
             } else if self.shown.take().is_some() || created {
-                self.engine.focus_ui();
+                if active { engine.focus_ui_in_host(self.parent); }
             }
+        }
+        if active && self.preserve_ui_focus {
+            self.shown = focused.filter(|tab| pages.get(tab).is_some_and(|page| page.owner == self.host));
+            if created { engine.focus_ui_in_host(self.parent); }
         }
     }
 
@@ -324,20 +435,23 @@ impl Pages {
     }
 
     pub fn surface_layout(&self) -> Vec<(TabId, Bounds)> {
-        self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.visible.contains(&intent.tab)).map(|(intent, frame)| (intent.tab, frame.page)).collect()
+        self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| (intent.tab, frame.page)).collect()
     }
 
-    pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) }
+    pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) && self.view(tab).is_some() }
 
     /// Transfers the native responder to GPUI without hiding the page.
     pub fn focus_ui(&mut self) {
-        self.engine.focus_ui();
+        self.page_focus = false;
+        self.store.borrow_mut().engine.focus_ui_in_host(self.parent);
     }
 
     /// Gives keyboard focus back to the page on screen.
     pub fn focus_shown(&mut self) {
-        if let Some(view) = self.shown.and_then(|tab| self.view(tab)) {
-            self.engine.focus_page(view);
+        self.page_focus = true;
+        if let Some((tab, view)) = self.wanted_focus.and_then(|tab| self.view(tab).map(|view| (tab, view))) {
+            self.store.borrow_mut().engine.focus_page(view);
+            self.shown = Some(tab);
         }
     }
 
@@ -345,11 +459,11 @@ impl Pages {
     pub fn move_to_host(&mut self, tab: TabId, parent: *mut c_void, bounds: Bounds) -> bool {
         if parent.is_null() { return false; }
         let Some(view) = self.view(tab) else { return false; };
-        self.engine.move_view(view, parent, bounds)
+        self.store.borrow_mut().engine.move_view(view, parent, bounds)
     }
 
     pub fn audio_muted(&self, tab: TabId) -> Option<bool> {
-        self.view(tab).and_then(|view| self.engine.audio_muted(view))
+        self.view(tab).and_then(|view| self.store.borrow_mut().engine.audio_muted(view))
     }
 
     pub fn shown(&self) -> Option<TabId> {
@@ -357,74 +471,93 @@ impl Pages {
     }
 
     fn view(&self, tab: TabId) -> Option<ViewId> {
-        self.pages.get(&tab).map(|page| page.view)
+        self.store.borrow().pages.get(&tab).filter(|page| page.owner == self.host).map(|page| page.view)
     }
 
     pub fn go_back(&mut self, tab: TabId) {
         if let Some(view) = self.view(tab) {
-            self.engine.go_back(view);
+            self.store.borrow_mut().engine.go_back(view);
         }
     }
 
     pub fn go_forward(&mut self, tab: TabId) {
         if let Some(view) = self.view(tab) {
-            self.engine.go_forward(view);
+            self.store.borrow_mut().engine.go_forward(view);
         }
     }
 
     pub fn undo(&mut self, tab: TabId) {
-        if let Some(view) = self.view(tab) { self.engine.undo(view); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.undo(view); }
     }
 
     pub fn redo(&mut self, tab: TabId) {
-        if let Some(view) = self.view(tab) { self.engine.redo(view); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.redo(view); }
     }
 
     pub fn reload(&mut self, tab: TabId) {
         if let Some(view) = self.view(tab) {
-            self.engine.reload(view);
+            self.store.borrow_mut().engine.reload(view);
         }
     }
 
     pub fn force_reload(&mut self, tab: TabId) {
-        if let Some(view) = self.view(tab) { self.engine.force_reload(view); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.force_reload(view); }
     }
 
     pub fn stop_loading(&mut self, tab: TabId) {
-        if let Some(view) = self.view(tab) { self.engine.stop_loading(view); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.stop_loading(view); }
     }
 
     pub fn zoom(&mut self, tab: TabId, direction: i32) {
-        if let Some(view) = self.view(tab) { self.engine.zoom(view, direction); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.zoom(view, direction); }
     }
 
     pub fn find(&mut self, tab: TabId, text: &str, forward: bool, next: bool) {
-        if let Some(view) = self.view(tab) { self.engine.find(view, text, forward, next); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.find(view, text, forward, next); }
     }
 
     pub fn stop_finding(&mut self, tab: TabId) {
-        if let Some(view) = self.view(tab) { self.engine.stop_finding(view); }
+        if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.stop_finding(view); }
     }
 
     pub fn pump_fn(&self) -> fn() {
-        self.engine.pump_fn()
+        self.store.borrow_mut().engine.pump_fn()
     }
 
     pub fn take_events(&mut self) -> Vec<Event> {
-        self.engine.take_events()
+        let mut store = self.store.borrow_mut();
+        let fresh = store.engine.take_events();
+        store.events.extend(fresh);
+        let queued = std::mem::take(&mut store.events);
+        let mut delivered = Vec::new();
+        for event in queued {
+            let owner = match &event {
+                Event::Shortcut(_) => Some(store.active_host),
+                Event::OpenInNewTab { opener, .. } => store.pages.values().find(|page| page.view == *opener).map(|page| page.owner),
+                Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
+                | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
+                | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } =>
+                    store.pages.values().find(|page| page.view == *view).map(|page| page.owner),
+            };
+            if owner == Some(self.host) { delivered.push(event); }
+            else if owner.is_some_and(|owner| store.hosts.contains_key(&owner)) { store.events.push(event); }
+        }
+        delivered
     }
 
     /// Records what the engine reported so it is not re-sent by `sync`.
     pub fn record(&mut self, event: &Event) {
+        let mut store = self.store.borrow_mut();
+        let PageStore { pages, .. } = &mut *store;
         match event {
             Event::EditFocusChanged { view, editable } => {
-                if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
             }
             Event::Focused { view } => {
-                if let Some(tab) = self.tab_for(*view).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); }
+                if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) { self.shown = Some(tab); self.page_focus = true; }
             }
             Event::UrlChanged { view, url } => {
-                if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
                     page.url = url.clone();
                     page.state.status.clear();
                 }
@@ -432,8 +565,8 @@ impl Pages {
             Event::StatusChanged { view, text } => {
                 // Hidden pages can still deliver callbacks queued before they
                 // were hidden. Never revive their old hover state.
-                if let Some(tab) = self.tab_for(*view).filter(|tab| self.visible.contains(tab)) {
-                    self.pages.get_mut(&tab).unwrap().state.status = text.clone();
+                if let Some(tab) = pages.iter().find_map(|(tab, page)| (page.view == *view && page.owner == self.host).then_some(*tab)).filter(|tab| self.visible.contains(tab)) {
+                    pages.get_mut(&tab).unwrap().state.status = text.clone();
                 }
             }
             Event::LoadingChanged {
@@ -442,7 +575,7 @@ impl Pages {
                 can_go_back,
                 can_go_forward,
             } => {
-                if let Some(page) = self.pages.values_mut().find(|page| page.view == *view) {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
                     page.state.loading = *loading;
                     page.state.can_go_back = *can_go_back;
                     page.state.can_go_forward = *can_go_forward;
@@ -452,4 +585,8 @@ impl Pages {
             Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut(_) | Event::FindResult { .. } => {}
         }
     }
+}
+
+impl Drop for Pages {
+    fn drop(&mut self) { self.release_host(); }
 }

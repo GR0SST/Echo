@@ -159,6 +159,7 @@ window_shortcuts! {
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
     "cmd-shift-w" => crate::menus::CloseWindow,
+    "cmd-n" => crate::menus::NewWindow,
     "cmd-shift-n" => crate::menus::NewIncognitoWindow,
     "ctrl-shift-=" => AddSplit,
     "ctrl-shift--" => CloseSplitPane,
@@ -361,6 +362,7 @@ pub enum Command {
     MoveToFolder,
     PinToFolder(FolderId),
     NewFolderWithTab,
+    NewWindow,
     NewIncognitoWindow,
     CollapseAllFolders,
     ExpandAllFolders,
@@ -600,11 +602,33 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::with_profile_pages(profile, selection, engine.map(Pages::new), window, cx)
+    }
+
+    pub(crate) fn with_profile_pages(
+        profile: crate::profile::ProfileHandle,
+        selection: Option<browser_core::windows::WindowSelection>,
+        pages: Option<Pages>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let selection = selection.unwrap_or_else(|| profile.new_window_selection());
         let browser = profile.projection(&selection);
         let profile = crate::profile::ProfileBinding::new(profile, selection, cx);
-        let pages = engine.map(|engine| Rc::new(RefCell::new(Pages::new(engine))));
+        let pages = pages.map(|mut pages| {
+            if let Some(parent) = crate::native::view_of(window) { pages.set_parent(parent); }
+            Rc::new(RefCell::new(pages))
+        });
         if let Some(pages) = pages.clone() {
+            let closing_pages = pages.clone();
+            window.on_window_should_close(cx, move |_, _| { closing_pages.borrow_mut().release_host(); true });
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.refresh_profile_projection();
+                    if let Some(pages) = &this.pages { pages.borrow_mut().activate_host(&this.browser); }
+                    cx.notify();
+                }
+            }).detach();
             let pump = pages.borrow().pump_fn();
             cx.spawn_in(window, async move |this, cx| loop {
                 cx.background_executor().timer(ENGINE_PUMP_INTERVAL).await;
@@ -631,6 +655,7 @@ impl BrowserWindow {
         let position = browser.active_space as f32;
         cx.on_release(|this, cx| {
             this.cancel_split_draft();
+            if let Some(pages) = &this.pages { pages.borrow_mut().release_host(); }
             this.profile.flush(cx);
             this.remove_child_windows(cx);
         }).detach();
@@ -689,6 +714,7 @@ impl BrowserWindow {
     /// Closing a window keeps its tabs in the session, unlike Archive Tab.
     pub(crate) fn close_window(&mut self, cx: &mut Context<Self>) {
         self.cancel_split_draft();
+        if let Some(pages) = &self.pages { pages.borrow_mut().release_host(); }
         self.remove_child_windows(cx);
         let main = self.main_window;
         cx.defer(move |cx| {
@@ -737,28 +763,28 @@ impl BrowserWindow {
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
                         if !title.is_empty() {
-                            self.edit_browser(|browser| browser.set_title(tab, title.clone()));
+                            self.edit_profile(|browser| browser.set_title(tab, title.clone()));
                             let url = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| entry.url.clone());
-                            if let Some(url) = url { self.edit_browser(|browser| browser.update_history_title(&url, &title)); }
+                            if let Some(url) = url { self.edit_profile(|browser| browser.update_history_title(&url, &title)); }
                         }
                     }
                 }
                 Event::Favicon { view, page_url, png } => {
-                    if pages.borrow().tab_for(view).is_some() { self.edit_browser(|browser| browser.cache_favicon(&page_url, png)); }
+                    if pages.borrow().tab_for(view).is_some() { self.edit_profile(|browser| browser.cache_favicon(&page_url, png)); }
                 }
                 Event::UrlChanged { view, url } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
-                        self.edit_browser(|browser| browser.set_url(tab, url.clone()));
-                        self.edit_browser(|browser| browser.record_visit(&url, SystemTime::now()));
+                        self.edit_profile(|browser| browser.set_url(tab, url.clone()));
+                        self.edit_profile(|browser| browser.record_visit(&url, SystemTime::now()));
                         let title = self.browser.all_tabs().find(|entry| entry.id == tab).and_then(|entry| entry.page_title.clone());
-                        if let Some(title) = title { self.edit_browser(|browser| browser.update_history_title(&url, &title)); }
+                        if let Some(title) = title { self.edit_profile(|browser| browser.update_history_title(&url, &title)); }
                     }
                 }
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
                 Event::EditFocusChanged { .. } => {},
                 Event::OpenInNewTab { url, .. } => {
                     let id = self.edit_browser(|browser| browser.new_tab(url.clone(), SystemTime::now()));
-                    self.edit_browser(|browser| browser.set_title(id, display_url(&url)));
+                    self.edit_profile(|browser| browser.set_title(id, display_url(&url)));
                 }
                 Event::Shortcut(shortcut) => {
                     // Actions update this view, so dispatch after this update ends.
@@ -779,7 +805,7 @@ impl BrowserWindow {
                 Event::LoadingChanged { view, loading: false, .. } => {
                     if let Some(tab) = pages.borrow().tab_for(view) {
                         let entry = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| (entry.url.clone(), entry.page_title.clone()));
-                        if let Some((url, Some(title))) = entry { self.edit_browser(|browser| browser.update_history_title(&url, &title)); }
+                        if let Some((url, Some(title))) = entry { self.edit_profile(|browser| browser.update_history_title(&url, &title)); }
                     }
                 }
                 Event::LoadingChanged { .. } => {}
@@ -1055,6 +1081,7 @@ impl BrowserWindow {
                 (Command::ArchiveSettings, "Archive Tabs After…", "archive tabs after|auto archive settings|change auto archiving", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
+                (Command::NewWindow, "New Window", "new window|open new window|create window|copy window|duplicate window", true),
                 (Command::NewIncognitoWindow, "New Incognito Window", "new incognito window|incognito|private window", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
                 (Command::ToggleSpaceHeader, if self.browser.space().show_header { "Hide Space Header" } else { "Show Space Header" }, if self.browser.space().show_header { "hide space header|toggle space header" } else { "show space header|toggle space header" }, true),
@@ -1385,6 +1412,7 @@ impl BrowserWindow {
             }
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.edit_space_name(None, cx),
+            Command::NewWindow => self.new_window(cx),
             Command::NewIncognitoWindow => {
                 self.close_command_bar(cx);
                 cx.defer(crate::open_incognito_window);
@@ -1463,6 +1491,7 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if this.command_bar.is_some() { this.close_command_bar(cx); }
@@ -2932,6 +2961,7 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_profile_projection();
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline(editor.tab)) {
             self.finish_tab_rename(true, cx);
         }
@@ -2971,6 +3001,7 @@ impl Render for BrowserWindow {
                 }
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
+            .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .when(self.tab_rename.is_none(), |this| this
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))

@@ -474,3 +474,47 @@ new third page and the first standalone tab. Echo currently invalidates a
 whole-item archive redo when its target has been regrouped. This is a known
 remaining mismatch, distinct from pane-close Redo's whole-group behavior, and
 is tracked in the partial Undo/Redo row. The temporary Arc window was closed.
+
+
+### Shared normal windows and live page ownership — 2026-10-23
+
+The earlier installed-Arc check recorded shared Today, Pinned, Favorites and
+Spaces, empty per-Space selections in a new window, a focused Command Bar,
+and a single live document when the same tab is selected in another window.
+This implementation keeps the normal profile and CEF page pool together while
+each window owns its selection, layout and native parent. Pages are keyed by
+TabId, so two tabs with the same URL remain distinct documents. The active
+window transfers an existing native view instead of creating another browser.
+Renderer callbacks are delivered once, in FIFO order, to the current host.
+Background metadata updates do not replace the session's selected window.
+
+A bundled Echo run used a fresh profile and a local form fixture. It loaded
+/A then /B, typed `pool-before`, opened a new window with Cmd+N, selected the
+existing tab through the Command Bar and appended `-new`. Returning to the
+original window retained the same document token and input. The second window
+then reclaimed the page and was closed with Shift+Cmd+W; the original window
+accepted `-closed` in the same input. All five /B dumps carried document token
+`180587e2-216e-4a50-86f5-158af88c469e`. Fixture requests were exactly
+`/A`, `/B`, `/A`, with the final /A reached through Back. No /B request was
+repeated during transfer or window closure. The empty-window Command Bar,
+second-window page, restored original page, post-close input and Back result
+were visually inspected. The guarded script completed without focus aborts
+or panics; an earlier run interrupted at an intentional activation was not
+counted as a complete verification.
+
+A second fresh-profile native run invoked File > New Window from Work. The
+new window inherited Work and had an open, empty Command Bar; Research and
+Personal also had no selected page. The named New Window action opened another
+normal window. After loading a disposable private-only page, Cmd+N from its
+native page opened a normal window with the retained regular sidebar and no
+private tab. Both final Command Bar screenshots were inspected. No system
+mouse movement or clipboard was used.
+
+All 426 workspace tests passed (301 browser, 123 core, 2 engine), including
+shared-page event order, activation with a stale prior URL, inline-editor
+focus, split-pane transfer, closure of the hosting window, transfer rejection,
+same-URL distinct tabs, menu/shortcut/Command Bar routing, private-to-normal
+isolation and normal-profile retention after all windows close. Inactive
+windows do not yet mirror a page hosted in another window; their exact Arc
+representation still needs a simultaneous-window reference capture. Windows
+and X11 native checks remain pending. New Window therefore remains partial.

@@ -46,7 +46,6 @@ struct HostTransfer {
     target: gpui::WindowHandle<BrowserWindow>,
     pages: std::rc::Rc<std::cell::RefCell<crate::pages::Pages>>,
     tab: browser_core::TabId,
-    frame: engine::Bounds,
 }
 
 fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> Option<(HostTransfer, WeakEntity<BrowserWindow>, usize)> {
@@ -64,25 +63,42 @@ fn transfer_new_host(source: &WeakEntity<BrowserWindow>, cx: &mut AsyncApp) -> O
             titlebar: Some(gpui::TitlebarOptions { title: Some("Echo transfer probe".into()), appears_transparent: true,
                 traffic_light_position: Some(gpui::point(gpui::px(crate::window::TRAFFIC_LIGHT_X), gpui::px(crate::window::TRAFFIC_LIGHT_Y))) }),
             ..Default::default()
-        }, |window, cx| cx.new(|cx| BrowserWindow::with_profile(profile, Some(selection), None, window, cx))).ok()?;
+        }, |window, cx| {
+            let parent = crate::native::view_of(window).unwrap_or(std::ptr::null_mut());
+            let shared_pages = pages.borrow().for_host(parent);
+            cx.new(|cx| BrowserWindow::with_profile_pages(profile, Some(selection), Some(shared_pages), window, cx))
+        }).ok()?;
         let (parent, entity) = target.update(cx, |_, window, cx| {
             crate::native::view_of(window).map(|parent| (parent, cx.weak_entity()))
         }).ok().flatten()?;
-        if !pages.borrow_mut().move_to_host(tab, parent, frame) {
+        let attached = target.update(cx, |view, _, _| {
+            let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+            pages.sync(&view.browser, true);
+            pages.set_bounds(frame);
+            pages.activate_host(&view.browser);
+            pages.is_visible(tab)
+        }).unwrap_or(false);
+        if !attached {
             let _ = target.update(cx, |_, window, _| window.remove_window());
             return None;
         }
         let _ = target.update(cx, |_, window, _| window.activate_window());
-        pages.borrow_mut().focus_shown();
+        let _ = target.update(cx, |view, _, _| view.pages.as_ref().unwrap().borrow_mut().focus_shown());
         Some((target, parent as usize, entity))
     }).ok().flatten()?;
-    Some((HostTransfer { source: source.clone(), source_view, source_window, target, pages, tab, frame }, target_entity, target_view))
+    Some((HostTransfer { source: source.clone(), source_view, source_window, target, pages, tab }, target_entity, target_view))
 }
 
 fn transfer_back(transfer: &HostTransfer, cx: &mut AsyncApp) -> bool {
     if transfer.source.upgrade().is_none() { return false; }
     if !cx.update(|cx| transfer.source_window.update(cx, |_, _, _| ()).is_ok()).unwrap_or(false) { return false; }
-    if !transfer.pages.borrow_mut().move_to_host(transfer.tab, transfer.source_view as *mut c_void, transfer.frame) { return false; }
+    let restored_page = cx.update(|cx| transfer.source.update(cx, |view, _| {
+        view.refresh_profile_projection();
+        let mut pages = transfer.pages.borrow_mut();
+        pages.activate_host(&view.browser);
+        pages.is_visible(transfer.tab)
+    }).unwrap_or(false)).unwrap_or(false);
+    if !restored_page { return false; }
     let restored = cx.update(|cx| {
         let _ = transfer.source_window.update(cx, |_, window, _| window.activate_window());
         transfer.pages.borrow_mut().focus_shown();
@@ -102,9 +118,9 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             eprintln!("[automation] {command}");
             let (name, arg) = command.split_once(' ').unwrap_or((command, ""));
             if name == "require-focus" { require_focus = true; }
-            // These commands do not send input and remain useful after a
-            // deliberate Close Window, especially for testing Dock reopen.
-            let after_close = matches!(name, "windows" | "reopen" | "window" | "quit");
+            // Explicit window selection/activation remains usable after a
+            // deliberate window switch or Close Window. Input still requires focus.
+            let after_close = matches!(name, "windows" | "reopen" | "window" | "activate" | "quit");
             if require_focus && !after_close && (view.upgrade().is_none() || !unsafe { has_browser_focus(ns_view) }) {
                 eprintln!("[automation] aborted: browser lost focus or is not on screen");
                 let _ = cx.update(|cx| cx.quit());

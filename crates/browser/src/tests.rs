@@ -6016,3 +6016,208 @@ fn cancelled_split_draft_with_cmd_w_keeps_a_previous_pane_close_redo(cx: &mut Te
     assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 0);
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
 }
+
+fn another_live_profile_window(a: &Entity<BrowserWindow>, visual: &mut VisualTestContext) -> (Entity<BrowserWindow>, VisualTestContext) {
+    let (profile, pages) = a.read_with(visual, |view, _| {
+        let mut pages = view.pages.as_ref().unwrap().borrow_mut();
+        pages.set_parent(1usize as *mut _);
+        (view.profile.handle.clone(), pages.for_host(2usize as *mut _))
+    });
+    let handle = visual.cx.update(|cx| {
+        use gpui::AppContext;
+        cx.open_window(gpui::WindowOptions::default(), |window, cx| cx.new(|cx| {
+            let view = BrowserWindow::with_profile_pages(profile, None, Some(pages), window, cx);
+            view.focus(window);
+            view
+        })).unwrap()
+    });
+    let view = handle.root(&mut visual.cx).unwrap();
+    let mut visual_b = VisualTestContext::from_window(handle.into(), &visual.cx);
+    view.update(&mut visual_b, |view, _| view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser));
+    visual_b.run_until_parked();
+    (view, visual_b)
+}
+
+#[gpui::test]
+fn shared_live_pages_move_once_and_route_events_to_the_host_window(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    fake.take_calls();
+    click(&mut visual_b, test_selector(format!("tab-{}", tab.get())));
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::MoveHost(1, 2, _))).count(), 1, "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))), "{calls:?}");
+    assert!(!a.read_with(visual_a, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(tab)));
+    assert!(b.read_with(&visual_b, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(tab)));
+    fake.send(&mut visual_b, Event::LoadingChanged { view: page(1), loading: false, can_go_back: true, can_go_forward: false });
+    fake.send(&mut visual_b, Event::UrlChanged { view: page(1), url: "https://shared.example/changed".into() });
+    for (view, visual) in [(&a, &mut *visual_a), (&b, &mut visual_b)] {
+        view.read_with(visual, |view, _| {
+            assert_eq!(view.browser.active_tab().unwrap().url, "https://shared.example/changed");
+            assert!(view.pages.as_ref().unwrap().borrow().state(tab).can_go_back);
+        });
+    }
+    visual_b.simulate_keystrokes("cmd-[");
+    assert!(fake.take_calls().contains(&Call::Back(1)));
+    a.update(visual_a, |view, _| view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser));
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::MoveHost(1, 1, _))), "{calls:?}");
+    b.update(&mut visual_b, |_, cx| cx.notify());
+    visual_b.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::MoveHost(..) | Call::Create(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn shared_live_pages_survive_closing_the_window_that_hosts_them(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    click(&mut visual_b, test_selector(format!("tab-{}", tab.get())));
+    fake.take_calls();
+    visual_b.simulate_keystrokes("cmd-shift-w");
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::MoveHost(1, 1, _))), "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::Close(..) | Call::Create(..))), "{calls:?}");
+    a.update(visual_a, |view, _| view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser));
+    assert!(a.read_with(visual_a, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(tab)));
+    assert!(fake.take_calls().contains(&Call::Visible(1, true)));
+    drop(b);
+}
+
+#[gpui::test]
+fn shared_live_pages_reject_a_failed_transfer_without_creating_a_duplicate(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    fake.0.borrow_mut().reject_move = true;
+    fake.take_calls();
+    click(&mut visual_b, test_selector(format!("tab-{}", tab.get())));
+    visual_b.simulate_keystrokes("cmd-r");
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::MoveHost(1, 2, _))), "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Reload(..))), "{calls:?}");
+    assert!(a.read_with(visual_a, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(tab)));
+    assert!(!b.read_with(&visual_b, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(tab)));
+}
+
+#[gpui::test]
+fn shared_live_pages_distinguish_two_tabs_with_the_same_url(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let url = active_url(&a, visual_a).unwrap();
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    fake.take_calls();
+    visual_b.simulate_keystrokes("cmd-t");
+    // A pasted URL is submitted as a new tab, even if a matching tab is suggested.
+    bar(&b, &mut visual_b).simulate_input(&url);
+    bar(&b, &mut visual_b).simulate_keystrokes("enter");
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::Create(2, loaded) if loaded == &url)), "{calls:?}");
+    assert_eq!(active_url(&a, visual_a), Some(url));
+}
+
+#[gpui::test]
+fn background_renderer_metadata_preserves_the_foreground_session_selection(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let (b, mut visual_b) = another_profile_window(&a, visual_a);
+    visual_b.simulate_keystrokes("cmd-t");
+    bar(&b, &mut visual_b).simulate_input("https://foreground.example");
+    bar(&b, &mut visual_b).simulate_keystrokes("enter");
+    let foreground = b.read_with(&visual_b, |view, _| view.browser.active_tab().unwrap().id);
+    fake.send(visual_a, Event::TitleChanged { view: page(1), title: "Background loaded".into() });
+    fake.send(visual_a, Event::UrlChanged { view: page(1), url: "https://background.example/redirect".into() });
+    let json = a.read_with(visual_a, |view, _| view.profile.session_json(&view.split_draft));
+    let restored = browser_core::session::from_json(&json).unwrap();
+    assert_eq!(restored.active_tab().unwrap().id, foreground);
+    assert_eq!(active_url(&b, &mut visual_b).as_deref(), Some("https://foreground.example"));
+}
+
+#[gpui::test]
+fn shared_live_split_moves_every_pane_and_closes_only_the_focused_page(cx: &mut TestAppContext) {
+    let (a, visual_a, fake) = open_split_pages(cx, 2);
+    let active = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    fake.take_calls();
+    click(&mut visual_b, test_selector(format!("sidebar-pane-{}", active.get())));
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::MoveHost(_, 2, _))).count(), 2, "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))), "{calls:?}");
+    assert_eq!(b.read_with(&visual_b, |view, _| view.pages.as_ref().unwrap().borrow().surface_layout().len()), 2);
+    visual_b.simulate_keystrokes("cmd-w");
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Close(_))).count(), 1, "{calls:?}");
+    assert!(calls.contains(&Call::Close(2)), "{calls:?}");
+    assert_eq!(b.read_with(&visual_b, |view, _| view.pages.as_ref().unwrap().borrow().surface_layout().len()), 1);
+    assert!(!a.read_with(visual_a, |view, _| view.browser.all_tabs().any(|tab| tab.id == active)));
+}
+
+#[gpui::test]
+fn queued_shared_page_callbacks_keep_fifo_order_when_the_page_changes_host(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    let old = Event::UrlChanged { view: page(1), url: "https://fifo.example/old".into() };
+    let new = Event::UrlChanged { view: page(1), url: "https://fifo.example/new".into() };
+    fake.0.borrow_mut().events.push(old.clone());
+    b.update(&mut visual_b, |view, _| assert!(view.pages.as_ref().unwrap().borrow_mut().take_events().is_empty()));
+    b.update(&mut visual_b, |view, _| {
+        view.edit_browser(|browser| browser.activate_tab(tab, std::time::SystemTime::now()));
+        view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser);
+    });
+    fake.0.borrow_mut().events.push(new.clone());
+    let events = b.update(&mut visual_b, |view, _| view.pages.as_ref().unwrap().borrow_mut().take_events());
+    assert_eq!(events, vec![old, new]);
+    a.update(visual_a, |view, _| assert!(view.pages.as_ref().unwrap().borrow_mut().take_events().is_empty()));
+}
+
+#[gpui::test]
+fn reactivating_a_host_refreshes_its_intent_before_moving_the_live_page(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(visual_a, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    click(&mut visual_b, test_selector(format!("tab-{}", tab.get())));
+    fake.take_calls();
+    // Both edits happen before profile notification or another render of A.
+    visual_a.cx.update(|cx| {
+        b.update(cx, |view, _| {
+            view.pages.as_ref().unwrap().borrow_mut().record(&Event::UrlChanged { view: page(1), url: "https://fresh.example/navigated".into() });
+            view.edit_profile(|browser| browser.set_url(tab, "https://fresh.example/navigated"));
+        });
+        a.update(cx, |view, _| {
+            view.refresh_profile_projection();
+            view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser);
+        });
+    });
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::MoveHost(1, 1, _))), "{calls:?}");
+    assert!(!calls.iter().any(|call| matches!(call, Call::Navigate(..) | Call::Create(..) | Call::Close(..))), "{calls:?}");
+    assert_eq!(active_url(&a, visual_a).as_deref(), Some("https://fresh.example/navigated"));
+}
+
+#[gpui::test]
+fn reactivating_a_shared_page_host_preserves_its_inline_editor_focus(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (a, visual_a) = open_with(cx, Some(Box::new(fake.clone())));
+    let (b, mut visual_b) = another_live_profile_window(&a, visual_a);
+    a.update(visual_a, |view, _| view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser));
+    double_click(visual_a, "tab-8");
+    visual_a.simulate_input("Draft name");
+    b.update(&mut visual_b, |view, _| view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser));
+    fake.take_calls();
+    a.update(visual_a, |view, _| view.pages.as_ref().unwrap().borrow_mut().activate_host(&view.browser));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))));
+    assert_eq!(inline_name(&a, visual_a).as_deref(), Some("Draft name"));
+    visual_a.simulate_input(" continued");
+    assert_eq!(inline_name(&a, visual_a).as_deref(), Some("Draft name continued"));
+    visual_a.simulate_keystrokes("enter");
+    fake.take_calls();
+    click(visual_a, "tab-7");
+    assert!(fake.take_calls().contains(&Call::FocusPage(2)));
+}
