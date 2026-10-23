@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use cef::*;
 mod editing;
 mod host;
+mod snapshot;
 pub use editing::subprocess_app;
+pub use snapshot::PageSnapshot;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -117,6 +119,7 @@ pub struct Engine {
     views: HashMap<ViewId, View>,
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
+    snapshots: snapshot::Snapshots,
     _runtime: std::rc::Rc<Runtime>,
     private_context: Option<std::rc::Rc<RequestContext>>,
 }
@@ -194,6 +197,7 @@ impl Engine {
             views: HashMap::new(),
             by_browser_id: HashMap::new(),
             next_id: 1,
+            snapshots: snapshot::Snapshots::default(),
             _runtime: runtime,
             private_context: None,
         })
@@ -491,7 +495,23 @@ impl Engine {
         }
     }
 
+    /// Captures the visible viewport of the same existing CEF browser without
+    /// navigation or emulation overrides. Returns false for an unknown/busy
+    /// view or submission failure; accepted requests complete via
+    /// [`Self::take_snapshots`]. Keep pumping CEF and polling for completions.
+    pub fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
+        let Some(page) = self.views.get(&view) else { return false };
+        self.snapshots.request(view, request, &page.browser)
+    }
+
+    /// Drains screenshot completions and expires requests after five seconds.
+    /// Closing a view discards its pending and completed screenshots.
+    pub fn take_snapshots(&mut self) -> Vec<PageSnapshot> {
+        self.snapshots.take()
+    }
+
     pub fn close(&mut self, id: ViewId) {
+        self.snapshots.close(id);
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
             if let Some(host) = view.browser.host() {

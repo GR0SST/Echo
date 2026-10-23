@@ -518,3 +518,38 @@ isolation and normal-profile retention after all windows close. Inactive
 windows do not yet mirror a page hosted in another window; their exact Arc
 representation still needs a simultaneous-window reference capture. Windows
 and X11 native checks remain pending. New Window therefore remains partial.
+
+
+### A shared tab's inactive-window presentation — 2026-10-23
+
+Two disposable normal Arc windows displayed the same local fixture on two
+fully visible displays (3840×2160 and 1920×1080). The fixture included an input,
+a half-second counter, a document UUID and copies of those values fixed at
+the right edge. It was created and selected using native keyboard/accessibility
+actions. AppleScript was authorized for window inspection and screen capture;
+System Events window positioning lacked Assistive Access, so the two existing
+displays were captured together instead. No permission or mouse position changed.
+
+Window A initially showed `reference-A`. After the same tab was selected in B,
+A retained a dimmed, frozen image with `reference-A`, counter 68 and its original
+viewport layout. B remained live, with `reference-B` and counter 269. Both carried
+document UUID `c2cf31bb-1b53-442e-bd38-49fe4e76d11c`. Source A's address field
+became the Search or Enter URL placeholder while its selected sidebar item
+remained. This is a per-window frozen image, not a continuously updated mirror.
+
+Cmd+` returned to A without navigation: it showed `reference-B`, counter 315
+and the same UUID at A's own viewport size. Inactive B retained `reference-B`
+and counter 301 at its original size. The simultaneous before/after and return
+captures were inspected. A roughly 30% dark overlay describes flat inactive
+page pixels; this estimate does not establish exact display-color calibration.
+The local tab was archived and both disposable windows were closed afterward.
+
+Echo's CEF layer now exposes asynchronous viewport capture of the existing
+windowed browser through the local DevTools observer transport. It does not
+create a browser, navigate, change device metrics or open DevTools UI. Results
+are correlated with caller generations; busy requests, submission failure,
+detach, timeout and closing a view are covered by seven engine tests. A native
+probe returned four page-only PNGs of the existing Home document before and
+after native host transfer. The per-window freeze/restore UI and marker-input
+validation remain separate integration work; this primitive does not complete
+New Window parity.
