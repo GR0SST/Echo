@@ -86,6 +86,10 @@ pub(crate) enum DownloadsIntent<Token> {
     },
 }
 
+/// Host responder intent for the list controls only; never the right preview.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DownloadsControlFocused;
+
 #[derive(Clone, Copy)]
 pub(crate) struct DownloadsColors {
     pub column: Hsla,
@@ -111,6 +115,8 @@ pub(crate) struct DownloadsView<Token: Clone + Eq + 'static> {
     input: Entity<TextInput>,
     filter_visible: bool,
     focus: FocusHandle,
+    controls_focus: FocusHandle,
+    _control_focus: Option<Subscription>,
     filter_focus: FocusHandle,
     done_focus: FocusHandle,
     profile_focus: Vec<(UserProfileId, FocusHandle)>,
@@ -125,6 +131,7 @@ pub(crate) struct DownloadsView<Token: Clone + Eq + 'static> {
 }
 
 impl<Token: Clone + Eq + 'static> EventEmitter<DownloadsIntent<Token>> for DownloadsView<Token> {}
+impl<Token: Clone + Eq + 'static> EventEmitter<DownloadsControlFocused> for DownloadsView<Token> {}
 
 impl<Token: Clone + Eq + 'static> Focusable for DownloadsView<Token> {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -155,6 +162,8 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             .collect();
         let mut view = Self {
             focus: cx.focus_handle(),
+            controls_focus: cx.focus_handle(),
+            _control_focus: None,
             filter_focus: cx.focus_handle(),
             done_focus: cx.focus_handle(),
             profile_focus,
@@ -173,6 +182,35 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
         };
         view.reconcile_item_keys();
         view
+    }
+
+    /// Install once after creation, with the actual host window. The scope is
+    /// attached to the left column, excluding History/Split/native preview.
+    pub(crate) fn observe_control_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self._control_focus.is_none() {
+            self._control_focus = Some(cx.on_focus_in(&self.controls_focus, window, |_, _, cx| {
+                cx.emit(DownloadsControlFocused);
+            }));
+        }
+    }
+
+    pub(crate) fn focused_control(&self, window: &Window, cx: &App) -> Option<FocusHandle> {
+        // Verify an actual current control, not a retained preview/root handle.
+        let focused = window.focused(cx)?;
+        self.is_control_available(&focused, cx).then_some(focused)
+    }
+
+    pub(crate) fn is_control_available(&self, focus: &FocusHandle, cx: &App) -> bool {
+        if self.filter_visible {
+            &self.done_focus == focus || self.profile_focus.iter().any(|(_, f)| f == focus)
+        } else {
+            &self.input.read(cx).focus_handle(cx) == focus || &self.filter_focus == focus
+        }
+    }
+
+    pub(crate) fn set_colors(&mut self, colors: DownloadsColors, cx: &mut Context<Self>) {
+        self.colors = colors;
+        cx.notify();
     }
 
     fn reconcile_item_keys(&mut self) {
@@ -236,6 +274,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                 .is_some_and(|id| !projection.profiles.iter().any(|profile| profile.id == id))
         {
             self.done_focus.focus(window);
+            cx.emit(DownloadsControlFocused);
         }
         self.profile_focus = projection
             .profiles
@@ -287,6 +326,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
         } else {
             self.filter_focus.focus(window);
         }
+        cx.emit(DownloadsControlFocused);
         cx.emit(DownloadsIntent::<Token>::FilterVisibilityChanged(visible));
         cx.notify();
     }
@@ -310,6 +350,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             None => 0,
         };
         targets[next].focus(window);
+        cx.emit(DownloadsControlFocused);
         if self.filter_visible && next > 0 {
             self.chips_scroll.scroll_to_item(next - 1);
         }
@@ -420,6 +461,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                                         {
                                             focus.focus(window);
                                         }
+                                        cx.emit(DownloadsControlFocused);
                                         cx.emit(DownloadsIntent::<Token>::ToggleProfile(id))
                                     }))
                                     .child(
@@ -470,6 +512,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                             if !focus.is_focused(window) {
                                 focus.focus(window);
                             }
+                            cx.emit(DownloadsControlFocused);
                             // A focusable enclosing browser must not take focus back.
                             window.prevent_default();
                         }),
@@ -726,6 +769,23 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
             .child(
                 div()
                     .debug_selector(|| "downloads-column".into())
+                    .track_focus(&self.controls_focus)
+                    // A click must reassert UI intent even if CEF left GPUI's
+                    // retained focus handle unchanged. Never wrap the preview.
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            // track_focus may have focused the column itself on
+                            // a disabled row/background hit. Resolve that scope
+                            // to an available responder before the host observes
+                            // intent. Preserve an exact child control if present.
+                            if this.focused_control(window, cx).is_none() {
+                                this.focus_handle(cx).focus(window);
+                            }
+                            window.prevent_default();
+                            cx.emit(DownloadsControlFocused);
+                        }),
+                    )
                     .absolute()
                     .left_0()
                     .top_0()

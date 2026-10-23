@@ -39,6 +39,7 @@ mod sidebar_navigation;
 mod library;
 mod downloads_view;
 mod downloads;
+mod library_downloads_host;
 mod user_profile_dialog;
 mod user_profiles;
 pub mod pages;
@@ -84,6 +85,7 @@ pub fn init(cx: &mut App) {
     new_menu::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);
     space_creation_view::bind_keys(cx);
+    downloads_view::bind_keys(cx);
 }
 
 /// Content of the first launch.
