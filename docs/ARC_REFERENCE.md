@@ -1175,3 +1175,29 @@ that section. Screenshots were inspected; no Space was deleted or reassigned.
 The combined 803-test workspace run passed, and independent route review found
 no material issue. This verifies these entry routes and document retention; it
 does not establish full Library parity or private/Blank native availability.
+
+### Download destination/search and Library retention, 2026-10-24
+
+A separate owned Arc 1.170.0 window in the existing test Space downloaded a tiny
+local attachment whose generated name already existed. It saved without a
+prompt to Downloads as `echo-source-tab-reference-20261023 (1).bin`; the original
+32 MiB fixture retained its expected hash. This establishes one normal-profile,
+single-extension collision, not custom-folder or concurrent-name behavior.
+
+Downloads search matched fixture filenames case-insensitively by literal ASCII
+substring. It did not match their source host/port or displayed Archive type;
+leading/trailing spaces and separated words were not normalized in the tested
+cases. Empty search results use `No results found for “<query>”`, distinct from
+the previously observed empty profile-filter copy. Filter → Done retained the
+query. Unicode matching rules and other empty states remain unverified.
+
+With an existing source page selected, both Downloads and Media retained that
+visible page to the right of their list. Empty right content was observed in
+windows with no selected page. The current runtime Window menu label is
+`Open Library…` (the installed nib's older `View Library` is not the live label).
+Invoking that menu action or ⇧⌘L while Media was open retained Media. These
+observations do not establish toggle/back or file-preview behavior.
+
+The owned window was closed, no Space was deleted/reassigned and no private
+window was touched. Detailed fixture hashes and safe observations are recorded
+in `/tmp/echo-download-destination-search-native-20261024.md`.

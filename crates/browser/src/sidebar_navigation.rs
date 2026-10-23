@@ -13,12 +13,42 @@ use browser_core::{Browser, SpaceId, UserProfileId};
 use gpui::{AnyElement, Context, Entity, Subscription, Window, div, hsla, prelude::*, px};
 use std::rc::Rc;
 
+/// Content identity is stronger than TabId: another host can navigate or
+/// reassign the same tab while an overlay's dismissal is queued.
+#[derive(Clone)]
+struct PreviewContent {
+    viewport: crate::pages::PageViewport,
+    viewport_generation: Option<u64>,
+    space: SpaceId,
+    profile: UserProfileId,
+    tab: browser_core::TabId,
+    url: String,
+    owner: Option<crate::pages::UiPageFocusOwner>,
+}
+pub(crate) struct PreviewUiResponder {
+    content: PreviewContent,
+    scope: gpui::FocusHandle,
+    focus: gpui::FocusHandle,
+}
+#[derive(Clone)]
+pub(crate) struct PreviewNativeResponder {
+    content: PreviewContent,
+    target: crate::pages::ResizePageFocus,
+}
+
 pub(crate) struct SidebarNavigation {
     pub(crate) controller: SpaceCreationController,
     pub(crate) library_section: LibrarySection,
     pub(crate) library_origin: SpaceId,
     pub(crate) form: Option<Entity<SpaceCreationView>>,
-    media: Option<Entity<library::media::MediaView>>,
+    pub(crate) media: Option<Entity<library::media::MediaView>>,
+    media_events: Option<Subscription>,
+    pub(crate) media_search_focus: bool,
+    preview_focus_scope: Option<gpui::FocusHandle>,
+    preview_rendered_content: Rc<std::cell::RefCell<Option<PreviewContent>>>,
+    pub(crate) preview_ui_focus: Option<PreviewUiResponder>,
+    pub(crate) preview_native_focus: Option<PreviewNativeResponder>,
+    preview_native_intent: Option<PreviewNativeResponder>,
     events: Option<Subscription>,
     generation: u64,
 }
@@ -30,6 +60,13 @@ impl SidebarNavigation {
             library_origin: browser.space().id,
             form: None,
             media: None,
+            media_events: None,
+            media_search_focus: false,
+            preview_focus_scope: None,
+            preview_rendered_content: Rc::default(),
+            preview_ui_focus: None,
+            preview_native_focus: None,
+            preview_native_intent: None,
             events: None,
             generation: 0,
         }
@@ -57,6 +94,21 @@ impl BrowserWindow {
                 self.sidebar_navigation.controller.selected(),
                 SidebarPage::Space(_)
             )
+    }
+    pub(crate) fn native_page_viewport(&self) -> crate::pages::PageViewport {
+        if self.page_content_visible() { return crate::pages::PageViewport::Content; }
+        if self.sidebar_navigation.controller.selected() == SidebarPage::Library {
+            return self.sidebar_navigation.library_section.page_viewport();
+        }
+        crate::pages::PageViewport::Hidden
+    }
+    pub(crate) fn native_page_content_visible(&self) -> bool {
+        self.native_page_viewport() != crate::pages::PageViewport::Hidden
+    }
+    pub(crate) fn sync_page_viewport(&self) {
+        if let Some(pages) = &self.pages {
+            if let Ok(mut pages) = pages.try_borrow_mut() { pages.set_viewport(self.native_page_viewport()); }
+        }
     }
     pub(crate) fn sidebar_page_index(&self) -> usize {
         if self.browser.is_blank() || self.browser.is_private() {
@@ -149,6 +201,7 @@ impl BrowserWindow {
                 }
             });
         }
+        self.sync_page_viewport();
         // Hide virtual pages synchronously. Real selection can be an
         // intermediate step in a drag/folder edit; apply its final document
         // only after that synchronous operation has completed.
@@ -285,6 +338,7 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn sync_navigation_visibility(&self) {
+        self.sync_page_viewport();
         if let Some(pages) = &self.pages {
             let mut pages = pages.borrow_mut();
             if !self.page_content_visible() {
@@ -315,8 +369,97 @@ impl BrowserWindow {
             });
         });
     }
+    fn library_preview_content(&self) -> Option<PreviewContent> {
+        if self.sidebar_navigation.controller.selected() != SidebarPage::Library || !self.native_page_content_visible() { return None; }
+        let tab = self.browser.active_tab()?;
+        let (viewport_generation, owner) = if let Some(pages) = &self.pages {
+            let pages = pages.try_borrow().ok()?;
+            (Some(pages.viewport_generation()), Some(pages.capture_ui_page_focus_owner(tab.id)?))
+        } else { (None, None) };
+        Some(PreviewContent { viewport: self.native_page_viewport(), viewport_generation,
+            space: self.browser.space().id, profile: self.browser.active_user_profile_id(),
+            tab: tab.id, url: tab.url.clone(), owner })
+    }
+    fn library_preview_content_is_current(&self, content: &PreviewContent) -> bool {
+        if self.sidebar_navigation.controller.selected() != SidebarPage::Library
+            || content.viewport != self.native_page_viewport()
+            || content.space != self.browser.space().id
+            || content.profile != self.browser.active_user_profile_id()
+            || !self.browser.active_tab().is_some_and(|tab| tab.id == content.tab && tab.url == content.url)
+        { return false; }
+        match (&self.pages, &content.owner) {
+            (None, None) => content.viewport_generation.is_none(),
+            (Some(pages), Some(owner)) => pages.try_borrow().is_ok_and(|pages|
+                Some(pages.viewport_generation()) == content.viewport_generation && pages.accepts_ui_page_focus_owner(owner)),
+            _ => false,
+        }
+    }
+    fn library_preview_content_is_rendered(&self) -> bool {
+        self.sidebar_navigation.preview_rendered_content.borrow().as_ref()
+            .is_some_and(|rendered| self.library_preview_content_is_current(rendered))
+    }
+    /// Validate before observing main-window focus: its retained GPUI handle may
+    /// describe the old document while CEF or an overlay owns the responder.
+    pub(crate) fn remember_library_preview_focus(&mut self, window: &Window, cx: &gpui::App) {
+        if self.sidebar_navigation.preview_ui_focus.as_ref().is_some_and(|saved|
+            !self.library_preview_content_is_current(&saved.content)
+                || !self.library_preview_content_is_rendered()
+                || !saved.scope.contains(&saved.focus, window))
+        { self.sidebar_navigation.preview_ui_focus = None; }
+        if self.sidebar_navigation.preview_native_focus.as_ref().is_some_and(|saved|
+            !self.library_preview_content_is_current(&saved.content))
+        { self.sidebar_navigation.preview_native_focus = None; }
+        if self.sidebar_navigation.preview_native_intent.as_ref().is_some_and(|saved|
+            !self.library_preview_content_is_current(&saved.content))
+        { self.sidebar_navigation.preview_native_intent = None; }
+        if self.sidebar_navigation.controller.selected() != SidebarPage::Library
+            || !self.sidebar_root_may_take_focus() || !self.native_page_content_visible()
+            || self.sidebar_navigation.preview_native_focus.is_some()
+            || self.sidebar_navigation.preview_native_intent.is_some()
+            || !self.library_preview_content_is_rendered()
+        { return; }
+        if let Some(pages) = &self.pages {
+            let Ok(pages) = pages.try_borrow() else { return; };
+            if pages.capture_resize_focus().has_native_focus() { return; }
+        }
+        if let Some(scope) = self.sidebar_navigation.preview_focus_scope.as_ref().filter(|scope| scope.contains_focused(window, cx)) {
+            if let (Some(focus), Some(content)) = (window.focused(cx), self.library_preview_content()) {
+                self.sidebar_navigation.media_search_focus = false;
+                self.sidebar_navigation.preview_native_intent = None;
+                self.sidebar_navigation.preview_ui_focus = Some(PreviewUiResponder { content, scope: scope.clone(), focus });
+            }
+        }
+    }
+    /// Shared capture entry point before a popup replaces responder intent.
+    pub(crate) fn remember_library_popup_focus(&mut self, window: &Window, cx: &gpui::App) {
+        self.remember_library_preview_focus(window, cx);
+        self.remember_library_native_popup_focus();
+    }
+    /// Save before an overlay clears Pages' responder intent. ResizePageFocus
+    /// already captures exact identity/profile/attachment/host and inspector
+    /// frontend generation; restoration revalidates every one of them.
+    pub(crate) fn remember_library_native_popup_focus(&mut self) {
+        if !self.sidebar_root_may_take_focus() { return; }
+        let Some(content) = self.library_preview_content() else { return; };
+        let Some(target) = self.pages.as_ref().and_then(|pages| pages.try_borrow().ok().map(|pages| pages.capture_resize_focus()))
+            .filter(|target| target.has_native_focus()) else { return; };
+        let saved = PreviewNativeResponder { content, target };
+        self.sidebar_navigation.preview_native_intent = Some(saved.clone());
+        self.sidebar_navigation.preview_native_focus = Some(saved);
+        self.sidebar_navigation.preview_ui_focus = None;
+        self.sidebar_navigation.media_search_focus = false;
+    }
+    /// Popup owners that already replaced Pages intent still share the same
+    /// validated restore path. This dormant snapshot never moves focus by itself.
+    pub(crate) fn prepare_library_popup_restore(&mut self) {
+        if self.sidebar_navigation.preview_native_focus.is_none() {
+            if let Some(saved) = self.sidebar_navigation.preview_native_intent.as_ref()
+                .filter(|saved| self.library_preview_content_is_current(&saved.content))
+            { self.sidebar_navigation.preview_native_focus = Some(saved.clone()); }
+        }
+    }
     pub(crate) fn focus_sidebar_page(
-        &self,
+        &mut self,
         window: &mut Window,
         cx: &gpui::App,
         expected: Option<&Entity<SpaceCreationView>>,
@@ -331,6 +474,36 @@ impl BrowserWindow {
                 form.read(cx).focus_name(window, cx);
             }
         } else {
+            if self.sidebar_navigation.controller.selected() == SidebarPage::Library {
+                self.prepare_library_popup_restore();
+                if let Some(saved) = self.sidebar_navigation.preview_native_focus.take() {
+                    if self.library_preview_content_is_current(&saved.content) {
+                        if let Some(pages) = &self.pages {
+                            if pages.borrow_mut().restore_resize_focus(saved.target.clone()) {
+                                self.sidebar_navigation.preview_native_intent = Some(saved);
+                                return;
+                            }
+                        }
+                    }
+                }
+                self.sidebar_navigation.preview_native_intent = None;
+                if let Some(saved) = self.sidebar_navigation.preview_ui_focus.take() {
+                    if self.library_preview_content_is_current(&saved.content) && self.library_preview_content_is_rendered()
+                        && saved.scope.contains(&saved.focus, window) {
+                        saved.focus.focus(window);
+                        return;
+                    }
+                }
+            }
+            if self.sidebar_navigation.controller.selected() == SidebarPage::Library
+                && self.sidebar_navigation.library_section == LibrarySection::Media
+                && self.sidebar_navigation.media_search_focus
+            {
+                if let Some(media) = &self.sidebar_navigation.media {
+                    media.read(cx).focus_search(window, cx);
+                    return;
+                }
+            }
             self.focus_handle.focus(window);
             if self.page_content_visible() {
                 if let Some(pages) = &self.pages {
@@ -371,7 +544,10 @@ impl BrowserWindow {
         }
         match intent {
             LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Spaces)) => {
+                self.invalidate_sidebar_focus();
                 self.sidebar_navigation.library_section = section;
+                self.sync_navigation_visibility();
+                self.defer_sidebar_focus(cx);
                 cx.notify();
             }
             LibraryIntent::SelectSpace(id) => self.select_sidebar_page(SidebarPage::Space(id), cx),
@@ -415,6 +591,7 @@ impl BrowserWindow {
             selected: hsla(0., 0., 0., 0.08),
         };
         let section = self.sidebar_navigation.library_section;
+        let preview = (section == LibrarySection::Media).then(|| self.render_library_page_preview(cx));
         let empty = (section == LibrarySection::Media).then(|| {
             // Reuse existing host semantic surfaces; never change App appearance.
             let media_colors = library::media::MediaColors {
@@ -432,10 +609,26 @@ impl BrowserWindow {
                     cx.new(|cx| library::media::MediaView::new(media_colors, cx))
                 })
                 .clone();
-            media.update(cx, |media, cx| media.set_colors(media_colors, cx));
+            if self.sidebar_navigation.media_events.is_none() {
+                self.sidebar_navigation.media_events = Some(cx.subscribe(&media, |this, _, event: &library::media::MediaIntent, _| {
+                    if *event == library::media::MediaIntent::SearchFocused {
+                        this.sidebar_navigation.media_search_focus = true;
+                        this.sidebar_navigation.preview_ui_focus = None;
+                        this.sidebar_navigation.preview_native_focus = None;
+                        this.sidebar_navigation.preview_native_intent = None;
+                        if let Some(pages) = &this.pages { pages.borrow_mut().focus_ui(); }
+                    }
+                }));
+            }
+            media.update(cx, |media, cx| {
+                media.set_colors(media_colors, cx);
+                media.set_hosted_preview(cx);
+            });
             // LearnMoreRequested has no navigation subscriber until its exact
             // target is verified. The input retains a window-local query.
-            media.into_any_element()
+            div().relative().size_full().child(media)
+                .child(library::media::render_preview(media_colors.preview, preview))
+                .into_any_element()
         });
         library::render_library(
             &projection,
@@ -450,6 +643,41 @@ impl BrowserWindow {
             |card, _| self.render_library_sidebar(card, cx),
             empty,
         )
+    }
+    /// Mount inside the presenter-owned preview rectangle (Media or Downloads).
+    /// Bounds are GPUI layout coordinates, never rail/list arithmetic.
+    pub(crate) fn render_library_page_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let scope = self.sidebar_navigation.preview_focus_scope.get_or_insert_with(|| cx.focus_handle()).clone();
+        let mut surface = div().relative().size_full().flex().flex_col().track_focus(&scope)
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                // Bubble after the preview's own editor/control has selected its
+                // responder. CEF page clicks do not pass through this GPUI tree.
+                this.sidebar_navigation.preview_native_focus = None;
+                this.sidebar_navigation.preview_native_intent = None;
+                if this.history_is_open() {
+                    if let Some(pages) = &this.pages { pages.borrow_mut().focus_ui(); }
+                }
+                this.remember_library_preview_focus(window, cx);
+                if this.sidebar_navigation.preview_focus_scope.as_ref().is_some_and(|scope| scope.contains_focused(window, cx)) {
+                    window.prevent_default();
+                }
+            }));
+        if self.browser.active_split().is_some() {
+            surface = surface.child(self.render_split(cx));
+        } else if self.history_is_open() {
+            surface = surface.child(self.render_history(cx));
+        } else if let Some(tab) = self.browser.active_tab().filter(|tab| browser_core::omnibox::is_internal_url(&tab.url)) {
+            // Match the normal content contract for unsupported internal pages.
+            surface = surface.child(div().size_full().flex().flex_col().items_center().justify_center()
+                .child("Page not found").child(tab.url.clone()));
+        }
+        let rendered = self.sidebar_navigation.preview_rendered_content.clone();
+        let content = self.library_preview_content();
+        surface = surface.child(gpui::canvas(|_, _, _| (), move |_, _, _, _| {
+            *rendered.borrow_mut() = content.clone();
+        }).absolute().inset_0());
+        surface = surface.children(self.render_page_viewport_canvas());
+        surface.into_any_element()
     }
     fn render_library_sidebar(
         &mut self,

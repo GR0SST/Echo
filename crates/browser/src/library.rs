@@ -22,6 +22,14 @@ impl LibrarySection {
         Self::Boosts,
         Self::ArchivedTabs,
     ];
+    /// Only sections verified with a retained selected page opt in.
+    pub(crate) fn page_viewport(self) -> crate::pages::PageViewport {
+        match self {
+            Self::Media => crate::pages::PageViewport::LibraryMedia,
+            Self::Downloads => crate::pages::PageViewport::LibraryDownloads,
+            _ => crate::pages::PageViewport::Hidden,
+        }
+    }
     fn label(self) -> &'static str {
         match self {
             Self::Media => "Media",

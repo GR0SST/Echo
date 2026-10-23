@@ -169,7 +169,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 |---|---|---|---|
 | Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
 | Minimize Window / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar target the main window. Bundled macOS checks verified minimization from page, Command Bar, Find and the Minimize Window command, plus restored document/input and History/DevTools responder retention. Popup teardown cancels deferred activation that would undo minimization. Native Zoom/Bring All ordering and remaining platforms still need verification |
-| View Library | ⇧⌘L | partial | Dock Home, the far-left sidebar page, Window → View Library, ⇧⌘L (including CEF focus), and Command Bar → Open Library open the existing Library route. Reopening retains its selected section. Spaces is interactive; remaining sections and full behavioral/visual parity are incomplete |
+| View Library | ⇧⌘L | partial | Dock Home, the far-left sidebar page, Window → Open Library…, ⇧⌘L (including CEF focus), and Command Bar → Open Library open the existing Library route. Reopening retains its selected section. Spaces is interactive. Media retains the selected page in a measured right-hand viewport; macOS checks preserve document identity and input through Command Bar/Find dismissal, and Reload works there. Downloads inventory routing and remaining behavioral/visual parity are incomplete |
 | View Downloads | ⇧⌘J | missing | — |
 | View Media / View Boosts | — | missing | — |
 | Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | missing | Relevant for us: "Essential Keyboard Shortcuts" (cheat sheet window) and "Restore Data" |

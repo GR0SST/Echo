@@ -92,7 +92,7 @@ fn open(
     let captured = log.clone();
     let subscription = visual.update(|_, cx| {
         cx.subscribe(&media, move |_, event: &MediaIntent, _| {
-            captured.borrow_mut().push(event.clone())
+            if !matches!(event, MediaIntent::SearchFocused) { captured.borrow_mut().push(event.clone()); }
         })
     });
     visual.simulate_resize(gpui::size(px(707.), px(2000.)));

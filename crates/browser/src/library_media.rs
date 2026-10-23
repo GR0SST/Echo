@@ -15,6 +15,7 @@ pub(crate) const MEDIA_BODY: &str = "Save media to your Documents, Desktop,\nand
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MediaIntent {
     SearchChanged(String),
+    SearchFocused,
     /// The target is unverified. This event never constructs or opens a URL.
     LearnMoreRequested,
 }
@@ -34,6 +35,7 @@ pub(crate) struct MediaColors {
 /// recreate its input. Search only retains/emits a query; no files are read.
 pub(crate) struct MediaView {
     colors: MediaColors,
+    hosted_preview: bool,
     input: Entity<TextInput>,
     _input_changes: Subscription,
 }
@@ -46,9 +48,17 @@ impl MediaView {
         });
         Self {
             colors,
+            hosted_preview: false,
             input,
             _input_changes: changes,
         }
+    }
+    /// Let the host render the preview alongside this retained search entity.
+    pub(crate) fn set_hosted_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.hosted_preview { self.hosted_preview = true; cx.notify(); }
+    }
+    pub(crate) fn focus_search(&self, window: &mut Window, cx: &gpui::App) {
+        self.input.read(cx).focus_handle(cx).focus(window);
     }
     pub(crate) fn query(&self, cx: &gpui::App) -> String {
         self.input.read(cx).text().to_owned()
@@ -117,6 +127,7 @@ impl Render for MediaView {
                                             }
                                             // Keep an enclosing focusable browser root from
                                             // taking focus back on this same mouse-down.
+                                            cx.emit(MediaIntent::SearchFocused);
                                             window.prevent_default();
                                         }),
                                     )
@@ -208,18 +219,17 @@ impl Render for MediaView {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .debug_selector(|| "library-media-preview".into())
-                    .absolute()
-                    .left(px(MEDIA_REFERENCE_COLUMN_WIDTH))
-                    .right_0()
-                    .top(px(17.))
-                    .bottom(px(10.))
-                    .rounded(px(8.))
-                    .bg(colors.preview),
-            )
+            .when(!self.hosted_preview, |this| this.child(render_preview(colors.preview, None)))
     }
+}
+
+/// The same measured surface serves the standalone presenter and the live host.
+/// The provisional width controls layout only; CEF gets the resulting canvas.
+pub(crate) fn render_preview(color: Hsla, content: Option<gpui::AnyElement>) -> gpui::AnyElement {
+    div().debug_selector(|| "library-media-preview".into())
+        .absolute().left(px(MEDIA_REFERENCE_COLUMN_WIDTH)).right_0()
+        .top(px(17.)).bottom(px(10.)).rounded(px(8.)).overflow_hidden()
+        .bg(color).children(content).into_any_element()
 }
 
 #[cfg(test)]

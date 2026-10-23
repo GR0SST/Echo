@@ -711,7 +711,9 @@ impl BrowserWindow {
                     }
                     if let Some(pages) = &this.pages { pages.borrow_mut().activate_host_with_visibility(&this.browser, this.page_content_visible()); }
                     this.restore_abandoned_resize_focus();
-                    if !this.page_content_visible() && this.sidebar_root_may_take_focus() { this.focus_sidebar_page(window, cx, None); }
+                    if !this.page_content_visible() && this.sidebar_root_may_take_focus()
+                        && !this.pages.as_ref().is_some_and(|pages| pages.borrow().capture_resize_focus().has_native_focus())
+                    { this.focus_sidebar_page(window, cx, None); }
                     cx.notify();
                 }
             }).detach();
@@ -937,18 +939,30 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (!self.page_content_visible() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::Focused { view } => {
                     self.finish_tab_rename(true, cx);
                     let tab = pages.borrow().tab_for(view).filter(|tab| pages.borrow().is_visible(*tab));
                     if let Some(tab) = tab {
+                        // A newer visible native responder supersedes both queued
+                        // sidebar focus and an already scheduled popup dismissal.
+                        self.invalidate_sidebar_focus();
+                        self.invalidate_navigation_focus();
+                        self.popup_focus_on_activation = false;
+                        self.sidebar_navigation.media_search_focus = false;
+                        self.sidebar_navigation.preview_ui_focus = None;
+                        self.sidebar_navigation.preview_native_focus = None;
                         let active = self.browser.space().active_tab;
                         if active.is_some_and(|id| self.browser.related_tabs(id).contains(&tab)) {
                             self.edit_browser(|browser| browser.activate_tab(tab, SystemTime::now()));
                             if active != Some(tab) { self.close_find(cx); }
                         }
+                        // Retain the latest validated native intent at its
+                        // shared source, so other popup owners cannot lose it
+                        // by clearing Pages focus before their next frame.
+                        self.remember_library_native_popup_focus();
                     }
                 }
                 Event::TitleChanged { view, title } => {
@@ -992,6 +1006,7 @@ impl BrowserWindow {
                             if self.browser.active_tab().is_some_and(|active| self.browser.related_tabs(active.id).contains(&tab)) {
                                 self.edit_browser(|browser| browser.activate_tab(tab, SystemTime::now()));
                             }
+                            self.remember_library_native_popup_focus();
                         }
                         Some(crate::devtools::Input::Shortcut(shortcut)) => {
                             self.defer_engine_shortcut(shortcut, input_origin, window, cx);
@@ -1042,7 +1057,7 @@ impl BrowserWindow {
                 let Some(pages) = &this.pages else { return false; };
                 let mut pages = pages.borrow_mut();
                 pages.reconcile_inventory(&this.browser);
-                this.page_content_visible() && pages.accepts_input_origin(source) && this.browser.user_profile_id_for_tab(source.identity.tab) == Some(source.identity.profile)
+                this.native_page_content_visible() && pages.accepts_input_origin(source) && this.browser.user_profile_id_for_tab(source.identity.tab) == Some(source.identity.profile)
             }).unwrap_or(false);
             // No owner/model/PageStore borrow survives action dispatch.
             if current { window.dispatch_keystroke(keystroke, cx); }
@@ -1058,7 +1073,7 @@ impl BrowserWindow {
     }
 
     fn with_active_page(&self, f: impl FnOnce(&mut Pages, TabId)) {
-        if !self.page_content_visible() { return; }
+        if !self.native_page_content_visible() { return; }
         if let (Some(pages), Some(tab)) = (&self.pages, self.browser.space().active_tab) {
             f(&mut pages.borrow_mut(), tab);
         }
@@ -1119,6 +1134,7 @@ impl BrowserWindow {
         if target == Target::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
         if self.browser.is_blank() && !matches!(target, Target::NewTab | Target::Tab(_) | Target::Split { .. } | Target::RenameTab(_) | Target::Archive(_) | Target::ConfirmClearArchive | Target::Icon(crate::icons::IconTarget::Tab(_))) { return; }
         if crate::quit::is_quitting() { return; }
+        self.remember_library_popup_focus(window, cx);
         self.close_user_profile_dialog(cx);
         self.finish_tab_rename(true, cx);
         self.close_link_status(cx);
@@ -1305,8 +1321,17 @@ impl BrowserWindow {
             if !restore { return; }
             let _ = main.update(cx, |_, window, cx| {
                 window.activate_window();
-                focus.focus(window);
-                let _ = browser.update(cx, |this, cx| { if !this.page_content_visible() && this.sidebar_root_may_take_focus() { this.focus_sidebar_page(window, cx, None); } });
+                let _ = browser.update(cx, |this, cx| {
+                    // Reconcile external edits before restoring a retained
+                    // native or GPUI preview responder, even before repaint.
+                    this.refresh_profile_projection();
+                    if this.popup_focus_generation != generation || !this.sidebar_root_may_take_focus() { return; }
+                    if !this.page_content_visible() {
+                        this.sync_navigation_visibility();
+                        this.remember_library_preview_focus(window, cx);
+                        this.focus_sidebar_page(window, cx, None);
+                    } else { focus.focus(window); }
+                });
             });
             let _ = browser.update(cx, |this, _| {
                 // Another host may have reassigned this Space while removal
@@ -3125,13 +3150,69 @@ impl BrowserWindow {
                 .child(canvas(|_, _, _| (), move |bounds, _, _, _| new_menu_anchor.set(Some(bounds))).absolute().inset_0()))
     }
 
+    /// Both normal content and Library mount this canvas inside their actual
+    /// GPUI surface. Generation guards also cover deferred tracking updates.
+    pub(crate) fn render_page_viewport_canvas(&self) -> Option<AnyElement> {
+        let native_view = self.native_view;
+        let mouse_tracking = self.mouse_tracking.clone();
+        self.pages.clone().and_then(|pages| {
+                        let generation = pages.try_borrow().ok()?.viewport_generation();
+                        let divider_pages = pages.clone();
+                        // Reports the card's bounds so the native page view can sit on it.
+                        Some(canvas(
+                            move |bounds, _, cx| {
+                                let bounds = engine::Bounds {
+                                    x: f64::from(f32::from(bounds.origin.x)),
+                                    y: f64::from(f32::from(bounds.origin.y)),
+                                    width: f64::from(f32::from(bounds.size.width)),
+                                    height: f64::from(f32::from(bounds.size.height)),
+                                };
+                                let surfaces = match pages.try_borrow_mut() {
+                                    Ok(mut pages) => { if pages.set_viewport_bounds(generation, bounds) { Some(pages.surface_bounds()) } else { None } }
+                                    Err(_) => None,
+                                };
+                                let tracking = mouse_tracking.clone();
+                                let update_tracking = move |surfaces: Vec<engine::Bounds>| {
+                                    if let Some(view) = native_view {
+                                        let holes: Vec<_> = surfaces.into_iter().map(|rect| [rect.x, rect.y, rect.width, rect.height]).collect();
+                                        let mut tracking = tracking.borrow_mut();
+                                        if tracking.holes.as_ref() != Some(&holes) {
+                                            tracking.holes = Some(holes.clone());
+                                            crate::native::track_mouse_outside(view, &holes, &mut tracking.areas);
+                                        }
+                                    }
+                                };
+                                if let Some(surfaces) = surfaces { update_tracking(surfaces); }
+                                else {
+                                    let pages = pages.clone();
+                                    cx.defer(move |_| {
+                                        let surfaces = { let mut pages = pages.borrow_mut(); if !pages.set_viewport_bounds(generation, bounds) { return; } pages.surface_bounds() };
+                                        update_tracking(surfaces);
+                                    });
+                                }
+                            },
+                            move |_, _, window, _| {
+                                if let Some(divider) = divider_pages.borrow().devtools_divider() {
+                                    window.paint_quad(gpui::fill(Bounds::new(
+                                        point(px(divider.x as f32), px(divider.y as f32)),
+                                        size(px(divider.width as f32), px(divider.height as f32)),
+                                    ), hsla(0., 0., 0.5, 0.3)));
+                                }
+                            },
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .into_any_element())
+        })
+    }
+
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let virtual_page = !self.page_content_visible();
         let split_open = !virtual_page && self.browser.active_split().is_some();
         let history_open = !virtual_page && self.history_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
-        let native_view = self.native_view;
-        let mouse_tracking = self.mouse_tracking.clone();
         // The page view covers the card; text only shows when there is no page.
         let placeholder = if virtual_page || split_open || history_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
@@ -3180,55 +3261,7 @@ impl BrowserWindow {
                                     .child(url),
                             )
                     }))
-                    .children(self.pages.clone().map(|pages| {
-                        let divider_pages = pages.clone();
-                        // Reports the card's bounds so the native page view can sit on it.
-                        canvas(
-                            move |bounds, _, cx| {
-                                let bounds = engine::Bounds {
-                                    x: f64::from(f32::from(bounds.origin.x)),
-                                    y: f64::from(f32::from(bounds.origin.y)),
-                                    width: f64::from(f32::from(bounds.size.width)),
-                                    height: f64::from(f32::from(bounds.size.height)),
-                                };
-                                let surfaces = match pages.try_borrow_mut() {
-                                    Ok(mut pages) => { pages.set_bounds(bounds); Some(pages.surface_bounds()) }
-                                    Err(_) => None,
-                                };
-                                let tracking = mouse_tracking.clone();
-                                let update_tracking = move |surfaces: Vec<engine::Bounds>| {
-                                    if let Some(view) = native_view {
-                                        let holes: Vec<_> = surfaces.into_iter().map(|rect| [rect.x, rect.y, rect.width, rect.height]).collect();
-                                        let mut tracking = tracking.borrow_mut();
-                                        if tracking.holes.as_ref() != Some(&holes) {
-                                            tracking.holes = Some(holes.clone());
-                                            crate::native::track_mouse_outside(view, &holes, &mut tracking.areas);
-                                        }
-                                    }
-                                };
-                                if let Some(surfaces) = surfaces { update_tracking(surfaces); }
-                                else {
-                                    let pages = pages.clone();
-                                    cx.defer(move |_| {
-                                        let surfaces = { let mut pages = pages.borrow_mut(); pages.set_bounds(bounds); pages.surface_bounds() };
-                                        update_tracking(surfaces);
-                                    });
-                                }
-                            },
-                            move |_, _, window, _| {
-                                if let Some(divider) = divider_pages.borrow().devtools_divider() {
-                                    window.paint_quad(gpui::fill(Bounds::new(
-                                        point(px(divider.x as f32), px(divider.y as f32)),
-                                        size(px(divider.width as f32), px(divider.height as f32)),
-                                    ), hsla(0., 0., 0.5, 0.3)));
-                                }
-                            },
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                    })),
+                    .children(self.render_page_viewport_canvas()),
             )
     }
 
@@ -3516,6 +3549,7 @@ impl Render for BrowserWindow {
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);
         }
+        self.remember_library_preview_focus(window, cx);
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
@@ -3526,6 +3560,7 @@ impl Render for BrowserWindow {
         if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {
             self.close_find(cx);
         }
+        self.sync_page_viewport();
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => pages.sync(&self.browser, self.page_content_visible()),
@@ -3662,7 +3697,7 @@ impl Render for BrowserWindow {
             .child(content)
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
             .when_some(library, |this, library| this.child(library))
-            .when(self.page_content_visible(), |this| this.children(self.render_window_snapshots()))
+            .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx)))
             .child(release_hover_on_exit())
             .into_any_element()

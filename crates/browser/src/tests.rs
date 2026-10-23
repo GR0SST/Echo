@@ -7137,3 +7137,6 @@ mod library_route_tests;
 
 #[path = "download_probe_page_tests.rs"]
 mod download_probe_page_tests;
+
+#[path = "library_live_page_tests.rs"]
+mod library_live_page_tests;

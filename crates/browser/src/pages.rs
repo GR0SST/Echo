@@ -365,6 +365,16 @@ pub(crate) struct InputOrigin {
     inspector: Option<engine::InspectorId>,
 }
 
+/// A GPUI document responder belongs to this exact Pages host and model
+/// generation, even when the document has no native view (for example History).
+#[derive(Clone)]
+pub(crate) struct UiPageFocusOwner {
+    store: std::rc::Weak<RefCell<PageStore>>,
+    host: u64,
+    parent: *mut c_void,
+    identity: PageIdentity,
+}
+
 /// Focus intent at the start of a sidebar resize. This does not retain an engine
 /// or authorize focus in a replacement Pages/store. UI restoration belongs to
 /// the host, which must also validate its popup/inline generation and FocusHandle.
@@ -414,7 +424,24 @@ struct PageStore {
     mirror_revision: u64,
 }
 
+/// Native layout ownership is independent of the virtual sidebar selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PageViewport {
+    #[default]
+    Content,
+    Hidden,
+    LibraryMedia,
+    LibraryDownloads,
+}
+impl PageViewport {
+    fn retains_library_page(self) -> bool {
+        matches!(self, Self::LibraryMedia | Self::LibraryDownloads)
+    }
+}
+
 pub struct Pages {
+    viewport: PageViewport,
+    viewport_generation: u64,
     store: Rc<RefCell<PageStore>>,
     host: u64,
     parent: *mut c_void,
@@ -492,6 +519,8 @@ impl Pages {
         let pages = Self {
             store: Rc::new(RefCell::new(PageStore { devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
                 events: Vec::new(), next_event: 0, metadata: BTreeMap::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
+            viewport: PageViewport::Content,
+            viewport_generation: 0,
             host: 1,
             parent: std::ptr::null_mut(),
             page_focus: true,
@@ -586,7 +615,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
+        Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
@@ -733,7 +762,7 @@ impl Pages {
         self.wanted.clear();
         self.wanted_focus = None;
         self.split = false;
-        if visible {
+        if visible || self.viewport.retains_library_page() {
             if let Some(active) = browser.active_tab() {
                 self.wanted_focus = (!browser_core::omnibox::is_internal_url(&active.url)).then_some(active.id);
                 if let Some(split) = browser.active_split() {
@@ -788,6 +817,25 @@ impl Pages {
             self.shown = None;
             if !self.resize_focus_suppressed { store.engine.focus_ui_in_host(self.parent); }
         }
+    }
+
+    /// Retire geometry before selection sync can reuse a previous surface.
+    /// This never changes a document, its host attachment or its storage.
+    pub(crate) fn set_viewport(&mut self, viewport: PageViewport) {
+        if self.viewport == viewport { return; }
+        self.viewport = viewport;
+        self.viewport_generation = self.viewport_generation.wrapping_add(1);
+        self.bounds = None;
+        if viewport != PageViewport::Content { self.request_ui_focus(); }
+    }
+
+    pub(crate) fn viewport_generation(&self) -> u64 { self.viewport_generation }
+
+    /// A deferred normal canvas must not overwrite a newer Library viewport.
+    pub(crate) fn set_viewport_bounds(&mut self, generation: u64, bounds: Bounds) -> bool {
+        if generation != self.viewport_generation || self.viewport == PageViewport::Hidden { return false; }
+        self.set_bounds(bounds);
+        true
     }
 
     /// Called from layout with the content card's bounds.
@@ -963,6 +1011,20 @@ impl Pages {
     pub fn mirror_revision(&self) -> u64 { self.store.borrow().mirror_revision }
 
     pub fn is_visible(&self, tab: TabId) -> bool { self.visible.contains(&tab) && self.view(tab).is_some() }
+
+    pub(crate) fn capture_ui_page_focus_owner(&self, tab: TabId) -> Option<UiPageFocusOwner> {
+        let store = self.store.borrow();
+        if store.active_host != self.host || store.hosts.get(&self.host) != Some(&self.parent) { return None; }
+        Some(UiPageFocusOwner { store: Rc::downgrade(&self.store), host: self.host,
+            parent: self.parent, identity: *store.identities.get(&tab)? })
+    }
+
+    pub(crate) fn accepts_ui_page_focus_owner(&self, owner: &UiPageFocusOwner) -> bool {
+        if !owner.store.ptr_eq(&Rc::downgrade(&self.store)) || owner.host != self.host || owner.parent != self.parent { return false; }
+        let store = self.store.borrow();
+        store.active_host == self.host && store.hosts.get(&self.host) == Some(&self.parent)
+            && store.identities.get(&owner.identity.tab) == Some(&owner.identity)
+    }
 
     /// Read intent without changing native or GPUI focus, draining events, or
     /// retaining a native owner. An invalid native target is never UI intent.

@@ -5,7 +5,7 @@ use crate::{library::LibrarySection, sidebar_pages::SidebarPage, window::Command
 fn route(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, route: usize) {
     match route {
         0 => cx.simulate_keystrokes("cmd-shift-l"),
-        1 => dispatch_menu(cx, "Window", "View Library"),
+        1 => dispatch_menu(cx, "Window", "Open Library…"),
         _ => run_named_command(view, cx, "open library"),
     }
     cx.run_until_parked();
@@ -21,7 +21,7 @@ fn assert_library(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
         assert!(view.command_bar.is_none());
         assert!(view.find_bar.is_none());
         assert!(view.new_menu.is_none());
-        assert!(!view
+        assert_eq!(view.sidebar_navigation.library_section == LibrarySection::Media, view
             .pages
             .as_ref()
             .unwrap()
@@ -68,7 +68,7 @@ fn library_shortcut_menu_and_command_preserve_the_original_page_and_spaces(
             LibrarySection::Media
         );
         let calls = fake.take_calls();
-        assert!(calls.contains(&Call::Visible(raw(document), false)));
+        assert!(calls.contains(&Call::Visible(raw(document), true)));
         assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))));
         assert_no_document_changes(&calls);
         assert_eq!(view.read_with(cx, |view, _| view.session_json()), before);
@@ -101,7 +101,7 @@ fn library_shortcut_from_cef_uses_the_registered_window_route(cx: &mut TestAppCo
     fake.send(cx, fake.shortcut(shortcut));
     assert_library(&view, cx);
     let calls = fake.take_calls();
-    assert!(calls.contains(&Call::Visible(raw(document), false)));
+    assert!(calls.contains(&Call::Visible(raw(document), true)));
     assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))));
     assert_no_document_changes(&calls);
     return_to_origin(&view, cx);
@@ -133,7 +133,7 @@ fn library_routes_keep_the_selected_section_when_library_is_already_open(cx: &mu
 }
 
 #[gpui::test]
-fn library_shortcut_closes_command_and_find_overlays_without_restoring_hidden_page_focus(
+fn library_shortcut_closes_command_and_find_overlays_without_stealing_media_focus(
     cx: &mut TestAppContext,
 ) {
     let (view, cx, fake) = open_pages(cx);
@@ -166,7 +166,7 @@ fn unavailable(cx: &mut TestAppContext, browser: browser_core::Browser) {
     let before = view.read_with(cx, |view, _| view.session_json());
     assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::ViewLibrary, cx)));
     cx.simulate_keystrokes("cmd-shift-l");
-    dispatch_menu(cx, "Window", "View Library");
+    dispatch_menu(cx, "Window", "Open Library…");
     assert!(view.read_with(cx, |view, _| view.page_content_visible()));
     assert_eq!(view.read_with(cx, |view, _| view.session_json()), before);
     cx.simulate_keystrokes("cmd-t");
@@ -219,7 +219,7 @@ fn library_menu_uses_the_observed_window_menu_position() {
         [
             "Minimize Window",
             "Zoom",
-            "View Library",
+            "Open Library…",
             "Bring All to Front"
         ]
     );

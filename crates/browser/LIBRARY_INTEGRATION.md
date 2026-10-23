@@ -193,3 +193,37 @@ Exact manifest/checkpoint: `/tmp/echo-media-reference-correction-20261023/releas
 See `MEDIA_REFERENCE_INTEGRATION.md` for the applied state and remaining gates.
 The integration is frozen for parent Cargo/native checks. Learn more remains
 an unwired, URL-free intent. Downloads and existing Library tests are unchanged.
+
+
+## Retained right-hand page — October 24, 2026
+
+Media now mounts the selected page in a measured preview viewport instead of
+replacing it with an unconditional blank surface. No selection still renders
+blank. Spaces keeps its existing native-page hiding behavior. The preview uses
+the existing page identity, storage and native view; it does not reload or create
+a substitute page. Viewport generations reject obsolete canvas updates.
+
+Native document shortcuts use preview eligibility independently of sidebar
+chrome eligibility. Command Bar, Find and Profile-sheet focus capture retain
+validated native targets. Restoration validates identity, profile, attachment
+and inspector lifetime. GPUI History responders additionally require current
+content ownership and rendered-tree membership. A newer native focus intent
+invalidates queued popup restoration.
+
+All seventeen added GPUI regressions passed in the 894-test workspace run
+(627 browser, 165 core, 102 engine). On the immutable R5 macOS bundle, native
+Library opening retained the loopback fixture's document UUID. Its actual CEF
+view resized from 952×784 to 804×773 inside the measured right-hand viewport.
+After a click in the document input, Cmd+T → Escape and Cmd+F → Escape each
+returned typing to that same input without another click: the fixture recorded
+`CLICKAFTERTAFTERF` under the same UUID. Cmd+R inside Library caused exactly the
+second load and a new UUID. Screenshots before and after reload were inspected.
+The process exited 0 after CEF Complete with no owners, browsers or cookie
+flushes pending. Local evidence: `/tmp/echo-library-responder-native-r5.log`,
+`/tmp/echo-library-responder-before-reload-r5.png` and
+`/tmp/echo-library-responder-reloaded-r5.png`.
+
+Downloads exposes a preview callback contract but its production controller and
+inventory route remain unwired. This check does not accept all History/Split/
+Source native interleavings, cross-platform view hosting, exact typography,
+translucency or full Library parity. Learn more remains unwired.

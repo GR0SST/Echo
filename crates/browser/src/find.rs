@@ -45,6 +45,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember_library_popup_focus(window, cx);
         self.close_user_profile_dialog(cx);
         self.close_tab_menu(cx);
         if self.focus_history_search(window, cx) { return; }
