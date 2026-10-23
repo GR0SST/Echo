@@ -46,7 +46,7 @@ impl HistoryPage {
 
 impl BrowserWindow {
     pub(crate) fn history_is_open(&self) -> bool {
-        self.browser
+        self.browser.active_split().is_none() && self.browser
             .active_tab()
             .is_some_and(|tab| tab.url.eq_ignore_ascii_case(HISTORY_URL))
     }

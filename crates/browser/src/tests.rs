@@ -2155,3 +2155,179 @@ fn hidden_split_pages_cannot_steal_the_new_tabs_shortcut_target(cx: &mut TestApp
     cx.simulate_keystrokes("cmd-r");
     assert!(fake.take_calls().contains(&Call::Reload(3)));
 }
+
+fn run_named_command(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, text: &str) {
+    cx.simulate_keystrokes("cmd-t");
+    bar(view, cx).simulate_input(text);
+    assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).first(), Some(Suggestion::Action { .. }))), "missing command: {text}");
+    bar(view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn split_picker_is_cancelable_and_can_use_an_existing_tab(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = view.read_with(cx, |w, _| w.browser.all_tabs().count());
+    cx.simulate_keystrokes("ctrl-shift-=");
+    assert!(bar_input_focused(&view, cx));
+    assert!(view.read_with(cx, |w, _| matches!(w.command_bar.as_ref().unwrap().target, crate::window::Target::Split { .. })));
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), before);
+    run_named_command(&view, cx, "add split view");
+    bar(&view, cx).simulate_input("github");
+    bar(&view, cx).simulate_keystrokes("down enter");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.browser.active_tab().unwrap().id.get(), 4);
+        assert_eq!(w.browser.all_tabs().count(), before);
+    });
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.browser.is_split_secondary(w.browser.active_tab().unwrap().id)));
+    assert!(cx.debug_bounds("tab-8").is_some());
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout().len()), 2);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Close(..))));
+}
+
+#[gpui::test]
+fn split_picker_adds_urls_in_the_requested_direction_and_enforces_four_panes(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 2);
+    run_named_command(&view, cx, "add top split");
+    bar(&view, cx).simulate_input("https://third.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        let split = w.browser.active_split().unwrap();
+        assert_eq!(split.axis, browser_core::splits::Axis::Vertical);
+        assert_eq!(split.panes[1], w.browser.active_tab().unwrap().id);
+    });
+    cx.simulate_keystrokes("ctrl-shift-=");
+    bar(&view, cx).simulate_input("https://fourth.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    let count = view.read_with(cx, |w, _| w.browser.all_tabs().count());
+    cx.simulate_keystrokes("ctrl-shift-=");
+    assert_eq!(bar_text(&view, cx), None);
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 4);
+        assert_eq!(w.browser.all_tabs().count(), count);
+        assert_eq!(w.toast.as_ref().unwrap().message, "Cannot Add New Pane");
+    });
+}
+
+#[gpui::test]
+fn pane_header_focus_and_chrome_match_native_geometry_in_both_axes(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    fake.take_calls();
+    click(cx, "pane-header-2");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 2);
+    assert!(fake.take_calls().contains(&Call::FocusPage(1)));
+    for vertical in [false, true] {
+        if vertical { run_named_command(&view, cx, "convert to vertical split"); }
+        let surfaces = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+        for (id, body) in surfaces {
+            let selector = match id.get() { 2 => "pane-header-2", 3 => "pane-header-3", 5 => "pane-header-5", _ => panic!("unexpected pane") };
+            let header = cx.debug_bounds(selector).unwrap();
+            assert!((f64::from(f32::from(header.origin.x)) - body.x).abs() < 0.6);
+            assert!((f64::from(f32::from(header.bottom())) - body.y).abs() < 0.6, "vertical={vertical} header={header:?} body={body:?}");
+            assert!((f64::from(f32::from(header.size.width)) - body.width).abs() < 0.6);
+        }
+    }
+}
+
+#[gpui::test]
+fn pane_close_shortcut_archives_only_the_selected_page_and_header_separates_without_reload(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    let closed = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("ctrl-shift--");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.browser.archive.last().unwrap().tab.id, closed);
+    });
+    fake.take_calls();
+    click(cx, "pane-separate-2");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 2);
+    assert!(cx.debug_bounds("tab-2").is_some());
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn split_sidebar_item_remembers_its_pane_and_favorites_show_one_group(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 2);
+    click(cx, "pane-header-2");
+    run_named_command(&view, cx, "favorite tab");
+    assert!(cx.debug_bounds("favorite-2").is_some());
+    assert!(cx.debug_bounds("favorite-3").is_none());
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://outside.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    click(cx, "favorite-2");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane0.example"));
+    run_named_command(&view, cx, "rename tab");
+    bar(&view, cx).simulate_input("Comparison");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.item_title(w.browser.active_tab().unwrap().id), "Comparison"));
+    run_named_command(&view, cx, "reset tab name");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().title.is_none()));
+}
+
+#[gpui::test]
+fn split_commands_move_focus_order_and_separate_without_navigation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    fake.take_calls();
+    run_named_command(&view, cx, "focus pane 1");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane0.example"));
+    run_named_command(&view, cx, "move pane right");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().panes[1], w.browser.active_tab().unwrap().id));
+    run_named_command(&view, cx, "focus next pane");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane1.example"));
+    run_named_command(&view, cx, "separate all tabs");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn command_search_and_archive_search_preserve_group_name_and_match_secondary_urls(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 2);
+    run_named_command(&view, cx, "rename tab");
+    bar(&view, cx).simulate_input("Comparison");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("pane1");
+    let rows = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert_eq!(rows.iter().filter(|row| matches!(row, Suggestion::SwitchToTab { .. })).count(), 1);
+    assert!(rows.iter().any(|row| matches!(row, Suggestion::SwitchToTab { title, .. } if title == "Comparison")));
+    bar(&view, cx).simulate_keystrokes("escape");
+    cx.simulate_keystrokes("cmd-w");
+    open_archive(&view, cx);
+    bar(&view, cx).simulate_input("pane1");
+    assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).first(), Some(Suggestion::ArchivedTab { title, .. }) if title == "Comparison")));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 2);
+}
+
+#[gpui::test]
+fn internal_pages_cannot_join_split_view_and_native_menu_uses_the_same_picker(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    dispatch_menu(cx, "View", "Add Split View…");
+    bar(&view, cx).simulate_input("browser://history");
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
+    bar(&view, cx).simulate_keystrokes("escape");
+    dispatch_menu(cx, "Archive", "View History");
+    cx.simulate_keystrokes("ctrl-shift-=");
+    assert_eq!(bar_text(&view, cx), None);
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+}
+
+#[gpui::test]
+fn split_shortcuts_from_native_page_focus_use_the_same_picker_and_close_action(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let shortcut = |key: &str| Shortcut { ctrl: true, shift: true, key: key.into(), ..Default::default() };
+    let shortcuts = crate::window::page_shortcuts();
+    assert!(shortcuts.contains(&shortcut("=")));
+    assert!(shortcuts.contains(&shortcut("-")));
+    fake.send(cx, Event::Shortcut(shortcut("=")));
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_keystrokes("escape");
+    fake.send(cx, Event::Shortcut(shortcut("-")));
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+}

@@ -1,5 +1,5 @@
 //! Arc-style browser window: vertical sidebar, content card, command bar.
-//! Web content is not wired up yet; the card shows the active tab's URL.
+//! Native CEF pages sit below browser-owned GPUI controls.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -63,6 +63,8 @@ actions!(
         NewSpace,
         EditCurrentUrl,
         CloseTab,
+        AddSplit,
+        CloseSplitPane,
         NextTab,
         PreviousTab,
         GoBack,
@@ -126,6 +128,8 @@ window_shortcuts! {
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
+    "ctrl-shift-=" => AddSplit,
+    "ctrl-shift--" => CloseSplitPane,
     "cmd-shift-t" => RestoreTab,
     "cmd-shift-k" => ClearToday,
     "ctrl-tab" => NextTab,
@@ -264,6 +268,7 @@ impl Drag {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     NewTab,
+    Split { anchor: TabId, placement: browser_core::splits::Placement },
     Tab(TabId),
     NewSpace,
     RenameSpace(SpaceId),
@@ -276,6 +281,7 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
     Load(Resolved),
+    SplitTab { id: TabId, title: String, space: String },
     History { title: String, url: String },
     SwitchToTab { id: TabId, title: String, url: String, space: String },
     Action { command: Command, label: String },
@@ -289,6 +295,14 @@ pub enum Suggestion {
 /// Commands currently implemented by the browser, also exposed by name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    AddSplit(Option<browser_core::splits::Placement>),
+    CloseSplitPane,
+    SplitAxis(browser_core::splits::Axis),
+    SeparateSplit,
+    SeparatePane,
+    FocusPane(usize),
+    CyclePane(isize),
+    MovePane(isize),
     NewSpace,
     RenameSpace,
     FindPage,
@@ -651,6 +665,7 @@ impl BrowserWindow {
         self.close_find(cx);
         let input = cx.new(|cx| {
             let placeholder = match target {
+                Target::Split { .. } => "Add a page to Split View…",
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
                 Target::RenameTab(_) => "Rename Tab…",
@@ -779,6 +794,7 @@ impl BrowserWindow {
             return Vec::new();
         };
         let text = bar.input.read(cx).text();
+        if let Target::Split { anchor, .. } = bar.target { return self.split_suggestions(anchor, text); }
         if let Target::Archive(space) = bar.target {
             return self.archive_suggestions(space, text);
         }
@@ -817,7 +833,7 @@ impl BrowserWindow {
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
                 (Command::RenameTab, "Rename Current Tab…", "rename current tab|rename tab|rename current item", active.is_some()),
-                (Command::ResetTabName, "Reset Tab Name", "reset tab name|reset name and icon|reset name", active.is_some_and(|tab| tab.custom_title.is_some())),
+                (Command::ResetTabName, "Reset Tab Name", "reset tab name|reset name and icon|reset name", active.is_some_and(|tab| self.browser.item_has_custom_name(tab.id))),
                 (Command::ResetSpace, "Reset Space", "reset space|reset all pinned tabs|reset all tabs in space", self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some())),
                 (Command::ResetPinnedTab, "Reset Tab to Original URL", "reset tab original url|reset pinned tab|reset pin", modified_pin),
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
@@ -855,6 +871,8 @@ impl BrowserWindow {
                 (Command::NextTab, "Next Tab", "next tab", active.is_some()),
                 (Command::PreviousTab, "Previous Tab", "previous tab", active.is_some()),
             ];
+            let mut commands = commands.to_vec();
+            commands.extend(self.split_commands());
             let mut matches: Vec<_> = commands.into_iter().filter_map(|(command, label, names, available)| {
                 if !available { return None; }
                 let score = command_match_score(&query, label).into_iter().chain(command_match_score(&query, names)).min()?;
@@ -895,14 +913,16 @@ impl BrowserWindow {
                 self.browser.spaces.iter().enumerate().filter(|(index, _)| *index != current).map(|(_, space)| space)
             );
             let favorites = self.browser.favorites.iter().map(|tab| ("Favorites", tab));
+            let mut seen = std::collections::HashSet::new();
             suggestions.extend(favorites.chain(spaces.flat_map(|space| {
                 space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))
             }))
-            .filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
+            .filter(|(_, tab)| query.is_empty() || self.browser.item_title(tab.id).to_lowercase().contains(&query) || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
                 || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
+                .filter(|(_, tab)| seen.insert(self.browser.item_anchor(tab.id)))
                 .take(MAX_TAB_SUGGESTIONS)
                 .map(|(space, tab)| Suggestion::SwitchToTab {
-                    id: tab.id, title: tab.title.clone(), url: tab.url.clone(), space: space.to_string(),
+                    id: tab.id, title: self.browser.item_title(tab.id), url: tab.url.clone(), space: if self.browser.split_for(tab.id).is_some() { format!("{space} · Split View") } else { space.to_string() },
                 }));
         }
         if !query.is_empty() {
@@ -950,6 +970,12 @@ impl BrowserWindow {
                     Resolved::Url(url) => display_url(url),
                 };
                 let id = match target {
+                    Target::Split { anchor, placement } => {
+                        if !self.can_add_split(anchor) || omnibox::is_internal_url(resolved.url()) { return; }
+                        let id = self.browser.new_tab(resolved.url(), now);
+                        self.browser.add_split(anchor, id, placement, now).expect("validated Split View");
+                        id
+                    }
                     Target::NewTab => self.browser.new_tab(resolved.url(), now),
                     Target::Tab(id) => {
                         self.browser.navigate(id, resolved.url());
@@ -966,6 +992,11 @@ impl BrowserWindow {
                     _ => return,
                 };
                 self.browser.set_title(id, title);
+            }
+            Suggestion::SplitTab { id, .. } => {
+                if let Target::Split { anchor, placement } = target {
+                    if self.browser.add_split(anchor, id, placement, now).is_err() { return; }
+                } else { return; }
             }
             Suggestion::SwitchToTab { id, .. } => {
                 if self.browser.is_favorite(id) {
@@ -1009,11 +1040,19 @@ impl BrowserWindow {
         self.close_command_bar(cx);
     }
 
-    fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
+    pub(crate) fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         match command {
+            Command::AddSplit(placement) => self.edit_split(placement, cx),
+            Command::CloseSplitPane => { if let Some(id) = self.browser.space().active_tab { self.close_split_pane(id, cx); } }
+            Command::SplitAxis(axis) => { if let Some(id) = self.browser.space().active_tab { self.browser.set_split_axis(id, axis); } }
+            Command::SeparateSplit => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
+            Command::SeparatePane => { if let Some(id) = self.browser.space().active_tab { if !self.browser.separate_split_pane(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } } }
+            Command::FocusPane(index) => { self.browser.focus_split_pane(index, SystemTime::now()); }
+            Command::CyclePane(delta) => { self.browser.cycle_split_pane(delta, SystemTime::now()); }
+            Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.browser.move_split_pane(id, delta); } }
             Command::RenameTab => {
                 if let Some(tab) = self.browser.active_tab() {
-                    let (id, name) = (tab.id, tab.title.clone());
+                    let (id, name) = (tab.id, self.browser.item_title(tab.id));
                     if let Some(bar) = &mut self.command_bar {
                         bar.target = Target::RenameTab(id);
                         bar.selected = 0;
@@ -1131,6 +1170,8 @@ impl BrowserWindow {
 
     fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(WINDOW_CONTEXT)
+            .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
+            .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))
@@ -1459,14 +1500,14 @@ impl BrowserWindow {
                 this.open_tab_menu(id, event.position, window, cx);
             }))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                this.browser.activate_tab(id, SystemTime::now());
+                this.browser.activate_sidebar_item(id, SystemTime::now());
                 if event.click_count() == 2 {
-                    let title = this.browser.all_tabs().find(|tab| tab.id == id).map(|tab| tab.title.clone());
+                    let title = Some(this.browser.item_title(id));
                     if let Some(title) = title { this.open_command_bar(Target::RenameTab(id), &title, window, cx); }
                 }
                 cx.notify();
             }))
-            .child(self.render_favicon(tab, hue))
+            .child(self.render_item_icon(tab, hue))
             .child(
                 div()
                     .flex_1()
@@ -1474,7 +1515,7 @@ impl BrowserWindow {
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .text_sm()
-                    .child(tab.title.clone()),
+                    .child(self.browser.item_title(id)),
             )
             .when(tab.muted, |this| this.child(self.render_mute_control(tab, false, cx)))
             .child(
@@ -1504,8 +1545,8 @@ impl BrowserWindow {
         let id = tab.id;
         let key = id.get() as usize;
         let group = SharedString::from(format!("favorite-{key}"));
-        let active = self.browser.space().active_tab == Some(id);
-        let title = tab.title.clone();
+        let active = self.browser.space().active_tab.is_some_and(|active| self.browser.item_anchor(active) == id);
+        let title = self.browser.item_title(id);
         let url = tab.url.clone();
         div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
             .group(group.clone()).relative().flex().items_center().justify_center()
@@ -1519,14 +1560,14 @@ impl BrowserWindow {
             }))
             .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: title.clone(), url: display_url(&url) }).into())
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                this.browser.activate_tab(id, SystemTime::now());
+                this.browser.activate_sidebar_item(id, SystemTime::now());
                 if event.click_count() == 2 {
-                    let title = this.browser.active_tab().unwrap().title.clone();
+                    let title = this.browser.item_title(id);
                     this.open_command_bar(Target::RenameTab(id), &title, window, cx);
                 }
                 cx.notify();
             }))
-            .child(self.render_favicon(tab, self.accent()))
+            .child(self.render_item_icon(tab, self.accent()))
             .when(tab.muted, |this| this.child(self.render_mute_control(tab, true, cx)))
             .child(div().id(("close-favorite", key)).debug_selector(move || format!("close-favorite-{key}"))
                 .absolute().right(px(2.0)).top(px(1.0)).px_1().rounded_sm().text_xs()
@@ -1553,7 +1594,7 @@ impl BrowserWindow {
             })).child("🔇")
     }
 
-    fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
+    pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement {
         match self.browser.favicon(&tab.url) {
             Some(png) => {
                 let title = tab.title.clone();
@@ -1616,7 +1657,7 @@ impl BrowserWindow {
             .when(!self.browser.favorites.is_empty(), |this| this.child(
                 div().id("favorites").debug_selector(|| "favorites".into())
                     .flex().flex_wrap().gap_2().px_2().pb_2()
-                    .children(self.browser.favorites.iter().map(|tab| self.render_favorite(tab, cx))),
+                    .children(self.browser.favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| self.render_favorite(tab, cx))),
             ))
             // Spaces side by side, shifted to the pager position.
             .child(
@@ -1638,9 +1679,9 @@ impl BrowserWindow {
         let hue = space.hue / 360.0;
         let current = index == self.browser.active_space;
         let tabs = |tabs: &[Tab], section, cx: &mut Context<Self>| -> Vec<AnyElement> {
-            tabs.iter()
+            tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id))
                 .map(|tab| {
-                    let active = space.active_tab == Some(tab.id);
+                    let active = space.active_tab.is_some_and(|id| self.browser.item_anchor(id) == tab.id);
                     self.render_tab(tab, section, active, hue, cx).into_any_element()
                 })
                 .collect()
@@ -1752,12 +1793,13 @@ impl BrowserWindow {
     }
 
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let split_open = self.browser.active_split().is_some();
         let history_open = self.history_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if history_open { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if split_open || history_open { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => Some(("No tab open".to_string(), "Press ⌘T to open a new tab".to_string())),
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -1778,12 +1820,13 @@ impl BrowserWindow {
                     .items_center()
                     .justify_center()
                     .gap_2()
-                    .px_8()
+                    .when(!split_open, |this| this.px_8())
                     .overflow_hidden()
                     .rounded(px(CONTENT_CORNER_RADIUS))
                     .bg(gpui::white())
                     .shadow_md()
                     .relative()
+                    .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .children(placeholder.map(|(title, url)| {
                         div()
@@ -1910,6 +1953,7 @@ impl BrowserWindow {
                         ("⌕", query, "Google Search".into())
                     }
                     Suggestion::Load(Resolved::Url(url)) => ("↗", display_url(&url), "Open".into()),
+                    Suggestion::SplitTab { title, space, .. } => ("▥", title, format!("Add to Split View · {space}")),
                     Suggestion::History { title, url } => ("◷", title, format!("History · {}", display_url(&url))),
                     Suggestion::SwitchToTab { title, space, .. } => {
                         ("⇥", title, format!("Switch to Tab · {space}"))
@@ -2074,6 +2118,8 @@ impl Render for BrowserWindow {
             }))
             .on_action(cx.listener(Self::on_open_command_bar))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
+            .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
+            .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Minimize, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Minimize, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ZoomWindow, _, cx| this.perform_window_operation(crate::menus::WindowOperation::Zoom, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ToggleFullscreen, _, cx| this.perform_window_operation(crate::menus::WindowOperation::ToggleFullscreen, cx)))

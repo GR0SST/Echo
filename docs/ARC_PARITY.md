@@ -294,7 +294,8 @@ in code, so some were reconstructed from translator comments (?).
 The persistent core model supports 2–4 pages as one sidebar item, including
 grouped pinning, Favorites, moving, renaming, closing, archive/restore and
 auto-archiving. Pane order, axis, focus and weights survive sessions. GPUI
-controls and the creation picker are not wired yet. CEF now renders all panes
+provides pane headers, focus/close/separate controls and a Command Bar picker
+for existing tabs or new URLs. CEF renders all panes
 at once, lays them out horizontally or vertically and reports native focus;
 loaded pages survive pane focus and orientation changes. Native surface geometry
 is checked; page-click focus and fresh pixels await an unlocked desktop. The unit behavior
@@ -304,13 +305,13 @@ the four-pane limit and preserving Pinned placement are confirmed in its
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Persistent grouping, four-pane limit and native CEF pane layout are implemented; the picker and shortcuts remain missing |
-| Close a pane | ⌃⇧- | missing | — |
+| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Command Bar picker, native menu, shortcut and four-pane limit toast; existing tabs and new URLs are supported. Fresh native visual review remains pending |
+| Close a pane | ⌃⇧- | done | GPUI header, Command Bar, menu and shortcut; the remaining panes keep their pages |
 | Create by dragging a tab to the middle of the window | drag | missing | — |
-| Horizontal/vertical layout, Move Left/Right/Up/Down | — | missing | — |
-| Separate Page / Separate All Tabs / Expand Current Split | — | missing | — |
-| Focus pane N / next / previous | (?) | missing | — |
-| Split View title ("Split view title text field placeholder") | — | missing | — |
+| Horizontal/vertical layout, Move Left/Right/Up/Down | — | done | Command Bar actions preserve loaded page views |
+| Separate Page / Separate All Tabs / Expand Current Split | — | partial | Separate Page and Separate All Tabs are implemented; expanding a pane is missing |
+| Focus pane N / next / previous | (?) | done | Command Bar actions and clickable GPUI pane headers |
+| Split View title ("Split view title text field placeholder") | — | done | Shared sidebar item title; rename/reset and archive search preserve it |
 | Share Split View (link) | — | missing | Arc service |
 
 ## 9. Little Arc

@@ -121,12 +121,12 @@ impl BrowserWindow {
                 self.browser.spaces[self.browser.active_space].active_tab = active;
             }
             Command::Rename => {
-                let name = self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| tab.title.clone()).unwrap_or_default();
+                let name = self.browser.item_title(id);
                 self.open_command_bar(Target::RenameTab(id), &name, window, cx);
             }
             Command::Reset => {
                 if self.browser.reset_pinned_tab(id) {
-                    if let Some(pages) = &self.pages { pages.borrow_mut().discard(id); }
+                    if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); for id in self.browser.related_tabs(id) { pages.discard(id); } }
                 }
             }
             Command::Replace => { self.browser.replace_pinned_url(id); }

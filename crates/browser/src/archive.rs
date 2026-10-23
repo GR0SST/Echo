@@ -20,6 +20,7 @@ impl BrowserWindow {
             .filter(|entry| {
                 entry.tab.title.to_lowercase().contains(&query)
                     || entry.tab.url.to_lowercase().contains(&query)
+                    || entry.split.as_ref().is_some_and(|split| split.view.title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)) || split.panes.iter().any(|tab| tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)))
             })
             .take(8)
             .map(|entry| {
@@ -50,8 +51,8 @@ impl BrowserWindow {
                 };
                 Suggestion::ArchivedTab {
                     id: entry.tab.id,
-                    title: entry.tab.title.clone(),
-                    detail: format!("{space} · {reason} · {age}"),
+                    title: entry.split.as_ref().map_or_else(|| entry.tab.title.clone(), |split| split.view.title.clone().unwrap_or_else(|| std::iter::once(&entry.tab).chain(&split.panes).map(|tab| tab.title.clone()).collect::<Vec<_>>().join(" | "))),
+                    detail: if entry.split.is_some() { format!("{space} · Split View · {reason} · {age}") } else { format!("{space} · {reason} · {age}") },
                 }
             })
             .collect()
