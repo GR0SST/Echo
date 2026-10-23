@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_FOLDER_DEPTH: usize = 32;
 
 mod copy;
+mod convert;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FolderId(u64);

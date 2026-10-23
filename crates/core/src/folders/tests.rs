@@ -4,6 +4,81 @@ use std::time::SystemTime;
 const NOW: SystemTime = SystemTime::UNIX_EPOCH;
 
 #[test]
+fn turning_a_nested_folder_into_a_space_promotes_children_without_copying_pages() {
+    let mut browser = Browser::new();
+    let source_space = browser.space().id;
+    let parent = browser.create_folder(source_space, None, "Projects").unwrap();
+    let folder = browser.create_folder(source_space, Some(parent), "Research").unwrap();
+    let child = browser.create_folder(source_space, Some(folder), "Reference").unwrap();
+    browser.set_folder_collapsed(child, true);
+    browser.set_folder_icon(folder, Some("🧭"));
+    let a = pin(&mut browser, "a");
+    let b = pin(&mut browser, "b");
+    let c = pin(&mut browser, "c");
+    browser.move_item_to_folder(a, folder);
+    browser.move_item_to_folder(b, child);
+    let split = browser.add_split(b, c, crate::splits::Placement::Below, NOW).unwrap();
+    browser.set_split_weights(b, &[2., 1.]);
+    browser.rename_tab(b, "Pair");
+    browser.navigate(a, "https://a/visited");
+    let outside = browser.new_tab("https://outside", NOW);
+    browser.activate_tab(c, NOW);
+    let before = tab_ids(&browser);
+    let items = browser.folder(folder).unwrap().items.clone();
+    let destination = browser.folder_into_space(folder, NOW).unwrap();
+    assert_eq!(tab_ids(&browser), before);
+    assert_eq!(browser.space().id, destination);
+    assert_eq!(browser.space().name, "Research");
+    assert_eq!(browser.space().custom_icon.as_deref(), Some("🧭"));
+    assert_eq!(browser.space().pinned_items, items);
+    assert_eq!(browser.space().active_tab, Some(c));
+    assert_eq!(browser.active_split().unwrap().id, split);
+    assert_eq!(browser.active_split().unwrap().weights, vec![2./3., 1./3.]);
+    assert_eq!(browser.active_split().unwrap().title.as_deref(), Some("Pair"));
+    assert_eq!(browser.folder_ancestors(b), vec![child]);
+    assert!(browser.folder(child).unwrap().collapsed);
+    assert!(browser.folder(folder).is_none());
+    let original = browser.spaces.iter().find(|space| space.id == source_space).unwrap();
+    assert_eq!(original.today[0].id, outside);
+    assert_eq!(original.active_tab, Some(outside));
+    assert!(browser.folder(parent).unwrap().items.is_empty());
+    let tab = browser.all_tabs().find(|tab| tab.id == a).unwrap();
+    assert_eq!(tab.url, "https://a/visited");
+    assert_eq!(tab.pinned_url.as_deref(), Some("https://a"));
+    assert!(browser.archive.is_empty());
+    let loaded = session::from_json(&session::to_json(&browser)).unwrap();
+    assert_eq!(loaded.space().pinned_items, items);
+    assert_eq!(tab_ids(&loaded), before);
+    assert_consistent(&loaded);
+}
+
+#[test]
+fn turning_an_inactive_or_empty_folder_into_a_space_remembers_split_focus_and_preserves_other_pages() {
+    let mut browser = Browser::new();
+    let source = browser.space().id;
+    let folder = browser.create_folder(source, None, "Pair").unwrap();
+    let a = pin(&mut browser, "a");
+    let b = pin(&mut browser, "b");
+    browser.add_split(a, b, crate::splits::Placement::Right, NOW).unwrap();
+    browser.move_item_to_folder(a, folder);
+    let outside = browser.new_tab("https://outside", NOW);
+    browser.folder_into_space(folder, NOW).unwrap();
+    assert_eq!(browser.space().active_tab, Some(b));
+    assert_eq!(browser.spaces.iter().find(|space| space.id == source).unwrap().active_tab, Some(outside));
+    let empty = browser.create_folder(source, None, "Empty").unwrap();
+    let before = tab_ids(&browser);
+    browser.folder_into_space(empty, NOW).unwrap();
+    assert_eq!(browser.space().name, "Empty");
+    assert!(browser.space().active_tab.is_none());
+    assert!(browser.space().pinned_items.is_empty());
+    assert_eq!(tab_ids(&browser), before);
+    let json = session::to_json(&browser);
+    assert!(browser.folder_into_space(FolderId(u64::MAX), NOW).is_none());
+    assert_eq!(session::to_json(&browser), json);
+    assert_consistent(&browser);
+}
+
+#[test]
 fn duplicating_a_folder_preserves_nested_order_and_split_metadata_with_independent_ids() {
     let mut browser = Browser::new();
     let space = browser.space().id;

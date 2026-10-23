@@ -3169,3 +3169,48 @@ fn duplicating_an_empty_folder_preserves_the_active_page_and_can_be_deleted_inde
     assert_eq!(active_url(&view, cx), active);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn turning_a_folder_into_a_space_keeps_the_active_split_and_its_native_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let surfaces = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+    fake.take_calls();
+    right_click(cx, "folder-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-into-space");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().name, "Projects");
+        assert_eq!(w.browser.spaces.len(), 2);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout(), surfaces);
+        assert_eq!(w.browser.space().folders.len(), 1);
+        assert_eq!(w.browser.space().folders[0].id.get(), 3);
+        assert!(w.browser.spaces[0].pinned.is_empty());
+        assert_eq!(w.browser.spaces[0].today[0].id.get(), 7);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn turning_an_empty_folder_into_a_space_leaves_other_tabs_and_their_engine_views_intact(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    run_named_command(&view, cx, "new folder");
+    bar(&view, cx).simulate_input("Empty");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    fake.take_calls();
+    right_click(cx, "folder-9");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-into-space");
+    cx.run_until_parked();
+    assert!(active_url(&view, cx).is_none());
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().name.clone()), "Empty");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    cx.simulate_keystrokes("alt-cmd-right");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

@@ -268,6 +268,7 @@ impl BrowserWindow {
             ),
         ];
         rows.push(("Duplicate", MenuCommand::FolderDuplicate));
+        rows.push(("Turn into Space", MenuCommand::FolderIntoSpace));
         if folder.items.is_empty() {
             rows.push(("Delete Empty Folder", MenuCommand::FolderDelete));
         }
@@ -291,6 +292,15 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         match command {
+            MenuCommand::FolderIntoSpace => {
+                if self
+                    .browser
+                    .folder_into_space(id, SystemTime::now())
+                    .is_some()
+                {
+                    self.switch_space(self.browser.active_space, cx);
+                }
+            }
             MenuCommand::FolderDuplicate => {
                 if let Some(copy) = self.browser.duplicate_folder(id, SystemTime::now()) {
                     self.scroll_to_pinned_item(PinnedItem::Folder(copy), cx);
