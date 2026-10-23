@@ -3107,3 +3107,65 @@ fn moving_to_a_folder_when_none_exist_creates_one_around_the_active_page(cx: &mu
     assert_eq!(active_url(&view, cx), active);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn duplicating_a_closed_folder_keeps_focus_and_loads_independent_split_pages_only_when_selected(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_folder_pages(cx);
+    let active = active_url(&view, cx);
+    run_named_command(&view, cx, "collapse all folders");
+    fake.take_calls();
+    right_click(cx, "folder-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-duplicate");
+    cx.run_until_parked();
+    let (folder, nested, copy, focused) = view.read_with(cx, |w, _| {
+        let folders = &w.browser.space().folders;
+        assert_eq!(folders.len(), 4);
+        let copy = folders[2].id;
+        let nested = folders[3].id;
+        assert!(folders[2].collapsed && folders[3].collapsed);
+        let pages = w.browser.folder_tabs(copy);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(w.browser.all_tabs().count(), 5);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 5);
+        let focused = w.browser.split_for(pages[0]).unwrap().active;
+        assert!(!pages.iter().any(|id| id.get() == 4 || id.get() == 5));
+        (copy, nested, pages[0], focused)
+    });
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    click(cx, Box::leak(format!("folder-{}", folder.get()).into_boxed_str()));
+    click(cx, Box::leak(format!("folder-{}", nested.get()).into_boxed_str()));
+    click(cx, Box::leak(format!("tab-{}", copy.get()).into_boxed_str()));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().active_tab, Some(focused));
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout().len(), 2);
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert_eq!(restored.folder_tabs(folder), w.browser.folder_tabs(folder));
+    });
+    let calls = fake.take_calls();
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Create(..))).count(), 2);
+    assert!(!calls.iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn duplicating_an_empty_folder_preserves_the_active_page_and_can_be_deleted_independently(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    run_named_command(&view, cx, "new folder");
+    bar(&view, cx).simulate_input("Empty");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    fake.take_calls();
+    right_click(cx, "folder-9");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-duplicate");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().folders.len()), 2);
+    right_click(cx, "folder-10");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-delete");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().folders.iter().map(|folder| folder.id.get()).collect::<Vec<_>>()), vec![9]);
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

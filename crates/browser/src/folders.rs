@@ -267,6 +267,7 @@ impl BrowserWindow {
                 MenuCommand::FolderCollapse,
             ),
         ];
+        rows.push(("Duplicate", MenuCommand::FolderDuplicate));
         if folder.items.is_empty() {
             rows.push(("Delete Empty Folder", MenuCommand::FolderDelete));
         }
@@ -290,6 +291,11 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         match command {
+            MenuCommand::FolderDuplicate => {
+                if let Some(copy) = self.browser.duplicate_folder(id, SystemTime::now()) {
+                    self.scroll_to_pinned_item(PinnedItem::Folder(copy), cx);
+                }
+            }
             MenuCommand::FolderRename => {
                 let name = self
                     .browser

@@ -167,6 +167,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 Folder storage follows Arc's [Folders guide](https://resources.arc.net/hc/en-us/articles/19228419623447-Folders-Stash-Similar-Tabs-Together):
 folder pages are Pinned and do not auto-archive.
+Folder duplication follows the right-click action documented in the
+[April 13, 2023 release notes](https://start.arc.net/release-notes).
 
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
@@ -269,7 +271,7 @@ in code, so some were reconstructed from translator comments (?).
 |---|---|---|
 | **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | GPUI right-click menus on tabs/Favorites: Copy Link/Markdown, Duplicate, Rename, Pin/Unpin, Favorite/Unfavorite, Reset/Replace Pinned URL, Customize Tab Icon, Reset Name and Icon, Add Split View, Mute/Unmute, Close/Archive and Archive Other Tabs/Tabs Above/Tabs Below (Today items only; Split Views stay atomic). Up/Down/Enter/Escape, scrolling in short windows and outside dismissal; actions target the clicked tab. Copy/rename/pin/mute preserve other active tabs; Duplicate focuses its independent copy. Remaining actions follow their missing features; fresh visual check awaits an unlocked desktop |
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
-| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | partial | GPUI context menu supports rename, nested creation, moving the complete subtree, icon changes, collapse/expand, deleting empty folders and copying all nested page links (plain/Markdown). Share, Duplicate, archiving nonempty folders and Turn into Space remain missing |
+| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | partial | GPUI context menu supports rename, nested creation, moving the complete subtree, icon changes, collapse/expand, deleting empty folders and copying all nested page links (plain/Markdown). Duplicate creates an independent ordered subtree with names, icons, Pinned URLs and Split View geometry intact; focus stays on the current page and copied engines load on selection. Share, archiving nonempty folders and Turn into Space remain missing |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
 | **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, duplication, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share and graphical icon catalog remain |
 | **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | partial | GPUI ellipsis and right-click menus target the clicked pane; all listed local actions implemented. Share remains |

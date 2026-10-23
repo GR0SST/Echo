@@ -4,6 +4,101 @@ use std::time::SystemTime;
 const NOW: SystemTime = SystemTime::UNIX_EPOCH;
 
 #[test]
+fn duplicating_a_folder_preserves_nested_order_and_split_metadata_with_independent_ids() {
+    let mut browser = Browser::new();
+    let space = browser.space().id;
+    let parent = browser.create_folder(space, None, "Projects").unwrap();
+    let source = browser.create_folder(space, Some(parent), "Reading").unwrap();
+    let nested = browser.create_folder(space, Some(source), "Reference").unwrap();
+    let a = pin(&mut browser, "a");
+    let b = pin(&mut browser, "b");
+    let c = pin(&mut browser, "c");
+    browser.move_item_to_folder(a, source);
+    browser.move_item_to_folder(b, nested);
+    browser.add_split(b, c, crate::splits::Placement::Below, NOW).unwrap();
+    browser.set_split_weights(b, &[1., 3.]);
+    browser.rename_tab(b, "Research pair");
+    browser.set_item_icon(b, Some("🌗"));
+    browser.set_folder_icon(source, Some("📚"));
+    browser.set_folder_collapsed(source, true);
+    browser.set_folder_collapsed(nested, true);
+    browser.navigate(a, "https://a/visited");
+    browser.set_tab_muted(a, true);
+    browser.activate_tab(c, NOW);
+    let originals: Vec<_> = browser.folder_tabs(source).into_iter().map(|id| browser.all_tabs().find(|tab| tab.id == id).unwrap().clone()).collect();
+    let source_items = browser.folder(source).unwrap().items.clone();
+    let source_split = browser.split_for(b).unwrap().clone();
+    let later = NOW + std::time::Duration::from_secs(100);
+    let copy = browser.duplicate_folder(source, later).unwrap();
+    assert_eq!(browser.folder(parent).unwrap().items, vec![PinnedItem::Folder(source), PinnedItem::Folder(copy)]);
+    assert_eq!(browser.space().active_tab, Some(c));
+    assert_eq!(browser.folder(source).unwrap().items, source_items);
+    let copy_folder = browser.folder(copy).unwrap();
+    assert_eq!(copy_folder.name, "Reading");
+    assert_eq!(copy_folder.custom_icon.as_deref(), Some("📚"));
+    assert!(copy_folder.collapsed);
+    let PinnedItem::Folder(copy_nested) = copy_folder.items[0] else { panic!("nested folder order was changed"); };
+    assert_ne!(copy_nested, nested);
+    assert_eq!(browser.folder(copy_nested).unwrap().name, "Reference");
+    assert!(browser.folder(copy_nested).unwrap().collapsed);
+    let copies = browser.folder_tabs(copy);
+    assert_eq!(copies.len(), originals.len());
+    for (id, original) in copies.iter().zip(&originals) {
+        let copied = browser.all_tabs().find(|tab| tab.id == *id).unwrap();
+        assert!(!originals.iter().any(|tab| tab.id == *id));
+        let mut expected = original.clone();
+        expected.id = *id;
+        expected.last_active = later;
+        assert_eq!(serde_json::to_value(copied).unwrap(), serde_json::to_value(expected).unwrap());
+    }
+    let split = browser.split_for(copies[0]).unwrap();
+    assert_ne!(split.id, source_split.id);
+    assert_eq!(split.axis, source_split.axis);
+    assert_eq!(split.weights, source_split.weights);
+    assert_eq!(split.title, source_split.title);
+    assert_eq!(split.custom_icon, source_split.custom_icon);
+    assert_eq!(split.panes, copies[..2]);
+    assert_eq!(split.active, copies[1]);
+    assert_consistent(&browser);
+    let mut loaded = session::from_json(&session::to_json(&browser)).unwrap();
+    assert_eq!(loaded.folder_tabs(copy), copies);
+    loaded.rename_folder(copy, "Independent");
+    loaded.navigate(copies[2], "https://copy-only");
+    loaded.toggle_pin(copies[0]);
+    assert_eq!(loaded.folder(source).unwrap().name, "Reading");
+    assert_eq!(loaded.all_tabs().find(|tab| tab.id == a).unwrap().url, "https://a/visited");
+    assert_eq!(loaded.split_for(b).unwrap().panes, source_split.panes);
+    assert_consistent(&loaded);
+}
+
+#[test]
+fn duplicating_empty_and_maximum_depth_folders_keeps_other_spaces_and_focus_unchanged() {
+    let mut browser = Browser::new();
+    let space = browser.space().id;
+    let root = browser.create_folder(space, None, "Root").unwrap();
+    let mut deepest = root;
+    for _ in 1..MAX_FOLDER_DEPTH { deepest = browser.create_folder(space, Some(deepest), "Nested").unwrap(); }
+    let tab = pin(&mut browser, "deep");
+    browser.move_item_to_folder(tab, deepest);
+    let other = browser.add_space("Work", 100.);
+    let index = browser.spaces.iter().position(|space| space.id == other).unwrap();
+    browser.switch_space(index);
+    let active = browser.new_tab("https://work", NOW);
+    let copy = browser.duplicate_folder(root, NOW).unwrap();
+    assert_eq!(browser.space().id, other);
+    assert_eq!(browser.space().active_tab, Some(active));
+    assert_eq!(browser.folder_ancestors(browser.folder_tabs(copy)[0]).len(), MAX_FOLDER_DEPTH);
+    let empty = browser.create_folder(other, None, "Empty").unwrap();
+    let empty_copy = browser.duplicate_folder(empty, NOW).unwrap();
+    assert!(browser.folder(empty_copy).unwrap().items.is_empty());
+    assert_eq!(browser.space().active_tab, Some(active));
+    let before = session::to_json(&browser);
+    assert!(browser.duplicate_folder(FolderId(u64::MAX), NOW).is_none());
+    assert_eq!(session::to_json(&browser), before);
+    assert_consistent(&browser);
+}
+
+#[test]
 fn nested_folders_pin_existing_pages_and_round_trip_without_cloning_them() {
     let mut browser = Browser::new();
     let space = browser.space().id;

@@ -8,7 +8,7 @@ use std::time::SystemTime;
 pub const MAX_SPLIT_PANES: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SplitId(u64);
+pub struct SplitId(pub(crate) u64);
 impl SplitId { pub fn get(self) -> u64 { self.0 } }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
