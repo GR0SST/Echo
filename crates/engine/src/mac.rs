@@ -285,3 +285,39 @@ pub(crate) fn destroy_browser_child(child: *mut c_void) {
         let _: () = msg_send![child as *mut AnyObject, removeFromSuperview];
     }
 }
+
+/// Independently owned, never ordered front. The existing clip remains CEF's
+/// original parent_view; only its superview changes. No GPUI owner is retained.
+pub(crate) fn create_retired_window() -> Result<(*mut c_void, *mut c_void), String> {
+    unsafe {
+        let class = AnyClass::get(c"NSWindow").ok_or("AppKit NSWindow unavailable")?;
+        let window: *mut AnyObject = msg_send![class, alloc];
+        let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(16., 16.));
+        let window: *mut AnyObject = msg_send![window, initWithContentRect: rect, styleMask: 0usize, backing: 2usize, defer: Bool::NO];
+        if window.is_null() { return Err("Hidden NSWindow creation failed".into()); }
+        let _: () = msg_send![window, setReleasedWhenClosed: Bool::NO];
+        let _: () = msg_send![window, setExcludedFromWindowsMenu: Bool::YES];
+        let _: () = msg_send![window, orderOut: std::ptr::null_mut::<AnyObject>()];
+        let content: *mut AnyObject = msg_send![window, contentView];
+        if content.is_null() {
+            ffi::objc_release(window);
+            return Err("Hidden NSWindow has no content view".into());
+        }
+        Ok((window.cast(), content.cast()))
+    }
+}
+
+pub(crate) fn clip_has_parent(clip: *mut c_void, parent: *mut c_void) -> bool {
+    unsafe {
+        let actual: *mut AnyObject = msg_send![clip as *mut AnyObject, superview];
+        actual.cast::<c_void>() == parent
+    }
+}
+
+pub(crate) fn release_retired_window(window: *mut c_void) {
+    unsafe {
+        let window = window as *mut AnyObject;
+        let _: () = msg_send![window, close];
+        ffi::objc_release(window);
+    }
+}

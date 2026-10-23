@@ -1,4 +1,4 @@
-//! Compile-registered download foundation; runtime wiring remains pending.
+//! Engine-owned download callbacks, ledger and explicit lifetime policies.
 //! See DOWNLOADS_INTEGRATION.md before activation.
 //!
 //! CEF callbacks copy items immediately and own only an inbox and immutable
@@ -10,7 +10,7 @@ use cef::rc::Rc as _;
 use cef::*;
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -135,6 +135,7 @@ pub enum DownloadError {
     DestinationUnavailable,
     InvalidDestination,
     ControlUnavailable,
+    UnsupportedPolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,6 +218,30 @@ impl Gate {
 struct Inbox<B, C> {
     closed: Gate,
     queue: Mutex<Vec<Incoming<B, C>>>,
+    shutdown_copies: Mutex<ShutdownCopies>,
+}
+
+#[derive(Clone)]
+struct CopiedTerminal {
+    key: Key,
+    origin: DownloadProvenance,
+    info: DownloadInfo,
+}
+#[derive(Default)]
+struct ShutdownCopies {
+    // Frozen before sealing native ingress. No token can be invented by a late
+    // callback, and neither Browser nor any callback handle enters this queue.
+    known: HashMap<Key, DownloadProvenance>,
+    ready: Vec<CopiedTerminal>,
+    terminal_seen: HashSet<Key>,
+}
+impl ShutdownCopies {
+    fn push(&mut self, key: Key, origin: DownloadProvenance, info: DownloadInfo) -> bool {
+        if !info.phase.is_terminal() || self.known.get(&key) != Some(&origin)
+            || !self.terminal_seen.insert(key) { return false; }
+        self.ready.push(CopiedTerminal { key, origin, info });
+        true
+    }
 }
 
 impl<B, C> Default for Inbox<B, C> {
@@ -224,11 +249,15 @@ impl<B, C> Default for Inbox<B, C> {
         Self {
             closed: Gate::new(false),
             queue: Mutex::new(Vec::new()),
+            shutdown_copies: Mutex::default(),
         }
     }
 }
 
 impl<B, C> Inbox<B, C> {
+    fn copy_shutdown_terminal(&self, key: Key, origin: DownloadProvenance, info: DownloadInfo) -> bool {
+        self.closed.get() && self.shutdown_copies.lock().unwrap().push(key, origin, info)
+    }
     fn push(&self, mut event: Incoming<B, C>) {
         // Only progress for the same key may replace progress. A before or
         // terminal event forms a barrier. Drop displaced handles AFTER borrow.
@@ -273,6 +302,8 @@ struct RegistrationState {
     origin: DownloadProvenance,
     accepting: Arc<Gate>,
     native_browser: Option<i32>,
+    continuing: bool,
+    retiring: bool,
 }
 
 enum Effect<B, C> {
@@ -332,24 +363,120 @@ impl<B, C: Clone> Ledger<B, C> {
                 origin,
                 accepting: accepting.clone(),
                 native_browser: None,
+                continuing: false,
+                retiring: false,
             },
         );
         Ok((id, accepting))
     }
 
+    fn ensure_entry(&mut self, key: Key, origin: DownloadProvenance, info: &DownloadInfo) -> DownloadToken {
+        if let Some(token) = self.keys.get(&key) { return *token; }
+        let token = DownloadToken { ledger: self.id, sequence: self.next_token };
+        self.next_token = self.next_token.checked_add(1).expect("download identity exhausted");
+        self.keys.insert(key, token);
+        self.entries.insert(token, Entry {
+            key, terminal: false, before: None, control: None,
+            snapshot: DownloadSnapshot {
+                token, provenance: origin, info: info.clone(),
+                destination: DownloadDestination::Unrequested,
+                cancel_requested: false, closing: false,
+            },
+        });
+        token
+    }
+
+    /// No CEF effects, callback drops or native handles. Materialize identities
+    /// of callbacks already received before the seal, then freeze late capture.
+    fn seal_ingress(&mut self) {
+        if self.inbox.closed.get() { return; }
+        let received: Vec<_> = self.inbox.queue.lock().unwrap().iter().map(|incoming| {
+            match incoming {
+                Incoming::Before { key, origin, info, .. } | Incoming::Update { key, origin, info, .. } =>
+                    (*key, *origin, info.clone()),
+            }
+        }).collect();
+        for (key, origin, info) in &received {
+            let known = self.keys.contains_key(key);
+            let admitted = self.registrations.get_mut(&key.registration).is_some_and(|state| {
+                state.origin == *origin
+                    && (state.accepting.get() || state.retiring || (state.continuing && known))
+                    && *state.native_browser.get_or_insert(key.native_browser) == key.native_browser
+            });
+            if admitted { self.ensure_entry(*key, *origin, info); }
+        }
+        {
+            let mut copies = self.inbox.shutdown_copies.lock().unwrap();
+            copies.known = self.entries.values().map(|entry| (entry.key, entry.snapshot.provenance)).collect();
+            // The ordinary inbox still owns callback handles until the existing
+            // outside-borrows dispatcher. Copy terminal data only, never handles.
+            for (key, origin, info) in received { copies.push(key, origin, info); }
+        }
+        self.inbox.closed.set(true);
+    }
+
+    /// Pure metadata reduction. Native handles, if any remain before the first
+    /// shutdown poll, are untouched; shutdown/Closed releases them separately.
+    fn collect_shutdown_copies(&mut self) {
+        let copied = std::mem::take(&mut self.inbox.shutdown_copies.lock().unwrap().ready);
+        for copy in copied {
+            let Some(token) = self.keys.get(&copy.key) else { continue; };
+            let entry = self.entries.get_mut(token).unwrap();
+            if entry.terminal || entry.snapshot.provenance != copy.origin || !copy.info.phase.is_terminal() { continue; }
+            entry.snapshot.info = copy.info;
+            if matches!(entry.snapshot.destination, DownloadDestination::Unrequested) {
+                entry.snapshot.destination = DownloadDestination::Rejected;
+            }
+            entry.snapshot.closing = false;
+            entry.terminal = true;
+            self.ready.push(DownloadEvent::Updated(entry.snapshot.clone()));
+        }
+    }
+
+    /// One shared owned-event consumer, including after CEF Complete. This
+    /// operation never collects/drops native handles and returns no effects.
+    fn take_shutdown_events(&mut self) -> Result<Vec<DownloadEvent>, String> {
+        if !self.inbox.closed.get() { return Err("Shutdown download drain requires begin_shutdown".into()); }
+        self.collect_shutdown_copies();
+        Ok(std::mem::take(&mut self.ready))
+    }
+
+    fn native_handles_released(&self) -> bool {
+        self.entries.values().all(|entry| entry.before.is_none() && entry.control.is_none())
+            && self.inbox.queue.lock().unwrap().is_empty()
+    }
+
     fn collect(&mut self) -> Vec<Effect<B, C>> {
+        self.collect_shutdown_copies();
+        self.reduce_received(self.inbox.take(), false)
+    }
+
+    /// Closed-first dispatch still preserves metadata already copied by CEF.
+    /// No native control or destination continuation can escape this mode.
+    fn collect_closed_metadata(&mut self, id: u64) -> Vec<Effect<B, C>> {
+        self.collect_shutdown_copies();
+        let (closed, keep): (Vec<_>, Vec<_>) = self.inbox.take().into_iter()
+            .partition(|incoming| incoming.key().registration == id);
+        self.inbox.queue.lock().unwrap().extend(keep);
+        self.reduce_received(closed, true)
+    }
+
+    fn reduce_received(&mut self, received: Vec<Incoming<B, C>>, release_only: bool) -> Vec<Effect<B, C>> {
         let mut effects = Vec::new();
-        for incoming in self.inbox.take() {
+        for incoming in received {
             let key = incoming.key();
             let origin = match &incoming {
                 Incoming::Before { origin, .. } | Incoming::Update { origin, .. } => *origin,
             };
-            let accepted = !self.stopped
+            let known = self.keys.contains_key(&key);
+            let shutdown_known = !self.inbox.closed.get()
+                || self.inbox.shutdown_copies.lock().unwrap().known.get(&key) == Some(&origin);
+            let accepted = shutdown_known && (release_only || !self.stopped)
                 && self
                     .registrations
                     .get_mut(&key.registration)
                     .is_some_and(|registration| {
-                        if registration.origin != origin || !registration.accepting.get() {
+                        if registration.origin != origin || !(release_only || registration.accepting.get() || registration.retiring || (registration.continuing && known)) {
                             return false;
                         }
                         *registration
@@ -358,48 +485,34 @@ impl<B, C: Clone> Ledger<B, C> {
                             == key.native_browser
                     });
             if !accepted {
-                Self::reject(incoming, &mut effects);
+                if release_only { Self::release(incoming, &mut effects); }
+                else { Self::reject(incoming, &mut effects); }
                 continue;
             }
-            let token = if let Some(token) = self.keys.get(&key) {
-                *token
-            } else {
-                let token = DownloadToken {
-                    ledger: self.id,
-                    sequence: self.next_token,
-                };
-                self.next_token = self
-                    .next_token
-                    .checked_add(1)
-                    .expect("download identity exhausted");
-                let info = match &incoming {
-                    Incoming::Before { info, .. } | Incoming::Update { info, .. } => info.clone(),
-                };
-                self.keys.insert(key, token);
-                self.entries.insert(
-                    token,
-                    Entry {
-                        key,
-                        terminal: false,
-                        before: None,
-                        control: None,
-                        snapshot: DownloadSnapshot {
-                            token,
-                            provenance: origin,
-                            info,
-                            destination: DownloadDestination::Unrequested,
-                            cancel_requested: false,
-                            closing: false,
-                        },
-                    },
-                );
-                token
+            let info = match &incoming {
+                Incoming::Before { info, .. } | Incoming::Update { info, .. } => info,
             };
+            let token = self.ensure_entry(key, origin, info);
             let entry = self.entries.get_mut(&token).unwrap();
             // The first event may itself be terminal. Existing terminal entries
             // have already emitted Updated; their tombstone prevents revival.
             if entry.terminal {
                 Self::release(incoming, &mut effects);
+                continue;
+            }
+            if release_only {
+                let info = match &incoming {
+                    Incoming::Before { info, .. } | Incoming::Update { info, .. } => info.clone(),
+                };
+                entry.terminal = info.phase.is_terminal();
+                entry.snapshot.info = info;
+                entry.snapshot.closing = !entry.terminal;
+                if matches!(entry.snapshot.destination, DownloadDestination::Unrequested) {
+                    entry.snapshot.destination = DownloadDestination::Rejected;
+                }
+                Self::release(incoming, &mut effects);
+                Self::release_handles(entry, &mut effects);
+                self.ready.push(DownloadEvent::Updated(entry.snapshot.clone()));
                 continue;
             }
             match incoming {
@@ -574,8 +687,10 @@ impl<B, C: Clone> Ledger<B, C> {
     }
 
     fn close_registration(&mut self, registration: u64) -> Vec<Effect<B, C>> {
-        if let Some(registration) = self.registrations.get(&registration) {
+        if let Some(registration) = self.registrations.get_mut(&registration) {
             registration.accepting.set(false);
+            registration.continuing = false;
+            registration.retiring = false;
         }
         let mut effects = Vec::new();
         for entry in self
@@ -602,14 +717,22 @@ impl<B, C: Clone> Ledger<B, C> {
     }
 
     fn shutdown(&mut self) -> Vec<Effect<B, C>> {
-        self.inbox.closed.set(true);
+        self.seal_ingress();
+        self.collect_shutdown_copies();
         let mut effects = Vec::new();
         for id in self.registrations.keys().copied().collect::<Vec<_>>() {
             effects.extend(self.close_registration(id));
         }
+        for entry in self.entries.values_mut() {
+            // Genuine terminal copies can precede the first shutdown poll.
+            // Their retained controls are release-only, never cancellation.
+            Self::release_handles(entry, &mut effects);
+        }
         self.stopped = true;
         for incoming in self.inbox.take() {
-            Self::reject(incoming, &mut effects);
+            let terminal = self.keys.get(&incoming.key()).is_some_and(|token| self.entries[token].terminal);
+            if terminal { Self::release(incoming, &mut effects); }
+            else { Self::reject(incoming, &mut effects); }
         }
         effects
     }
@@ -684,6 +807,7 @@ impl Downloads {
             accepting,
             allow_downloads,
             native_alive: Arc::new(Gate::new(true)),
+            quiescence: Arc::default(),
             inbox: self.0.inbox.clone(),
         })
     }
@@ -746,6 +870,7 @@ pub struct DownloadRegistration {
     accepting: Arc<Gate>,
     allow_downloads: bool,
     native_alive: Arc<Gate>,
+    quiescence: Arc<Quiescence>,
     inbox: Arc<Inbox<NativeBefore, NativeControl>>,
 }
 
@@ -826,7 +951,7 @@ wrap_download_handler! {
         fn on_before_download(&self, browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, suggested_name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> i32 {
             // Always claim handling: false delegates to Alloy's cancellation.
             // Rejected/invalid requests drop the callback without continuing.
-            if !self.native_alive.get() || !self.allow_downloads || !self.accepting.get() || self.inbox.closed.get() { return 1; }
+            if !self.native_alive.get() || !self.allow_downloads || self.inbox.closed.get() { return 1; }
             if let (Some(browser), Some((native_download, info)), Some(callback)) = (browser, copy_item(download_item), callback) {
                 self.inbox.push(Incoming::Before {
                     key: Key { registration: self.registration, native_browser: browser.identifier(), native_download },
@@ -842,7 +967,17 @@ wrap_download_handler! {
             // lifecycle notification is collected. IsValid is allowed afterward.
             if !self.native_alive.get() || !browser.as_ref().is_some_and(|browser| browser.is_valid() != 0) { return; }
             let copied = copy_item(download_item);
-            if !self.allow_downloads || !self.accepting.get() || self.inbox.closed.get() || copied.is_none() || browser.is_none() {
+            if self.allow_downloads && self.inbox.closed.get() {
+                if let (Some(browser), Some((native_download, info))) = (browser.as_ref(), copied.as_ref()) {
+                    if info.phase.is_terminal() {
+                        self.inbox.copy_shutdown_terminal(Key {
+                            registration: self.registration, native_browser: browser.identifier(), native_download: *native_download,
+                        }, self.origin, info.clone());
+                        return; // No callback clone/control/native release here.
+                    }
+                }
+            }
+            if !self.allow_downloads || self.inbox.closed.get() || copied.is_none() || browser.is_none() {
                 // No inbox/model borrow exists while calling CEF, including
                 // late callbacks after explicit shutdown. Terminal updates only
                 // release their handle; invalid items are never read further.
@@ -867,9 +1002,11 @@ fn release_closed_registration<B, C: Clone>(
     ledger: &mut Ledger<B, C>,
     id: u64,
 ) -> Vec<Effect<B, C>> {
-    let mut effects = Vec::new();
-    if let Some(state) = ledger.registrations.get(&id) {
+    let mut effects = ledger.collect_closed_metadata(id);
+    if let Some(state) = ledger.registrations.get_mut(&id) {
         state.accepting.set(false);
+        state.retiring = false;
+        state.continuing = false;
     }
     for entry in ledger
         .entries
@@ -878,7 +1015,6 @@ fn release_closed_registration<B, C: Clone>(
     {
         if !entry.terminal && !entry.snapshot.closing {
             entry.snapshot.closing = true;
-            entry.snapshot.cancel_requested = true;
             ledger
                 .ready
                 .push(DownloadEvent::Updated(entry.snapshot.clone()));
@@ -900,26 +1036,48 @@ fn release_closed_registration<B, C: Clone>(
     effects
 }
 
-/// Explicit opt-in for a local profile's downloads. The constructor acknowledges
-/// cancel-before-native-close teardown; it does not claim Arc parity for tab
-/// closure. Existing page creation methods never construct this capability.
+/// Explicit opt-in for a captured local profile's downloads. Source-close
+/// cancellation and candidate normal continuation are distinct policies.
+/// Existing page creation methods never construct either capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DownloadOwner {
     profile: u64,
+    policy: SourceClosePolicy,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceClosePolicy { Cancel, ContinueNormal }
 
 impl DownloadOwner {
     pub fn cancel_before_native_close(profile: u64) -> Self {
-        Self { profile }
+        Self { profile, policy: SourceClosePolicy::Cancel }
+    }
+    /// Candidate normal-only policy. Requires the outside-borrows retirement
+    /// handshake before destroying the source native parent. Not native accepted.
+    pub fn continue_normal_after_source_close(owner: u64) -> Self {
+        Self { profile: owner, policy: SourceClosePolicy::ContinueNormal }
     }
 }
+
+#[derive(Default)]
+struct Quiescence { retiring: AtomicBool, requested: AtomicBool, complete: AtomicBool, failed: AtomicBool, initiator_failed: AtomicBool }
 
 #[derive(Clone)]
 pub(crate) struct DownloadGate {
     admission: Arc<Gate>,
     native_alive: Arc<Gate>,
+    quiescence: Arc<Quiescence>,
 }
 impl DownloadGate {
+    pub(crate) fn document_result(&self, url: &str, success: bool) {
+        if !success && self.quiescence.retiring.load(Ordering::Acquire) && !self.quiescence.requested.load(Ordering::Acquire) {
+            self.quiescence.initiator_failed.store(true, Ordering::Release);
+        }
+        if url == "about:blank" && self.quiescence.requested.load(Ordering::Acquire) {
+            if success { self.quiescence.complete.store(true, Ordering::Release); }
+            else { self.quiescence.failed.store(true, Ordering::Release); }
+        }
+    }
     pub(crate) fn seal(&self) {
         self.native_alive.set(false);
         self.admission.set(false);
@@ -931,6 +1089,7 @@ impl DownloadRegistration {
         DownloadGate {
             admission: self.accepting.clone(),
             native_alive: self.native_alive.clone(),
+            quiescence: self.quiescence.clone(),
         }
     }
 }
@@ -941,6 +1100,8 @@ struct OwnedBrowser<C> {
     registration: DownloadRegistration,
     context: Rc<C>,
     native: Option<i32>,
+    policy: SourceClosePolicy,
+    retirement: Option<crate::retirement::Retirement>,
 }
 
 pub(crate) struct PreparedDownloads {
@@ -953,6 +1114,7 @@ pub(crate) struct RuntimeDownloads<C> {
     storage: Vec<(u64, std::rc::Weak<C>)>,
     next_identity: u64,
     failed: Vec<u64>,
+    retirement_history: Vec<crate::DownloadRetirementStatus>,
 }
 
 impl<C> Default for RuntimeDownloads<C> {
@@ -963,6 +1125,7 @@ impl<C> Default for RuntimeDownloads<C> {
             storage: Vec::new(),
             next_identity: 1,
             failed: Vec::new(),
+            retirement_history: Vec::new(),
         }
     }
 }
@@ -995,6 +1158,9 @@ impl<C> RuntimeDownloads<C> {
         owner: DownloadOwner,
         private: bool,
     ) -> Result<PreparedDownloads, DownloadError> {
+        if private && owner.policy == SourceClosePolicy::ContinueNormal {
+            return Err(DownloadError::UnsupportedPolicy);
+        }
         self.storage
             .retain(|(_, context)| context.strong_count() != 0);
         let storage = self.storage.iter().find_map(|(id, existing)| {
@@ -1017,6 +1183,8 @@ impl<C> RuntimeDownloads<C> {
                 registration: registration.clone(),
                 context,
                 native: None,
+                policy: owner.policy,
+                retirement: None,
             },
         );
         Ok(PreparedDownloads { registration })
@@ -1098,6 +1266,53 @@ impl<C> RuntimeDownloads<C> {
         work
     }
 
+    /// Logical close only queues work: no callbacks, handles or native calls.
+    pub(crate) fn queue_retirement(&mut self, native: i32) -> bool {
+        if self.downloads.0.inbox.closed.get() { return false; }
+        let Some(browser) = self.browsers.values_mut().find(|b| b.native == Some(native)) else { return false; };
+        if browser.policy != SourceClosePolicy::ContinueNormal { return false; }
+        browser.registration.accepting.set(false);
+        browser.registration.quiescence.retiring.store(true, Ordering::Release);
+        self.downloads.0.registrations.get_mut(&browser.registration.id).unwrap().retiring = true;
+        browser.retirement.get_or_insert_with(Default::default);
+        true
+    }
+
+    fn retirement_ids(&self) -> Vec<i32> {
+        self.browsers.values().filter_map(|b| b.retirement.as_ref().and(b.native)).collect()
+    }
+
+    fn transfer_state(&self, native: i32) -> crate::retirement::Transfers {
+        let browser = self.browsers.values().find(|b| b.native == Some(native)).unwrap();
+        let mut state = crate::retirement::Transfers::default();
+        for entry in self.downloads.0.entries.values().filter(|e| e.key.registration == browser.registration.id) {
+            state.associated = true;
+            if !entry.terminal {
+                state.unfinished += 1;
+                state.destinations_ready &= matches!(entry.snapshot.destination, DownloadDestination::Resolved(_));
+            }
+        }
+        state
+    }
+
+    fn seal_retirement_admission(&mut self, native: i32) {
+        let browser = self.browsers.values().find(|b| b.native == Some(native)).unwrap();
+        let state = self.downloads.0.registrations.get_mut(&browser.registration.id).unwrap();
+        state.retiring = false;
+        state.continuing = true;
+        state.accepting.set(false);
+    }
+
+    fn retirement(&self, native: i32) -> crate::retirement::Retirement {
+        self.browsers.values().find(|b| b.native == Some(native)).unwrap().retirement.as_ref().unwrap().clone()
+    }
+
+    fn set_retirement(&mut self, native: i32, state: crate::retirement::Retirement) {
+        if let Some(browser) = self.browsers.values_mut().find(|b| b.native == Some(native)) {
+            browser.retirement = Some(state);
+        }
+    }
+
     pub(crate) fn before_native_close(&mut self, native: i32) -> RuntimeDownloadWork<C> {
         let mut work = self.collect();
         if let Some(id) = self
@@ -1118,19 +1333,42 @@ impl<C> RuntimeDownloads<C> {
             .browsers
             .iter()
             .find_map(|(id, browser)| (browser.native == Some(native)).then_some(*id));
-        id.map(|id| self.release_registration(id))
+        let metadata = if let Some(id) = id {
+            self.browsers[&id].registration.gate().seal();
+            self.downloads.0.collect_closed_metadata(id)
+        } else { Vec::new() };
+        if let Some(id) = id {
+            let browser = &self.browsers[&id];
+            if let Some(retirement) = &browser.retirement {
+                let mut status = retirement.status(native, browser.registration.origin, self.transfer_state(native));
+                status.closed = true;
+                if !retirement.close_requested && !self.downloads.0.inbox.closed.get() {
+                    status.failure = Some("Native browser closed before continuation released its transfer lease".into());
+                }
+                self.retirement_history.push(status);
+            }
+        }
+        let mut work = id.map(|id| self.release_registration(id))
             .unwrap_or_else(|| RuntimeDownloadWork {
                 effects: DownloadEffects(Vec::new(), PhantomData),
                 contexts: Vec::new(),
-            })
+            });
+        let mut effects = DownloadEffects(metadata, PhantomData);
+        effects.append(work.effects);
+        work.effects = effects;
+        work
     }
 
     /// Admission seal performs no CEF calls and releases no native handles.
     pub(crate) fn seal(&mut self) {
-        self.downloads.0.inbox.closed.set(true);
+        self.downloads.0.seal_ingress();
         for browser in self.browsers.values() {
             browser.registration.accepting.set(false);
         }
+    }
+
+    pub(crate) fn downloads_native_handles_released(&self) -> bool {
+        self.browsers.is_empty() && self.downloads.0.native_handles_released()
     }
 
     pub(crate) fn shutdown(&mut self) -> RuntimeDownloadWork<C> {
@@ -1167,6 +1405,7 @@ pub(crate) fn poll_runtime() {
         runtime.lifecycle.collect_closed();
         let work = runtime.downloads.borrow_mut().collect();
         work.execute();
+        let _ = progress_retirements(&runtime);
     }
 }
 pub(crate) fn before_native_close(native: i32) {
@@ -1203,6 +1442,20 @@ fn running_runtime() -> Result<Rc<crate::Runtime>, String> {
     Ok(runtime)
 }
 
+fn shutdown_owned_dispatch(
+    phase: crate::ShutdownPhase,
+    between_native_calls: bool,
+    drain: impl FnOnce() -> Result<Vec<DownloadEvent>, String>,
+) -> Result<Vec<DownloadEvent>, String> {
+    if phase == crate::ShutdownPhase::Running {
+        return Err("Shutdown download drain requires begin_shutdown".into());
+    }
+    if !between_native_calls {
+        return Err("Shutdown download drain must run between native calls and shutdown polls".into());
+    }
+    drain()
+}
+
 impl crate::Engine {
     /// One process-wide drain for a future central profile/private router, not
     /// per-window page events. Call outside ALL window/model/engine borrows.
@@ -1213,6 +1466,23 @@ impl crate::Engine {
         work.execute();
         let events = runtime.downloads.borrow_mut().downloads.take_events();
         Ok(events)
+    }
+
+    /// Owned copies only, after begin_shutdown and between poll_shutdown calls,
+    /// including after Complete. The unique app shutdown consumer replaces the
+    /// normal take_download_events consumer; both consume the same ready queue.
+    /// No CEF calls, callback collection/release, controls or destination effects.
+    pub fn take_shutdown_download_events() -> Result<Vec<DownloadEvent>, String> {
+        crate::shutdown::check_thread()?;
+        let runtime = current_runtime();
+        let phase = runtime.as_ref().map(|runtime| runtime.lifecycle.shutdown_phase())
+            .unwrap_or(if crate::shutdown::shutdown_started() { crate::ShutdownPhase::Complete } else { crate::ShutdownPhase::Running });
+        let between = runtime.as_ref().is_none_or(|runtime| runtime.lifecycle.download_dispatch_allowed());
+        shutdown_owned_dispatch(phase, between, || {
+            let Some(runtime) = runtime else { return Ok(Vec::new()); };
+            let events = runtime.downloads.borrow_mut().downloads.0.take_shutdown_events()?;
+            Ok(events)
+        })
     }
 
     pub fn download_snapshot(token: DownloadToken) -> Result<Option<DownloadSnapshot>, String> {
@@ -1343,6 +1613,317 @@ mod tests {
     }
     fn destination() -> PathBuf {
         std::env::temp_dir().join("echo-download-foundation.bin")
+    }
+
+    #[test]
+    fn shutdown_complete_copied_before_seal_drains_once_without_native_releases_or_effects() {
+        let (mut ledger, key, origin) = fixture();
+        let active = update(&ledger, key, origin, DownloadPhase::InProgress, 12);
+        drop(ledger.collect());
+        ledger.ready.clear();
+        let complete = update(&ledger, key, origin, DownloadPhase::Complete, 32);
+        ledger.seal_ingress();
+        let events = ledger.take_shutdown_events().unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)]
+            if snapshot.info.phase == DownloadPhase::Complete && snapshot.info.received_bytes == 32));
+        assert_eq!(active.get(), 0);
+        assert_eq!(complete.get(), 0); // Owned drain never drops native handles.
+        assert!(ledger.entries[&token(&ledger, key)].control.is_some());
+        assert!(ledger.take_shutdown_events().unwrap().is_empty());
+        let cleanup = ledger.shutdown();
+        assert!(cleanup.iter().all(|effect| matches!(effect, Effect::ReleaseBefore(_) | Effect::ReleaseControl(_))));
+        assert_eq!(active.get(), 0); // Outside-borrows caller still owns releases.
+        assert!(ledger.native_handles_released());
+        drop(cleanup);
+        assert_eq!(active.get(), 1);
+        assert_eq!(complete.get(), 1);
+        assert!(ledger.take_shutdown_events().unwrap().is_empty());
+    }
+
+    #[test]
+    fn queued_progress_and_complete_at_seal_release_handles_without_canceling_completed_item() {
+        let (mut ledger, key, origin) = fixture();
+        let progress = update(&ledger, key, origin, DownloadPhase::InProgress, 12);
+        let complete = update(&ledger, key, origin, DownloadPhase::Complete, 32);
+        ledger.seal_ingress();
+        let cleanup = ledger.shutdown();
+        assert!(cleanup.iter().all(|effect| matches!(effect, Effect::ReleaseBefore(_) | Effect::ReleaseControl(_))));
+        assert_eq!(progress.get(), 0);
+        assert_eq!(complete.get(), 0);
+        drop(cleanup);
+        assert_eq!(progress.get(), 1);
+        assert_eq!(complete.get(), 1);
+        let events = ledger.take_shutdown_events().unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)] if snapshot.info.phase == DownloadPhase::Complete));
+    }
+
+    #[test]
+    fn shutdown_terminal_during_cancel_preserves_real_complete_without_commanded_success() {
+        let (mut ledger, key, origin) = fixture();
+        let active = update(&ledger, key, origin, DownloadPhase::Paused, 12);
+        drop(ledger.collect());
+        ledger.ready.clear();
+        ledger.seal_ingress();
+        let cancellation = ledger.shutdown();
+        assert!(matches!(cancellation.as_slice(), [Effect::Control(_, DownloadControl::Cancel)]));
+        assert_ne!(ledger.entries[&token(&ledger, key)].snapshot.info.phase, DownloadPhase::Complete);
+        ledger.take_shutdown_events().unwrap(); // Cancel request is not Complete.
+        // Same metadata-only ingress used by the real callback while Cancel is
+        // executing and native owner is still alive. It clones no callback.
+        assert!(ledger.inbox.copy_shutdown_terminal(key, origin, info(DownloadPhase::Complete, 32)));
+        let events = ledger.take_shutdown_events().unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)]
+            if snapshot.info.phase == DownloadPhase::Complete && snapshot.cancel_requested));
+        assert_eq!(active.get(), 0);
+        drop(cancellation);
+        assert_eq!(active.get(), 1);
+        assert!(!ledger.inbox.copy_shutdown_terminal(key, origin, info(DownloadPhase::Complete, 99)));
+        assert!(ledger.take_shutdown_events().unwrap().is_empty());
+        assert_eq!(ledger.entries[&token(&ledger, key)].snapshot.info.received_bytes, 32);
+    }
+
+    #[test]
+    fn shutdown_capture_rejects_unknown_spoofed_native_identity_origin_and_private_drift() {
+        let (mut ledger, key, origin) = fixture();
+        update(&ledger, key, origin, DownloadPhase::InProgress, 12);
+        drop(ledger.collect());
+        ledger.ready.clear();
+        ledger.seal_ingress();
+        for (wrong_key, wrong_origin) in [
+            (Key { native_download: 999, ..key }, origin),
+            (Key { native_browser: 999, ..key }, origin),
+            (key, DownloadProvenance::new(999, 20, 30, false)),
+            (key, DownloadProvenance::new(10, 20, 30, true)),
+        ] {
+            assert!(!ledger.inbox.copy_shutdown_terminal(wrong_key, wrong_origin, info(DownloadPhase::Complete, 32)));
+        }
+        assert!(!ledger.inbox.copy_shutdown_terminal(key, origin, info(DownloadPhase::Interrupted, 12)));
+        assert!(ledger.take_shutdown_events().unwrap().is_empty());
+        assert_eq!(ledger.keys.len(), 1);
+        assert_ne!(ledger.entries[&token(&ledger, key)].snapshot.info.phase, DownloadPhase::Complete);
+        drop(ledger.shutdown());
+    }
+
+    #[test]
+    fn complete_queued_without_prior_drain_is_known_at_seal_and_unknown_after_seal_is_rejected() {
+        let (mut ledger, key, origin) = fixture();
+        update(&ledger, key, origin, DownloadPhase::Complete, 32);
+        ledger.seal_ingress();
+        let events = ledger.take_shutdown_events().unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)] if snapshot.info.phase == DownloadPhase::Complete));
+        let unknown = Key { native_download: 8, ..key };
+        update(&ledger, unknown, origin, DownloadPhase::Complete, 45);
+        let release = release_closed_registration(&mut ledger, key.registration);
+        assert!(release.iter().all(|effect| matches!(effect, Effect::ReleaseBefore(_) | Effect::ReleaseControl(_))));
+        assert!(!ledger.keys.contains_key(&unknown));
+        drop(release);
+        drop(ledger.shutdown());
+    }
+
+    #[test]
+    fn terminal_after_runtime_shutdown_owner_drain_remains_copied_without_native_leases() {
+        use std::cell::RefCell;
+        let runtime = RefCell::new(RuntimeDownloads::<()>::default());
+        let context = Rc::new(());
+        let weak = Rc::downgrade(&context);
+        let prepared = runtime.borrow_mut().prepare(context.clone(), DownloadOwner::cancel_before_native_close(94), false).unwrap();
+        runtime.borrow_mut().bind(&prepared.registration, 703).unwrap();
+        let key = Key { registration: prepared.registration.id, native_browser: 703, native_download: 1 };
+        prepared.registration.inbox.push(Incoming::Update {
+            key, origin: prepared.registration.origin, info: info(DownloadPhase::InProgress, 12), callback: None,
+        });
+        let collect = runtime.borrow_mut().collect();
+        collect.execute();
+        runtime.borrow_mut().downloads.take_events();
+        runtime.borrow_mut().seal();
+        drop(context);
+        let cleanup = runtime.borrow_mut().shutdown();
+        assert!(runtime.try_borrow_mut().is_ok());
+        assert!(weak.upgrade().is_some()); // Release work still owns exact Rc.
+        cleanup.execute(); // Existing native dispatcher executes outside borrow.
+        assert!(weak.upgrade().is_none());
+        runtime.borrow_mut().downloads.0.take_shutdown_events().unwrap();
+        assert!(runtime.borrow().downloads_native_handles_released());
+        // Client/gate remains alive until native Closed, independently of the
+        // drained RuntimeDownloads owner map. No callback handle is cloned.
+        assert!(prepared.registration.inbox.copy_shutdown_terminal(key, prepared.registration.origin, info(DownloadPhase::Complete, 32)));
+        let closed = runtime.borrow_mut().native_closed(703);
+        closed.execute();
+        let events = shutdown_owned_dispatch(crate::ShutdownPhase::Complete, true,
+            || runtime.borrow_mut().downloads.0.take_shutdown_events()).unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)] if snapshot.info.phase == DownloadPhase::Complete));
+        assert!(runtime.borrow().downloads_native_handles_released());
+        assert!(runtime.borrow_mut().downloads.0.take_shutdown_events().unwrap().is_empty());
+    }
+
+    #[test]
+    fn post_complete_owned_dispatch_is_pure_exactly_once_and_running_actions_stay_closed() {
+        let (mut ledger, key, origin) = fixture();
+        update(&ledger, key, origin, DownloadPhase::Complete, 32);
+        ledger.seal_ingress();
+        drop(ledger.shutdown());
+        assert!(ledger.native_handles_released()); // CEF finalization precondition.
+        let calls = Cell::new(0);
+        let events = shutdown_owned_dispatch(crate::ShutdownPhase::Complete, true, || {
+            calls.set(calls.get() + 1);
+            ledger.take_shutdown_events()
+        }).unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)] if snapshot.info.phase == DownloadPhase::Complete));
+        assert_eq!(calls.get(), 1);
+        assert!(shutdown_owned_dispatch(crate::ShutdownPhase::Complete, true, || ledger.take_shutdown_events()).unwrap().is_empty());
+        for (phase, allowed) in [(crate::ShutdownPhase::Running, true), (crate::ShutdownPhase::ClosingBrowsers, false)] {
+            assert!(shutdown_owned_dispatch(phase, allowed, || panic!("reentrant/running drain must not execute")).is_err());
+        }
+        let id = token(&ledger, key);
+        assert_eq!(ledger.control(id, DownloadControl::Resume).err(), Some(DownloadError::Closed));
+        assert_eq!(ledger.resolve(id, destination()).err(), Some(DownloadError::Closed));
+        assert!(ledger.native_handles_released());
+    }
+
+    #[test]
+    fn retirement_collects_queued_two_items_then_accepts_known_updates_and_delayed_destination_only() {
+        let (mut ledger, first, origin) = fixture();
+        let second = Key { native_download: 2, ..first };
+        // Callback order at logical close: Update can precede Before.
+        update(&ledger, first, origin, DownloadPhase::Pending, 0);
+        before(&ledger, second, origin);
+        {
+            let registration = ledger.registrations.get_mut(&first.registration).unwrap();
+            registration.accepting.set(false);
+            registration.retiring = true;
+        }
+        drop(ledger.collect());
+        let first_token = token(&ledger, first);
+        let second_token = token(&ledger, second);
+        let registration = ledger.registrations.get_mut(&first.registration).unwrap();
+        registration.retiring = false;
+        registration.continuing = true;
+        before(&ledger, first, origin); // Known pending item's delayed callback.
+        update(&ledger, second, origin, DownloadPhase::Paused, 12);
+        drop(ledger.collect());
+        let effects = ledger.resolve(first_token, destination()).unwrap();
+        assert!(matches!(effects.as_slice(), [Effect::Continue(_, _)]));
+        drop(effects);
+        assert!(!ledger.entries[&first_token].snapshot.closing);
+        assert!(!ledger.entries[&second_token].snapshot.cancel_requested);
+        let unknown = Key { native_download: 3, ..first };
+        before(&ledger, unknown, origin);
+        update(&ledger, unknown, origin, DownloadPhase::InProgress, 1);
+        let effects = ledger.collect();
+        assert!(effects.iter().any(|e| matches!(e, Effect::Control(_, DownloadControl::Cancel))));
+        assert!(!ledger.keys.contains_key(&unknown));
+        drop(effects);
+        update(&ledger, first, origin, DownloadPhase::Complete, 20);
+        update(&ledger, second, origin, DownloadPhase::Interrupted, 12);
+        drop(ledger.collect());
+        assert!(ledger.entries[&first_token].terminal);
+        assert!(!ledger.entries[&second_token].terminal);
+        update(&ledger, second, origin, DownloadPhase::Canceled, 12);
+        drop(ledger.collect());
+        assert!(ledger.entries[&second_token].terminal);
+    }
+
+    #[test]
+    fn continuation_native_close_is_failure_history_and_exact_context_release_is_deferred() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let context = Rc::new(());
+        let weak = Rc::downgrade(&context);
+        let prepared = runtime.prepare(context.clone(), DownloadOwner::continue_normal_after_source_close(91), false).unwrap();
+        runtime.bind(&prepared.registration, 601).unwrap();
+        assert!(runtime.queue_retirement(601));
+        let key = Key { registration: prepared.registration.id, native_browser: 601, native_download: 1 };
+        runtime.downloads.0.inbox.push(Incoming::Update {
+            key, origin: prepared.registration.origin, info: info(DownloadPhase::Pending, 0), callback: None,
+        });
+        runtime.collect().execute();
+        assert_eq!(runtime.transfer_state(601).unfinished, 1);
+        runtime.seal_retirement_admission(601);
+        assert!(!prepared.registration.accepting.get());
+        assert!(prepared.registration.native_alive.get());
+        drop(context);
+        let release = runtime.native_closed(601);
+        assert!(weak.upgrade().is_some());
+        assert!(runtime.retirement_history[0].failure.is_some());
+        assert!(runtime.retirement_history[0].closed);
+        assert!(!runtime.retirement_history[0].host_released);
+        let snapshot = &runtime.downloads.0.entries[&runtime.downloads.0.keys[&key]].snapshot;
+        assert_eq!(snapshot.info.phase, DownloadPhase::Pending);
+        assert!(!snapshot.cancel_requested); // Never invent cancellation/completion.
+        release.execute();
+        assert!(weak.upgrade().is_none());
+        assert!(!prepared.registration.native_alive.get());
+    }
+
+    #[test]
+    fn copied_complete_then_unexpected_closed_before_drain_preserves_snapshot_and_history() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        let prepared = runtime.prepare(Rc::new(()), DownloadOwner::continue_normal_after_source_close(93), false).unwrap();
+        runtime.bind(&prepared.registration, 602).unwrap();
+        let key = Key { registration: prepared.registration.id, native_browser: 602, native_download: 1 };
+        runtime.downloads.0.inbox.push(Incoming::Update {
+            key, origin: prepared.registration.origin, info: info(DownloadPhase::InProgress, 12), callback: None,
+        });
+        runtime.collect().execute();
+        runtime.downloads.take_events();
+        assert!(runtime.queue_retirement(602));
+        runtime.seal_retirement_admission(602);
+        runtime.downloads.0.inbox.push(Incoming::Update {
+            key, origin: prepared.registration.origin, info: info(DownloadPhase::Complete, 32), callback: None,
+        });
+        // Exact production Closed-first seam, with Complete copied but undrained.
+        let release = runtime.native_closed(602);
+        let snapshot = &runtime.downloads.0.entries[&runtime.downloads.0.keys[&key]].snapshot;
+        assert_eq!(snapshot.info.phase, DownloadPhase::Complete);
+        assert_eq!(snapshot.info.received_bytes, 32);
+        assert!(!snapshot.cancel_requested);
+        let history = &runtime.retirement_history[0];
+        assert_eq!(history.unfinished, 0);
+        assert!(history.closed);
+        assert!(history.failure.is_some()); // Unexpected close is still reported.
+        let events = runtime.downloads.take_events();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)] if snapshot.info.phase == DownloadPhase::Complete));
+        assert!(release.effects.0.iter().all(|effect| matches!(effect, Effect::ReleaseBefore(_) | Effect::ReleaseControl(_))));
+        release.execute();
+    }
+
+    #[test]
+    fn release_only_closed_reducer_preserves_terminal_first_and_never_emits_native_controls() {
+        let (mut ledger, key, origin) = fixture();
+        let other = Key { native_download: 2, ..key };
+        // An already-canceled request must not produce another Cancel from a
+        // copied progress update once its native owner has closed.
+        update(&ledger, key, origin, DownloadPhase::InProgress, 1);
+        drop(ledger.collect());
+        drop(ledger.control(token(&ledger, key), DownloadControl::Cancel).unwrap());
+        update(&ledger, key, origin, DownloadPhase::Interrupted, 7);
+        update(&ledger, other, origin, DownloadPhase::Complete, 32);
+        let effects = release_closed_registration(&mut ledger, key.registration);
+        assert!(effects.iter().all(|effect| matches!(effect, Effect::ReleaseBefore(_) | Effect::ReleaseControl(_))));
+        assert_eq!(ledger.entries[&token(&ledger, key)].snapshot.info.phase, DownloadPhase::Interrupted);
+        assert_eq!(ledger.entries[&token(&ledger, other)].snapshot.info.phase, DownloadPhase::Complete);
+        assert!(ledger.entries[&token(&ledger, other)].terminal);
+        drop(effects);
+    }
+
+    #[test]
+    fn continuation_is_normal_only_and_app_shutdown_overrides_known_item_gate() {
+        let mut runtime = RuntimeDownloads::<()>::default();
+        assert_eq!(runtime.prepare(Rc::new(()), DownloadOwner::continue_normal_after_source_close(92), true).err(), Some(DownloadError::UnsupportedPolicy));
+        let (mut ledger, key, origin) = fixture();
+        update(&ledger, key, origin, DownloadPhase::Paused, 1);
+        drop(ledger.collect());
+        let state = ledger.registrations.get_mut(&key.registration).unwrap();
+        state.accepting.set(false);
+        state.continuing = true;
+        let effects = ledger.shutdown();
+        assert!(effects.iter().any(|e| matches!(e, Effect::Control(_, DownloadControl::Cancel))));
+        assert!(ledger.entries[&token(&ledger, key)].snapshot.cancel_requested);
+        assert!(!ledger.registrations[&key.registration].continuing);
+        drop(effects);
+        update(&ledger, key, origin, DownloadPhase::InProgress, 2);
+        let effects = ledger.collect();
+        assert!(effects.iter().any(|e| matches!(e, Effect::Control(_, DownloadControl::Cancel))));
+        assert_eq!(ledger.entries[&token(&ledger, key)].snapshot.info.phase, DownloadPhase::Paused);
     }
 
     #[test]
@@ -2083,9 +2664,11 @@ mod tests {
         runtime.native_closed(109).execute();
         runtime.collect().execute();
         let events = runtime.downloads.take_events();
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], DownloadEvent::Updated(snapshot)
+            if snapshot.provenance.owner() == 27 && snapshot.info.phase == DownloadPhase::Interrupted && snapshot.closing));
         assert!(
-            matches!(&events[0], DownloadEvent::Updated(snapshot) if snapshot.provenance.owner() == 28 && snapshot.provenance.is_private())
+            matches!(&events[1], DownloadEvent::Updated(snapshot) if snapshot.provenance.owner() == 28 && snapshot.provenance.is_private())
         );
         assert!(runtime.browsers.contains_key(&second.registration.id));
         assert!(!runtime.browsers.contains_key(&first.registration.id));
@@ -2279,6 +2862,34 @@ mod closure_order_tests {
     }
 
     #[test]
+    fn shutdown_complete_then_closed_same_pump_preserves_owned_copy_and_context_release_order() {
+        let lifecycle = Lifecycle::default();
+        let runtime = Rc::new(RefCell::new(TestRuntime::default()));
+        let trace = Rc::new(RefCell::new(Vec::new()));
+        let owner = add_owner(&runtime, &lifecycle, 211);
+        update(&runtime, &owner, DownloadPhase::InProgress, &trace);
+        let work = runtime.borrow_mut().ledger.collect();
+        run(work);
+        runtime.borrow_mut().ledger.ready.clear();
+        runtime.borrow_mut().ledger.seal_ingress();
+        assert!(runtime.borrow().ledger.inbox.copy_shutdown_terminal(owner.key, owner.origin,
+            DownloadInfo { phase: DownloadPhase::Complete, received_bytes: 32,
+                ..runtime.borrow().ledger.entries.values().next().unwrap().snapshot.info.clone() }));
+        queue_close(&owner, &lifecycle);
+        lifecycle.after_closed_with(|native| release(&runtime, native), || {
+            assert!(runtime.try_borrow_mut().is_ok());
+            assert_eq!(owner.drops.get(), 1);
+            assert!(owner.context.upgrade().is_none());
+            assert!(runtime.borrow().ledger.native_handles_released());
+        });
+        let events = shutdown_owned_dispatch(crate::ShutdownPhase::Complete, true, || runtime.borrow_mut().ledger.take_shutdown_events()).unwrap();
+        assert!(matches!(events.as_slice(), [DownloadEvent::Updated(snapshot)]
+            if snapshot.info.phase == DownloadPhase::Complete && snapshot.info.received_bytes == 32));
+        assert!(trace.borrow().is_empty());
+        assert!(runtime.borrow_mut().ledger.take_shutdown_events().unwrap().is_empty());
+    }
+
+    #[test]
     fn queued_active_or_interrupted_update_then_closed_is_release_only_before_pump_collection() {
         for phase in [DownloadPhase::InProgress, DownloadPhase::Interrupted] {
             let lifecycle = Lifecycle::default();
@@ -2311,7 +2922,19 @@ mod closure_order_tests {
                 },
             );
             assert!(trace.borrow().is_empty());
-            assert!(!runtime.borrow().ledger.keys.contains_key(&closed.key));
+            let closed_token = runtime.borrow().ledger.keys[&closed.key];
+            {
+                let state = runtime.borrow();
+                let entry = &state.ledger.entries[&closed_token];
+                assert_eq!(entry.snapshot.info.phase, phase);
+                assert_eq!(entry.snapshot.info.received_bytes, 12);
+                assert!(entry.snapshot.closing);
+                assert!(!entry.snapshot.cancel_requested);
+                assert!(!entry.terminal);
+                assert!(entry.before.is_none() && entry.control.is_none());
+                assert!(!state.owners.contains_key(&201));
+            }
+            assert_eq!(runtime.borrow_mut().ledger.control(closed_token, DownloadControl::Resume).err(), Some(DownloadError::Closed));
             let token = runtime.borrow().ledger.keys[&live.key];
             let effects = runtime
                 .borrow_mut()
@@ -2394,5 +3017,158 @@ mod closure_order_tests {
         lifecycle.after_closed_with(|native| release(&runtime, native), || shutdown(&runtime));
         assert_eq!(owner.drops.get(), 1);
         assert!(trace.borrow().is_empty());
+    }
+}
+
+/// Observe the release separately from Closed: lifecycle drops exact clip and
+/// independent parent only after its callback dispatcher has returned.
+pub(crate) fn native_lease_released(native: i32) {
+    if let Some(runtime) = current_runtime() {
+        if let Some(status) = runtime.downloads.borrow_mut().retirement_history.iter_mut().rev()
+            .find(|status| status.native_browser == native && status.closed) {
+            status.host_released = true;
+        }
+    }
+}
+
+fn progress_retirements(runtime: &crate::Runtime) -> Result<crate::DownloadRetirementPreparation, String> {
+    use crate::retirement::Action;
+    let Some(_guard) = runtime.lifecycle.preparing_retirements() else {
+        return Ok(crate::DownloadRetirementPreparation::Pending);
+    };
+    // App quit overrides continuation; existing shutdown barriers own closure.
+    if runtime.downloads.borrow().downloads.0.inbox.closed.get() {
+        return Ok(crate::DownloadRetirementPreparation::Ready);
+    }
+    let ids = runtime.downloads.borrow().retirement_ids();
+    let mut failures = Vec::new();
+    for native in ids {
+        // All inbox work preceding the active decision is collected first.
+        let work = runtime.downloads.borrow_mut().collect();
+        work.execute();
+        let (mut retirement, transfers, quiescence) = {
+            let downloads = runtime.downloads.borrow();
+            let Some(browser) = downloads.browsers.values().find(|b| b.native == Some(native)) else { continue; };
+            (downloads.retirement(native), downloads.transfer_state(native), browser.registration.quiescence.clone())
+        };
+        if let Some(failure) = &retirement.failure { failures.push(failure.clone()); continue; }
+        if retirement.close_requested { continue; }
+        let Some(browser) = runtime.lifecycle.retirement_browser(native) else {
+            retirement.failure = Some(format!("Retiring native browser {native} lost its lifecycle lease"));
+            runtime.downloads.borrow_mut().set_retirement(native, retirement);
+            failures.push(format!("Retiring browser {native} is unavailable"));
+            continue;
+        };
+        let result = (|| -> Result<(), String> {
+            if browser.is_valid() == 0 { return Err(format!("Retiring browser {native} closed unexpectedly")); }
+            // Empty/terminal sources use the ordinary close path immediately;
+            // no native continuation host is needed (even on unsupported hosts).
+            if retirement.next(transfers, browser.is_loading() != 0, false) == Action::Close {
+                retirement.close_requested = true;
+                runtime.lifecycle.request_close(native);
+                return Ok(());
+            }
+            let host = browser.host().ok_or("Retiring browser has no native host")?;
+            host.set_audio_muted(1);
+            if browser.is_valid() == 0 || host.is_audio_muted() == 0 {
+                return Err("Cannot verify retired browser audio mute".into());
+            }
+            // Active and pending initiators move the original native host
+            // synchronously before the caller can destroy its GPUI parent.
+            if !retirement.parked {
+                runtime.lifecycle.park_download_browser(native)?;
+                retirement.parked = true;
+            }
+            if browser.is_valid() == 0 { return Err("Retiring browser closed during native handoff".into()); }
+            if !transfers.associated && quiescence.initiator_failed.load(Ordering::Acquire) {
+                return Err("Retired source initiating navigation failed before any download association".into());
+            }
+            if transfers.associated || browser.is_loading() == 0 {
+                runtime.downloads.borrow_mut().seal_retirement_admission(native);
+            }
+            let frame = browser.main_frame();
+            let blank = frame.as_ref().is_some_and(|frame| CefString::from(&frame.url()).to_string() == "about:blank");
+            if quiescence.failed.load(Ordering::Acquire) {
+                return Err("Retirement about:blank navigation failed; continuation is not accepted".into());
+            }
+            if retirement.blank_requested && quiescence.complete.load(Ordering::Acquire) && blank && browser.is_loading() == 0 {
+                retirement.blank_verified = true;
+            }
+            match retirement.next(transfers, browser.is_loading() != 0, blank) {
+                Action::Blank => {
+                    let frame = frame.ok_or("Retiring browser has no main frame for document quiescence")?;
+                    quiescence.requested.store(true, Ordering::Release);
+                    retirement.blank_requested = true;
+                    // Never StopLoad: an unresolved initiating request must not
+                    // be aborted. Every known unfinished destination is accepted.
+                    frame.load_url(Some(&CefString::from("about:blank")));
+                }
+                Action::Close => {
+                    retirement.close_requested = true;
+                    runtime.lifecycle.request_close(native);
+                }
+                Action::Park | Action::Wait | Action::Failed => {}
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            retirement.failure = Some(error.clone());
+            failures.push(error);
+        }
+        runtime.downloads.borrow_mut().set_retirement(native, retirement);
+    }
+    if !failures.is_empty() { return Err(failures.join("; ")); }
+    Ok(crate::DownloadRetirementPreparation::Ready)
+}
+
+impl crate::Engine {
+    /// No runtime/no queued work is Ready. Call OUTSIDE all App/model/engine
+    /// borrows, BEFORE destroying a source GPUI parent. Native parking is
+    /// synchronous. Ready permits parent destruction, not a native parity claim.
+    pub fn prepare_download_retirements() -> Result<crate::DownloadRetirementPreparation, String> {
+        crate::shutdown::check_thread()?;
+        let Some(runtime) = current_runtime() else { return Ok(crate::DownloadRetirementPreparation::Ready); };
+        if runtime.lifecycle.is_preparing_retirements() {
+            return Ok(crate::DownloadRetirementPreparation::Pending);
+        }
+        if runtime.downloads.borrow().retirement_ids().is_empty() {
+            return Ok(crate::DownloadRetirementPreparation::Ready);
+        }
+        if !runtime.lifecycle.download_dispatch_allowed() {
+            return Err("Download retirement cannot run inside CEF creation, pumping or shutdown polling".into());
+        }
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().collect();
+        work.execute();
+        progress_retirements(&runtime)
+    }
+
+    /// Pure scheduling hint: no pumping, callback collection or CEF calls.
+    /// A central app service must keep pumping while true, including without
+    /// source Engine/GPUI owners, and independently drain take_download_events.
+    pub fn download_work_pending() -> bool {
+        current_runtime().is_some_and(|runtime| {
+            let downloads = runtime.downloads.borrow();
+            let queued = !downloads.downloads.0.inbox.queue.lock().unwrap().is_empty();
+            queued || !downloads.downloads.0.ready.is_empty()
+                || !downloads.failed.is_empty()
+                || downloads.browsers.values().any(|b| b.retirement.is_some())
+                || downloads.downloads.0.entries.values().any(|e| !e.terminal && !e.snapshot.closing)
+        })
+    }
+
+    /// Pure diagnostics; retains neither native handles nor Runtime owners.
+    /// Closed history is process-local, with original immutable provenance.
+    pub fn download_retirement_status() -> Vec<crate::DownloadRetirementStatus> {
+        let Some(runtime) = current_runtime() else { return Vec::new(); };
+        let downloads = runtime.downloads.borrow();
+        let mut statuses = downloads.retirement_history.clone();
+        for browser in downloads.browsers.values() {
+            if let (Some(native), Some(retirement)) = (browser.native, &browser.retirement) {
+                statuses.push(retirement.status(native, browser.registration.origin, downloads.transfer_state(native)));
+            }
+        }
+        statuses.sort_by_key(|s| s.native_browser);
+        statuses
     }
 }

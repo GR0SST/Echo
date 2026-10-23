@@ -1,9 +1,11 @@
 # Engine download integration
 
-Engine-only wiring is present. **All existing creation APIs and inspector clients
-deny downloads.** No browser caller opts in, no default destination is selected,
-and no UI, file picker, Save As dialog, settings, persistence or account service
-is introduced. Download parity rows remain missing pending native Arc reference.
+Production page creation and inspector clients still deny downloads. A narrow
+loopback-only automation probe explicitly opts in for native verification.
+Completed-record storage and the central browser router are registered but
+dormant: no production destination policy, page admission, or Library Downloads
+route is enabled. Download parity remains incomplete. The normal Arc lifetime
+reference and engine continuation boundary are described below.
 
 ## Explicit opt-in seam
 
@@ -21,9 +23,10 @@ Engine::create_view_in_context_with_download_owner(
 ) -> Result<ViewId, String>
 ```
 
-Construct the capability with
-`DownloadOwner::cancel_before_native_close(captured_local_profile_id)`. Its name
-requires an explicit teardown decision; it does not establish Arc's behavior.
+The original capability is
+`DownloadOwner::cancel_before_native_close(captured_local_profile_id)`. A separate
+normal continuation candidate and its mandatory handshake are described below.
+Neither constructor establishes native acceptance.
 The profile ID is opaque to engine. Blank uses its retained normal source profile;
 never read the active Space/window profile later in a callback. Incognito data
 must be routed separately and never serialized into normal sessions/history.
@@ -49,31 +52,23 @@ Legacy `create_view`, `create_view_in_context`, forks and inspector creation
 remain denied. The explicit deny handler blocks both user-initiated downloads
 and the before/update paths used by StartDownload (which bypasses can_download).
 
-## Native-close policy requiring reference before browser adoption
+## Original explicit native-close cancellation policy
 
-Local CEF154 `include/cef_life_span_handler.h:279-290` says browser destruction
-aborts associated network requests and restricts browser methods after
-OnBeforeClose. Retaining a Rust Browser or context wrapper is not evidence that
-the native page/download remains usable after its host window is destroyed.
+`cancel_before_native_close` invokes download cancellation before submitting
+CloseBrowser, retains the exact context until Closed and releases callback
+handles/context leases without issuing controls against a closed native owner.
+Unexpected OnBeforeClose seals its gate immediately. This capability remains
+available with its original semantics; it is not the normal continuation policy.
 
-This patch therefore does not keep a retired native browser/child view alive or
-invent a detached download host. The opt-in capability explicitly selects
-**cancel before native close**: the existing lifecycle ledger invokes download
-cancellation before submitting CloseBrowser. It retains the exact context lease
-until Closed, then releases callback handles/context leases without issuing
-controls against the closed native owner. Unexpected OnBeforeClose seals its
-gate immediately; subsequent lifecycle collection releases that owner's state.
+CEF154's download delegate can continue associated transfers while the context
+survives native browser destruction, but suppresses public handler updates once
+the original browser is gone. A replacement blank browser/context alone cannot
+provide a tracker. The separate candidate below retains the original browser in
+an independently owned host; it preserves the OnBeforeClose release-only barrier.
 
-The shared download ledger and captured owner outlive live view-map removal;
-progress is never passed through Engine/PageStore live-page event filters.
-This independence does not promise transfers continue after native destruction.
-
-**Unresolved native question:** Does Arc continue normal/Blank/private/Little Arc
-transfers after source tab/window closure, and what happens at final private
-window closure? Observe this before any browser caller adopts the opt-in seam.
-If continuation is required, design and verify the native browser/host lifetime
-separately; do not weaken the existing CEF destruction barrier or preserve a raw
-child-view pointer after its parent window is gone.
+Normal Arc source tab/window continuation has now been observed. Blank, private,
+Little Arc, final-private-window and application quit policies remain outside
+that evidence. Verify each separately before adoption.
 
 ## Owned facade and borrowing contract
 
@@ -169,12 +164,10 @@ closed owners, preserve unrelated owners and cancellation-before-new-close
 ordering, and assert exact context/callback releases occur outside state borrows
 and lifecycle queue locks. They construct no native CEF objects.
 
-The integrated engine passed all 82 engine tests and the combined workspace
-passed 786 tests on October 23, 2026. Native acceptance of the explicit admitting
-API with disposable local download fixtures remains outstanding. No current caller opts in, so applying
-it alone must leave existing downloads denied and must not change UI behavior.
-Keep Arc native-close observation as a gate for later browser adoption. No
-account, browser login or cross-device service is in scope.
+The October 23 checkpoint passed 82 engine tests and 786 workspace tests. It
+verified only the denied production path. The October 24 checkpoints below add
+an explicit disposable loopback probe; production page creation still does not
+opt in. No account, browser login or cross-device service is in scope.
 
 ## Bundled regression check — October 23, 2026
 
@@ -196,3 +189,202 @@ The existing cancel-before-native-close capability is consequently **not a
 normal-browser parity policy**. Normal caller adoption remains disabled until
 CEF continuation, callback routing and storage/host lifetime are implemented and
 verified against that requirement. Final private-window behavior is unobserved.
+
+## Normal continuation implementation (CEF154; bounded macOS acceptance below)
+
+`DownloadOwner::continue_normal_after_source_close(captured_local_profile_id)`
+is a separate, explicit policy from `cancel_before_native_close`. Private
+request contexts reject the candidate (`UnsupportedPolicy`); this is not a
+private-window behavior claim. Legacy page creation and inspectors still deny
+all downloads. There is no normal production caller adoption in this engine
+change. The normal Arc reference is `/tmp/echo-download-lifetime-native-20261023.md`;
+CEF reasoning and remaining acceptance cases are in
+`/tmp/echo-cef-download-continuation-design-r1.md`.
+
+The browser-close handshake is exactly:
+
+```rust
+pub enum DownloadRetirementPreparation { Ready, Pending }
+Engine::prepare_download_retirements()
+    -> Result<DownloadRetirementPreparation, String>;
+Engine::download_work_pending() -> bool;
+Engine::download_retirement_status() -> Vec<DownloadRetirementStatus>;
+```
+
+After logically closing source views, call `prepare_download_retirements` on
+the initialization thread **outside ALL App/model/engine/window borrows**, before
+removing their GPUI window. `Ready` means the old parent can be destroyed: active
+or pending sources have been synchronously reparented into independently owned
+hidden native hosts; empty/terminal sources have queued ordinary native close.
+`Pending` means a nested retirement operation still owns the handoff boundary;
+retry after returning to the normal event loop. `Err` is a real native/mute/load
+failure; do not remove the old window, select cancellation, or report successful
+continuation. No runtime/no work returns `Ok(Ready)`. Pending destination or blank
+navigation does **not** hold the old GPUI window once parking has succeeded.
+
+`Engine::close` removes page routing, inspectors and snapshot namespace
+immediately. It queues retirement without CEF calls or callback/context release.
+The outside-borrows boundary collects queued Before/Update callbacks before
+checking active work. New admission is closed on logical retirement. Already
+queued callbacks are admitted before the known-item cutoff; while a loading
+initiator is still unassociated, its late Before/Update callbacks are allowed to
+establish association. Once associated, only known-item updates and delayed
+Before callbacks are admitted. Native liveness remains independent and seals
+only at OnBeforeClose. Pending, Paused and Interrupted all retain the source;
+only Complete/Canceled release transfer leases. Interrupted cancellation still
+requires native verification; no synthetic terminal state is produced.
+
+The initiation boundary is deliberately observable. `waiting_for_association`
+means the original loading document is retained/muted in the independent host,
+with no StopLoad/navigation/timeout. A main-frame load error without an associated
+item becomes an explicit retirement failure. An empty, nonloading source closes
+promptly after callback collection. CEF has no public fence proving that an
+unseen future item cannot arrive from a nonloading document; close-before-headers
+and delayed sibling admission remain native acceptance gates, not guarantees.
+Do not broaden the candidate to ordinary browsing on the strength of this seam.
+
+Once **every** unfinished item's destination has been resolved, the engine
+requests `about:blank` on the original browser. It verifies main-frame load-end,
+URL and loading state, rather than treating LoadURL submission as completion.
+The source is muted and mute is checked first. No stop_loading is used. A blank
+load error is explicit failure. Pending quiescence is exposed by
+`blank_requested && !blank_verified`; it is not native acceptance and the
+central service/probe must surface stuck or failed cases. The normal probe must
+require blank verification while the download remains active, plus exact file
+bytes/hash and real later callbacks. This code does not certify that navigation
+preserves transfers in the linked binary or that unload cannot stall it.
+
+Lifecycle owns the **same** CEF browser, clip/native child and exact Rc of its
+RequestContext until OnBeforeClose. It additionally owns an independent parent
+lease installed *before* native attachment, including partial attachment failure.
+No keeper points to Engine, StorageContext, Runtime or GPUI. macOS uses a never
+ordered-front borderless NSWindow and moves the original retained clip, preserving
+CEF's original parent_view. Windows uses a hidden nonactivating tool HWND; X11
+uses an owned unmapped parent on a private XCB connection, with checked
+CreateWindow/ReparentWindow/DestroyWindow/ConfigureWindow requests and exact-cookie
+xcb_request_check error handling. No Xlib process-global handler is installed or
+restored. Wayland-only or unavailable XCB hosts fail explicitly. Platform
+compilation/native acceptance is still required independently.
+
+The app-owned central download service must continue `Engine::pump()` and
+`take_download_events()` outside borrows even after every source Engine/window
+is gone. `download_work_pending` is a pure scheduling hint (no CEF or collection):
+it includes inbox/events, failed creations, unfinished live entries and retired
+browsers awaiting Closed. `download_retirement_status` is also pure. Each status
+contains native browser ID, original provenance, parked/unfinished/association,
+blank requested/verified, close requested, closed, host_released and failure.
+Closed history survives keeper cleanup in memory. `closed` records receipt of
+OnBeforeClose; `host_released` is set only after lifecycle drops its lease.
+Neither is inferred from window visibility or output-file size. Native browser
+IDs may be reused; always pair diagnostics with immutable provenance.
+
+Final terminal collection queues native close outside borrows. The existing
+DoClose path destroys only the selected native child; it never closes the hidden
+parent or another browser as its close target. Closed-first dispatch seals
+controls and releases download leases, then drops clip/context/hidden parent
+outside lifecycle borrows. An unexpected Closed preserves the last actual
+transfer phase and records failure, without fabricating completion/cancellation.
+App shutdown is separate: it seals admission, overrides continuation, cancels
+and releases download controls/context owners, and finishes the existing native
+browser/cookie-flush/owner barriers. This remains Echo's safe-shutdown policy,
+not an assertion about Arc quit behavior.
+
+CEF-free regression sources cover queued update-before-Before, two-item lifetime,
+known callbacks vs new admission, pending destination, paused/interrupted leases,
+normal-only gating, shutdown override, unexpected native close with deferred exact
+context release, reentrant dispatch exclusion, and install-before-attach host
+failure/release through production generic seams. This implementation task only
+syntax-parsed the files; parent must run Cargo tests, cross-platform checks and
+the bounded native probes before adoption or a parity status change.
+
+
+## Independent review fixes — October 24, 2026
+
+Shutdown polling now excludes an active native retirement before it can drain
+registration owners retained by the handoff snapshot. Closed-first dispatch
+reduces already-copied metadata in a release-only mode before history counts and
+native lease release: a genuine queued Complete remains Complete even when
+Closed arrives before the ordinary drain. That mode cannot emit native controls
+or destination continuations, including for rejected provenance. X11 traps now
+attribute only the exact Display/request serial range and forward unrelated
+errors to the previous handler outside the trap lock; unrelated errors cannot
+turn successful hidden-parent creation into a failed result that loses ownership.
+CEF/X-server-free regressions use the production shutdown gate, RuntimeDownloads,
+release-only Ledger reducer and native request-attribution/result seams. These
+changes were syntax-parsed only in the implementation task; parent rerun and all
+previously open native acceptance gates remain required.
+
+
+## R3 X11 review fix and copied-state regression — October 24, 2026
+
+The R2 temporary Xlib trap was removed entirely. Forwarding scoped errors did
+not make overlapping process-global handler installation/restoration safe: a
+foreign scope could restore the engine callback later, allowing it to become its
+own predecessor. X11 host operations now use a private runtime-loaded
+`libxcb.so.1` connection and checked requests whose errors are returned directly
+for their connection/cookie. There is no engine handler to capture, restore or
+recursively forward to. The production checked-request seam has server-free
+regressions for interleaved foreign request errors, unaffected foreign handler
+state across two generations, exact own-request rejection and parent ownership
+cleanup. Linux compilation and native host acceptance remain open.
+
+The R2 engine run reported 93 passing tests and one obsolete closure assertion:
+absence of the closed owner's token conflicted with the release-only copied-state
+contract. Its replacement requires original copied phase/bytes, closing state,
+no synthetic cancellation or terminal status, no retained controls/native owner,
+and Resume returning Closed. Existing no-native-controls, deferred release,
+unrelated-cookie ordering and live-other-owner control assertions remain.
+These R3 changes were only syntax-parsed here; no test rerun is claimed.
+
+
+## macOS continuation acceptance — October 24, 2026
+
+The disposable fixture is reproducible with
+`bun scripts/fixtures/download-probe.ts`. It serves a 32 MiB attachment on
+loopback port 18473. Production admission and destination policy remain disabled.
+The native probe resolves only its validated requested filename into a disposable
+output directory, retaining exact owner/storage/browser provenance and token.
+
+Baseline and source-tab closure passed on the immutable R4 bundle (binary
+SHA-256 `63d4f2837e057ef40ea44b690966a14e43b9355a15f78fb9e7b2eaf133681e43`).
+The original R3 baseline failed filename authorization and is not acceptance.
+R4 uses `DownloadDestination::Requested.suggested_name`; empty later item names
+are accepted only for the already-bound token/provenance and resolved exact path.
+
+Source-window closure passed on the R5 bundle (binary SHA-256
+`adecca45266426800d3ef848f5edc78ea1d72a2daffd8eeaaaf0e856198da5c6`).
+The source normal root closed while a separate empty private window kept Echo
+running. This tests a normal download, not private download lifetime. While the
+transfer remained unfinished, status confirmed parking and main-frame blank
+verification. Later genuine Complete reported 33,554,432 bytes. The output file
+was independently hashed; all three successful runs matched
+`46a3eca34e6d0d965224144558ccf51a14916a0075a09089f08da4868a020644`.
+
+After completion, retirement reported Closed and host release with no failure.
+Native window inventory no longer contained the independent hidden NSWindow.
+Screenshots before source closure and of the surviving window were inspected.
+All three processes exited 0 after CEF Complete with zero owners, no browsers
+and no cookie flushes pending. Logs and screenshots remain under
+`/tmp/echo-download-probe-{baseline,tab,window}-native-r{4,5}.log` and the
+corresponding screenshot paths recorded by each script. These paths identify
+local evidence, not portable test artifacts.
+
+The current integrated workspace passed 894 tests: 627 browser, 165 core and
+102 engine. These checks do not establish delayed sibling association, unseen
+nonloading initiators, arbitrary unload behavior, final-private lifetime,
+Windows/Linux native hosting, or full download UI parity.
+
+## Shutdown-owned terminal ingestion
+
+`Engine::take_shutdown_download_events()` consumes the same owned event queue
+after shutdown begins, between polls and after Complete. It performs no native
+effect or CEF call. Known identities are frozen at sealing; genuine terminal
+metadata copied before or during cancellation survives native-handle release.
+Eight production-seam regressions passed in the 102-test engine run.
+
+The browser service exposes an exclusive `ShutdownDownloads` capability for
+ingestion, canonical persistence and unique retained-writer flushing. Its actual
+quit-coordinator hookup is still pending. Registration alone does not create a
+second consumer or claim terminal-race persistence acceptance. Final ordering
+must be Complete, final owned drain, persist, writer flush, service finish, then
+the existing native exit continuation.

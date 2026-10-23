@@ -12,6 +12,10 @@ use std::sync::{Arc, Mutex};
 use cef::*;
 mod devtools;
 mod downloads;
+mod retirement;
+#[cfg(any(target_os = "linux", test))]
+mod native_requests;
+pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod editing;
 mod devtools_renderer;
@@ -546,8 +550,9 @@ impl Engine {
     }
 
     /// Explicit engine-only opt-in. Owner is the captured originating local
-    /// profile, including Blank's retained source. The capability acknowledges
-    /// cancel-before-native-close teardown; observe Arc before browser adoption.
+    /// profile, including Blank's retained source. The capability selects an
+    /// explicit lifetime policy; continuation requires native acceptance and the
+    /// outside-borrows prepare_download_retirements handshake.
     /// Privacy/storage/browser identities are derived from the actual engine
     /// context and immutable registration, never from current window selection.
     pub fn create_view_in_context_with_download_owner(
@@ -692,7 +697,7 @@ impl Engine {
         let host = page_view;
 
         self._runtime.lifecycle.register(browser.identifier(), shutdown::BrowserLease {
-            browser: browser.clone(), _context: context.clone(), host,
+            browser: browser.clone(), _context: context.clone(), host, retired_host: None,
         });
         let id = ViewId(self.next_id);
         self.next_id += 1;
@@ -1021,7 +1026,9 @@ impl Engine {
             self.by_browser_id.remove(&view.browser.identifier());
             // Runtime owns the exact context and child host until OnBeforeClose.
             // Close is queued: no CEF call or callback while page state is borrowed.
-            self._runtime.lifecycle.request_close(view.browser.identifier());
+            if !self._runtime.downloads.borrow_mut().queue_retirement(view.browser.identifier()) {
+                self._runtime.lifecycle.request_close(view.browser.identifier());
+            }
         }
     }
 }
@@ -1132,7 +1139,7 @@ wrap_client! {
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(EngineLoadHandler::new(self.events.clone()))
+            Some(EngineLoadHandler::new(self.events.clone(), self.download_gate.clone()))
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
@@ -1237,11 +1244,22 @@ wrap_download_image_callback! {
 wrap_load_handler! {
     struct EngineLoadHandler {
         events: EventQueue,
+        download_gate: Option<downloads::DownloadGate>,
     }
 
     impl LoadHandler {
+        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: i32) {
+            if let Some(frame) = frame.filter(|frame| frame.is_main() != 0) {
+                if let Some(gate) = &self.download_gate {
+                    gate.document_result(&CefString::from(&frame.url()).to_string(), true);
+                }
+            }
+        }
         fn on_load_error(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
             if frame.is_some_and(|frame| frame.is_main() != 0) {
+                if let Some(gate) = &self.download_gate {
+                    gate.document_result(&failed_url.map(CefString::to_string).unwrap_or_default(), false);
+                }
                 push(&self.events, browser, RawEvent::LoadError(
                     failed_url.map(CefString::to_string).unwrap_or_default(),
                     error_code.get_raw(),

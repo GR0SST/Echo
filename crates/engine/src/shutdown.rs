@@ -74,6 +74,7 @@ pub(crate) struct BrowserLease {
     // The exact Rc registry lease, also for private contexts and inspectors.
     pub _context: Rc<RequestContext>,
     pub host: *mut std::ffi::c_void,
+    pub retired_host: Option<Rc<crate::host::RetiredHost>>,
 }
 impl Drop for BrowserLease {
     fn drop(&mut self) {
@@ -164,6 +165,7 @@ pub(crate) struct Lifecycle {
     unknown_browsers: RefCell<HashSet<i32>>,
     creating: Cell<usize>,
     pumping: Cell<bool>,
+    retiring: Cell<bool>,
 }
 impl Default for Lifecycle {
     fn default() -> Self {
@@ -177,6 +179,7 @@ impl Default for Lifecycle {
             unknown_browsers: RefCell::new(HashSet::new()),
             creating: Cell::new(0),
             pumping: Cell::new(false),
+            retiring: Cell::new(false),
         }
     }
 }
@@ -186,13 +189,25 @@ impl Drop for CreationGuard<'_> {
         self.0.set(self.0.get() - 1);
     }
 }
+pub(crate) struct RetirementGuard<'a>(&'a Cell<bool>);
+impl Drop for RetirementGuard<'_> {
+    fn drop(&mut self) { self.0.set(false); }
+}
 impl Lifecycle {
+    pub(crate) fn shutdown_phase(&self) -> ShutdownPhase { self.phase.get() }
+    pub(crate) fn is_preparing_retirements(&self) -> bool { self.retiring.get() }
+    fn shutdown_poll_allowed(&self) -> bool {
+        self.creating.get() == 0 && !self.pumping.get() && !self.retiring.get()
+    }
+    pub(crate) fn preparing_retirements(&self) -> Option<RetirementGuard<'_>> {
+        if self.retiring.replace(true) { None } else { Some(RetirementGuard(&self.retiring)) }
+    }
     pub fn creating(&self) -> CreationGuard<'_> {
         self.creating.set(self.creating.get() + 1);
         CreationGuard(&self.creating)
     }
     pub(crate) fn download_dispatch_allowed(&self) -> bool {
-        self.creating.get() == 0 && !self.pumping.get() && !self.polling.get()
+        self.creating.get() == 0 && !self.pumping.get() && !self.polling.get() && !self.retiring.get()
     }
     fn begin(&self) {
         if self.phase.get() == ShutdownPhase::Running {
@@ -242,6 +257,26 @@ impl Lifecycle {
     pub fn register(&self, id: i32, lease: BrowserLease) {
         self.browsers.borrow_mut().insert(id, lease);
     }
+    /// Snapshot only. Never execute native work while lifecycle is borrowed.
+    pub(crate) fn retirement_browser(&self, id: i32) -> Option<Browser> {
+        self.browsers.borrow().0.get(&id).map(|r| r.lease.browser.clone())
+    }
+    pub(crate) fn park_download_browser(&self, id: i32) -> Result<(), String> {
+        let (clip, existing) = {
+            let browsers = self.browsers.borrow();
+            let record = browsers.0.get(&id).ok_or("Retiring browser has already closed")?;
+            (record.lease.host, record.lease.retired_host.clone())
+        };
+        let host = match existing {
+            Some(host) => host,
+            None => Rc::new(crate::host::RetiredHost::new()?),
+        };
+        crate::host::retain_and_attach(host, |host| {
+            self.browsers.borrow_mut().0.get_mut(&id).ok_or("Retiring browser closed during host creation")?
+                .lease.retired_host = Some(host);
+            Ok(())
+        }, |host| host.attach(clip))
+    }
     pub fn request_close(&self, id: i32) {
         self.browsers.borrow_mut().request(id);
     }
@@ -260,6 +295,7 @@ impl Lifecycle {
                 let lease = self.browsers.borrow_mut().close(id);
                 release(id);
                 drop(lease); // Never release native/context leases under a borrow.
+                crate::downloads::native_lease_released(id);
             }
         }
     }
@@ -300,6 +336,7 @@ impl Lifecycle {
                 let lease = self.browsers.borrow_mut().close(*id);
                 crate::downloads::native_closed(*id);
                 drop(lease); // Native releases can re-enter: never under RefCell borrow.
+                crate::downloads::native_lease_released(*id);
             }
         }
         for callback in callbacks {
@@ -402,6 +439,8 @@ pub(crate) fn check_thread() -> Result<(), String> {
 fn runtime() -> Option<Rc<Runtime>> {
     RUNTIME.with(|slot| slot.borrow().clone())
 }
+/// Pure lifecycle state, also valid after the retained Runtime reaches Complete.
+pub(crate) fn shutdown_started() -> bool { CLOSING.load(Ordering::SeqCst) }
 pub(crate) fn is_polling() -> bool {
     runtime().is_some_and(|r| r.lifecycle.polling.get())
 }
@@ -417,6 +456,7 @@ pub(crate) fn pump_once() {
         lifecycle.phase.get(),
         ShutdownPhase::Complete | ShutdownPhase::ShuttingDown
     ) || lifecycle.creating.get() != 0
+        || lifecycle.retiring.get()
         || lifecycle.pumping.replace(true)
     {
         return;
@@ -493,8 +533,8 @@ impl Engine {
             return Self::shutdown_status();
         };
         let lifecycle = &runtime.lifecycle;
-        if lifecycle.creating.get() != 0 || lifecycle.pumping.get() {
-            return Err("CEF shutdown polling attempted inside a CEF call".into());
+        if !lifecycle.shutdown_poll_allowed() {
+            return Err("CEF shutdown polling attempted inside a CEF call or native retirement".into());
         }
         if lifecycle.polling.replace(true) {
             return Err("CEF shutdown polling re-entered".into());
@@ -569,7 +609,10 @@ impl Engine {
                     }
                 }
                 lifecycle.collect();
-                if lifecycle.start_finalizing(Rc::strong_count(&runtime).saturating_sub(2)) {
+                // Owned terminal copies may outlive CEF. Native download
+                // handles may not: all callback releases precede CefShutdown.
+                let downloads_released = runtime.downloads.borrow().downloads_native_handles_released();
+                if downloads_released && lifecycle.start_finalizing(Rc::strong_count(&runtime).saturating_sub(2)) {
                     let flushes = std::mem::take(&mut *lifecycle.flushes.borrow_mut());
                     drop(flushes);
                     runtime.persistent.clear();
@@ -779,6 +822,34 @@ mod download_dispatch_tests {
     use super::Lifecycle;
 
     #[test]
+    fn reentrant_shutdown_cannot_drain_registration_owners_during_native_handoff() {
+        use crate::downloads::RuntimeDownloads;
+        use crate::DownloadOwner;
+        use std::rc::Rc;
+        let lifecycle = Lifecycle::default();
+        let mut downloads = RuntimeDownloads::<()>::default();
+        let context = Rc::new(());
+        let weak = Rc::downgrade(&context);
+        let snapshot = downloads.prepare(context.clone(), DownloadOwner::continue_normal_after_source_close(91), false).unwrap();
+        downloads.bind(&snapshot.registration, 701).unwrap();
+        drop(context);
+        let handoff = lifecycle.preparing_retirements().unwrap();
+        // Native handoff reenters begin_shutdown + poll_shutdown. Use the exact
+        // production poll gate before it can drain RuntimeDownloads owners.
+        lifecycle.begin();
+        if lifecycle.shutdown_poll_allowed() { downloads.shutdown().execute(); }
+        assert!(!lifecycle.shutdown_poll_allowed());
+        assert!(weak.upgrade().is_some());
+        // Resume from the retained native-operation snapshot: the same browser
+        // registration still exists instead of having been drained by polling.
+        assert!(downloads.queue_retirement(701));
+        drop(handoff);
+        assert!(lifecycle.shutdown_poll_allowed());
+        downloads.shutdown().execute();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
     fn public_download_dispatch_rejects_nested_creation_pumping_and_shutdown_polling() {
         let lifecycle = Lifecycle::default();
         assert!(lifecycle.download_dispatch_allowed());
@@ -791,6 +862,12 @@ mod download_dispatch_tests {
         lifecycle.polling.set(true);
         assert!(!lifecycle.download_dispatch_allowed());
         lifecycle.polling.set(false);
+        assert!(lifecycle.download_dispatch_allowed());
+        let retirement = lifecycle.preparing_retirements().unwrap();
+        assert!(!lifecycle.download_dispatch_allowed());
+        assert!(!lifecycle.shutdown_poll_allowed());
+        assert!(lifecycle.preparing_retirements().is_none());
+        drop(retirement);
         assert!(lifecycle.download_dispatch_allowed());
     }
 }
