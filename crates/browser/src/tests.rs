@@ -2225,6 +2225,7 @@ fn pane_header_focus_and_chrome_match_native_geometry_in_both_axes(cx: &mut Test
         for (id, body) in surfaces {
             let selector = match id.get() { 2 => "pane-header-2", 3 => "pane-header-3", 5 => "pane-header-5", _ => panic!("unexpected pane") };
             let header = cx.debug_bounds(selector).unwrap();
+            assert!(header.origin.y >= gpui::px(32.));
             assert!((f64::from(f32::from(header.origin.x)) - body.x).abs() < 0.6);
             assert!((f64::from(f32::from(header.bottom())) - body.y).abs() < 0.6, "vertical={vertical} header={header:?} body={body:?}");
             assert!((f64::from(f32::from(header.size.width)) - body.width).abs() < 0.6);
@@ -2330,4 +2331,81 @@ fn split_shortcuts_from_native_page_focus_use_the_same_picker_and_close_action(c
     fake.send(cx, Event::Shortcut(shortcut("-")));
     assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
+}
+
+#[gpui::test]
+fn pane_menu_targets_an_inactive_pane_and_moves_it_without_changing_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    click(cx, "pane-menu-2");
+    assert_eq!(active_url(&view, cx), active);
+    click(&mut tab_menu(&view, cx), "tab-menu-move-forward");
+    assert_eq!(active_url(&view, cx), active);
+    view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().panes[1].get(), 2));
+    right_click(cx, "pane-header-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-orientation");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().axis, browser_core::splits::Axis::Vertical));
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn pane_menu_mutes_or_closes_only_its_target_while_sidebar_menu_mutes_the_group(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 3);
+    click(cx, "pane-menu-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-mute");
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.all_tabs().find(|tab| tab.id.get() == 2).unwrap().muted);
+        assert_eq!(w.browser.all_tabs().filter(|tab| tab.muted).count(), 1);
+    });
+    right_click(cx, "tab-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-mute");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().filter(|tab| tab.muted).count()), 3);
+    assert!(fake.take_calls().contains(&Call::Mute(1, true)));
+    let active = active_url(&view, cx);
+    click(cx, "pane-menu-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-close-pane");
+    assert_eq!(active_url(&view, cx), active);
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(w.browser.archive.last().unwrap().tab.id.get(), 2);
+    });
+    assert!(fake.take_calls().contains(&Call::Close(1)));
+}
+
+#[gpui::test]
+fn pane_menu_adds_at_the_clicked_pane_and_separates_it_with_its_existing_engine(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    click(cx, "pane-menu-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-add-left");
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("https://left.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_split().unwrap().panes[0], w.browser.active_tab().unwrap().id);
+        assert_eq!(w.browser.active_split().unwrap().panes[1].get(), 2);
+    });
+    fake.take_calls();
+    click(cx, "pane-menu-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-separate-pane");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane0.example"));
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn sidebar_split_menu_resets_group_name_and_separates_the_whole_group(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 2);
+    right_click(cx, "tab-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-rename");
+    bar(&view, cx).simulate_input("Comparison");
+    bar(&view, cx).simulate_keystrokes("enter");
+    right_click(cx, "tab-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-reset-name");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().title.is_none()));
+    right_click(cx, "tab-2");
+    click(&mut tab_menu(&view, cx), "tab-menu-separate-all");
+    assert!(view.read_with(cx, |w, _| w.browser.space().splits.is_empty()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().count()), 2);
 }

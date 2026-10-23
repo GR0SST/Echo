@@ -95,9 +95,9 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Stop Loading | ⌘. | done | CEF stop_load; also available in the Command Bar |
 | Refresh the Page / Force Refresh | ⌘R / ⇧⌘R | done | Reload and reload_ignore_cache through CEF |
 | Clear Cookies and Refresh / Clear Cache and Refresh | — | missing | — |
-| Add Split View | ⌃⇧= | missing | See "Split View" |
-| Close this Split Pane | ⌃⇧- | missing | — |
-| Separate Page from Split View / Expand Current Split | — | missing | — |
+| Add Split View | ⌃⇧= | partial | Picker, direction and four-pane limit implemented; fresh native visual review remains |
+| Close this Split Pane | ⌃⇧- | done | Menu, Command Bar, pane header and engine shortcut |
+| Separate Page from Split View / Expand Current Split | — | partial | Separate Page implemented; Expand Current Split remains |
 | Zoom to Actual Size / Zoom In / Zoom Out | ⌘0 / ⌘+ (⌘=) / ⌘- | done | Chromium zoom steps from 25% to 500%, reset to 100%; also in the Command Bar |
 | Cast | — | missing | — |
 | Developer: View Source, Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘U, ⌥⌘I, ⌥⌘C, ⌥⌘J, — | missing | DevTools not wired up through CEF |
@@ -134,7 +134,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
 | Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | missing | — |
 | Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | partial | Pinned, then Today. No Favorites and no "Include Favorites in ordering" option |
-| Switch to Split View 1–4 / next / previous | (?) | missing | — |
+| Switch to Split View 1–4 / next / previous | (?) | done | Command Bar actions |
 | Reveal Tab in Sidebar | — | missing | — |
 | Clear Unpinned Tabs (Today) | ⇧⌘K | done | — |
 | Reset all tabs in this Space | — | done | Command Bar → Reset Space returns all Pinned tabs to their original URLs and unloads their pages; Today and other Spaces are preserved |
@@ -188,7 +188,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Close button on hover (× for Today, − for Pinned) | hover | done | — |
 | Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
 | Camera/microphone indicator on a tab | — | missing | — |
-| Split View item in the sidebar (tab group) | — | missing | — |
+| Split View item in the sidebar (tab group) | — | done | One item for 2–4 pages; shared title, Favorites, pinning, archive and last focused pane |
 | Space header (name), Show/Hide Space Header | — | partial | The name is shown but can't be hidden |
 | Spaces dock at the bottom (Space icons) | click | partial | We show colored dots; Arc shows Space icons or emoji |
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + creates a Space. The multi-action menu remains missing |
@@ -236,7 +236,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Entering a URL or searching ("Search or Enter URL…") | — | done | The search engine is hardcoded (Google). Arc lets you pick it in profile settings |
 | Editing the current URL | ⌘L | done | Enter on an unchanged URL reloads the page and preserves its title |
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | Repeating ⌘T or ⌘L dismisses its mode; switching between them replaces the input in the same overlay |
-| Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View remains missing |
+| Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View results are deduplicated by group, match pane titles/URLs and focus the matching page |
 | Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | missing | Also needs the suggestions privacy screen |
 | History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | partial | Local browsing history matches title/URL in ⌘T and ⌘L, with keyboard/click selection; open tabs match original page titles and suppress duplicate history rows. Bookmark/folder sources remain missing |
 | Calculator (Search Calculator Answer) | — | missing | — |
@@ -268,8 +268,8 @@ in code, so some were reconstructed from translator comments (?).
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
 | **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | missing | — |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
-| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | missing | — |
-| **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | missing | — |
+| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Group separation, add pane, orientation, reset name, pin/Favorite, group mute and archive implemented. Share, duplicate and custom icons remain |
+| **Split View pane** (control menu): Separate Tab from Split, Share Split View…, Convert orientation, Move Left/Right/Up/Down, Add Left/Right/Top/Bottom Split | partial | GPUI ellipsis and right-click menus target the clicked pane; all listed local actions implemented. Share remains |
 | **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | missing | — |
 | **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |
 | **Download**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | missing | — |
@@ -442,7 +442,7 @@ are implemented for copied links; the remaining notifications follow below.
 | Pinned Tab to “%@” / Un-Pinned Tab from “%@” | missing |
 | Auto archived %d tabs; Tab/Folder restored to … | missing |
 | New Tab Created in %@ (with the sidebar hidden); New Space Created | missing |
-| Cannot Add New Pane (Split View) | missing |
+| Cannot Add New Pane (Split View) | done |
 | Import: Now importing… / Success / partial / failure | missing |
 | Translation: Translated to %@ / back to %@ / error | missing |
 | Updates: update pending / failed / in progress | missing |

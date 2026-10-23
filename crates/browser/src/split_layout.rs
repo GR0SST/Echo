@@ -3,6 +3,8 @@ use browser_core::splits::Axis;
 use engine::Bounds;
 
 pub(crate) const GAP: f64 = 8.;
+/// Keep pane controls below the window's draggable titlebar region.
+pub(crate) const TITLE_HEIGHT: f64 = 24.;
 pub(crate) const HEADER_HEIGHT: f64 = 28.;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -14,6 +16,7 @@ pub(crate) struct PaneBounds {
 
 pub(crate) fn layout(card: Bounds, axis: Axis, weights: &[f32], split: bool) -> Vec<PaneBounds> {
     if weights.is_empty() || ![card.x, card.y, card.width, card.height].iter().all(|value| value.is_finite()) { return Vec::new(); }
+    let card = if split { let inset = TITLE_HEIGHT.min(card.height.max(0.)); Bounds { y: card.y + inset, height: (card.height - inset).max(0.), ..card } } else { card };
     let count = weights.len();
     let horizontal = axis == Axis::Horizontal;
     let length = if horizontal { card.width } else { card.height }.max(0.);
@@ -47,8 +50,8 @@ mod tests {
         let panes = layout(card, Axis::Horizontal, &[0.25, 0.75], true);
         assert_eq!(panes[0].frame.width, 234.);
         assert_eq!(panes[1].frame.x, 490.);
-        assert_eq!(panes[0].page.y, 36.);
-        assert_eq!(panes[0].page.height, 756.);
+        assert_eq!(panes[0].page.y, 60.);
+        assert_eq!(panes[0].page.height, 732.);
         assert_eq!(panes[1].frame.x + panes[1].frame.width, card.x + card.width);
         assert_eq!(layout(card, Axis::Horizontal, &[1.], false)[0].page, card);
     }

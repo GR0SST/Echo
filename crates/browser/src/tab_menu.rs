@@ -1,6 +1,6 @@
 //! Sidebar context menus target the clicked tab without activating it.
 use crate::window::{BrowserWindow, Overlay, OverlayKind, Target};
-use browser_core::TabId;
+use browser_core::{TabId, splits::{Axis, Placement}};
 use gpui::{
     actions, div, hsla, point, prelude::*, px, AnyElement, App, Context, FocusHandle,
     KeyBinding, Pixels, Point, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
@@ -23,13 +23,28 @@ pub(crate) fn bind_keys(cx: &mut App) {
 pub(crate) struct TabMenu {
     pub tab: TabId,
     pub selected: usize,
+    pane: bool,
     position: Point<Pixels>,
     focus: FocusHandle,
     pub overlay: Option<WindowHandle<Overlay>>,
 }
 
 #[derive(Clone, Copy)]
-enum Command { Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close }
+enum Command { Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+    Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane }
+
+impl Command {
+    fn selector(self) -> &'static str {
+        match self {
+            Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
+            Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::Mute => "mute", Self::Close => "close",
+            Self::Add(Placement::Left) => "add-left", Self::Add(Placement::Right) => "add-right",
+            Self::Add(Placement::Above) => "add-top", Self::Add(Placement::Below) => "add-bottom",
+            Self::Axis(_) => "orientation", Self::SeparateAll => "separate-all", Self::SeparatePane => "separate-pane",
+            Self::Move(delta) => if delta < 0 { "move-backward" } else { "move-forward" }, Self::ResetName => "reset-name", Self::ClosePane => "close-pane",
+        }
+    }
+}
 
 impl BrowserWindow {
     pub(crate) fn open_tab_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -37,7 +52,7 @@ impl BrowserWindow {
         self.close_tab_menu(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { tab, selected: 0, position, focus: focus.clone(), overlay: None });
+        self.tab_menu = Some(TabMenu { tab, selected: 0, pane: false, position, focus: focus.clone(), overlay: None });
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -68,6 +83,13 @@ impl BrowserWindow {
         });
     }
 
+    pub(crate) fn open_pane_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser.split_for(tab).is_none() { return; }
+        self.open_tab_menu(tab, position, window, cx);
+        if let Some(menu) = &mut self.tab_menu { menu.pane = true; }
+        cx.notify();
+    }
+
     pub(crate) fn close_tab_menu(&mut self, cx: &mut Context<Self>) {
         let Some(menu) = self.tab_menu.take() else { return; };
         let main = self.main_window;
@@ -84,6 +106,23 @@ impl BrowserWindow {
     fn tab_menu_commands(&self) -> Vec<(&'static str, Command)> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
         let Some(tab) = self.browser.favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).find(|tab| tab.id == menu.tab) else { return Vec::new(); };
+        let split = self.browser.split_for(tab.id);
+        let orientation = if split.is_some_and(|split| split.axis == Axis::Horizontal) {
+            ("Convert to Vertical Split", Command::Axis(Axis::Vertical))
+        } else { ("Convert to Horizontal Split", Command::Axis(Axis::Horizontal)) };
+        if menu.pane {
+            let Some(split) = split else { return Vec::new(); };
+            let horizontal = split.axis == Axis::Horizontal;
+            let index = split.panes.iter().position(|id| *id == tab.id).unwrap();
+            let mut rows = vec![("Separate Tab from Split", Command::SeparatePane), orientation];
+            if index > 0 { rows.push((if horizontal { "Move Left" } else { "Move Up" }, Command::Move(-1))); }
+            if index + 1 < split.panes.len() { rows.push((if horizontal { "Move Right" } else { "Move Down" }, Command::Move(1))); }
+            rows.extend([("Add Left Split…", Command::Add(Placement::Left)), ("Add Right Split…", Command::Add(Placement::Right)),
+                ("Add Top Split…", Command::Add(Placement::Above)), ("Add Bottom Split…", Command::Add(Placement::Below))]);
+            if !browser_core::omnibox::is_internal_url(&tab.url) { rows.push((if tab.muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute)); }
+            rows.push(("Close Pane", Command::ClosePane));
+            return rows;
+        }
         let favorite = self.browser.is_favorite(tab.id);
         let pinned = tab.pinned_url.is_some();
         let mut rows = vec![("Copy Link", Command::Copy), ("Copy Link as Markdown", Command::CopyMarkdown), ("Rename…", Command::Rename)];
@@ -93,7 +132,14 @@ impl BrowserWindow {
             rows.push(("Reset Tab to Original URL", Command::Reset));
             rows.push(("Replace Pinned URL with Current", Command::Replace));
         }
-        if !browser_core::omnibox::is_internal_url(&tab.url) { rows.push((if tab.muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute)); }
+        if !browser_core::omnibox::is_internal_url(&tab.url) {
+            let muted = if let Some(split) = split { split.panes.iter().all(|id| self.browser.all_tabs().any(|tab| tab.id == *id && tab.muted)) } else { tab.muted };
+            rows.push((if split.is_some() { if muted { "Unmute Split View" } else { "Mute Split View" } } else if muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute));
+        }
+        if split.is_some() {
+            rows.extend([("Separate All Tabs", Command::SeparateAll), ("Add Split View…", Command::Add(Placement::Right)), orientation]);
+            if self.browser.item_has_custom_name(tab.id) { rows.push(("Reset Name", Command::ResetName)); }
+        }
         rows.push((if pinned { "Close Tab" } else { "Archive Tab" }, Command::Close));
         rows
     }
@@ -107,10 +153,26 @@ impl BrowserWindow {
     }
 
     fn confirm_tab_menu(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.tab_menu.as_ref().map(|menu| menu.tab) else { return; };
+        let Some((id, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.tab, menu.pane)) else { return; };
         let Some((_, command)) = self.tab_menu_commands().get(index).copied() else { self.close_tab_menu(cx); return; };
         self.close_tab_menu(cx);
         match command {
+            Command::Add(mut placement) => {
+                if !self.can_add_split(id) { self.show_toast("Cannot Add New Pane".into(), cx); }
+                else {
+                    if !pane_menu && self.browser.split_for(id).is_some_and(|split| split.axis == Axis::Vertical) { placement = Placement::Below; }
+                    self.open_command_bar(Target::Split { anchor: id, placement }, "", window, cx);
+                }
+            }
+            Command::Axis(axis) => { self.browser.set_split_axis(id, axis); }
+            Command::SeparateAll => { if !self.browser.separate_split(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); } }
+            Command::SeparatePane => {
+                if self.browser.separate_split_pane(id) { self.browser.activate_tab(id, std::time::SystemTime::now()); }
+                else { self.show_toast("You can have up to 12 Favorites".into(), cx); }
+            }
+            Command::Move(delta) => { self.browser.move_split_pane(id, delta); }
+            Command::ResetName => { self.browser.reset_tab_name(id); }
+            Command::ClosePane => self.close_split_pane(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),
             Command::CopyMarkdown => self.copy_tab_url(id, true, cx),
             Command::Pin => self.browser.toggle_pin(id),
@@ -131,17 +193,19 @@ impl BrowserWindow {
             }
             Command::Replace => { self.browser.replace_pinned_url(id); }
             Command::Mute => {
-                let muted = self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| !tab.muted);
-                if let Some(muted) = muted { self.set_tab_muted(id, muted, cx); }
+                let ids = if pane_menu { vec![id] } else { self.browser.related_tabs(id) };
+                let muted = !ids.iter().all(|id| self.browser.all_tabs().any(|tab| tab.id == *id && tab.muted));
+                for id in ids { self.set_tab_muted(id, muted, cx); }
             }
             Command::Close => self.close_tab(id, cx),
         }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
         cx.notify();
     }
 
     pub(crate) fn render_tab_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(menu) = &self.tab_menu else { return div().into_any_element(); };
-        let rows = self.tab_menu_commands().into_iter().enumerate().map(|(index, (label, _))| {
+        let rows = self.tab_menu_commands().into_iter().enumerate().map(|(index, (label, command))| {
             div().id(("tab-menu-row", index)).debug_selector(move || format!("tab-menu-row-{index}"))
                 .h(px(32.)).px_3().flex().items_center().rounded_md()
                 .when(menu.selected == index, |this| this.bg(hsla(0.6, 0.7, 0.5, 1.)).text_color(gpui::white()))
@@ -149,7 +213,7 @@ impl BrowserWindow {
                     if *hovered { if let Some(menu) = &mut this.tab_menu { menu.selected = index; } cx.notify(); }
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.confirm_tab_menu(index, window, cx); }))
-                .child(label)
+                .child(div().debug_selector(move || format!("tab-menu-{}", command.selector())).child(label))
         });
         div().id("tab-menu-backdrop").debug_selector(|| "tab-menu-backdrop".into()).size_full().key_context(CONTEXT).track_focus(&menu.focus)
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, _, _, cx| this.close_tab_menu(cx)))

@@ -83,7 +83,7 @@ impl BrowserWindow {
     pub(crate) fn render_split(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(split) = self.browser.active_split() else { return div().into_any_element(); };
         let horizontal = split.axis == Axis::Horizontal;
-        div().size_full().flex().gap(px(crate::split_layout::GAP as f32))
+        let panes = div().w_full().flex_1().min_h_0().flex().gap(px(crate::split_layout::GAP as f32))
             .when(!horizontal, |this| this.flex_col())
             .children(split.panes.iter().zip(&split.weights).filter_map(|(id, weight)| {
                 let tab = self.browser.all_tabs().find(|tab| tab.id == *id)?;
@@ -96,9 +96,13 @@ impl BrowserWindow {
                     .child(div().id(("pane-header", key)).debug_selector(move || format!("pane-header-{key}"))
                         .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
                         .bg(hsla(0., 0., 0., if active { 0.10 } else { 0.04 }))
+                        .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
                         .on_click(cx.listener(move |this, _, _, cx| { this.browser.activate_tab(id, SystemTime::now()); if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, true); } cx.notify(); }))
                         .child(self.render_favicon(tab, self.browser.space().hue / 360.))
                         .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                        .child(div().id(("pane-menu", key)).debug_selector(move || format!("pane-menu-{key}")).px_1().rounded_sm()
+                            .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
+                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child("⋯"))
                         .child(div().id(("pane-separate", key)).debug_selector(move || format!("pane-separate-{key}")).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if this.browser.separate_split_pane(id) { this.browser.activate_tab(id, SystemTime::now()); } else { this.show_toast("You can have up to 12 Favorites".into(), cx); } cx.notify(); })).child("↗"))
@@ -106,6 +110,10 @@ impl BrowserWindow {
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.close_split_pane(id, cx); })).child("×")))
                     .child(div().flex_1().min_h_0().when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(tab.url.clone())))))
-            })).into_any_element()
+            }));
+        div().size_full().flex().flex_col()
+            .child(div().h(px(crate::split_layout::TITLE_HEIGHT as f32)).flex_none().flex().items_center().justify_center().text_xs()
+                .child(div().max_w_full().truncate().child(self.browser.item_title(split.anchor))))
+            .child(panes).into_any_element()
     }
 }
