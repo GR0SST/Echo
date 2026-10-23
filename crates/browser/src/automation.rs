@@ -7,6 +7,7 @@
 //!
 //! Commands: `reopen` (Dock request), `activate`, `require-focus` (abort on focus loss or occlusion),
 //! `wait <seconds>`, `key <keystroke>`, `type <text>`,
+//! `menu <menu title> > <item title>` (invoke an enabled native menu item),
 //! `compose <text>` (native IME/emoji text insertion into the focused responder),
 //! `click <x> <y>`, `doubleclick <x> <y>`, `rightclick <x> <y>` (logical px from the browser's top-left;
 //! clicks and moves hit its child overlays when present),
@@ -53,6 +54,15 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
             }
             match name {
                 "require-focus" => {},
+                "menu" => {
+                    let invoked = arg.split_once(" > ").is_some_and(|(menu, item)| unsafe { perform_menu_action(menu, item) });
+                    if !invoked {
+                        eprintln!("[automation] aborted: native menu item is missing or disabled");
+                        let _ = cx.update(|cx| cx.quit());
+                        return;
+                    }
+                    cx.background_executor().timer(EVENT_GAP).await;
+                }
                 "reopen" => {
                     // Deliver the same delegate request AppKit sends for a Dock click.
                     unsafe {
@@ -398,6 +408,41 @@ unsafe fn window_of(view: *mut AnyObject) -> *mut AnyObject {
     unsafe { msg_send![view, window] }
 }
 
+/// Keyboard events belong to the focused child window, while script points
+/// remain relative to the browser's main window.
+unsafe fn keyboard_window(view: *mut AnyObject) -> *mut AnyObject {
+    unsafe {
+        let root = window_of(view);
+        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+        let key: *mut AnyObject = msg_send![app, keyWindow];
+        let mut ancestor = key;
+        while !ancestor.is_null() {
+            if ancestor == root { return key; }
+            ancestor = msg_send![ancestor, parentWindow];
+        }
+        root
+    }
+}
+
+unsafe fn perform_menu_action(menu: &str, item: &str) -> bool {
+    unsafe {
+        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+        let main: *mut AnyObject = msg_send![app, mainMenu];
+        let menu_item: *mut AnyObject = msg_send![main, itemWithTitle: &*NSString::from_str(menu)];
+        if menu_item.is_null() { return false; }
+        let submenu: *mut AnyObject = msg_send![menu_item, submenu];
+        if submenu.is_null() { return false; }
+        let _: () = msg_send![submenu, update];
+        let index: isize = msg_send![submenu, indexOfItemWithTitle: &*NSString::from_str(item)];
+        if index < 0 { return false; }
+        let item: *mut AnyObject = msg_send![submenu, itemAtIndex: index];
+        let enabled: Bool = msg_send![item, isEnabled];
+        if !enabled.as_bool() { return false; }
+        let _: () = msg_send![submenu, performActionForItemAtIndex: index];
+        true
+    }
+}
+
 /// Command Bar and menu child windows belong to the same test browser.
 unsafe fn has_browser_focus(view: *mut AnyObject) -> bool {
     unsafe {
@@ -518,7 +563,7 @@ unsafe fn post_key(view: *mut AnyObject, spec: &str) {
     let (flags, chars, code) = parse_key(spec);
     let shifted = if flags & SHIFT != 0 { chars.to_uppercase() } else { chars.clone() };
     unsafe {
-        let window = window_of(view);
+        let window = keyboard_window(view);
         let number: isize = msg_send![window, windowNumber];
         let characters = NSString::from_str(&shifted);
         let unmodified = NSString::from_str(&chars);

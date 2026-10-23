@@ -65,6 +65,10 @@ if another app takes focus or the browser becomes occluded. Command Bar and
 menu child windows count as browser focus. An aborted run exits with status 1
 and must be repeated before using its screenshots as evidence.
 
+`menu Edit > Undo` invokes an enabled native menu item without moving the
+system pointer. Keyboard events follow the focused browser child window,
+including the Command Bar; point coordinates remain relative to the main window.
+
 Rules for contributors and coding agents are in [`AGENTS.md`](AGENTS.md).
 In short: match Arc, write Rust, build the UI in GPUI, cover
 UI behavior with tests, and commit each finished change to `main`.
