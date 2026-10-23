@@ -483,6 +483,7 @@ pub struct BrowserWindow {
     pub browser: Browser,
     pub sidebar_visible: bool,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
+    tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     pub command_bar: Option<CommandBar>,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
@@ -552,6 +553,7 @@ impl BrowserWindow {
             browser,
             sidebar_visible: true,
             sidebar_scrolls: HashMap::new(),
+            tab_drop_edges: RefCell::new(HashMap::new()),
             command_bar: None,
             find_bar: None,
             toast: None,
@@ -1410,6 +1412,14 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    pub(crate) fn scroll_to_today_item(&mut self, tab: TabId, cx: &mut Context<Self>) {
+        let anchor = self.browser.item_anchor(tab);
+        if let Some(index) = self.browser.space().today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor) {
+            self.sidebar_scrolls.entry(self.browser.space().id).or_default().pending.set(Some((Section::Today, index)));
+        }
+        cx.notify();
+    }
+
     fn reveal_active_tab(&mut self, cx: &mut Context<Self>) {
         let Some(active) = self.browser.space().active_tab else { return; };
         self.close_command_bar(cx);
@@ -1677,12 +1687,23 @@ impl BrowserWindow {
         let id = tab.id;
         let key = id.get() as usize;
         let group = SharedString::from(format!("tab-{key}"));
+        // Keep the current edge across view refreshes caused by drag hover.
+        let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
+        let move_edge = edge.clone();
+        let paint_edge = edge.clone();
 
         div()
             .id(("tab", key))
             .debug_selector(|| format!("tab-{key}"))
             .group(group.clone())
             .on_drag(self.tab_drag(tab), |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
+            .on_drag_move::<crate::tab_drag::TabDrag>(move |event, _, _| { move_edge.set(event.event.position.y > event.bounds.center().y); })
+            .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {
+                let style = style.border_color(hsla(0., 0., 0.2, 0.6));
+                if paint_edge.get() { style.border_b_2() } else { style.border_t_2() }
+            })
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_relative(drag.id, id, edge.get(), cx)))
             .flex_none()
             .flex()
             .items_center()
@@ -2370,6 +2391,8 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
+        self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
         self.sync_history_focus(window, cx);
         if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_target_exists(menu.target)) {

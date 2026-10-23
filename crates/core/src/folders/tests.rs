@@ -4,6 +4,125 @@ use std::time::SystemTime;
 const NOW: SystemTime = SystemTime::UNIX_EPOCH;
 
 #[test]
+fn relative_ordering_in_sections_and_closed_folders_keeps_splits_atomic_and_page_metadata_unchanged() {
+    for location in 0..3 {
+        let pinned = location > 0;
+        let mut browser = Browser::new();
+        let a = browser.new_tab("https://a", NOW);
+        let b = browser.new_tab("https://b", NOW);
+        let c = browser.new_tab("https://c", NOW);
+        browser.add_split(b, c, crate::splits::Placement::Above, NOW).unwrap();
+        browser.rename_tab(b, "Pair");
+        browser.set_item_icon(b, Some("🧭"));
+        let d = browser.new_tab("https://d", NOW);
+        let e = browser.new_tab("https://e", NOW);
+        if pinned { for tab in [a, b, d, e] { browser.toggle_pin(tab); } }
+        if location == 2 {
+            let folder = browser.create_folder(browser.space().id, None, "Folder").unwrap();
+            for tab in [a, b, d, e] { browser.move_item_to_folder(tab, folder); }
+            browser.set_folder_collapsed(folder, true);
+        }
+        let json = session::to_json(&browser);
+        for source in 0..4 {
+            for target in 0..4 {
+                for after in [false, true] {
+                    let mut browser = session::from_json(&json).unwrap();
+                    let active = browser.space().active_tab;
+                    let pages: Vec<_> = browser.all_tabs().map(|tab| (tab.id, serde_json::to_value(tab).unwrap())).collect();
+                    let splits = serde_json::to_value(&browser.space().splits).unwrap();
+                    let tabs = if pinned { &browser.space().pinned } else { &browser.space().today };
+                    let mut order: Vec<_> = tabs.iter().filter(|tab| !browser.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
+                    let source_id = order[source];
+                    let target_id = order[target];
+                    if source == target {
+                        let before = session::to_json(&browser);
+                        assert!(!browser.move_tab_relative(source_id, target_id, after));
+                        assert_eq!(session::to_json(&browser), before);
+                        continue;
+                    }
+                    order.remove(source);
+                    let position = order.iter().position(|id| *id == target_id).unwrap() + usize::from(after);
+                    order.insert(position, source_id);
+                    let source_id = if source_id == b { c } else { source_id };
+                    let target_id = if target_id == b { c } else { target_id };
+                    assert!(browser.move_tab_relative(source_id, target_id, after));
+                    let tabs = if pinned { &browser.space().pinned } else { &browser.space().today };
+                    assert_eq!(tabs.iter().filter(|tab| !browser.is_split_secondary(tab.id)).map(|tab| tab.id).collect::<Vec<_>>(), order);
+                    assert_eq!(browser.space().active_tab, active);
+                    assert_eq!(serde_json::to_value(&browser.space().splits).unwrap(), splits);
+                    assert_eq!(browser.all_tabs().count(), pages.len());
+                    for tab in browser.all_tabs() { assert_eq!(serde_json::to_value(tab).unwrap(), pages.iter().find(|(id, _)| *id == tab.id).unwrap().1); }
+                    let group = browser.related_tabs(b);
+                    let start = tabs.iter().position(|tab| tab.id == group[0]).unwrap();
+                    assert_eq!(tabs[start..start + group.len()].iter().map(|tab| tab.id).collect::<Vec<_>>(), group);
+                    assert_consistent(&browser);
+                    let loaded = session::from_json(&session::to_json(&browser)).unwrap();
+                    let tabs = if pinned { &loaded.space().pinned } else { &loaded.space().today };
+                    assert_eq!(tabs.iter().filter(|tab| !loaded.is_split_secondary(tab.id)).map(|tab| tab.id).collect::<Vec<_>>(), order);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn relative_moves_adopt_folder_section_and_space_without_losing_pin_urls_or_split_identity() {
+    let mut browser = Browser::new();
+    let source = browser.space().id;
+    let parent = browser.create_folder(source, None, "Projects").unwrap();
+    let folder = browser.create_folder(source, Some(parent), "Reference").unwrap();
+    let a = pin(&mut browser, "a");
+    browser.move_item_to_folder(a, folder);
+    browser.set_folder_collapsed(folder, true);
+    let b = browser.new_tab("https://b", NOW);
+    let c = browser.new_tab("https://c", NOW);
+    let split = browser.add_split(b, c, crate::splits::Placement::Right, NOW).unwrap();
+    browser.rename_tab(b, "Pair");
+    browser.set_split_weights(b, &[1., 3.]);
+    let favorite = pin(&mut browser, "favorite");
+    browser.favorite_tab(favorite);
+    let other = browser.add_space("Work", 100.);
+    browser.switch_space(1);
+    let d = browser.new_tab("https://d", NOW);
+    browser.switch_space(0);
+    let original = tab_ids(&browser);
+    assert!(browser.move_tab_relative(c, a, true));
+    assert_eq!(browser.folder(folder).unwrap().items, vec![PinnedItem::Tab(a), PinnedItem::Split(split)]);
+    assert!(browser.folder(folder).unwrap().collapsed);
+    assert!(browser.space().pinned.iter().filter(|tab| tab.id == b || tab.id == c).all(|tab| tab.pinned_url.is_some()));
+    assert!(browser.move_tab_relative(b, d, false));
+    let destination = browser.spaces.iter().find(|space| space.id == other).unwrap();
+    assert_eq!(destination.today.iter().map(|tab| tab.id).collect::<Vec<_>>(), vec![b, c, d]);
+    assert!(destination.today.iter().all(|tab| tab.pinned_url.is_none()));
+    assert_eq!(browser.split_for(b).unwrap().id, split);
+    assert_eq!(browser.split_for(b).unwrap().weights, vec![0.25, 0.75]);
+    assert_eq!(browser.split_for(b).unwrap().title.as_deref(), Some("Pair"));
+    assert!(browser.move_tab_relative(favorite, a, false));
+    assert!(browser.favorites.is_empty());
+    assert_eq!(browser.folder(folder).unwrap().items, vec![PinnedItem::Tab(favorite), PinnedItem::Tab(a)]);
+    assert_eq!(browser.folder_ancestors(favorite), vec![parent, folder]);
+    assert_eq!(tab_ids(&browser), original);
+    assert!(browser.archive.is_empty());
+    assert_consistent(&browser);
+}
+
+#[test]
+fn invalid_relative_targets_and_drops_onto_the_same_split_leave_the_session_unchanged() {
+    let mut browser = Browser::new();
+    let a = browser.new_tab("https://a", NOW);
+    let b = browser.new_tab("https://b", NOW);
+    browser.add_split(a, b, crate::splits::Placement::Right, NOW).unwrap();
+    let favorite = browser.new_tab("https://favorite", NOW);
+    browser.favorite_tab(favorite);
+    let before = session::to_json(&browser);
+    assert!(!browser.move_tab_relative(a, b, false));
+    assert!(!browser.move_tab_relative(a, favorite, true));
+    assert!(!browser.move_tab_relative(TabId(u64::MAX), a, false));
+    assert!(!browser.move_tab_relative(a, TabId(u64::MAX), false));
+    assert_eq!(session::to_json(&browser), before);
+}
+
+#[test]
 fn turning_a_nested_folder_into_a_space_promotes_children_without_copying_pages() {
     let mut browser = Browser::new();
     let source_space = browser.space().id;

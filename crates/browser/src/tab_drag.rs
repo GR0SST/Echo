@@ -15,6 +15,46 @@ pub(crate) struct TabDrag {
 }
 
 impl BrowserWindow {
+    pub(crate) fn drop_tab_relative(
+        &mut self,
+        tab: TabId,
+        target: TabId,
+        after: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.browser.space().active_tab;
+        let pages = self.browser.related_tabs(tab);
+        if !self.browser.move_tab_relative(tab, target, after) {
+            return;
+        }
+        if let Some(index) = self.browser.spaces.iter().position(|space| {
+            space
+                .pinned
+                .iter()
+                .chain(&space.today)
+                .any(|entry| entry.id == tab)
+        }) {
+            self.switch_space(index, cx);
+        }
+        if let Some(active) = active.filter(|tab| pages.contains(tab)) {
+            self.browser.activate_tab(active, SystemTime::now());
+        } else {
+            self.browser.activate_sidebar_item(tab, SystemTime::now());
+        }
+        if self
+            .browser
+            .space()
+            .pinned
+            .iter()
+            .any(|entry| entry.id == tab)
+        {
+            self.scroll_to_pinned_item(self.browser.pinned_item(tab), cx);
+        } else {
+            self.scroll_to_today_item(tab, cx);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn drop_tab_at_favorite(
         &mut self,
         tab: TabId,
