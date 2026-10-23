@@ -712,3 +712,18 @@ created temporary reference Space remains tracked for cleanup. Profile chooser
 behavior, global archive presentation, relaunch persistence, and the exact
 creation shortcut's native input path remain unverified. The bundle establishes
 Control+Command+N; a tool key attempt alone did not establish shortcut behavior.
+
+## Auto Archive interval evidence boundary (2026-10-23)
+
+The [official Auto Archive article](https://resources.arc.net/hc/en-us/articles/19228855311127-Auto-Archive-Clean-as-you-go)
+documents a 12-hour inactivity default, per-Profile timing, and says Auto Archive
+cannot be disabled. Its text was available through the official-domain search
+index; direct article fetching failed, and browser opening was not verified.
+Installed Arc 1.170.0 contains compiled threshold descriptions for Never,
+1 hour, 6 hours, 12 hours, 24 hours, 7 days, 30 days and an internal-only
+20-second option. These strings do not establish release-menu availability.
+The existing Echo searchable picker and its current-value-first ordering have
+not been matched to the native settings control. Interval parity therefore
+remains partial pending release-menu inspection and Profile propagation checks.
+Incognito's internal disabled timer and Little Arc's separate interval must not
+be changed solely on this public-menu evidence.
