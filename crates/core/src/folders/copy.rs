@@ -7,6 +7,7 @@ impl Browser {
     /// while names, icons, Pinned URLs, pane geometry and order are preserved.
     /// The currently selected page and the source's disclosure state stay put.
     pub fn duplicate_folder(&mut self, id: FolderId, now: SystemTime) -> Option<FolderId> {
+        if !self.can_edit_persistent_sidebar() { return None; }
         let index = self
             .spaces
             .iter()

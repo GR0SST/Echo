@@ -22,6 +22,9 @@ pub mod windows;
 fn default_enabled() -> bool { true }
 pub mod session;
 
+#[cfg(test)]
+mod blank_tests;
+
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
 pub const DEFAULT_ARCHIVE_AFTER: Duration = Duration::from_secs(12 * 60 * 60);
 
@@ -179,6 +182,9 @@ pub struct Browser {
     sidebar_history: undo::SidebarHistory,
     #[serde(skip)]
     private: bool,
+    /// Runtime window kind only; Blank session persistence is not established.
+    #[serde(skip)]
+    blank: bool,
     next_id: u64,
 }
 
@@ -190,6 +196,17 @@ impl Default for Browser {
 
 impl Browser {
     pub fn new() -> Self {
+        Self::with_initial_space("Personal", true, false)
+    }
+
+    /// A fresh, normal-privacy, window-local Today list with no persistent
+    /// sidebar controls. History and auto-archive policy retain normal defaults.
+    /// Blank identity is runtime-only: session serialization does not preserve it.
+    pub fn new_blank() -> Self {
+        Self::with_initial_space("Space 1", false, true)
+    }
+
+    fn with_initial_space(name: &str, show_header: bool, blank: bool) -> Self {
         let mut browser = Self {
             spaces: Vec::new(),
             active_space: 0,
@@ -203,9 +220,11 @@ impl Browser {
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
             sidebar_history: undo::SidebarHistory::default(),
             private: false,
+            blank,
             next_id: 1,
         };
-        browser.add_space("Personal", 250.0);
+        browser.add_space(name, 250.0);
+        browser.spaces[0].show_header = show_header;
         browser
     }
 
@@ -219,6 +238,12 @@ impl Browser {
     }
 
     pub fn is_private(&self) -> bool { self.private }
+
+    pub fn is_blank(&self) -> bool { self.blank }
+
+    /// Whether Favorites, Pinned tabs and folders may be edited. Independent
+    /// of privacy; callers can also use this to route sidebar controls.
+    pub fn can_edit_persistent_sidebar(&self) -> bool { !self.is_blank() }
 
     /// Makes a deserialized model consistent: at least one space, a valid
     /// active space and ids that never repeat.
@@ -480,6 +505,7 @@ impl Browser {
     /// Moves a tab between Pinned and Today. Newly pinned tabs go to the
     /// bottom of Pinned; unpinned tabs go to the top of Today.
     pub fn toggle_pin(&mut self, id: TabId) {
+        if !self.can_edit_persistent_sidebar() { return; }
         let before = undo::PinState::capture(self, id);
         self.toggle_pin_unrecorded(id);
         if let Some(before) = before {
@@ -518,6 +544,7 @@ impl Browser {
     /// Moves an existing tab without cloning it. Source focus moves to a neighbor;
     /// the caller chooses whether to focus the destination Space and tab.
     pub fn move_tab(&mut self, id: TabId, destination: SpaceId, section: Section) -> bool {
+        if section == Section::Pinned && !self.can_edit_persistent_sidebar() { return false; }
         if self.split_for(id).is_some() { return self.move_split(id, destination, section); }
         let Some(target) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
         if let Some(mut tab) = self.take_favorite(id) {

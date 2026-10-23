@@ -303,6 +303,7 @@ impl Browser {
     }
 
     pub(crate) fn toggle_split_pin(&mut self, tab: TabId) {
+        if !self.can_edit_persistent_sidebar() { return; }
         let Some(scope) = self.tab_scope(tab) else { return; };
         if scope == Scope::Favorites { self.unfavorite_split(tab); return; }
         let Scope::Space(index, section) = scope else { return; };
@@ -319,6 +320,7 @@ impl Browser {
     }
 
     pub(crate) fn move_split(&mut self, tab: TabId, destination: crate::SpaceId, section: Section) -> bool {
+        if section == Section::Pinned && !self.can_edit_persistent_sidebar() { return false; }
         let Some(index) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
         let Some(scope) = self.tab_scope(tab) else { return false; };
         let target = Scope::Space(index, section);
@@ -334,6 +336,7 @@ impl Browser {
     }
 
     pub(crate) fn favorite_split(&mut self, tab: TabId) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         if self.is_favorite(tab) || self.favorite_count() >= crate::favorites::MAX_FAVORITES { return false; }
         self.forget_pinned_item(tab);
         let Some((scope, split)) = self.take_split(tab) else { return false; };

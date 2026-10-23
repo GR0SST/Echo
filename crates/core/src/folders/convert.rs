@@ -6,6 +6,7 @@ impl Browser {
     /// Promotes the folder's children into the Pinned root of a new Space.
     /// Nested folders retain their identities, order and disclosure state.
     pub fn folder_into_space(&mut self, id: FolderId, now: SystemTime) -> Option<SpaceId> {
+        if !self.can_edit_persistent_sidebar() { return None; }
         let source = self
             .spaces
             .iter()

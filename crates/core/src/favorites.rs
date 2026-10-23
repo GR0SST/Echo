@@ -11,6 +11,7 @@ impl Browser {
     /// Reorders logical dock items, keeping all pages of a Split View together
     /// and retaining every Space's current selection of a shared Favorite.
     pub fn move_favorite(&mut self, id: TabId, destination: usize) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let anchor = self.item_anchor(id);
         let mut order: Vec<_> = self.favorites.iter().filter(|tab| !self.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
         let Some(source) = order.iter().position(|id| *id == anchor) else { return false; };
@@ -33,6 +34,7 @@ impl Browser {
     /// Moves an existing tab into the shared dock, preserving its loaded page.
     /// An existing Pinned tab keeps its original URL; Today captures its URL.
     pub fn favorite_tab(&mut self, id: TabId) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         if self.split_for(id).is_some() { return self.favorite_split(id); }
         if self.is_favorite(id) || self.favorite_count() >= MAX_FAVORITES { return false; }
         let Some((space, section, index)) = self.spaces.iter().enumerate().find_map(|(i, space)| {
@@ -54,6 +56,7 @@ impl Browser {
 
     /// Returns a Favorite to Today in the current Space.
     pub fn unfavorite_tab(&mut self, id: TabId) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         if self.split_for(id).is_some() { return self.unfavorite_split(id); }
         let Some(mut tab) = self.take_favorite(id) else { return false; };
         tab.pinned_url = None;

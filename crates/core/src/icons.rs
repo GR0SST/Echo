@@ -37,6 +37,7 @@ impl Browser {
     }
 
     pub fn set_folder_icon(&mut self, folder: crate::folders::FolderId, icon: Option<&str>) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let Some(icon) = normalized(icon) else { return false; };
         self.spaces.iter_mut().flat_map(|space| &mut space.folders).find(|entry| entry.id == folder)
             .is_some_and(|folder| replace(&mut folder.custom_icon, icon))

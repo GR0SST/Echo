@@ -138,6 +138,7 @@ impl Browser {
         parent: Option<FolderId>,
         name: &str,
     ) -> Option<FolderId> {
+        if !self.can_edit_persistent_sidebar() { return None; }
         let name = name.trim();
         if name.is_empty() {
             return None;
@@ -175,6 +176,7 @@ impl Browser {
     }
 
     pub fn rename_folder(&mut self, id: FolderId, name: &str) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let name = name.trim();
         if name.is_empty() {
             return false;
@@ -192,6 +194,7 @@ impl Browser {
     }
 
     pub fn set_folder_collapsed(&mut self, id: FolderId, collapsed: bool) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let Some(folder) = self
             .spaces
             .iter_mut()
@@ -206,6 +209,7 @@ impl Browser {
     }
 
     pub fn set_all_folders_collapsed(&mut self, space: SpaceId, collapsed: bool) -> usize {
+        if !self.can_edit_persistent_sidebar() { return 0; }
         let Some(space) = self.spaces.iter_mut().find(|entry| entry.id == space) else {
             return 0;
         };
@@ -220,6 +224,7 @@ impl Browser {
     }
 
     pub fn delete_empty_folder(&mut self, id: FolderId) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let Some(index) = self.spaces.iter().position(|space| {
             space
                 .folders
@@ -236,6 +241,7 @@ impl Browser {
     /// Pins the whole item in the destination Space, without expanding a closed
     /// destination folder. The caller chooses whether to focus its page.
     pub fn move_item_to_folder(&mut self, tab: TabId, folder: FolderId) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let Some(space) = self.folder_space(folder) else {
             return false;
         };
@@ -276,6 +282,7 @@ impl Browser {
     }
 
     pub fn move_item_to_pinned_root(&mut self, tab: TabId, space: SpaceId) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         if !self.spaces.iter().any(|entry| entry.id == space)
             || !self.all_tabs().any(|entry| entry.id == tab)
         {
@@ -301,6 +308,7 @@ impl Browser {
     /// Moves a complete subtree. Pages and Split Views keep their identities,
     /// original URLs and loaded engine views, including across Spaces.
     pub fn can_move_folder(&self, id: FolderId, destination: SpaceId, parent: Option<FolderId>) -> bool {
+        if !self.can_edit_persistent_sidebar() { return false; }
         let Some(source) = self
             .spaces
             .iter()

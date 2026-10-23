@@ -22,6 +22,7 @@ impl Browser {
         }) else {
             return false;
         };
+        if section == Section::Pinned && !self.can_edit_persistent_sidebar() { return false; }
         let space = self.spaces[index].id;
         if section == Section::Pinned {
             let parent = self.folder_ancestors(target).last().copied();
