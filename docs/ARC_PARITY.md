@@ -172,7 +172,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Address field at the top of the sidebar (click opens the Command Bar with the URL) | — | done | No back/forward/reload buttons, no Site Control Center button |
 | Hiding the sidebar and sliding it in when hovering the left edge | ⌘S | done | — |
 | "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | ⇧⌘D | missing | — |
-| **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | missing | Needs drag and drop ("Drag to add Favorites"), unread badges (Gmail, GitHub, X, WhatsApp), calendar captions ("Show Time to Next Meeting") |
+| **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | — | partial | Shared persistent dock (up to 12), click/keyboard activation, title/URL tooltips, Close unloads and resets the original URL, Favorite/Unfavorite and moves preserve the live page. Uses letter icons; site favicons, drag/drop, unread badges, calendar captions and profile isolation remain missing. Fresh visual check awaits an unlocked desktop |
 | Hover previews for Favorites, Pinned and folders (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | hover | missing | Configured in "Previews Settings…" |
 | **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL). Reset to Original URL and Replace Pinned URL with Current are available in the Command Bar; section can be collapsed |
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
@@ -246,7 +246,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab, window controls, Space/tab management and archive. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
 | Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | partial | Move to Pinned/Today in any Space and Pin to <space> are implemented. Identity, custom name and loaded page are preserved; destination is focused. Move to Folder remains missing |
-| Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | missing | — |
+| Favorites: "Favorite Tab", "Unfavorite Tab", "Pin to Top Apps" | — | done | Command Bar and Tabs menu; Unfavorite returns the tab to Today in the current Space |
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | missing | — |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | missing | — |
 | Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab and Reset Tab Name are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate and mute remain missing |

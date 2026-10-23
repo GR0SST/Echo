@@ -130,6 +130,7 @@ pub(crate) fn build() -> Vec<Menu> {
             name: "Tabs".into(),
             items: vec![
                 MenuItem::action("Pin/Unpin Tab", window::TogglePin),
+                MenuItem::action("Favorite/Unfavorite Tab", window::ToggleFavorite),
                 MenuItem::action("Rename Current Tab…", RenameTab),
                 MenuItem::action("Reset Tab Name", ResetTabName),
                 MenuItem::action("Reset Tab to Original URL", ResetPinnedTab),

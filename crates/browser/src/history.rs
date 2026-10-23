@@ -80,11 +80,8 @@ impl BrowserWindow {
     }
 
     pub(crate) fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let existing = self
-            .browser
-            .space()
-            .pinned
-            .iter()
+        let existing = self.browser.favorites.iter()
+            .chain(&self.browser.space().pinned)
             .chain(&self.browser.space().today)
             .find(|tab| tab.url.eq_ignore_ascii_case(HISTORY_URL))
             .map(|tab| tab.id);

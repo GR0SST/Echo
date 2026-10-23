@@ -73,6 +73,7 @@ actions!(
         ZoomOut,
         ResetZoom,
         TogglePin,
+        ToggleFavorite,
         TogglePinnedSection,
         ToggleSidebar,
         NextSpace,
@@ -300,6 +301,7 @@ pub enum Command {
     CopyUrlAsMarkdown,
     ToggleSidebar,
     TogglePin,
+    ToggleFavorite,
     TogglePinnedSection,
     CloseTab,
     ClearToday,
@@ -777,6 +779,7 @@ impl BrowserWindow {
         if !query.is_empty() {
             let active = self.browser.active_tab();
             let pinned = active.is_some_and(|tab| tab.pinned_url.is_some());
+            let favorite = active.is_some_and(|tab| self.browser.is_favorite(tab.id));
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
                 (Command::RenameTab, "Rename Current Tab…", "rename current tab|rename tab|rename current item", active.is_some()),
@@ -794,7 +797,8 @@ impl BrowserWindow {
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
                 (Command::ToggleSidebar, if self.sidebar_visible { "Hide Sidebar" } else { "Show Sidebar" }, if self.sidebar_visible { "toggle sidebar|hide sidebar|sidebar" } else { "toggle sidebar|show sidebar|sidebar" }, true),
-                (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some()),
+                (Command::TogglePin, if pinned { "Unpin Tab" } else { "Pin Tab" }, if pinned { "unpin tab|move to today" } else { "pin tab|move to pinned" }, active.is_some() && !favorite),
+                (Command::ToggleFavorite, if favorite { "Unfavorite Tab" } else { "Favorite Tab" }, if favorite { "unfavorite tab|remove from favorites|unfavorite current tab" } else { "favorite tab|favorite current tab|pin to top apps|add to favorites" }, active.is_some()),
                 (Command::TogglePinnedSection, if self.browser.space().pinned_collapsed { "Expand Pinned Section" } else { "Collapse Pinned Section" }, if self.browser.space().pinned_collapsed { "expand pinned section|toggle pinned section" } else { "collapse pinned section|toggle pinned section" }, !self.browser.space().pinned.is_empty()),
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
                 (Command::ClearToday, "Clear Unpinned Tabs", "clear unpinned tabs|clear today|archive all today tabs", !self.browser.space().today.is_empty()),
@@ -829,14 +833,14 @@ impl BrowserWindow {
                 }
             }
             if let Some(tab) = active {
-                let source = if self.browser.space().pinned.iter().any(|pinned| pinned.id == tab.id) { Section::Pinned } else { Section::Today };
+                let source = if favorite { None } else if self.browser.space().pinned.iter().any(|pinned| pinned.id == tab.id) { Some(Section::Pinned) } else { Some(Section::Today) };
                 for space in &self.browser.spaces {
                     for section in [Section::Pinned, Section::Today] {
-                        if space.id == self.browser.space().id && section == source { continue; }
+                        if space.id == self.browser.space().id && Some(section) == source { continue; }
                         let section_name = if section == Section::Pinned { "Pinned" } else { "Today" };
                         let label = format!("Move to {section_name} in {}", space.name);
                         let mut names = format!("{label}|{} {}", if section == Section::Pinned { "pin to" } else { "move to today in" }, space.name);
-                        if section == source { names.push_str(&format!("|move to {}", space.name)); }
+                        if Some(section) == source { names.push_str(&format!("|move to {}", space.name)); }
                         if let Some(score) = command_match_score(&query, &names) {
                             matches.push((score, Suggestion::Action { command: Command::MoveTab { space: space.id, section }, label }));
                         }
@@ -853,13 +857,15 @@ impl BrowserWindow {
             let spaces = std::iter::once(&self.browser.spaces[current]).chain(
                 self.browser.spaces.iter().enumerate().filter(|(index, _)| *index != current).map(|(_, space)| space)
             );
-            suggestions.extend(spaces.flat_map(|space| {
-                space.pinned.iter().chain(&space.today).map(move |tab| (space, tab))
-            }).filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
+            let favorites = self.browser.favorites.iter().map(|tab| ("Favorites", tab));
+            suggestions.extend(favorites.chain(spaces.flat_map(|space| {
+                space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))
+            }))
+            .filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
                 || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
                 .take(MAX_TAB_SUGGESTIONS)
                 .map(|(space, tab)| Suggestion::SwitchToTab {
-                    id: tab.id, title: tab.title.clone(), url: tab.url.clone(), space: space.name.clone(),
+                    id: tab.id, title: tab.title.clone(), url: tab.url.clone(), space: space.to_string(),
                 }));
         }
         if !query.is_empty() {
@@ -925,7 +931,9 @@ impl BrowserWindow {
                 self.browser.set_title(id, title);
             }
             Suggestion::SwitchToTab { id, .. } => {
-                if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)) {
+                if self.browser.is_favorite(id) {
+                    self.browser.activate_tab(id, now);
+                } else if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)) {
                     self.browser.switch_space(index);
                     self.browser.activate_tab(id, now);
                     self.settle_pager(cx);
@@ -1018,6 +1026,12 @@ impl BrowserWindow {
             Command::ToggleSidebar => self.toggle_sidebar(cx),
             Command::TogglePin => {
                 if let Some(id) = self.browser.space().active_tab { self.browser.toggle_pin(id); }
+            }
+            Command::ToggleFavorite => {
+                if let Some(id) = self.browser.space().active_tab {
+                    if self.browser.is_favorite(id) { self.browser.unfavorite_tab(id); }
+                    else if !self.browser.favorite_tab(id) { self.show_toast("You can have up to 12 Favorites".into(), cx); }
+                }
             }
             Command::TogglePinnedSection => self.toggle_pinned_section(self.browser.active_space, cx),
             Command::CloseTab => {
@@ -1436,6 +1450,39 @@ impl BrowserWindow {
             )
     }
 
+    fn render_favorite(&self, tab: &Tab, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = tab.id;
+        let key = id.get() as usize;
+        let group = SharedString::from(format!("favorite-{key}"));
+        let active = self.browser.space().active_tab == Some(id);
+        let title = tab.title.clone();
+        let url = tab.url.clone();
+        div().id(("favorite", key)).debug_selector(move || format!("favorite-{key}"))
+            .group(group.clone()).relative().flex().items_center().justify_center()
+            .w(px(68.0)).h(px(48.0)).rounded_lg()
+            .bg(hsla(0.0, 0.0, 1.0, if active { 0.85 } else { 0.3 }))
+            .when(active, |this| this.shadow_sm())
+            .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.65)))
+            .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: title.clone(), url: display_url(&url) }).into())
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                this.browser.activate_tab(id, SystemTime::now());
+                if event.click_count() == 2 {
+                    let title = this.browser.active_tab().unwrap().title.clone();
+                    this.open_command_bar(Target::RenameTab(id), &title, window, cx);
+                }
+                cx.notify();
+            }))
+            .child(favicon(&tab.title, self.accent()))
+            .child(div().id(("close-favorite", key)).debug_selector(move || format!("close-favorite-{key}"))
+                .absolute().right(px(2.0)).top(px(1.0)).px_1().rounded_sm().text_xs()
+                .invisible().group_hover(group, |s| s.visible())
+                .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.1)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.close_tab(id, cx);
+                })).child("−"))
+    }
+
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let url = self
             .browser
@@ -1483,6 +1530,11 @@ impl BrowserWindow {
                         .child(url),
                 ),
             )
+            .when(!self.browser.favorites.is_empty(), |this| this.child(
+                div().id("favorites").debug_selector(|| "favorites".into())
+                    .flex().flex_wrap().gap_2().px_2().pb_2()
+                    .children(self.browser.favorites.iter().map(|tab| self.render_favorite(tab, cx))),
+            ))
             // Spaces side by side, shifted to the pager position.
             .child(
                 div().flex_1().min_h_0().relative().overflow_hidden().child(
@@ -1959,6 +2011,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
             .on_action(cx.listener(Self::on_toggle_pin))
+            .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| this.run_command(Command::ToggleFavorite, cx)))
             .on_action(cx.listener(|this, _: &TogglePinnedSection, _, cx| this.toggle_pinned_section(this.browser.active_space, cx)))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))
@@ -1990,6 +2043,17 @@ impl Render for BrowserWindow {
             .when(self.sidebar_visible, |this| this.child(self.render_sidebar(cx)))
             .child(self.render_content(cx))
 
+    }
+}
+
+struct TabTooltip { title: String, url: String }
+
+impl Render for TabTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().flex().flex_col().gap_1().p_2().rounded_md().bg(gpui::white()).shadow_md()
+            .text_sm().text_color(gpui::black()).max_w(px(320.0))
+            .child(self.title.clone())
+            .child(div().text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5)).child(self.url.clone()))
     }
 }
 

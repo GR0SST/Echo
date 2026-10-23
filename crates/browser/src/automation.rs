@@ -237,7 +237,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
         out += &format!("[dump] find={:?} count={:?} active={} searching={}\n", find.input.read(cx).text(), find.count, find.active, find.searching);
     }
     let shown = this.pages.as_ref().and_then(|pages| pages.borrow().shown());
-    for (section, tabs) in [("pinned", &space.pinned), ("today", &space.today)] {
+    for (section, tabs) in [("favorite", &this.browser.favorites), ("pinned", &space.pinned), ("today", &space.today)] {
         for tab in tabs {
             let active = space.active_tab == Some(tab.id);
             let state = this

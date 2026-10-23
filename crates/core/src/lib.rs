@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod omnibox;
 pub mod links;
 pub mod history;
+pub mod favorites;
 pub mod session;
 
 /// Arc's default: unpinned tabs are archived after 12 hours of inactivity.
@@ -133,6 +134,9 @@ pub struct Browser {
     pub archive: Vec<ArchivedTab>,
     #[serde(default)]
     pub history: Vec<history::HistoryEntry>,
+    /// Shared by all Spaces in the current profile.
+    #[serde(default)]
+    pub favorites: Vec<Tab>,
     /// `None` disables auto-archiving.
     pub archive_after: Option<Duration>,
     next_id: u64,
@@ -151,6 +155,7 @@ impl Browser {
             active_space: 0,
             archive: Vec::new(),
             history: Vec::new(),
+            favorites: Vec::new(),
             archive_after: Some(DEFAULT_ARCHIVE_AFTER),
             next_id: 1,
         };
@@ -170,6 +175,7 @@ impl Browser {
             .iter()
             .flat_map(|space| std::iter::once(space.id.0).chain(space.tabs().map(|t| t.id.0)))
             .chain(self.archive.iter().map(|a| a.tab.id.0))
+            .chain(self.favorites.iter().map(|tab| tab.id.0))
             .max()
             .unwrap_or(0);
         self.next_id = self.next_id.max(max_id + 1);
@@ -192,7 +198,7 @@ impl Browser {
     pub fn active_tab(&self) -> Option<&Tab> {
         let space = self.space();
         let id = space.active_tab?;
-        space.tabs().find(|t| t.id == id)
+        self.favorites.iter().chain(space.tabs()).find(|t| t.id == id)
     }
 
     pub fn add_space(&mut self, name: impl Into<String>, hue: f32) -> SpaceId {
@@ -247,6 +253,11 @@ impl Browser {
     }
 
     pub fn activate_tab(&mut self, id: TabId, now: SystemTime) {
+        if let Some(tab) = self.favorites.iter_mut().find(|tab| tab.id == id) {
+            tab.last_active = now;
+            self.space_mut().active_tab = Some(id);
+            return;
+        }
         let space = self.space_mut();
         let Some((section, i)) = space.find(id) else {
             return;
@@ -255,11 +266,11 @@ impl Browser {
         space.active_tab = Some(id);
     }
 
-    /// Focuses the tab `delta` steps away in sidebar order (pinned, then
-    /// today), wrapping around. Like Ctrl+Tab / Ctrl+Shift+Tab.
+    /// Focuses the tab `delta` steps away in sidebar order (Favorites,
+    /// Pinned, then Today), wrapping around. Like Ctrl+Tab / Ctrl+Shift+Tab.
     pub fn cycle_tab(&mut self, delta: isize, now: SystemTime) {
         let space = self.space();
-        let ids: Vec<TabId> = space.tabs().map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.favorites.iter().chain(space.tabs()).map(|t| t.id).collect();
         if ids.is_empty() {
             return;
         }
@@ -289,6 +300,10 @@ impl Browser {
     /// Closes a tab like Arc's ⌘W: Today tabs go to the archive, pinned
     /// tabs stay pinned and return to their pinned page.
     pub fn close_tab(&mut self, id: TabId, now: SystemTime) -> Option<Closed> {
+        if self.is_favorite(id) {
+            self.close_favorite(id);
+            return Some(Closed::Unloaded);
+        }
         let space = self.space_mut();
         match space.find(id)? {
             (Section::Pinned, i) => {
@@ -365,10 +380,10 @@ impl Browser {
         self.archive.len() != before
     }
 
-    /// Focuses the `n`th sidebar item (0-based, pinned then today), or the
+    /// Focuses the `n`th sidebar item (0-based, Favorites, Pinned, Today), or the
     /// last one for `None`. Like Arc's ⌘1…⌘8 and ⌘9.
     pub fn activate_item(&mut self, n: Option<usize>, now: SystemTime) {
-        let ids: Vec<TabId> = self.space().tabs().map(|t| t.id).collect();
+        let ids: Vec<TabId> = self.favorites.iter().chain(self.space().tabs()).map(|t| t.id).collect();
         let id = match n {
             Some(n) => ids.get(n),
             None => ids.last(),
@@ -381,6 +396,10 @@ impl Browser {
     /// Moves a tab between Pinned and Today. Newly pinned tabs go to the
     /// bottom of Pinned; unpinned tabs go to the top of Today.
     pub fn toggle_pin(&mut self, id: TabId) {
+        if self.is_favorite(id) {
+            self.unfavorite_tab(id);
+            return;
+        }
         let space = self.space_mut();
         match space.find(id) {
             Some((Section::Pinned, i)) => {
@@ -403,6 +422,20 @@ impl Browser {
     /// the caller chooses whether to focus the destination Space and tab.
     pub fn move_tab(&mut self, id: TabId, destination: SpaceId, section: Section) -> bool {
         let Some(target) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
+        if let Some(mut tab) = self.take_favorite(id) {
+            match section {
+                Section::Pinned => {
+                    self.spaces[target].pinned.push(tab);
+                    self.spaces[target].pinned_collapsed = false;
+                }
+                Section::Today => {
+                    tab.pinned_url = None;
+                    tab.pinned_title = None;
+                    self.spaces[target].today.insert(0, tab);
+                }
+            }
+            return true;
+        }
         let Some((source, old_section, index)) = self.spaces.iter().enumerate().find_map(|(index, space)| space.find(id).map(|(section, tab)| (index, section, tab))) else { return false; };
         if source == target && old_section == section { return false; }
         let source_space = &mut self.spaces[source];
@@ -428,12 +461,7 @@ impl Browser {
 
     /// Returns a pinned tab to the URL it was pinned at, keeping its identity.
     pub fn reset_pinned_tab(&mut self, id: TabId) -> bool {
-        for space in &mut self.spaces {
-            if let Some(tab) = space.pinned.iter_mut().find(|tab| tab.id == id) {
-                return tab.reset_to_pinned_url();
-            }
-        }
-        false
+        self.tab_mut(id).is_some_and(Tab::reset_to_pinned_url)
     }
 
     /// Resets every pinned page in the current Space, leaving Today untouched.
@@ -446,90 +474,68 @@ impl Browser {
 
     /// Changes the original pinned URL without navigating the current page.
     pub fn replace_pinned_url(&mut self, id: TabId) -> bool {
-        for space in &mut self.spaces {
-            if let Some(tab) = space.pinned.iter_mut().find(|tab| tab.id == id) {
-                tab.pinned_url = Some(tab.url.clone());
-                tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
-                return true;
-            }
-        }
-        false
+        let Some(tab) = self.tab_mut(id).filter(|tab| tab.pinned_url.is_some()) else { return false; };
+        tab.pinned_url = Some(tab.url.clone());
+        tab.pinned_title = tab.page_title.clone().or_else(|| Some(tab.title.clone()));
+        true
     }
 
     /// Loads `url` in an existing tab of any space.
     pub fn navigate(&mut self, id: TabId, url: impl Into<String>) {
         let url = url.into();
-        for space in &mut self.spaces {
-            if let Some((section, i)) = space.find(id) {
-                let tab = &mut space.section_mut(section)[i];
-                tab.page_title = None;
-                tab.title = tab.custom_title.clone().unwrap_or_else(|| url.clone());
-                tab.url = url;
-                return;
-            }
+        if let Some(tab) = self.tab_mut(id) {
+            tab.page_title = None;
+            tab.title = tab.custom_title.clone().unwrap_or_else(|| url.clone());
+            tab.url = url;
         }
     }
 
     /// Records the URL a tab's page actually shows (after redirects or
     /// in-page navigation) without touching its title.
     pub fn set_url(&mut self, id: TabId, url: impl Into<String>) {
-        let url = url.into();
-        for space in &mut self.spaces {
-            if let Some((section, i)) = space.find(id) {
-                space.section_mut(section)[i].url = url;
-                return;
-            }
-        }
+        if let Some(tab) = self.tab_mut(id) { tab.url = url.into(); }
     }
 
-    /// Every tab in every space.
+    /// Every open tab, with shared Favorites included once.
     pub fn all_tabs(&self) -> impl Iterator<Item = &Tab> {
-        self.spaces.iter().flat_map(|space| space.tabs())
+        self.favorites.iter().chain(self.spaces.iter().flat_map(|space| space.tabs()))
+    }
+
+    fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        self.favorites.iter_mut().chain(self.spaces.iter_mut().flat_map(|space| {
+            space.pinned.iter_mut().chain(&mut space.today)
+        })).find(|tab| tab.id == id)
     }
 
     pub fn set_title(&mut self, id: TabId, title: impl Into<String>) {
         let title = title.into();
-        for space in &mut self.spaces {
-            if let Some((section, i)) = space.find(id) {
-                let tab = &mut space.section_mut(section)[i];
-                tab.page_title = Some(title.clone());
-                if tab.pinned_url.as_ref() == Some(&tab.url) { tab.pinned_title = Some(title.clone()); }
-                tab.title = tab.custom_title.clone().unwrap_or(title);
-                return;
-            }
+        if let Some(tab) = self.tab_mut(id) {
+            tab.page_title = Some(title.clone());
+            if tab.pinned_url.as_ref() == Some(&tab.url) { tab.pinned_title = Some(title.clone()); }
+            tab.title = tab.custom_title.clone().unwrap_or(title);
         }
     }
 
     pub fn rename_tab(&mut self, id: TabId, name: &str) -> bool {
         let name = name.trim();
         if name.is_empty() { return false; }
-        for space in &mut self.spaces {
-            if let Some((section, i)) = space.find(id) {
-                let tab = &mut space.section_mut(section)[i];
-                // Preserve the page label from sessions saved before page_title existed.
-                if tab.custom_title.is_none() && tab.page_title.is_none() { tab.page_title = Some(tab.title.clone()); }
-                tab.custom_title = Some(name.to_string());
-                tab.title = name.to_string();
-                return true;
-            }
-        }
-        false
+        let Some(tab) = self.tab_mut(id) else { return false; };
+        // Preserve the page label from sessions saved before page_title existed.
+        if tab.custom_title.is_none() && tab.page_title.is_none() { tab.page_title = Some(tab.title.clone()); }
+        tab.custom_title = Some(name.to_string());
+        tab.title = name.to_string();
+        true
     }
 
     pub fn reset_tab_name(&mut self, id: TabId) -> bool {
-        for space in &mut self.spaces {
-            if let Some((section, i)) = space.find(id) {
-                let tab = &mut space.section_mut(section)[i];
-                if tab.custom_title.take().is_none() { return false; }
-                tab.title = tab.page_title.clone().unwrap_or_else(|| tab.url.clone());
-                return true;
-            }
-        }
-        false
+        let Some(tab) = self.tab_mut(id) else { return false; };
+        if tab.custom_title.take().is_none() { return false; }
+        tab.title = tab.page_title.clone().unwrap_or_else(|| tab.url.clone());
+        true
     }
 
     /// Archives Today tabs idle longer than `archive_after` in every space.
-    /// Pinned tabs and each space's focused tab are never archived.
+    /// Favorites, Pinned tabs and each Space's focused tab are never archived.
     /// Returns the number of archived tabs.
     pub fn archive_idle(&mut self, now: SystemTime) -> usize {
         let Some(limit) = self.archive_after else {

@@ -1739,3 +1739,88 @@ fn deleting_a_history_suggestion_keeps_the_bar_and_does_not_open_the_page(cx: &m
     bar(&view, cx).simulate_input("first page");
     assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 1);
 }
+
+#[gpui::test]
+fn favorites_are_shared_and_keep_the_loaded_page_across_spaces(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx).unwrap();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("favorite tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites.len()), 1);
+    assert!(cx.debug_bounds("favorite-8").is_some());
+    fake.take_calls();
+    cx.simulate_keystrokes("ctrl-2");
+    assert!(active_url(&view, cx).is_none());
+    click(cx, "favorite-8");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    // Favorites come before the Space's Pinned and Today items by default.
+    cx.simulate_keystrokes("ctrl-1 cmd-2");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://github.com"));
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("chromium");
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::SwitchToTab { space, .. } if space == "Favorites"))));
+    bar(&view, cx).simulate_keystrokes("down enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+}
+
+#[gpui::test]
+fn closing_a_favorite_unloads_it_and_clicking_it_reopens_the_original_url(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx).unwrap();
+    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.simulate_keystrokes("ctrl-2 cmd-1");
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/favorite-navigation".into() });
+    fake.take_calls();
+    let archive = view.read_with(cx, |w, _| w.browser.archive.len());
+    click(cx, "close-favorite-8");
+    assert!(fake.take_calls().contains(&Call::Close(1)));
+    assert!(active_url(&view, cx).is_none());
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), archive);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.favorites.len()), 1);
+    click(cx, "favorite-8");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+    assert!(fake.take_calls().contains(&Call::Create(2, original)));
+}
+
+#[gpui::test]
+fn unfavorite_returns_the_shared_tab_to_the_current_spaces_today(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.simulate_keystrokes("ctrl-2 cmd-1");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("unfavorite tab");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.favorites.is_empty());
+        assert_eq!(w.browser.space().today.len(), 1);
+        assert_eq!(w.browser.space().today[0].id.get(), 8);
+        let restored = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
+        assert!(restored.favorites.is_empty());
+        assert_eq!(restored.active_tab().unwrap().id.get(), 8);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn a_favorite_can_move_to_the_current_spaces_pinned_section(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.simulate_keystrokes("ctrl-2 cmd-1");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("move to pinned in work");
+    bar(&view, cx).simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.favorites.is_empty());
+        assert_eq!(w.browser.space().pinned[0].id.get(), 8);
+        assert_eq!(w.browser.space().active_tab.unwrap().get(), 8);
+        assert_ne!(w.browser.spaces[0].active_tab, w.browser.space().active_tab);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
