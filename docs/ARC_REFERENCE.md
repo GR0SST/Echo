@@ -643,3 +643,14 @@ commands. A later native run verified close restores the inspected page's
 responder: `after-inspector` was typed into the retained fixture after closing,
 and a page PNG showed that input with the original fixture UUID. Diagnostic
 identifiers use getRandomValues rather than the secure-context-only randomUUID.
+
+### Developer command targeting follow-up — 2026-10-23
+
+In a temporary normal Arc window with a localhost fixture, Inspect Elements
+opened Elements; repeating its shortcut kept DevTools open. Network Inspector
+from the Command Bar opened Network, and repeating the same action closed the
+frontend. Opening JavaScript Console while Elements was visible switched to
+Console rather than closing DevTools. These were checked through the native
+accessibility tree. Exact selected-element overlay and repeated inspect-mode
+state still need visual confirmation. User input interrupted reference cleanup;
+the uniquely named temporary Space is tracked for later removal.
