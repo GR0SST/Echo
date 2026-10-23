@@ -257,11 +257,11 @@ struct Drag {
 impl Drag {
     /// Finger speed (px/s) over the last moments of the gesture, measured
     /// between events; zero if the fingers paused before lifting.
-    fn speed(&self) -> f32 {
+    fn speed(&self, now: Instant) -> f32 {
         let Some(&(last, _)) = self.samples.last() else {
             return 0.0;
         };
-        if last.elapsed() > Duration::from_millis(50) {
+        if now.saturating_duration_since(last) > Duration::from_millis(50) {
             return 0.0;
         }
         let recent: Vec<_> = self
@@ -1574,7 +1574,7 @@ impl BrowserWindow {
                     return;
                 }
                 drag.travel += dx;
-                drag.samples.push((Instant::now(), dx));
+                drag.samples.push((cx.background_executor().now(), dx));
                 // Fingers moving left reveal the space on the right.
                 let raw = drag.start - drag.travel / SIDEBAR_WIDTH;
                 self.pager.position = rubber_band(raw, self.browser.spaces.len());
@@ -1589,7 +1589,7 @@ impl BrowserWindow {
                 }
                 let start = drag.start.round();
                 let moved = self.pager.position - drag.start;
-                let speed = drag.speed();
+                let speed = drag.speed(cx.background_executor().now());
                 let step = if moved > SPACE_SWIPE_COMMIT || speed < -SPACE_FLICK_SPEED {
                     1.0
                 } else if moved < -SPACE_SWIPE_COMMIT || speed > SPACE_FLICK_SPEED {

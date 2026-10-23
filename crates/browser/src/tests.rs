@@ -737,6 +737,42 @@ fn a_small_drag_springs_back(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_fast_short_sidebar_flick_commits_by_velocity(cx: &mut TestAppContext) {
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    scroll(cx, "sidebar", Started, 0., 0.);
+    scroll(cx, "sidebar", Moved, -10., 0.);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    scroll(cx, "sidebar", Moved, -10., 0.);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    scroll(cx, "sidebar", Moved, -10., 0.);
+    // 30px is below the distance threshold, but 667px/s is a flick.
+    scroll(cx, "sidebar", Ended, 0., 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 1.);
+}
+
+#[gpui::test]
+fn pausing_before_releasing_a_short_sidebar_drag_cancels_its_flick_velocity(cx: &mut TestAppContext) {
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    scroll(cx, "sidebar", Started, 0., 0.);
+    scroll(cx, "sidebar", Moved, -10., 0.);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    scroll(cx, "sidebar", Moved, -10., 0.);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    scroll(cx, "sidebar", Moved, -10., 0.);
+    cx.executor().advance_clock(Duration::from_millis(60));
+    scroll(cx, "sidebar", Ended, 0., 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 0.);
+}
+
+#[gpui::test]
 fn dragging_past_the_ends_resists(cx: &mut TestAppContext) {
     use gpui::TouchPhase::*;
     let (view, cx) = open(cx);

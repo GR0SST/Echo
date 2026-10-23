@@ -207,7 +207,7 @@ Folder duplication follows the right-click action documented in the
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
 | Several Spaces, each with its own Pinned/Today and active tab | — | done | — |
-| Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | done | — |
+| Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | done | Distance or a fast flick commits the gesture; pausing before releasing a short drag springs back. Velocity uses GPUI's clock, so distance/flick/pause behavior is covered deterministically |
 | Switching Spaces from the keyboard (animated) | ⌥⌘→/← | done | — |
 | Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | — | partial | Named Spaces can be created from the dock or Command Bar with an automatic accent; Turn into Space converts a folder and inherits its name/icon. Space icons can be edited afterward. Theme/profile controls in the creation dialog remain missing |
 | Renaming a Space | — | done | Name editor via the Command Bar, Spaces menu or header/dock context menu; persisted with the same Space identity. Context actions can target an inactive Space without changing the current page |
