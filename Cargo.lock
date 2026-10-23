@@ -751,6 +751,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "raw-window-handle",
+ "serde_json",
  "unicode-segmentation",
 ]
 

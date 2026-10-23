@@ -69,47 +69,87 @@ fn rounded_rect(x: f32, y: f32, width: f32, height: f32, radius: f32) -> Vec<(f3
     points
 }
 
-pub(crate) fn control(icon: Icon) -> AnyElement {
+type IconContours = std::collections::BTreeMap<String, Vec<Vec<f32>>>;
+static IONICONS: std::sync::LazyLock<IconContours> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(include_str!("../assets/ionicons/paths.json")).expect("embedded Ionicons geometry is valid")
+});
+
+fn ionicon(name: &'static str) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
-        use std::f32::consts::{PI, TAU};
-        let mut paths: Vec<Vec<(f32, f32)>> = match icon {
-            Icon::Back => vec![vec![(13.5, 9.), (3.5, 9.)], vec![(8., 4.5), (3.5, 9.), (8., 13.5)]],
-            Icon::Forward => vec![vec![(4.5, 9.), (14.5, 9.)], vec![(10., 4.5), (14.5, 9.), (10., 13.5)]],
-            Icon::Reload => vec![arc(9., 9.5, 5.5, -2.5, -PI * 2.5), vec![(9., 4.), (12., 4.)], vec![(9., 1.), (12., 4.), (9., 7.)]],
+        let Some(commands) = IONICONS.get(name) else { return; };
+        let scale = f32::from(bounds.size.width) / 512.;
+        let at = |x, y| bounds.origin + gpui::point(px(x * scale), px((511. - y) * scale));
+        let mut path = gpui::PathBuilder::fill();
+        for command in commands {
+            match command.as_slice() {
+                [0., x, y] => path.move_to(at(*x, *y)),
+                [1., x, y] => path.line_to(at(*x, *y)),
+                [2., cx, cy, x, y] => path.curve_to(at(*x, *y), at(*cx, *cy)),
+                [3., c1x, c1y, c2x, c2y, x, y] => path.cubic_bezier_to(at(*x, *y), at(*c1x, *c1y), at(*c2x, *c2y)),
+                [4.] => path.close(),
+                _ => unreachable!("embedded contour command"),
+            }
+        }
+        if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+    }).size(px(18.)).flex_none().into_any_element()
+}
+
+pub(crate) fn control(icon: Icon) -> AnyElement {
+    let name = match icon {
+        Icon::Back => "arrow-back-outline", Icon::Forward => "arrow-forward-outline",
+        Icon::Reload => "reload-outline", Icon::Close => "close-outline",
+        Icon::Minus => "remove-outline", Icon::Plus => "add-outline",
+        Icon::Folder => "folder-outline", Icon::Search => "search-outline",
+        Icon::External => "open-outline", Icon::History => "time-outline",
+        Icon::Enter => "return-down-back-outline", Icon::Restore => "arrow-undo-outline",
+        Icon::Up => "arrow-up-outline", Icon::Down => "arrow-down-outline",
+        Icon::Check => "checkmark-outline", Icon::Mute => "volume-mute-outline",
+        Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
+    };
+    ionicon(name)
+}
+
+/// Reference-specific frame/key controls absent from the Ionicons catalog.
+fn chrome_frame(icon: Icon) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let paths = match icon {
             Icon::Sidebar => vec![rounded_rect(1.5, 3., 15., 12., 2.), vec![(6.5, 3.), (6.5, 15.)], vec![(3.5, 6.), (4.5, 6.)], vec![(3.5, 8.5), (4.5, 8.5)]],
             Icon::Split => vec![rounded_rect(2., 3., 14., 12., 1.5), vec![(9., 3.), (9., 15.)]],
-            Icon::Close => vec![vec![(5., 5.), (13., 13.)], vec![(13., 5.), (5., 13.)]],
-            Icon::Minus => vec![vec![(4.5, 9.), (13.5, 9.)]],
-            Icon::Plus => vec![vec![(4., 9.), (14., 9.)], vec![(9., 4.), (9., 14.)]],
-            Icon::Folder => vec![rounded_rect(1.5, 5.25, 15., 10.5, 1.75), vec![(1.5, 7.), (1.5, 4.5), (2., 3.25), (6.5, 3.25), (8.5, 5.25)]],
-            Icon::Search => vec![arc(7.5, 7.5, 4.75, 0., TAU), vec![(11., 11.), (15.5, 15.5)]],
-            Icon::External => vec![vec![(4., 14.), (14., 4.)], vec![(6., 4.), (14., 4.), (14., 12.)]],
-            Icon::History => vec![arc(9., 9., 6.25, 0., TAU), vec![(9., 4.75), (9., 9.), (12., 10.5)]],
-            Icon::Enter => vec![vec![(14., 4.), (14., 10.), (4., 10.)], vec![(7.5, 6.5), (4., 10.), (7.5, 13.5)]],
-            Icon::Restore => vec![arc(9.5, 9.5, 5.5, -PI * 0.95, PI * 0.9), vec![(3.5, 3.), (3.5, 7.), (7.5, 7.)]],
-            Icon::Up => vec![vec![(9., 14.), (9., 4.)], vec![(4.5, 8.5), (9., 4.), (13.5, 8.5)]],
-            Icon::Down => vec![vec![(9., 4.), (9., 14.)], vec![(4.5, 9.5), (9., 14.), (13.5, 9.5)]],
-            Icon::Check => vec![vec![(3.5, 9.), (7.25, 12.75), (14.5, 5.5)]],
-            Icon::Mute => vec![vec![(3., 7.), (6., 7.), (10., 3.5), (10., 14.5), (6., 11.), (3., 11.), (3., 7.)], vec![(13., 7.), (16., 11.)], vec![(16., 7.), (13., 11.)]],
             Icon::Command => vec![rounded_rect(3., 3., 4., 4., 1.75), rounded_rect(11., 3., 4., 4., 1.75), rounded_rect(3., 11., 4., 4., 1.75), rounded_rect(11., 11., 4., 4., 1.75), rounded_rect(7., 7., 4., 4., 0.)],
+            _ => unreachable!("catalog-backed control"),
         };
         let color = window.text_style().color;
-        for points in paths.drain(..) {
+        for points in paths {
             let mut path = gpui::PathBuilder::stroke(px(1.5));
             for (index, (x, y)) in points.iter().enumerate() {
                 let point = bounds.origin + gpui::point(px(*x), px(*y));
                 if index == 0 { path.move_to(point); } else { path.line_to(point); }
             }
             if let Ok(path) = path.build() { window.paint_path(path, color); }
-            // Curves are already smooth; only short polylines need round joins.
-            for (index, (x, y)) in points.iter().enumerate() {
-                if points.len() > 8 && index != 0 && index + 1 != points.len() { continue; }
-                let mut cap = gpui::fill(gpui::Bounds::new(bounds.origin + gpui::point(px(*x - 0.75), px(*y - 0.75)), gpui::size(px(1.5), px(1.5))), color);
-                cap.corner_radii = px(0.75).into();
-                window.paint_quad(cap);
-            }
         }
     }).size(px(18.)).flex_none().into_any_element()
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_ionicons_preserve_valid_curves_and_exclude_brand_glyphs() {
+        assert_eq!(IONICONS.len(), 1108);
+        for name in ["pizza-outline", "folder-outline", "arrow-back-outline", "close-outline", "volume-mute-outline"] {
+            assert!(IONICONS.contains_key(name), "{name}");
+        }
+        for (name, commands) in IONICONS.iter() {
+            assert!(!name.starts_with("logo-"));
+            assert!(!commands.is_empty(), "{name}");
+            for command in commands {
+                let expected = match command[0] { 0. | 1. => 3, 2. => 5, 3. => 7, 4. => 1, _ => panic!("unknown command in {name}") };
+                assert_eq!(command.len(), expected, "{name}");
+                assert!(command.iter().all(|value| value.is_finite()), "{name}");
+            }
+        }
+    }
 }
 
 pub(crate) fn folder(custom: Option<&str>) -> AnyElement {

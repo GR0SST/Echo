@@ -103,11 +103,13 @@ The supplied reference takes precedence over inferred online behavior.
 
 Reference: the user's full Arc sidebar screenshot and the confirmed Split
 View clipping screenshot. Existing interface controls use a shared 18 px
-vector grid with a 1.5 px stroke (the semibold disclosure uses 1.8 px),
-inheriting control color. Default folders are monochrome outlines, with the
+vector box and inherit control color. Reference-specific frame controls use
+a 1.5 px stroke; the semibold disclosure uses 1.8 px. Catalog-backed controls
+retain their source geometry at that size. Default folders are monochrome outlines, with the
 disclosure replacing the icon on hover. Selected user emoji and website
-favicons remain unchanged. These are independently drawn generic controls;
-Arc branding and bundled artwork are not included.
+favicons remain unchanged. Reference-specific controls are independently
+drawn; general-purpose controls use the open Ionicons catalog below. Arc
+branding and proprietary bundled artwork are not included.
 
 The sidebar's top row exposes sidebar toggle, back, forward and reload/stop.
 Back/forward reflect engine navigation state; reload changes to stop during
@@ -117,3 +119,10 @@ Unnamed Split View rows give each segment an equal share of the full row.
 The group close button is overlaid on hover, so no empty trailing gutter is
 reserved. Only the last segment's text inset changes for that button; its
 outer bounds remain fixed. Long page names truncate within their segment.
+
+The installed Arc icon bundle contains the open-source Ionicons font. We
+export its 1108 non-brand glyphs to embedded filled contours, preserving the
+source shapes and MIT notice (`crates/browser/assets/ionicons`). Existing
+general-purpose controls now use those contours. Disclosure, ellipsis and
+reference-specific frame/key controls retain their fixed vector geometry.
+The graphical Space icon picker remains separate unfinished parity work.
