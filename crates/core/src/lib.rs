@@ -19,6 +19,7 @@ pub mod folders;
 pub mod undo;
 pub mod windows;
 pub mod profiles;
+pub mod downloads;
 pub use profiles::UserProfileId;
 
 fn default_enabled() -> bool { true }

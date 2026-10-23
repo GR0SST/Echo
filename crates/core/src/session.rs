@@ -16,6 +16,9 @@ pub fn to_json(browser: &Browser) -> String {
 pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
     use serde::de::Error;
     let mut value: serde_json::Value = serde_json::from_str(json)?;
+    if value.get("downloads").is_some() {
+        return Err(serde_json::Error::custom("download records require explicit profile ownership"));
+    }
     let new_format = ["format_version", "profiles", "default_user_profile_id", "next_user_profile_id"]
         .iter().any(|key| value.get(key).is_some());
     if new_format {
@@ -39,6 +42,7 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
         // downward or infer a fresh Default on malformed versioned input.
         return Err(serde_json::Error::custom("invalid user profile identity watermark"));
     }
+    browser.validate_downloads().map_err(serde_json::Error::custom)?;
     browser.repair();
     Ok(browser)
 }

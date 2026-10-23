@@ -37,6 +37,8 @@ pub struct UserProfile {
     pub empty_favorites_dismissed: bool,
     #[serde(default)]
     pub favicon_cache: Vec<SiteIcon>,
+    #[serde(default)]
+    pub(crate) downloads: crate::downloads::CompletedDownloads,
 }
 impl UserProfile {
     pub fn id(&self) -> UserProfileId {
@@ -63,6 +65,7 @@ impl UserProfile {
             archive_after,
             empty_favorites_dismissed: false,
             favicon_cache: Vec::new(),
+            downloads: crate::downloads::CompletedDownloads::default(),
         }
     }
 }
