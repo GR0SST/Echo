@@ -788,3 +788,25 @@ offered no action and left the saved 7-day duration unchanged. Stack screenshots
 were inspected. The full workspace still passed 526 tests; legacy None/custom
 values are preserved on cancellation or unmatched input. This verifies the
 choice correction, not parity of the still-missing native settings control.
+
+Reference cleanup constraint: the user explicitly requested retaining the
+temporary `Echo Favorites Reference 20261023` Space for manual deletion.
+Do not delete that Space during automated cleanup.
+
+### Successful disposable profile creation follow-up
+
+File → New Profile from the temporary reference Space uses the same two-step
+sheet as Settings Add, but preselects only the originating Space on the second
+step. The parent created `Echo Profile Reference 20261023` with only
+`Echo Favorites Reference 20261023` selected. The resulting Space had empty
+Favorites and retained its existing name. No other Space was reassigned.
+
+Spaces → Change Profile opens a sheet naming the current Space, warning about
+different browser data/logins/Favorites/extensions, and showing a profile
+dropdown with Cancel and Change Profile. The dropdown lists existing profiles
+and New Profile; the newly created profile was selected. Its layout was
+inspected, but the switch was cancelled. User activity interrupted further
+reference checks. The parent closed only its disposable window
+`9F759E29-D319-48F3-9DA1-86A2370BC5E1`, leaving the test Space and profile
+intact. Loaded-tab reassignment, successful switching, deletion and timing
+propagation remain unverified.
