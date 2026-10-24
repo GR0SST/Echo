@@ -52,8 +52,9 @@ impl BrowserWindow {
 
     pub(crate) fn update_command_suggestions(&mut self, cx: &mut Context<Self>) {
         let profile = self.browser.active_user_profile_id();
-        let enabled = self.browser.active_user_profile().command_bar_search.suggestions && !self.browser.is_private();
-        let engine = self.browser.active_user_profile().command_bar_search.engine;
+        let enabled = self.browser.active_user_profile().settings.search.suggestions && !self.browser.is_private();
+        let engine = self.browser.active_user_profile().settings.search.engine;
+        let enabled = enabled && engine.supports_suggestions();
         let Some(bar) = &mut self.command_bar else { return; };
         if !matches!(bar.target, Target::NewTab | Target::Tab(_)) { return; }
         let text = bar.input.read(cx).text().to_string();
@@ -80,8 +81,8 @@ impl BrowserWindow {
             // Recheck after debounce before transmitting anything.
             let allowed = this.read_with(cx, |this, cx| {
                 !this.browser.is_private() && this.browser.active_user_profile_id() == profile
-                    && this.browser.active_user_profile().command_bar_search.suggestions
-                    && this.browser.active_user_profile().command_bar_search.engine == engine
+                    && this.browser.active_user_profile().settings.search.suggestions
+                    && this.browser.active_user_profile().settings.search.engine == engine
                     && this.command_bar.as_ref().is_some_and(|bar| bar.input == input
                         && bar.remote_generation == generation && bar.input.read(cx).text() == query)
             }).unwrap_or(false);
@@ -90,8 +91,8 @@ impl BrowserWindow {
             let rows = cx.background_executor().spawn(async move { fetch(engine, &requested) }).await;
             let _ = this.update(cx, |this, cx| {
                 if this.browser.active_user_profile_id() != profile || this.browser.is_private()
-                    || !this.browser.active_user_profile().command_bar_search.suggestions
-                    || this.browser.active_user_profile().command_bar_search.engine != engine { return; }
+                    || !this.browser.active_user_profile().settings.search.suggestions
+                    || this.browser.active_user_profile().settings.search.engine != engine { return; }
                 let Some(bar) = &mut this.command_bar else { return; };
                 if bar.input != input || bar.remote_generation != generation || bar.input.read(cx).text() != query { return; }
                 bar.remote = rows;

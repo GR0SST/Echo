@@ -599,13 +599,13 @@ fn command_bar_calculator_copies_answer_without_creating_a_tab(cx: &mut TestAppC
 fn command_bar_uses_profile_engine_and_remote_rows_are_selectable(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     view.update(cx, |view, _| view.edit_browser(|browser| {
-        browser.active_user_profile_mut().command_bar_search.engine = browser_core::omnibox::SearchEngine::DuckDuckGo;
-        browser.active_user_profile_mut().command_bar_search.suggestions = false;
+        browser.active_user_profile_mut().settings.search.engine = browser_core::omnibox::SearchEngine::DuckDuckGo;
+        browser.active_user_profile_mut().settings.search.suggestions = false;
     }));
     cx.simulate_keystrokes("cmd-l");
     bar(&view, cx).simulate_input("rust language");
     view.update(cx, |view, cx| {
-        view.edit_browser(|browser| browser.active_user_profile_mut().command_bar_search.suggestions = true);
+        view.edit_browser(|browser| browser.active_user_profile_mut().settings.search.suggestions = true);
         let bar = view.command_bar.as_mut().unwrap();
         assert!(bar.remote_task.is_none());
         bar.remote = vec!["rust language tutorial".into()];
@@ -627,7 +627,7 @@ fn command_bar_empty_field_shows_five_rows_and_privacy_disclosure_dismisses(cx: 
     assert!(bar(&view, cx).debug_bounds("suggestions-privacy").is_some());
     click(&mut bar(&view, cx), "dismiss-suggestions-privacy");
     assert!(!view.read_with(cx, |view, _| view.command_bar.as_ref().unwrap().suggestions_privacy));
-    assert!(view.read_with(cx, |view, _| view.browser.active_user_profile().command_bar_search.notice_dismissed));
+    assert!(view.read_with(cx, |view, _| view.browser.active_user_profile().settings.search.notice_dismissed));
     assert!(bar_input_focused(&view, cx));
 }
 
@@ -1763,78 +1763,20 @@ fn find_command_opens_a_small_panel_with_input_focus(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn auto_archive_picker_keeps_four_intervals_in_fixed_order_with_current_third(cx: &mut TestAppContext) {
+fn auto_archive_interval_is_only_offered_in_settings_profiles(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
-    let current = Some(Duration::from_secs(7 * 86400));
-    view.update(cx, |w, _| w.edit_browser(|browser| browser.active_user_profile_mut().archive_after = current));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("archive tabs after");
-    bar(&view, cx).simulate_keystrokes("enter");
-    assert!(bar_input_focused(&view, cx));
     let options = view.read_with(cx, |w, cx| w.suggestions(cx));
-    assert_eq!(options, vec![
-        Suggestion::ArchiveAfter { label: "12 hours (default)".into(), seconds: Some(43200) },
-        Suggestion::ArchiveAfter { label: "24 hours".into(), seconds: Some(86400) },
-        Suggestion::ArchiveAfter { label: "7 days".into(), seconds: Some(604800) },
-        Suggestion::ArchiveAfter { label: "30 days".into(), seconds: Some(2592000) },
-    ]);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), current);
+    assert!(!options.iter().any(|s| matches!(s, Suggestion::Action { label, .. } if label.contains("Archive Tabs After"))));
     bar(&view, cx).simulate_keystrokes("escape");
-    assert_eq!(bar_text(&view, cx), None);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), current);
-}
-
-#[gpui::test]
-fn auto_archive_picker_filters_valid_choice_and_persists_interval(cx: &mut TestAppContext) {
-    let (view, cx) = open(cx);
-    view.update(cx, |w, _| w.edit_browser(|browser| browser.active_user_profile_mut().archive_after = None));
-    cx.simulate_keystrokes("cmd-t");
-    bar(&view, cx).simulate_input("auto archive settings");
-    bar(&view, cx).simulate_keystrokes("enter");
-    bar(&view, cx).simulate_input("  7 DAYS  ");
-    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx)), vec![
-        Suggestion::ArchiveAfter { label: "7 days".into(), seconds: Some(604800) },
-    ]);
-    click(&mut bar(&view, cx), "suggestion-0");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(7 * 86400)));
-    assert_eq!(bar_text(&view, cx), None);
-    let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
-    assert_eq!(restored.active_user_profile().archive_after, Some(Duration::from_secs(7 * 86400)));
-    cx.simulate_keystrokes("cmd-t");
-    bar(&view, cx).simulate_input("archive tabs after");
-    bar(&view, cx).simulate_keystrokes("enter");
-    bar(&view, cx).simulate_input("1 hour");
-    bar(&view, cx).simulate_keystrokes("escape");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(7 * 86400)));
-}
-
-#[gpui::test]
-fn auto_archive_picker_cancel_and_unsupported_queries_preserve_legacy_intervals(cx: &mut TestAppContext) {
-    let (view, cx) = open(cx);
-    for saved in [None, Some(Duration::from_secs(12345)), Some(Duration::from_secs(3600)), Some(Duration::from_secs(21600))] {
-        view.update(cx, |w, _| w.edit_browser(|browser| browser.active_user_profile_mut().archive_after = saved));
-        cx.simulate_keystrokes("cmd-t");
-        bar(&view, cx).simulate_input("archive tabs after");
-        bar(&view, cx).simulate_keystrokes("enter");
-        let options = view.read_with(cx, |w, cx| w.suggestions(cx));
-        assert_eq!(options.len(), 4);
-        assert!(options.iter().all(|option| matches!(option,
-            Suggestion::ArchiveAfter { seconds: Some(43200 | 86400 | 604800 | 2592000), .. }
-        )));
-        assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), saved);
-        for query in ["Never", "1 hour", "6 hours", "Current interval", "12345"] {
-            bar(&view, cx).simulate_keystrokes("cmd-a");
-            bar(&view, cx).simulate_input(query);
-            assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
-            bar(&view, cx).simulate_keystrokes("enter");
-            assert_eq!(bar_text(&view, cx).as_deref(), Some(query));
-            assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), saved);
-        }
-        bar(&view, cx).simulate_keystrokes("cmd-a backspace escape");
-        assert_eq!(bar_text(&view, cx), None);
-        let restored = view.read_with(cx, |w, _| browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap());
-        assert_eq!(restored.active_user_profile().archive_after, saved);
-    }
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-popup-Archive tabs after");
+    for index in 0..4 { assert!(settings.debug_bounds(test_selector(format!("settings-choice-{index}"))).is_some()); }
+    assert!(settings.debug_bounds("settings-choice-4").is_none());
+    settings.simulate_keystrokes("escape");
 }
 
 #[gpui::test]
@@ -2027,7 +1969,7 @@ fn reset_space_discards_pinned_pages_and_reopens_the_active_original(cx: &mut Te
 fn exact_command_names_outrank_longer_actions_with_shared_words(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-t");
-    for (query, expected) in [("pin tab", "Pin Tab"), ("archive tab", "Archive Tab"), ("archive tabs after", "Archive Tabs After…"), ("archive", "View Archive"), ("copy url", "Copy URL"), ("copy url as markdown", "Copy URL as Markdown"), ("reset space", "Reset Space")] {
+    for (query, expected) in [("pin tab", "Pin Tab"), ("archive tab", "Archive Tab"), ("settings", "Settings…"), ("archive", "View Archive"), ("copy url", "Copy URL"), ("copy url as markdown", "Copy URL as Markdown"), ("reset space", "Reset Space")] {
         bar(&view, cx).simulate_keystrokes("cmd-a");
         bar(&view, cx).simulate_input(query);
         let label = view.read_with(cx, |w, cx| match w.suggestions(cx).first() { Some(Suggestion::Action { label, .. }) => label.clone(), _ => String::new() });
@@ -7608,4 +7550,139 @@ fn split_focus_contour_stays_outside_native_pages_and_focusing_does_not_reflow_t
     click(cx, "pane-header-2");
     assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout()), before);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+}
+
+fn settings_window(cx: &mut VisualTestContext) -> (Entity<crate::settings::SettingsWindow>, VisualTestContext) {
+    let handle = cx.cx.update(|cx| cx.windows().into_iter().find_map(|w| w.downcast::<crate::settings::SettingsWindow>()).expect("Settings window"));
+    let view = handle.root(&mut cx.cx).unwrap();
+    let visual = VisualTestContext::from_window(handle.into(), &cx.cx);
+    visual.run_until_parked();
+    (view, visual)
+}
+
+#[gpui::test]
+fn settings_shortcut_opens_one_native_window_and_cmd_w_preserves_tabs(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = today_urls(&view, cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    let bounds = settings.update(|window, _| window.bounds());
+    assert_eq!(bounds.size, gpui::size(gpui::px(684.), gpui::px(650.)));
+    cx.simulate_keystrokes("cmd-,");
+    let count = cx.cx.update(|cx| cx.windows().iter().filter(|w| w.downcast::<crate::settings::SettingsWindow>().is_some()).count());
+    assert_eq!(count, 1);
+    settings.simulate_keystrokes("cmd-w");
+    assert_eq!(today_urls(&view, cx), before);
+}
+
+#[gpui::test]
+fn settings_profile_search_and_archive_controls_edit_canonical_state(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let (peer, peer_cx) = another_profile_window(&view, cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (settings_view, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-button-Profile Settings…");
+    assert_eq!(settings_view.read_with(&settings, |s, _| s.tab), crate::settings::Tab::Profiles);
+    click(&mut settings, "settings-popup-Search engine");
+    click(&mut settings, "settings-choice-2");
+    click(&mut settings, "settings-popup-Archive tabs after");
+    click(&mut settings, "settings-choice-2");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(604800)));
+    assert_eq!(peer.read_with(&peer_cx, |w, _| w.browser.active_user_profile().settings.search.engine), browser_core::settings::SearchEngine::DuckDuckGo);
+    settings.simulate_keystrokes("cmd-w");
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rust settings");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://duckduckgo.com/?q=rust+settings"));
+    let saved = view.read_with(cx, |w, _| w.profile.session_json(&w.split_draft));
+    let restored = browser_core::session::from_json(&saved).unwrap();
+    assert_eq!(restored.active_user_profile().archive_after, Some(Duration::from_secs(604800)));
+    assert_eq!(restored.active_user_profile().settings.search.engine, browser_core::settings::SearchEngine::DuckDuckGo);
+}
+
+#[gpui::test]
+fn settings_toggles_persist_without_affecting_other_profiles(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let other = view.update(cx, |w, _| w.edit_profile(|b| b.create_user_profile("Work").unwrap()));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("settings");
+    bar(&view, cx).simulate_keystrokes("enter");
+    let (settings_view, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-toggle-WarnBeforeQuitting");
+    click(&mut settings, "settings-tab-Advanced");
+    click(&mut settings, "settings-toggle-Boosts");
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-profile-Work");
+    click(&mut settings, "settings-search-suggestions");
+    assert_eq!(settings_view.read_with(&settings, |s, _| s.selected_profile), other);
+    settings.simulate_keystrokes("escape");
+    let saved = view.read_with(cx, |w, _| w.profile.session_json(&w.split_draft));
+    let browser = browser_core::session::from_json(&saved).unwrap();
+    assert!(!browser.settings.enabled(browser_core::settings::Toggle::WarnBeforeQuitting));
+    assert!(!browser.settings.enabled(browser_core::settings::Toggle::Boosts));
+    assert!(!browser.user_profile(other).unwrap().settings.search.suggestions);
+    assert!(browser.active_user_profile().settings.search.suggestions);
+}
+
+#[gpui::test]
+fn settings_menu_and_native_page_shortcut_open_the_same_window(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    dispatch_menu(cx, "Echo", "Settings…");
+    let (settings, mut visual) = settings_window(cx);
+    visual.simulate_keystrokes("cmd-w");
+    fake.send(cx, fake.shortcut(Shortcut { cmd: true, key: ",".into(), ..Default::default() }));
+    let (second, _) = settings_window(cx);
+    assert_ne!(settings, second);
+    assert_eq!(active_url(&view, cx), active);
+    assert!(crate::window::WINDOW_SHORTCUTS.contains(&"cmd-,"));
+}
+
+#[gpui::test]
+fn settings_archive_dropdown_keyboard_cancel_preserves_legacy_policy(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let legacy = Some(Duration::from_secs(12345));
+    view.update(cx, |w, _| w.edit_profile(|b| b.active_user_profile_mut().archive_after = legacy));
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-popup-Archive tabs after");
+    settings.simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), legacy);
+    click(&mut settings, "settings-popup-Archive tabs after");
+    settings.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(604800)));
+}
+
+#[gpui::test]
+fn settings_profile_creation_dismisses_settings_and_cancel_preserves_the_model(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = view.read_with(cx, |w, _| w.profile.session_json(&w.split_draft));
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-add-profile");
+    let count = cx.cx.update(|cx| cx.windows().iter().filter(|w| w.downcast::<crate::settings::SettingsWindow>().is_some()).count());
+    assert_eq!(count, 0);
+    let overlay = view.read_with(cx, |w, _| w.user_profile_dialog.as_ref().unwrap().overlay.unwrap());
+    let mut dialog = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    dialog.run_until_parked();
+    assert!(dialog.debug_bounds("user-profile-sheet").is_some());
+    dialog.simulate_input("Settings test");
+    dialog.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |w, _| w.user_profile_dialog.is_none()));
+    assert_eq!(view.read_with(cx, |w, _| w.profile.session_json(&w.split_draft)), before);
+}
+
+#[gpui::test]
+fn settings_tabs_remain_clickable_after_shortcuts(cx: &mut TestAppContext) {
+    let (_, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (view, mut settings) = settings_window(cx);
+    for (tab, label) in [(crate::settings::Tab::Shortcuts, "settings-tab-Shortcuts"), (crate::settings::Tab::Icon, "settings-tab-Icon"), (crate::settings::Tab::Advanced, "settings-tab-Advanced"), (crate::settings::Tab::Links, "settings-tab-Links"), (crate::settings::Tab::Profiles, "settings-tab-Profiles"), (crate::settings::Tab::General, "settings-tab-General")] {
+        click(&mut settings, label);
+        assert_eq!(view.read_with(&settings, |s, _| s.tab), tab);
+    }
 }

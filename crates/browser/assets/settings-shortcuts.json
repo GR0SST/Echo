@@ -1,0 +1,414 @@
+[
+  [
+    "Add Split View",
+    "⌃⇧="
+  ],
+  [
+    "Blank Window",
+    "⌃⌘N"
+  ],
+  [
+    "Capture Full Page",
+    "---"
+  ],
+  [
+    "Capture in Portrait Mode",
+    "---"
+  ],
+  [
+    "Capture…",
+    "⇧⌘2"
+  ],
+  [
+    "Cast",
+    "---"
+  ],
+  [
+    "Clear Cookies and Refresh",
+    "---"
+  ],
+  [
+    "Clear Archive",
+    "---"
+  ],
+  [
+    "Clear Unpinned Tabs",
+    "⇧⌘K"
+  ],
+  [
+    "Close this Split Pane",
+    "⌃⇧-"
+  ],
+  [
+    "Close Window",
+    "⇧⌘W"
+  ],
+  [
+    "Collapse All Folders",
+    "---"
+  ],
+  [
+    "Copy URL",
+    "⇧⌘C"
+  ],
+  [
+    "Copy URL as Markdown",
+    "⌥⇧⌘C"
+  ],
+  [
+    "Copy URL as Quote",
+    "⌃⇧⌘C"
+  ],
+  [
+    "Developer Tools",
+    "F12"
+  ],
+  [
+    "Developer Tools (Alternate)",
+    "⌥⌘I"
+  ],
+  [
+    "Duplicate",
+    "---"
+  ],
+  [
+    "Archive Tab",
+    "⌘W"
+  ],
+  [
+    "Enter/Exit Full Screen",
+    "⌃⌘F"
+  ],
+  [
+    "Exit",
+    "⎋"
+  ],
+  [
+    "Expand All Folders",
+    "---"
+  ],
+  [
+    "Find and Replace",
+    "⌥⌘F"
+  ],
+  [
+    "Find Next",
+    "⌘G"
+  ],
+  [
+    "Find Previous",
+    "⇧⌘G"
+  ],
+  [
+    "Find…",
+    "⌘F"
+  ],
+  [
+    "Force Refresh the Page",
+    "⇧⌘R"
+  ],
+  [
+    "Go Back",
+    "⌘←"
+  ],
+  [
+    "Go Back (Alternate)",
+    "⌘["
+  ],
+  [
+    "Go Forward",
+    "⌘]"
+  ],
+  [
+    "Go Forward (Alternate)",
+    "⌘→"
+  ],
+  [
+    "Go to last Sidebar Item",
+    "⌘9"
+  ],
+  [
+    "Go to Sidebar Item 1",
+    "⌘1"
+  ],
+  [
+    "Go to Sidebar Item 2",
+    "⌘2"
+  ],
+  [
+    "Go to Sidebar Item 3",
+    "⌘3"
+  ],
+  [
+    "Go to Sidebar Item 4",
+    "⌘4"
+  ],
+  [
+    "Go to Sidebar Item 5",
+    "⌘5"
+  ],
+  [
+    "Go to Sidebar Item 6",
+    "⌘6"
+  ],
+  [
+    "Go to Sidebar Item 7",
+    "⌘7"
+  ],
+  [
+    "Go to Sidebar Item 8",
+    "⌘8"
+  ],
+  [
+    "Hide Echo",
+    "⌘H"
+  ],
+  [
+    "Hide Other Windows",
+    "⌥⌘H"
+  ],
+  [
+    "Inspect Elements",
+    "⌥⌘C"
+  ],
+  [
+    "JavaScript Console",
+    "⌥⌘J"
+  ],
+  [
+    "Join Meeting",
+    "⌃⌘J"
+  ],
+  [
+    "Jump to Selection",
+    "⌘J"
+  ],
+  [
+    "Manage Spaces…",
+    "---"
+  ],
+  [
+    "Minimize Window",
+    "⌘M"
+  ],
+  [
+    "Network Inspector",
+    "---"
+  ],
+  [
+    "New Easel",
+    "⌃⇧E"
+  ],
+  [
+    "New Folder…",
+    "---"
+  ],
+  [
+    "New Incognito Window",
+    "⇧⌘N"
+  ],
+  [
+    "New Little Echo Window",
+    "⌥⌘N"
+  ],
+  [
+    "New Note",
+    "⌃⇧N"
+  ],
+  [
+    "New Note (in Split)",
+    "⌃⌥N"
+  ],
+  [
+    "New Space…",
+    "---"
+  ],
+  [
+    "New Tab…",
+    "⌘T"
+  ],
+  [
+    "New Window",
+    "⌘N"
+  ],
+  [
+    "Next Space",
+    "⌥⌘→"
+  ],
+  [
+    "Next Tab",
+    "⌘}"
+  ],
+  [
+    "Next Tab (Alternate)",
+    "⌥⌘↓"
+  ],
+  [
+    "Open Command Bar",
+    "⌘L"
+  ],
+  [
+    "Open Extensions",
+    "⌘E"
+  ],
+  [
+    "Open Little Echo or Peek in…",
+    "⌘O"
+  ],
+  [
+    "Paste and Match Style",
+    "⇧⌘V"
+  ],
+  [
+    "Pin/Unpin Tab",
+    "⌘D"
+  ],
+  [
+    "Previous Space",
+    "⌥⌘←"
+  ],
+  [
+    "Previous Tab",
+    "⌘{"
+  ],
+  [
+    "Previous Tab (Alternate)",
+    "⌥⌘↑"
+  ],
+  [
+    "Print",
+    "⌘P"
+  ],
+  [
+    "Quit Echo",
+    "⌘Q"
+  ],
+  [
+    "Refresh the Page",
+    "⌘R"
+  ],
+  [
+    "Rename Current Item",
+    "---"
+  ],
+  [
+    "Reset all tabs in this Space",
+    "---"
+  ],
+  [
+    "Reset Tab to Original URL",
+    "---"
+  ],
+  [
+    "Restore Last Closed Tab",
+    "⇧⌘T"
+  ],
+  [
+    "Reveal Current Tab",
+    "⌃⎵"
+  ],
+  [
+    "Reveal Tab in Sidebar",
+    "---"
+  ],
+  [
+    "Save Page As",
+    "⇧⌘S"
+  ],
+  [
+    "Separate Page from Split View",
+    "---"
+  ],
+  [
+    "Share…",
+    "---"
+  ],
+  [
+    "Show Little Echo “Open In” Menu",
+    "⇧⌘O"
+  ],
+  [
+    "Show/Hide Sidebar",
+    "⌘S"
+  ],
+  [
+    "Show/Hide Toolbar",
+    "⇧⌘D"
+  ],
+  [
+    "Stop Loading",
+    "⌘."
+  ],
+  [
+    "Switch to next Split View",
+    "⌃⇧]"
+  ],
+  [
+    "Switch to previous Split View",
+    "⌃⇧["
+  ],
+  [
+    "Switch to Split View 1",
+    "⌃⇧1"
+  ],
+  [
+    "Switch to Split View 2",
+    "⌃⇧2"
+  ],
+  [
+    "Switch to Split View 3",
+    "⌃⇧3"
+  ],
+  [
+    "Switch to Split View 4",
+    "⌃⇧4"
+  ],
+  [
+    "Tab Switcher (backward)",
+    "⌃⇧⇥"
+  ],
+  [
+    "Tab Switcher (forward)",
+    "⌃⇥"
+  ],
+  [
+    "Toggle Developer Mode",
+    "⌃D"
+  ],
+  [
+    "Use Selection to Find",
+    "---"
+  ],
+  [
+    "View Downloads",
+    "⇧⌘J"
+  ],
+  [
+    "View Archive",
+    "---"
+  ],
+  [
+    "View History",
+    "⌘Y"
+  ],
+  [
+    "View Library",
+    "⇧⌘L"
+  ],
+  [
+    "View Source",
+    "⌥⌘U"
+  ],
+  [
+    "Zoom In",
+    "⌘+"
+  ],
+  [
+    "Zoom Out",
+    "⌘-"
+  ],
+  [
+    "Zoom to Actual Size",
+    "⌘0"
+  ]
+]

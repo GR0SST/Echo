@@ -75,7 +75,7 @@ static IONICONS: std::sync::LazyLock<IconContours> = std::sync::LazyLock::new(||
     serde_json::from_str(include_str!("../assets/ionicons/paths.json")).expect("embedded Ionicons geometry is valid")
 });
 
-fn ionicon(name: &'static str, size: f32, zoom: f32) -> AnyElement {
+pub(crate) fn ionicon(name: &'static str, size: f32, zoom: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let Some(commands) = IONICONS.get(name) else { return; };
         let scale = f32::from(bounds.size.width) / 512. * zoom;

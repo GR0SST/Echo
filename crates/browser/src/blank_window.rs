@@ -75,7 +75,7 @@ impl BrowserWindow {
             | Command::CollapseAllFolders | Command::ExpandAllFolders | Command::RenameFolder(_) | Command::ExpandFolder(_)
             | Command::NewSpace | Command::RenameSpace | Command::CustomizeSpaceIcon | Command::ResetSpace
             | Command::ToggleSpaceHeader | Command::ToggleFavoritesOrdering | Command::TogglePin | Command::ToggleFavorite
-            | Command::TogglePinnedSection | Command::FocusSpace(_) | Command::MoveTab { .. } | Command::ArchiveSettings)
+            | Command::TogglePinnedSection | Command::FocusSpace(_) | Command::MoveTab { .. })
     }
 
     /// Only successful removals call this: an initial empty model or cancelled

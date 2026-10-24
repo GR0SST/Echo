@@ -5,6 +5,7 @@ use gpui::{actions, App, KeyBinding, Menu, MenuItem, OsAction};
 actions!(
     menu,
     [
+        Settings,
         HideApp,
         HideOthers,
         ShowAllApps,
@@ -26,13 +27,12 @@ actions!(
         ReplacePinnedUrl,
         ResetSpace,
         ViewArchive,
-        ClearArchive,
-        ArchiveSettings
+        ClearArchive
     ]
 );
 
 pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None)]);
+    cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None), KeyBinding::new("cmd-,", Settings, None)]);
     cx.bind_keys([KeyBinding::new("ctrl-cmd-n", BlankWindow, None)]);
     cx.on_action(|_: &BlankWindow, cx| { cx.defer(crate::blank_window::open); });
     cx.on_action(|_: &NewWindow, cx| { cx.defer(|cx| crate::new_window::open(true, cx)); });
@@ -65,7 +65,7 @@ pub(crate) fn init(cx: &mut App) {
 }
 
 pub(crate) fn build() -> Vec<Menu> {
-    let mut app = Vec::new();
+    let mut app = vec![MenuItem::action("Settings…", Settings), MenuItem::separator()];
     if native::supports_app_visibility() {
         app.extend([
             MenuItem::action("Hide Echo", HideApp),
@@ -202,7 +202,6 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::action("View History", history::ViewHistory),
             MenuItem::action("View Archive", ViewArchive),
                 MenuItem::action("Clear Archive…", ClearArchive),
-                MenuItem::action("Archive Tabs After…", ArchiveSettings),
             ],
         },
         Menu {

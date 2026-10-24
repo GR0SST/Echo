@@ -48,10 +48,6 @@ const MAX_TAB_SUGGESTIONS: usize = 6;
 const MAX_HISTORY_SUGGESTIONS: usize = 4;
 const MAX_COMMAND_SUGGESTIONS: usize = 12;
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
-const ARCHIVE_OPTIONS: &[(&str, Option<u64>)] = &[
-    ("12 hours (default)", Some(43200)), ("24 hours", Some(86400)),
-    ("7 days", Some(604800)), ("30 days", Some(2592000)),
-];
 /// Fraction of the sidebar width a swipe must travel to change space.
 const SPACE_SWIPE_COMMIT: f32 = 0.25;
 /// Finger speed (px/s) that changes space regardless of distance (a flick).
@@ -163,6 +159,7 @@ window_shortcuts! {
     "cmd-shift-z" => crate::text_input::Redo,
     "cmd-shift-v" => crate::text_input::PasteAndMatchStyle,
     "cmd-t" => OpenCommandBar,
+    "cmd-," => crate::menus::Settings,
     "cmd-y" => crate::history::ViewHistory,
     "cmd-m" => crate::menus::Minimize,
     "ctrl-cmd-f" => crate::menus::ToggleFullscreen,
@@ -341,7 +338,6 @@ pub enum Target {
     RenameFolder(FolderId),
     MoveToFolder(TabId),
     MoveFolder(FolderId),
-    ArchiveInterval,
     Archive(Option<SpaceId>),
     ConfirmClearArchive,
 }
@@ -359,7 +355,6 @@ pub enum Suggestion {
     FolderDestination { space: SpaceId, parent: Option<FolderId>, label: String },
     SaveTabName { name: String },
     SaveIcon { icon: Option<String> },
-    ArchiveAfter { label: String, seconds: Option<u64> },
     ArchivedTab { id: TabId, title: String, detail: String, date: String },
     MoreArchive { remaining: usize },
     ConfirmClearArchive,
@@ -396,7 +391,7 @@ pub enum Command {
     NewSpace,
     RenameSpace,
     FindPage,
-    ArchiveSettings,
+    Settings,
     ViewArchive,
     ViewHistory,
     OpenLibrary,
@@ -1241,7 +1236,6 @@ impl BrowserWindow {
                 Target::RenameSpace(_) => "Rename Space…",
                 Target::RenameTab(_) => "Rename Tab…",
                 Target::Icon(_) => "Enter one symbol or emoji…",
-                Target::ArchiveInterval => "Archive tabs after…",
                 Target::Archive(_) => "Search Archive…",
                 Target::ConfirmClearArchive => "Type “Clear Archive” to confirm…",
                 _ => "Search or Enter URL…",
@@ -1469,13 +1463,6 @@ impl BrowserWindow {
             }
             return suggestions;
         }
-        if bar.target == Target::ArchiveInterval {
-            let query = text.trim().to_lowercase();
-            return ARCHIVE_OPTIONS.iter()
-                .filter(|(label, _)| label.to_lowercase().contains(&query))
-                .map(|(label, seconds)| Suggestion::ArchiveAfter { label: (*label).into(), seconds: *seconds })
-                .collect();
-        }
         if matches!(bar.target, Target::NewFolder { .. } | Target::RenameFolder(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveFolderName { name: text.trim().to_string() }] };
         }
@@ -1527,7 +1514,7 @@ impl BrowserWindow {
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
-                (Command::ArchiveSettings, "Archive Tabs After…", "archive tabs after|auto archive settings|change auto archiving", true),
+                (Command::Settings, "Settings…", "settings|preferences|search settings", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewProfile(self.browser.space().id), "New Profile", "new profile|create profile|add profile", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ChangeProfile(self.browser.space().id), "Change Profile", "change profile|set profile|switch profile", !self.browser.is_private() && !self.browser.is_blank()),
@@ -1627,7 +1614,7 @@ impl BrowserWindow {
             matches.sort_by_key(|(score, _)| *score);
             suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
-        let engine = self.browser.active_user_profile().command_bar_search.engine;
+        let engine = self.browser.active_user_profile().settings.search.engine;
         suggestions.extend(omnibox::resolve_with_engine(text, engine).map(Suggestion::Load));
         if bar.target == Target::NewTab {
             // Current Space first, then every other Space, keeping duplicate URLs distinct.
@@ -1656,7 +1643,7 @@ impl BrowserWindow {
                 .take(MAX_HISTORY_SUGGESTIONS)
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
         }
-        if self.browser.active_user_profile().command_bar_search.suggestions && !self.browser.is_private() {
+        if self.browser.active_user_profile().settings.search.suggestions && !self.browser.is_private() {
             suggestions.extend(bar.remote.iter().map(|query| Suggestion::Load(engine.search(query))));
         }
         suggestions.truncate(MAX_COMMAND_SUGGESTIONS);
@@ -1715,7 +1702,7 @@ impl BrowserWindow {
                         self.edit_browser(|browser| browser.navigate(id, resolved.url()));
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::NewFolder { .. } | Target::RenameFolder(_) | Target::MoveToFolder(_) | Target::MoveFolder(_) | Target::ArchiveInterval | Target::Archive(_) | Target::ConfirmClearArchive => return,
+                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::NewFolder { .. } | Target::RenameFolder(_) | Target::MoveToFolder(_) | Target::MoveFolder(_) | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
                 self.edit_browser(|browser| browser.set_title(id, title));
             }
@@ -1771,9 +1758,6 @@ impl BrowserWindow {
             Suggestion::ConfirmClearArchive => {
                 self.edit_browser(|browser| { let profile = browser.active_user_profile_id(); browser.archive.retain(|entry| entry.user_profile_id != profile); });
                 self.show_toast("Archive cleared".into(), cx);
-            }
-            Suggestion::ArchiveAfter { seconds, .. } => {
-                self.edit_browser(|browser| browser.active_user_profile_mut().archive_after = seconds.map(Duration::from_secs));
             }
             Suggestion::SaveFolderName { name } => {
                 if !self.save_folder_name(target, &name, cx) { return; }
@@ -1872,16 +1856,7 @@ impl BrowserWindow {
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
             Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
-            Command::ArchiveSettings => {
-                if let Some(bar) = &mut self.command_bar {
-                    bar.target = Target::ArchiveInterval;
-                    bar.selected = 0;
-                    bar.input.update(cx, |input, cx| {
-                        input.set_placeholder("Archive tabs after…", cx);
-                        input.set_text("", cx);
-                    });
-                }
-            }
+            Command::Settings => self.open_settings(cx),
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.begin_space_creation(self.browser.space().id, cx),
             Command::NewProfile(space) => self.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx),
@@ -1972,6 +1947,7 @@ impl BrowserWindow {
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
                 .on_action(cx.listener(|this, _: &crate::menus::NewProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx); }))
                 .on_action(cx.listener(|this, _: &crate::menus::ChangeProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_switch(space, cx); })))
@@ -3535,7 +3511,6 @@ impl BrowserWindow {
                     Suggestion::SaveIcon { icon } => (crate::icons::Icon::Enter, icon.unwrap_or_else(|| "Reset Icon".into()), match bar.target { Target::Icon(crate::icons::IconTarget::Space(_)) => "Space Icon".into(), Target::Icon(crate::icons::IconTarget::Folder(_)) => "Folder Icon".into(), _ => "Tab Icon".into() }),
                     Suggestion::SaveTabName { name } => (crate::icons::Icon::Enter, name, "Rename Tab".into()),
                     Suggestion::SaveSpace { name } => (crate::icons::Icon::Plus, name, if bar.target == Target::NewSpace { "Create Space".into() } else { "Rename Space".into() }),
-                    Suggestion::ArchiveAfter { label, seconds } => (crate::icons::Icon::History, label, if self.browser.active_user_profile().archive_after.map(|duration| duration.as_secs()) == seconds { "Current".into() } else { "Archive tabs after".into() }),
                     Suggestion::ArchivedTab { title, detail, .. } => (crate::icons::Icon::Restore, title, detail),
                     Suggestion::MoreArchive { remaining } => (crate::icons::Icon::Down, "Show More".into(), format!("{remaining} more archived {}", if remaining == 1 { "tab" } else { "tabs" })),
                     Suggestion::ConfirmClearArchive => (crate::icons::Icon::Close, "Clear Archive".into(), "Permanently delete".into()),
@@ -3722,7 +3697,7 @@ impl BrowserWindow {
                             .rounded(px(6.)).px_3().py_2().text_size(px(13.))
                             .bg(hsla(accent, 0.3, 0.3, 1.))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.edit_browser(|browser| browser.active_user_profile_mut().command_bar_search.notice_dismissed = true);
+                                this.edit_browser(|browser| browser.active_user_profile_mut().settings.search.notice_dismissed = true);
                                 if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = false; }
                                 cx.notify();
                             })).child("Dismiss")))),
@@ -3791,6 +3766,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(Self::on_open_command_bar))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
                 .on_action(cx.listener(|this, _: &crate::menus::NewProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx); }))
                 .on_action(cx.listener(|this, _: &crate::menus::ChangeProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_switch(space, cx); })))
@@ -3818,7 +3794,6 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::RenameTab, window, cx| this.open_command_action(Command::RenameTab, window, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ViewArchive, window, cx| this.open_command_action(Command::ViewArchive, window, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ClearArchive, window, cx| this.open_command_action(Command::RequestClearArchive, window, cx)))
-            .on_action(cx.listener(|this, _: &crate::menus::ArchiveSettings, window, cx| this.open_command_action(Command::ArchiveSettings, window, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ResetTabName, _, cx| this.run_command(Command::ResetTabName, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ResetPinnedTab, _, cx| this.run_command(Command::ResetPinnedTab, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ReplacePinnedUrl, _, cx| this.run_command(Command::ReplacePinnedUrl, cx)))

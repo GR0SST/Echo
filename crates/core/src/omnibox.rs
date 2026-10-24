@@ -10,6 +10,9 @@ pub enum SearchEngine {
     Google,
     DuckDuckGo,
     Bing,
+    Yandex,
+    Brave,
+    Perplexity,
 }
 
 /// Isolated profile preference contract for Command Bar search. The Settings
@@ -27,11 +30,19 @@ impl Default for CommandBarSearchPreferences {
     }
 }
 impl SearchEngine {
+    pub const ALL: [Self; 6] = [Self::Google, Self::Bing, Self::DuckDuckGo, Self::Yandex, Self::Brave, Self::Perplexity];
+    pub fn label(self) -> &'static str {
+        match self { Self::Google => "Google", Self::Bing => "Microsoft Bing", Self::DuckDuckGo => "DuckDuckGo", Self::Yandex => "Yandex", Self::Brave => "Brave", Self::Perplexity => "Perplexity" }
+    }
+    pub fn supports_suggestions(self) -> bool { matches!(self, Self::Google | Self::DuckDuckGo | Self::Bing) }
     pub fn search(self, query: &str) -> Resolved {
         let endpoint = match self {
             Self::Google => "https://www.google.com/search?q=",
             Self::DuckDuckGo => "https://duckduckgo.com/?q=",
             Self::Bing => "https://www.bing.com/search?q=",
+            Self::Yandex => "https://yandex.com/search/?text=",
+            Self::Brave => "https://search.brave.com/search?q=",
+            Self::Perplexity => "https://www.perplexity.ai/search?q=",
         };
         Resolved::Search { query: query.into(), url: format!("{endpoint}{}", encode_query(query)) }
     }
@@ -40,6 +51,8 @@ impl SearchEngine {
             Self::Google => "https://suggestqueries.google.com/complete/search?client=chrome&q=",
             Self::DuckDuckGo => "https://duckduckgo.com/ac/?type=list&q=",
             Self::Bing => "https://api.bing.com/osjson.aspx?query=",
+            // No verified completion transport exists for these providers yet.
+            Self::Yandex | Self::Brave | Self::Perplexity => return String::new(),
         };
         format!("{endpoint}{}", encode_query(query))
     }
@@ -119,10 +132,7 @@ pub fn resolve(input: &str) -> Option<Resolved> {
         let scheme = if is_local(&lower) { "http" } else { "https" };
         return Some(Resolved::Url(format!("{scheme}://{input}")));
     }
-    Some(Resolved::Search {
-        query: input.to_string(),
-        url: format!("https://www.google.com/search?q={}", encode_query(input)),
-    })
+    Some(SearchEngine::Google.search(input))
 }
 
 fn host_of(input: &str) -> &str {
@@ -192,16 +202,16 @@ mod tests {
         let mut browser = crate::Browser::new();
         let mut legacy: serde_json::Value = serde_json::from_str(&crate::session::to_json(&browser)).unwrap();
         for profile in legacy["profiles"].as_object_mut().unwrap().values_mut() {
-            profile.as_object_mut().unwrap().remove("command_bar_search");
+            profile.as_object_mut().unwrap().remove("settings");
         }
         let loaded = crate::session::from_json(&legacy.to_string()).unwrap();
-        assert_eq!(loaded.active_user_profile().command_bar_search.engine, SearchEngine::Google);
-        assert!(loaded.active_user_profile().command_bar_search.suggestions);
-        browser.active_user_profile_mut().command_bar_search.engine = SearchEngine::Bing;
-        browser.active_user_profile_mut().command_bar_search.suggestions = false;
+        assert_eq!(loaded.active_user_profile().settings.search.engine, SearchEngine::Google);
+        assert!(loaded.active_user_profile().settings.search.suggestions);
+        browser.active_user_profile_mut().settings.search.engine = SearchEngine::Bing;
+        browser.active_user_profile_mut().settings.search.suggestions = false;
         let loaded = crate::session::from_json(&crate::session::to_json(&browser)).unwrap();
-        assert_eq!(loaded.active_user_profile().command_bar_search.engine, SearchEngine::Bing);
-        assert!(!loaded.active_user_profile().command_bar_search.suggestions);
+        assert_eq!(loaded.active_user_profile().settings.search.engine, SearchEngine::Bing);
+        assert!(!loaded.active_user_profile().settings.search.suggestions);
     }
 
     fn url(input: &str) -> String {

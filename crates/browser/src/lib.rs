@@ -47,6 +47,7 @@ mod library_downloads;
 mod downloads_presentation;
 mod user_profile_dialog;
 mod user_profiles;
+mod settings;
 pub mod pages;
 pub(crate) use pages::devtools;
 pub mod text_input;
@@ -84,6 +85,7 @@ pub fn init(cx: &mut App) {
     window::bind_keys(cx);
     find::bind_keys(cx);
     menus::init(cx);
+    settings::init(cx);
     history::bind_keys(cx);
     tab_menu::bind_keys(cx);
     site_controls::bind_keys(cx);

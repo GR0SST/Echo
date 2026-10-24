@@ -22,6 +22,8 @@ impl UserProfileId {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserProfile {
+    #[serde(default)]
+    pub settings: crate::settings::ProfileSettings,
     pub(crate) id: UserProfileId,
     pub(crate) name: String,
     #[serde(default)]
@@ -35,8 +37,6 @@ pub struct UserProfile {
     pub include_favorites_in_ordering: bool,
     #[serde(default)]
     pub empty_favorites_dismissed: bool,
-    #[serde(default)]
-    pub command_bar_search: crate::omnibox::CommandBarSearchPreferences,
     #[serde(default)]
     pub favicon_cache: Vec<SiteIcon>,
     #[serde(default)]
@@ -58,6 +58,7 @@ impl UserProfile {
     }
     fn empty(id: UserProfileId, name: String, archive_after: Option<Duration>) -> Self {
         Self {
+            settings: crate::settings::ProfileSettings::default(),
             id,
             name,
             include_favorites_in_ordering: true,
@@ -66,7 +67,6 @@ impl UserProfile {
             history: Vec::new(),
             archive_after,
             empty_favorites_dismissed: false,
-            command_bar_search: crate::omnibox::CommandBarSearchPreferences::default(),
             favicon_cache: Vec::new(),
             downloads: crate::downloads::CompletedDownloads::default(),
         }
@@ -227,6 +227,7 @@ impl Browser {
             id,
             UserProfile::empty(id, source.name.clone(), source.archive_after),
         );
+        blank.profiles.get_mut(&id).unwrap().settings = source.settings.clone();
         blank.spaces[0].user_profile_id = id;
         blank.blank_source_user_profile_id = Some(id);
         blank.next_user_profile_id = self.next_user_profile_id;

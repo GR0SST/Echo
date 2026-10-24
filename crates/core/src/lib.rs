@@ -14,6 +14,7 @@ pub mod audio;
 pub mod splits;
 pub mod bulk_archive;
 pub mod preferences;
+pub mod settings;
 pub mod icons;
 pub mod folders;
 pub mod undo;
@@ -165,6 +166,8 @@ pub enum Closed {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Browser {
+    #[serde(default)]
+    pub settings: settings::Settings,
     pub spaces: Vec<Space>,
     pub active_space: usize,
     pub archive: Vec<ArchivedTab>,
@@ -204,6 +207,7 @@ impl Browser {
 
     fn with_initial_space(name: &str, show_header: bool, blank: bool) -> Self {
         let mut browser = Self {
+            settings: settings::Settings::default(),
             spaces: Vec::new(),
             active_space: 0,
             archive: Vec::new(),

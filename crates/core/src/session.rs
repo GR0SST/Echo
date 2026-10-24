@@ -28,6 +28,18 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
     } else {
         migrate_legacy(&mut value)?;
     }
+    // Fold the earlier Command Bar preference contract into profile settings.
+    // An explicitly saved canonical value takes precedence over the old field.
+    if let Some(profiles) = value.get_mut("profiles").and_then(|v| v.as_object_mut()) {
+        for profile in profiles.values_mut().filter_map(|v| v.as_object_mut()) {
+            if let Some(search) = profile.remove("command_bar_search") {
+                let settings = profile.entry("settings").or_insert_with(|| serde_json::json!({}));
+                if let Some(settings) = settings.as_object_mut() {
+                    settings.entry("search").or_insert(search);
+                }
+            }
+        }
+    }
     let mut browser: Browser = serde_json::from_value(value)?;
     if browser.default_user_profile_id != crate::UserProfileId::DEFAULT
         || !browser.profiles.contains_key(&browser.default_user_profile_id)

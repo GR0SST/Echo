@@ -45,7 +45,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | About Arc | — | missing | About window with licenses (Arc's `Credits.html`) |
-| Preferences… | ⌘, | missing | No settings window at all |
+| Preferences… | ⌘, | partial | Separate GPUI Settings window from the app menu, Command Bar and page shortcut; General, Profiles, Links, Shortcuts, Icon and Advanced. Stored controls and remaining integrations are detailed below |
 | Share Arc (referral link) | — | missing | Out of parity (Arc service) |
 | Set as Default Browser | — | missing | Registering as the default browser, prompts |
 | Import from Another Browser… | — | missing | See "Onboarding and import" |
@@ -255,11 +255,11 @@ Folder duplication follows the right-click action documented in the
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
 | Popup over the page | ⌘T | partial | Uses the full browser window bounds, including the floating sidebar. Installed-Arc comparison covers 764 px width, centered input anchor, 46 px rows, radius, padding and typography; material/blur and exact theme-color fidelity still need work |
-| Entering a URL or searching ("Search or Enter URL…") | — | done | Search routing follows the persisted profile engine; profile settings presentation is tracked in section 12 |
+| Entering a URL or searching ("Search or Enter URL…") | — | done | Uses the selected local profile’s search engine from Settings → Profiles |
 | Editing the current URL | ⌘L | done | Enter on an unchanged URL reloads the page and preserves its title |
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | Repeating ⌘T or ⌘L dismisses its mode; switching between them replaces the input in the same overlay |
 | Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View results are deduplicated by group, match pane titles/URLs and focus the matching page |
-| Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | partial | Debounced, bounded, cookie-free completions from the profile engine; requests and late replies are guarded by input identity, generation, profile and preference. Disabled in private windows and for addresses. The information disclosure uses Arc's observed wording; its Search Settings route/privacy-policy link and complete Navigate Suggest ranking remain unfinished |
+| Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | partial | Debounced, bounded, cookie-free completions from Google, DuckDuckGo and Bing; the other three Settings engines currently route search without completions; requests and late replies are guarded by input identity, generation, profile and preference. Disabled in private windows and for addresses. The information disclosure uses Arc's observed wording; its Search Settings route/privacy-policy link and complete Navigate Suggest ranking remain unfinished |
 | History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | partial | Local browsing history matches title/URL in ⌘T and ⌘L, with keyboard/click selection; open tabs match original page titles and suppress duplicate history rows. Bookmark/folder sources remain missing |
 | Calculator (Search Calculator Answer) | — | partial | Bounded local arithmetic, precedence/parentheses/percentages and copy-on-confirm. Answer-row presentation and confirmation behavior still require verification against an Arc profile that displays calculator answers |
 | Popular domains (Popular Domains, ARC_TopDomains) | — | partial | Local common-domain catalog and selected-suffix inline completion; typing replaces the suffix, Backspace removes it, Right accepts it. Full catalog and reference ranking remain incomplete |
@@ -303,7 +303,7 @@ in code, so some were reconstructed from translator comments (?).
 | Feature | Status | What's missing |
 |---|---|---|
 | Auto-archiving idle Today tabs, 12 hours by default | done | One once-a-minute timer per profile in `profile.rs`; `core::archive_idle_except` protects selected tabs and complete split groups from every bound window |
-| Auto Archive interval choices | partial | The four observed release choices appear in fixed order: 12 hours (default), 24 hours, 7 days, 30 days. Bundled Echo verifies selecting and persisting 7 days; unsupported legacy durations remain stored but are not offered. Native settings control and per-profile propagation remain missing |
+| Auto Archive interval choices | partial | Settings → Profiles has the four observed choices: 12 hours (default), 24 hours, 7 days, 30 days. Selection updates the selected profile’s real archive policy and persists. Unsupported legacy durations remain stored until an explicit choice. The invented Command Bar picker and Archive menu entry were removed |
 | Per-profile setting and the "apply to all profiles / only this one" question | missing | — |
 | Separate "Archive Little Arcs after:" interval | missing | — |
 | ⌘W and × send the tab to the archive | done | — |
@@ -386,25 +386,29 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 Reference tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account,
 Icon. Echo excludes Account and sync. There is also an internal Staff tab.
-We have no settings window;
-rows marked partial expose the setting from the Command Bar instead.
+The separate 684 × 650 GPUI Settings window follows the installed Arc reference.
+Account, synchronization and Max are intentionally excluded. Arc artwork and
+referral icon unlocks are not distributed. Controls for features without an
+implementation persist intent only; action-only routes without backing behavior
+remain unavailable. The installed release puts Auto-Archive in Profiles, not
+General. Screenshots are recorded under `/tmp/parity/settings/`.
 
 | Tab → option | Status |
 |---|---|
 | General → Arc is not the default browser ("Set as default" button) | missing |
-| General → "Profile Settings…" (search engine, auto-archive, downloads) | missing |
-| General → "Archive tabs after" | partial (available from Command Bar; settings window remains missing) |
+| General → "Profile Settings…" (search engine, auto-archive, downloads) | partial (opens Profiles in the same Settings window; native capture reviewed) |
+| General → "Archive tabs after" | partial (the installed release places this dropdown in Profiles; no Command Bar interval picker) |
 | General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | missing |
-| General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | missing |
-| General → Warn before quitting | missing |
-| General → Automatically update my Arc | missing |
+| General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | partial (observed seven-checkbox panel; choices persist, previews themselves remain missing) |
+| General → Warn before quitting | partial (toggle persists; quit confirmation is not integrated) |
+| General → Automatically update my Arc | partial (toggle persists; updater remains missing) |
 | General → Export Data (Spaces and tabs as Markdown, "Arc Data Export.md") | missing |
-| Profiles → profile list, creating and deleting, Default Search Engine, Include search engine suggestions, Search Settings…, auto-archive, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | missing |
-| Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | missing |
-| Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | missing |
+| Profiles → profile list, creating and deleting, Default Search Engine, Include search engine suggestions, Search Settings…, auto-archive, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | partial (real profile inventory and existing creation sheet; search engine and per-profile archive policy wired. Suggestions control the Command Bar; document/download choices persist. Deletion, search management and data-page routes remain unavailable) |
+| Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | partial (reference controls persist intent; Little Arc, Peek and Air Traffic Control integrations remain missing) |
+| Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | partial (searchable observed shortcut catalog, with local Space names. Recording, conflict/priority editing, reset, extension routes and the Favorites-ordering menu remain missing) |
 | Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | missing (AI, lower priority) |
-| Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture when leaving a tab with video, dragging the window by the top of the page, Shared Quotes, Show full URL when Toolbar is enabled, restoring windows on launch, Haptic feedback when reordering, Play Arc sound effects | missing |
-| Icon → alternative app icons (unlocked by referrals) | missing (we don't copy assets) |
+| Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture when leaving a tab with video, dragging the window by the top of the page, Shared Quotes, Show full URL when Toolbar is enabled, restoring windows on launch, Haptic feedback when reordering, Play Arc sound effects | partial (observed three-group layout with nine persisted toggles. Engine/platform integrations and action buttons remain unavailable) |
+| Icon → alternative app icons (unlocked by referrals) | partial (current Echo icon shown; proprietary Arc artwork and referral service intentionally excluded, alternative Echo icons not implemented) |
 
 ## 14. Library (⇧⌘L)
 
@@ -545,7 +549,7 @@ rows without a status aren't counted.
    Search with Tab. Basic actions, Space switching and tabs from all Spaces
    are implemented.
 2. **Archive.** Search, Space/reason filters, local date groups, older entries,
-   restore/delete/clear and interval selection work in the Command Bar.
+   restore/delete/clear work in the Command Bar; interval selection lives in Settings → Profiles.
    Needs the dedicated Library page and Little Arc entries.
 3. **Sessions.** Back/forward history of tabs isn't saved.
 4. **Favorites, folders, drag and drop and sidebar context menus.**

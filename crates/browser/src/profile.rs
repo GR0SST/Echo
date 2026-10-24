@@ -201,6 +201,21 @@ impl ProfileHandle {
         self.data.borrow().new_blank_for_user_profile(id).expect("retained normal source profile")
     }
 
+    /// Settings edits use the canonical model and do not change a window's selection.
+    pub(crate) fn settings_snapshot(&self) -> Browser { self.data.borrow().clone() }
+    pub(crate) fn read_settings<R>(&self, read: impl FnOnce(&Browser) -> R) -> R { read(&self.data.borrow()) }
+
+    pub(crate) fn edit_settings<R>(&self, edit: impl FnOnce(&mut Browser) -> R) -> R {
+        let result = self.edit(edit);
+        self.revision.set(self.revision.get().wrapping_add(1));
+        self.notify();
+        result
+    }
+
+    pub(crate) fn observe_settings<T: 'static>(&self, cx: &mut Context<T>) -> Subscription {
+        cx.observe(&self.owner, |_, _, cx| cx.notify())
+    }
+
     pub(crate) fn default_user_profile_id(&self) -> UserProfileId { self.data.borrow().default_user_profile_id() }
 
     pub(crate) fn selection(&self) -> WindowSelection { self.data.borrow().window_selection() }
