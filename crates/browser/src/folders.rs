@@ -336,6 +336,9 @@ impl BrowserWindow {
             }
             MenuCommand::FolderCopy | MenuCommand::FolderCopyMarkdown => {
                 let markdown = matches!(command, MenuCommand::FolderCopyMarkdown);
+                let urls: Vec<_> = self.browser.folder_tabs(id).into_iter()
+                    .filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == id))
+                    .map(|tab| browser_core::links::clean_url(&tab.url)).collect();
                 let links: Vec<_> = self
                     .browser
                     .folder_tabs(id)
@@ -350,7 +353,7 @@ impl BrowserWindow {
                     })
                     .collect();
                 cx.write_to_clipboard(ClipboardItem::new_string(links.join("\n")));
-                self.show_toast("Copied item links".into(), cx);
+                self.show_link_toast("Copied item links".into(), urls, cx);
             }
             _ => {}
         }

@@ -2009,6 +2009,23 @@ fn closing_a_browser_removes_both_incoming_and_retiring_toast_windows(cx: &mut T
 }
 
 #[gpui::test]
+fn toast_share_button_uses_the_copied_url_after_switching_spaces(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let copied = browser_core::links::clean_url(&active_url(&view, cx).unwrap());
+    cx.simulate_keystrokes("cmd-shift-c");
+    cx.executor().advance_clock(Duration::from_millis(650));
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.toast.as_ref().unwrap().overlay.unwrap());
+    cx.simulate_keystrokes("ctrl-2");
+    assert_ne!(active_url(&view, cx).as_deref(), Some(copied.as_str()));
+    let mut toast = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    toast.run_until_parked();
+    click(&mut toast, "toast-share");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.share_picker.as_ref().unwrap().urls.clone()), vec![copied]);
+}
+
+#[gpui::test]
 fn clear_today_feedback_advertises_the_working_undo_shortcut(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let before = view.read_with(cx, |w, _| w.browser.space().today.len());

@@ -238,7 +238,7 @@ Folder duplication follows the right-click action documented in the
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost opens the floating page editor; New Easel is left out |
 | "Springy" click animation on sidebar items | — | partial | Ordinary tab rows ease 1 px inward per edge over 60 ms, then expand from the current inset on release; nested indentation and drag-card grab points are retained. Native Arc/Echo recordings confirm 212 → 210 → 212 px at the same sidebar width. Other sidebar item types and reorder settling remain unfinished |
 | Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
-| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. No nib/layout was found for the SwiftUI education banner; local blocker banners remain missing; Arc update-feed and account banners are out of scope |
+| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. No nib/layout was found for the SwiftUI education banner; existing education eligibility is false and was not modified. Local blocker banners remain missing; Arc update-feed and account banners are out of scope |
 | Media controls in the sidebar | — | missing | See "Media and PiP" |
 
 ## 3. Spaces
@@ -332,7 +332,7 @@ in code, so some were reconstructed from translator comments (?).
 | ⌘W and × send the tab to the archive | done | — |
 | Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | partial | Command Bar archive browser searches titles/URLs (including Split View panes), combines Space and reason filters, groups by local calendar day (Today/Yesterday/date), and loads older entries with Show More. Keyboard navigation and a bounded scrolling list are implemented. Dedicated Library layout and Little Arc remain missing |
 | Restore ("Tab restored to …. Click to view."), Delete, Clear Archive | done | Restore a selected entry and activate its original Space with a toast; delete an entry with ×; clear all with confirmation |
-| "Auto archived %d tabs" toast and the "We cleaned up!" banner | partial | Profile-driven toast; saved entries do not replay on startup/new windows. Education banner remains missing; its SwiftUI resource bundle has no nib/layout, so no count/action geometry is guessed |
+| "Auto archived %d tabs" toast and the "We cleaned up!" banner | partial | Profile-driven toast; saved entries do not replay on startup/new windows. Education banner remains missing; its SwiftUI resource bundle has no nib/layout and existing education eligibility is false, so no count/action geometry is guessed |
 
 ## 8. Split View
 
@@ -495,7 +495,7 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 
 ## 18. Notifications and toasts
 
-The main toasts from the `Toasts` module. One reusable passive GPUI child-window
+The main toasts from the `Toasts` module. One reusable GPUI child-window
 component renders content-sized feedback above CEF without taking page focus.
 Arc 1.170.0 native checks (2026-10-24) distinguish copy feedback (48 px high,
 16 px right / 19 px top inset, trailing share symbol) from plain feedback
@@ -505,8 +505,12 @@ and a purple gradient. Native Arc recordings measure a spring entry (ζ=0.694,
 ω=15.42), five-second lifetime, and 200 ms shrink/fade exit anchored at the top
 center. Replacement overlaps the same corner with independent outgoing content
 and expiration; all child windows close with their browser. Reduced motion is
-respected. Hover duration and copy-accessory interaction remain incomplete;
-the reference accessory opens the native system share menu.
+respected. The copy accessory opens the native system share menu with an immutable
+copy-time URL list; changing tabs/Spaces cannot change its payload. Native
+service-menu presentation is outside application/entity/window borrows. The compact native service menu preserves the main window’s keyboard input
+after dismissal; macOS 27 service icons are explicitly visible. Hover timing,
+normal-pointer menu anchoring, other accessory actions and Windows/Linux
+sharing remain incomplete.
 Reference inventory: [TOAST_REFERENCE.md](TOAST_REFERENCE.md). Native evidence:
 `target/parity/toasts/`.
 Web notification permission/delivery is not part of this section's inventory.
@@ -514,7 +518,7 @@ Web notification permission/delivery is not part of this section's inventory.
 | Toast | Status |
 |---|---|
 | Undo for actions ("“%@”. ⌘Z to Undo.") | partial (Clear Today: “Cleared Tabs! Use ⌘Z to undo.” with inline keycap; generic action messages remain) |
-| Copied Current URL / clean link without trackers / Copied item links / as quote | partial (URL, clean URL and Markdown done; multi-item links and quotes remain) |
+| Copied Current URL / clean link without trackers / Copied item links / as quote | partial (URL, clean URL and Markdown done; existing item-link handler shares its copied URLs; multi-selection UI and quotes remain) |
 | Pinned Tab to “%@” / Un-Pinned Tab from “%@” | partial (shortcut and Command Bar; only with hidden sidebar as observed in Arc; drag routes remain) |
 | Auto archived %d tabs; Tab/Folder restored to … | partial (automatic archive and existing tab restore; folder restore and click-to-view remain) |
 | New Tab Created in %@ (with the sidebar hidden); New Space Created | missing |

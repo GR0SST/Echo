@@ -559,7 +559,7 @@ impl Render for Overlay {
         if let OverlayKind::Toast(generation) = kind {
             let now = cx.background_executor().now();
             let width = f32::from(window.viewport_size().width);
-            return self.browser.read_with(cx, |browser, _| browser.render_toast(generation, width, now))
+            return self.browser.read_with(cx, |browser, _| browser.render_toast(generation, width, now, self.browser.clone()))
                 .unwrap_or_else(|_| div().into_any_element());
         }
         self.browser
@@ -653,6 +653,7 @@ pub struct BrowserWindow {
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
     pub(crate) retiring_toasts: Vec<crate::toast::Toast>,
+    pub(crate) share_picker: Option<crate::native::sharing::SharePicker>,
     pub(crate) link_status: Option<crate::link_status::LinkStatus>,
     pub(crate) link_status_generation: u64,
     pub(crate) history_page: crate::history::HistoryPage,
@@ -906,6 +907,7 @@ impl BrowserWindow {
             toast: None,
             toast_generation: 0,
             retiring_toasts: Vec::new(),
+            share_picker: None,
             link_status: None,
             link_status_generation: 0,
             history_page: crate::history::HistoryPage::new(cx),
@@ -1065,6 +1067,7 @@ impl BrowserWindow {
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
         crate::peek_history::discard_owner(self.main_window.window_id(), cx);
+        self.share_picker.take();
         self.discard_sidebar_resize();
         if let Some(bar) = &self.command_bar { bar.material_alive.set(false); }
         self.clear_command_bar_backdrop();

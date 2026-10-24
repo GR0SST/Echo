@@ -368,7 +368,7 @@ mod mac {
         }
     }
 
-    pub fn set_overlay_shadow(view: *mut c_void) {
+    pub fn prepare_toast_window(view: *mut c_void) {
         let overlay = window(view);
         if !overlay.is_null() {
             unsafe {
@@ -388,10 +388,10 @@ mod mac {
     }
 }
 
-/// Let the platform shadow follow the rounded alpha mask of a toast surface.
-pub fn set_overlay_shadow(view: *mut c_void) {
+/// Borderless toast windows use a shadow that follows the rendered surface.
+pub fn prepare_toast_window(view: *mut c_void) {
     #[cfg(target_os = "macos")]
-    mac::set_overlay_shadow(view);
+    mac::prepare_toast_window(view);
     #[cfg(not(target_os = "macos"))]
     let _ = view;
 }
@@ -700,3 +700,6 @@ pub(crate) fn pointer_in_view(view: *mut c_void) -> Option<(f32, f32)> {
     #[cfg(any(not(target_os = "macos"), test))]
     { let _ = view; None }
 }
+
+/// Platform-owned sharing destination menu.
+pub(crate) mod sharing;

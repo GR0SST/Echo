@@ -1,4 +1,4 @@
-//! Passive, short-lived notifications above native page views.
+//! Short-lived notifications above native page views.
 use crate::window::{BrowserWindow, Overlay, OverlayKind};
 use gpui::{
     div, hsla, point, prelude::*, px, size, AnyElement, Bounds, ClipboardItem, Context,
@@ -16,7 +16,11 @@ pub(crate) struct Toast {
     started: Instant,
     dismissed: Option<(Instant, f32)>,
     motion: Option<gpui::Task<()>>,
+    action: Option<ToastAction>,
 }
+
+#[derive(Clone)]
+enum ToastAction { ShareLinks(Vec<String>) }
 
 // Arc 1.170.0, measured from arc-copy.mov (variable-frame-rate PTS):
 // spring ζ=0.694, ω=15.42; dismissal starts 4.986 s after presentation
@@ -66,13 +70,32 @@ impl BrowserWindow {
         } else {
             "Copied Current URL"
         };
+        let share_url = clean.clone();
         let text = if markdown {
             browser_core::links::markdown_link(&tab.title, &tab.url)
         } else {
             clean
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.show_toast(message.into(), cx);
+        self.show_link_toast(message.into(), vec![share_url], cx);
+    }
+
+    pub(crate) fn show_link_toast(&mut self, message: String, urls: Vec<String>, cx: &mut Context<Self>) {
+        self.show_toast(message, cx);
+        if let Some(toast) = &mut self.toast { toast.action = Some(ToastAction::ShareLinks(urls)); }
+    }
+
+    fn activate_toast_action(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(toast) = self.toast.as_ref().filter(|toast| toast.generation == generation && toast.dismissed.is_none()) else { return; };
+        let Some(ToastAction::ShareLinks(urls)) = toast.action.clone() else { return; };
+        let main = self.main_window;
+        // Native menu presentation enters AppKit's event loop. End GPUI
+        // application, entity and window borrows before native tracking.
+        cx.spawn(async move |owner, cx| {
+            let Ok((view, width)) = main.update(cx, |_, window, _| (crate::native::view_of(window), f32::from(window.viewport_size().width))) else { return; };
+            let picker = crate::native::sharing::show(view, [width - 60., 29., 32., 28.], &urls);
+            let _ = owner.update(cx, |this, _| this.share_picker = picker);
+        }).detach();
     }
 
     pub(crate) fn show_toast(&mut self, message: String, cx: &mut Context<Self>) {
@@ -88,6 +111,7 @@ impl BrowserWindow {
             started: cx.background_executor().now(),
             dismissed: None,
             motion: None,
+            action: None,
         });
         let main = self.main_window;
         let browser = cx.entity().downgrade();
@@ -139,8 +163,8 @@ impl BrowserWindow {
             if let Ok(overlay) = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
-                    crate::native::set_overlay_passthrough(child);
-                    crate::native::set_overlay_shadow(child);
+                    if !copied_link { crate::native::set_overlay_passthrough(child); }
+                    crate::native::prepare_toast_window(child);
                 }
                 cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast(generation), cx))
             }) {
@@ -219,7 +243,7 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    pub(crate) fn render_toast(&self, generation: u64, width: f32, now: Instant) -> AnyElement {
+    pub(crate) fn render_toast(&self, generation: u64, width: f32, now: Instant, owner: gpui::WeakEntity<Self>) -> AnyElement {
         let Some(toast) = self.toast_by_generation(generation) else {
             return div().into_any_element();
         };
@@ -256,7 +280,9 @@ impl BrowserWindow {
                     .flex().items_center().rounded(px(4. * scale)).bg(hsla(0., 0., 1., 0.1)).child("⌘Z"))
                 .child("to undo.")))
             .when(copied_link, |this| this.child(
-                div().w(px(32. * scale)).h(px(28. * scale)).flex_none().rounded(px(6. * scale))
+                div().id("toast-share").debug_selector(|| "toast-share".into()).cursor_pointer()
+                    .on_click(move |_, _, cx| { let _ = owner.update(cx, |this, cx| this.activate_toast_action(generation, cx)); })
+                    .w(px(32. * scale)).h(px(28. * scale)).flex_none().rounded(px(6. * scale))
                     .bg(hsla(0., 0., 1., 0.2)).flex().items_center().justify_center()
                     .child(crate::icons::control_sized(crate::icons::Icon::Share, 18. * scale))));
         div().size_full().flex().items_start().justify_center().pt(px(PAD_Y))

@@ -52,7 +52,7 @@ this in %@Settings%@.” Title/dismiss label are compiled short strings; the
 requested title is “We cleaned up!”. No safe live trigger was found for its
 layout/count/actions, so the banner has not been guessed or marked complete.
 
-Remaining: hover duration, actionable accessories, generic
+Remaining: hover duration, non-copy accessories, generic
 Undo toast, background-created items, drag pinning, folder restore, quote link,
 unsupported feature notifications and sidebar banners. Native web notification
 permission/delivery is not listed in section 18 and was not added.
@@ -94,3 +94,48 @@ AppKit frame rim. Toast frames redraw only their own
 window through a read-only browser snapshot, preserving main-window feedback
 expiry and avoiding CEF/main-window frame churn. Sidebar banner layout remains
 unverified; no banner or count/action layout was invented.
+
+## Round 2 accessory and remaining inventory
+
+The native copy share accessory is wired for URL, cleaned URL, Markdown and
+the existing item-link copy handler. It captures cleaned URLs at copy time,
+not the later active tab or clipboard contents. The revised full workspace
+run passes 1,208 tests. Platform presentation is
+isolated in `native/sharing.rs`; macOS uses NSSharingService service discovery
+and delivery with a native NSMenu. These selectors are also in Arc’s binary.
+The newer rich NSSharingServicePicker popover was rejected in the native check:
+Arc exposes a compact service-only menu. The menu is retained by its browser
+and released on browser close. Presentation runs from a foreground async task
+after GPUI application/entity/window borrows have ended because AppKit enters
+a nested tracking loop. A clicked child returns key status to its parent before
+tracking begins; a selected destination can then activate its own application.
+The menu excludes the Reading List service, matching the observed five entries,
+and explicitly requests image visibility on macOS 27 (newly linked apps
+otherwise hide menu icons). Native window logs confirm a non-key toast and
+working Command Bar input after Escape while the toast is still visible.
+Normal-pointer menu anchor precision and hover lifetime remain unverified. Windows/Linux native sharing remains unimplemented.
+
+A GPUI click regression changes Spaces after copying and verifies the platform
+request still contains the original URL. Native evidence is
+`target/parity/toasts/r2/echo-share-menu.png`, `echo-share-keyboard.png` and
+`pair-accessory.png`; the system menu is dismissed without choosing a service.
+
+Unfinished hooks, rather than invented feedback:
+- Generic Undo/archive, move-to-Space, background opening and drag pinning:
+  the source inventory is known, but additional live flow/accessory checks
+  remain. Arc's move message is “Tab moved! Click to go there.”; it is not
+  evidence that Echo should immediately switch Spaces.
+- Folder pin/restore and quote URL: destination/reveal and selection flows
+  remain unverified. A compiled toast string alone does not establish layout.
+- Downloads: source messages are Tidy Downloads rename/revert, awaiting the
+  provider-direct Max implementation; no completion toast is invented.
+- Education banner: `ARC_SidebarBanner.bundle` contains Assets.car and an
+  update animation, no nib or layout file. Compiled SwiftUI view/state names
+  and copy do not establish count/actions, padding or geometry. The global
+  education eligibility preference was already false; it was not modified.
+
+Additional Arc inputs were blocked while an unclaimed agent test window
+covered the claimed main window (10205). Guard failures and snapshots are in
+`target/parity/toasts/r2/recovery.log` and `recovery-state.json`. No input was
+sent past that guard, no owner Space was changed, and no archive setting or
+education preference was modified.
