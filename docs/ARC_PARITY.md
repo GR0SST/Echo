@@ -240,7 +240,7 @@ Folder duplication follows the right-click action documented in the
 
 | Feature | Status | What's missing |
 |---|---|---|
-| The Space color tints the sidebar and window; during a swipe the color blends smoothly | partial | We only have a hue and the blend during swipes. No gradients or grain |
+| The Space color tints the sidebar and window; during a swipe the color blends smoothly | partial | We only have a hue and the blend during swipes. No gradients or grain; the root field is shared with clipped passive region previews without pane-relative gradient rescaling |
 | Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | missing | — |
 | Palette with several colors ("Add color" / "Remove color"), gradient of 2–3 colors (?) | missing | — |
 | Preset color sets in pages: Brand, Drab, Greyscale, Pastel | missing | — |

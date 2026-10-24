@@ -7686,3 +7686,42 @@ fn settings_tabs_remain_clickable_after_shortcuts(cx: &mut TestAppContext) {
         assert_eq!(view.read_with(&settings, |s, _| s.tab), tab);
     }
 }
+
+struct ThemeRegionProbe {
+    browser: Entity<BrowserWindow>,
+    region: gpui::Bounds<gpui::Pixels>,
+}
+impl gpui::Render for ThemeRegionProbe {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::prelude::*;
+        let region=self.region;
+        gpui::div().size_full().child(gpui::div().absolute().left(region.origin.x).top(region.origin.y)
+            .w(region.size.width).h(region.size.height).rounded(gpui::px(6.)).overflow_hidden()
+            .child(self.browser.read(cx).theme_region(region,window.viewport_size())))
+    }
+}
+
+#[gpui::test]
+fn theme_region_keeps_the_window_field_aligned_across_half_panes(cx: &mut TestAppContext) {
+    use gpui::AppContext;
+    let (browser,source)=open(cx);
+    let browser_for_probe=browser.clone();
+    let region=gpui::Bounds::new(gpui::point(gpui::px(240.),gpui::px(10.)),gpui::size(gpui::px(300.),gpui::px(400.)));
+    let handle=source.cx.update(|cx|cx.open_window(gpui::WindowOptions::default(),|_,cx|cx.new(|_|ThemeRegionProbe {browser:browser_for_probe,region})).unwrap());
+    let mut preview=VisualTestContext::from_window(handle.into(),source);
+    preview.run_until_parked();
+    let viewport=preview.update(|window,_|window.viewport_size());
+    assert_eq!(preview.debug_bounds("theme-region").unwrap(),region);
+    let field=preview.debug_bounds("theme-region-field").unwrap();
+    assert_eq!(field.origin,gpui::point(gpui::px(0.),gpui::px(0.)));
+    assert_eq!(field.size,viewport);
+    let next=gpui::Bounds::new(gpui::point(gpui::px(540.),gpui::px(10.)),gpui::size(gpui::px(250.),gpui::px(200.)));
+    preview.cx.update(|cx|handle.update(cx,|probe,_,cx|{probe.region=next;cx.notify();})).unwrap();
+    preview.run_until_parked();
+    assert_eq!(preview.debug_bounds("theme-region").unwrap(),next);
+    assert_eq!(preview.debug_bounds("theme-region-field").unwrap(),field);
+    browser.update(source,|w,cx|{w.pager.position+=0.5;cx.notify();});
+    let midpoint=browser.read_with(source,|w,_|w.theme_background());
+    browser.update(source,|w,cx|{w.pager.position-=0.5;cx.notify();});
+    assert!(browser.read_with(source,|w,_|w.theme_background())!=midpoint);
+}

@@ -1206,6 +1206,28 @@ impl BrowserWindow {
         (from + diff * position.fract()).rem_euclid(360.0) / 360.0
     }
 
+    /// The exact field used by the root and floating sidebar. Region previews
+    /// share it, including the current Space-swipe hue and private appearance.
+    pub(crate) fn theme_background(&self) -> gpui::Background {
+        if self.browser.is_private() {
+            return hsla(210. / 360., 0.06, 0.05, 1.).into();
+        }
+        let hue = self.pager_hue();
+        linear_gradient(160., linear_color_stop(tint(hue, 0.82), 0.), linear_color_stop(tint(hue, 0.72), 1.))
+    }
+
+    /// Content of an already positioned region in a passive overlay. Bounds
+    /// are window-relative; the caller owns rounded clipping and the contour.
+    /// Translate the full viewport field instead of stretching it to the pane.
+    pub(crate) fn theme_region(&self, bounds: Bounds<gpui::Pixels>, viewport: gpui::Size<gpui::Pixels>) -> AnyElement {
+        div().relative().w(bounds.size.width).h(bounds.size.height).overflow_hidden()
+            .debug_selector(|| "theme-region".into())
+            .child(div().absolute().left(-bounds.origin.x).top(-bounds.origin.y)
+                .debug_selector(|| "theme-region-field".into())
+                .w(viewport.width).h(viewport.height).bg(self.theme_background()))
+            .into_any_element()
+    }
+
     // Command bar.
 
     pub fn open_command_bar(
@@ -3374,7 +3396,6 @@ impl BrowserWindow {
             return div().into_any_element();
         };
         let closing = floating.closing;
-        let hue = self.pager_hue();
         let width = self.sidebar_width();
         let panel = div()
             .id("floating-sidebar")
@@ -3387,12 +3408,7 @@ impl BrowserWindow {
             .rounded(px(WINDOW_CORNER_RADIUS - FLOATING_SIDEBAR_INSET))
             .overflow_hidden()
             .shadow_lg()
-            .bg(linear_gradient(
-                160.0,
-                linear_color_stop(tint(hue, 0.82), 0.0),
-                linear_color_stop(tint(hue, 0.72), 1.0),
-            ))
-            .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
+            .bg(self.theme_background())
             .child(self.render_sidebar(cx))
             .child(self.render_sidebar_resize_handle(true, cx))
             // This overlay is its own native window with forwarded controls.
@@ -3737,7 +3753,6 @@ impl Render for BrowserWindow {
             }
         }
         self.sync_link_status(window, cx);
-        let hue = self.pager_hue();
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
         let window_controls_offset = self.window_controls_offset();
@@ -3854,12 +3869,7 @@ impl Render for BrowserWindow {
             .flex()
             .size_full()
             .font_family(".SystemUIFont")
-            .bg(linear_gradient(
-                160.0,
-                linear_color_stop(tint(hue, 0.82), 0.0),
-                linear_color_stop(tint(hue, 0.72), 1.0),
-            ))
-            .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
+            .bg(self.theme_background())
             .when(!library_open, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
                 .relative().flex_none().h_full().w(px(self.sidebar_width() * sidebar_amount)).overflow_hidden()
                 .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(sidebar)))))
