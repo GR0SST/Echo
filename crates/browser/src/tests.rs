@@ -9786,3 +9786,35 @@ fn little_address_click_edits_the_full_url_without_changing_normal_tabs(cx: &mut
     assert_eq!(owner.read_with(cx, |view, _| view.browser.all_tabs().count()), before);
     assert!(engine.take_calls().contains(&Call::Navigate(1, "https://edited.example/complete?value=1".into())));
 }
+
+#[gpui::test]
+fn default_material_and_contrast_return_after_theme_undo(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, cx) = open(cx);
+    view.update(cx, |w, cx| {
+        w.edit_profile(|b| b.settings.theme_appearance = ThemeAppearance::Dark);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.theme_default_fraction(), 1.);
+        assert_eq!(w.theme_address_fill().unwrap().a, 0.10);
+        assert!(w.theme_colors().foreground.l > 0.9);
+    });
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-preset-2");
+    editor.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.theme_default_fraction(), 0.);
+        assert!(w.theme_address_fill().is_none());
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.space().theme.is_none());
+        assert_eq!(w.theme_default_fraction(), 1.);
+        assert!(w.theme_colors().foreground.l > 0.9);
+    });
+}

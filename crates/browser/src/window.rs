@@ -3088,6 +3088,7 @@ impl BrowserWindow {
                         .text_size(px(13.))
                         .text_color(hsla(0.0, 0.0, 0.0, 0.6))
                         .when(dark, |this| this.bg(hsla(0., 0., 1., 0.14)).text_color(hsla(0., 0., 1., 0.65)))
+                        .when_some(self.theme_address_fill(), |this, fill| this.bg(fill))
                         .whitespace_nowrap()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_edit_current_url(&EditCurrentUrl, window, cx)

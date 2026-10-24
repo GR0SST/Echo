@@ -1,6 +1,8 @@
 //! Space backgrounds use one continuous field across sidebar and frame. The
 //! procedural overlays are original textures; no reference-app assets ship.
 use crate::window::BrowserWindow;
+#[path = "space_theme_default.rs"]
+mod default_field;
 use browser_core::themes::{NoiseTexture, SpaceTheme, ThemeAppearance, ThemeColor};
 use gpui::{AnyElement, Bounds, RenderImage, canvas, prelude::*, px};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -10,9 +12,13 @@ pub(crate) struct Surface {
     pub theme: SpaceTheme,
     pub dark: bool,
     pub picked: bool,
+    pub default_style: bool,
 }
 impl Surface {
     pub(crate) fn sample(&self, x: f32, y: f32) -> ThemeColor {
+        if self.default_style {
+            return default_field::sample(self.dark, x, y);
+        }
         let colors = &self.theme.colors;
         let t = (y * 0.82 + x * 0.18).clamp(0., 1.);
         let position = t * (colors.len() - 1) as f32;
@@ -22,9 +28,20 @@ impl Surface {
         if self.picked {
             // Reference intensity fades the pigment toward a pale neutral in
             // both appearances. Dark mode does not multiply the chosen RGB.
-            let (neutral, strength, exponent) = if self.dark { (0.85, 0.58, 0.65) } else { (0.84, 0.75, 1.4) };
-            return mix(ThemeColor { red: neutral, green: neutral, blue: neutral },
-                color, 0.12 + self.theme.intensity.powf(exponent) * strength);
+            let (neutral, strength, exponent) = if self.dark {
+                (0.85, 0.58, 0.65)
+            } else {
+                (0.84, 0.75, 1.4)
+            };
+            return mix(
+                ThemeColor {
+                    red: neutral,
+                    green: neutral,
+                    blue: neutral,
+                },
+                color,
+                0.12 + self.theme.intensity.powf(exponent) * strength,
+            );
         }
         // Keep chroma in the pigment, with intensity controlling its mix into
         // the appearance's neutral ground, independently of texture strength.
@@ -64,13 +81,14 @@ fn noise(texture: NoiseTexture, x: u32, y: u32) -> f32 {
     match texture {
         NoiseTexture::None => 0.,
         NoiseTexture::Grain => hash(x, y),
-        NoiseTexture::Sand => hash(x, y) * 0.75
-            + hash((x + 99) % 100, y) * 0.125
-            + hash(x, (y + 99) % 100) * 0.125,
+        NoiseTexture::Sand => {
+            hash(x, y) * 0.75 + hash((x + 99) % 100, y) * 0.125 + hash(x, (y + 99) % 100) * 0.125
+        }
         NoiseTexture::Tweed => {
             let angle = std::f32::consts::TAU;
             (angle * (0.4 * x as f32 - 0.44 * y as f32)).cos() * 0.7
-                + (angle * 0.4 * x as f32).cos() * 0.32 + hash(x, y) * 0.9
+                + (angle * 0.4 * x as f32).cos() * 0.32
+                + hash(x, y) * 0.9
         }
         NoiseTexture::Denim => {
             let angle = std::f32::consts::TAU;
@@ -94,6 +112,53 @@ fn noise_opacity(texture: NoiseTexture, x: u32, y: u32, strength: f32) -> f32 {
     (mean + noise(texture, x, y) * amplitude).clamp(0., 0.2) * strength
 }
 
+const GRAIN_OPACITY: f32 = 0.25;
+fn quantize(value: f32, round: bool) -> u8 {
+    let value = value.clamp(0., 1.) * 255.;
+    (if round { value.round() } else { value }) as u8
+}
+fn gradient_alpha(key: &PaintKey) -> u8 {
+    let alpha = |s: &Surface| {
+        if !key.translucent || s.default_style {
+            255.
+        } else {
+            224.
+        }
+    };
+    (alpha(&key.from) * (1. - key.fraction) + alpha(&key.to) * key.fraction).round() as u8
+}
+fn default_grain(surface: &Surface, x: u32, y: u32) -> (ThemeColor, f32) {
+    let reference = surface.sample(0.1, 0.5);
+    let luminance = reference.red * 0.2126 + reference.green * 0.7152 + reference.blue * 0.0722;
+    let value = hash(x, y);
+    let amplitude = if surface.dark { 1.50 } else { 1.80 } / 255.;
+    if value >= 0. {
+        (
+            ThemeColor {
+                red: 1.,
+                green: 1.,
+                blue: 1.,
+            },
+            value * amplitude / (1. - luminance).max(0.01),
+        )
+    } else {
+        let color = if surface.dark {
+            ThemeColor {
+                red: (reference.red - luminance).max(0.),
+                green: (reference.green - luminance).max(0.),
+                blue: (reference.blue - luminance).max(0.),
+            }
+        } else {
+            ThemeColor {
+                red: 0.,
+                green: 0.,
+                blue: 0.,
+            }
+        };
+        (color, -value * amplitude / luminance.max(0.01))
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct PaintKey {
     from: Surface,
@@ -109,7 +174,12 @@ struct PaintData {
 #[derive(Clone, Default)]
 pub(crate) struct ThemePaintCache(Rc<RefCell<Option<PaintData>>>);
 impl ThemePaintCache {
-    fn images(&self, key: PaintKey) -> (Arc<RenderImage>, Arc<RenderImage>) {
+    fn images(&self, mut key: PaintKey) -> (Arc<RenderImage>, Arc<RenderImage>) {
+        // The default is a painted field in the reference: desktop crops stay
+        // identical over controlled red/green windows in both appearances.
+        if key.from.default_style && key.to.default_style {
+            key.translucent = false;
+        }
         let mut cache = self.0.borrow_mut();
         if let Some(data) = cache.as_ref().filter(|data| data.key == key) {
             return (data.gradient.clone(), data.texture.clone());
@@ -121,18 +191,42 @@ impl ThemePaintCache {
                 key.fraction,
             );
             image::Rgba([
-                (c.blue * 255.) as u8,
-                (c.green * 255.) as u8,
-                (c.red * 255.) as u8,
-                if key.translucent { 224 } else { 255 },
+                quantize(c.blue, key.from.default_style || key.to.default_style),
+                quantize(c.green, key.from.default_style || key.to.default_style),
+                quantize(c.red, key.from.default_style || key.to.default_style),
+                gradient_alpha(&key),
             ])
         });
         let texture = image::RgbaImage::from_fn(NOISE_TILE, NOISE_TILE, |x, y| {
-            let amount = |s: &Surface| noise_opacity(s.theme.texture, x, y, s.theme.noise);
-            let alpha = amount(&key.from) * (1. - key.fraction) + amount(&key.to) * key.fraction;
-            // Match the native material's response through GPUI's translucent backing.
-            let backing_gain = if key.translucent { 0.82 } else { 1. };
-            image::Rgba([0, 0, 0, (alpha * backing_gain * 255.).round() as u8])
+            let overlay = |surface: &Surface| {
+                if surface.default_style {
+                    return default_grain(surface, x, y);
+                }
+                let gain = if key.translucent { 0.82 } else { 1. };
+                (
+                    ThemeColor {
+                        red: 0.,
+                        green: 0.,
+                        blue: 0.,
+                    },
+                    noise_opacity(surface.theme.texture, x, y, surface.theme.noise) * gain,
+                )
+            };
+            let (from, a) = overlay(&key.from);
+            let (to, b) = overlay(&key.to);
+            let (a, b) = (a * (1. - key.fraction), b * key.fraction);
+            let alpha = a + b;
+            let color = if alpha > 0. {
+                mix(from, to, b / alpha)
+            } else {
+                from
+            };
+            image::Rgba([
+                quantize(color.blue, true),
+                quantize(color.green, true),
+                quantize(color.red, true),
+                (alpha / GRAIN_OPACITY * 255.).round().clamp(0., 255.) as u8,
+            ])
         });
         let gradient = Arc::new(RenderImage::new(vec![image::Frame::new(gradient)]));
         let texture = Arc::new(RenderImage::new(vec![image::Frame::new(texture)]));
@@ -153,7 +247,9 @@ fn rounded_distance(width: f32, height: f32, x: f32, y: f32) -> f32 {
     dx.max(0.).hypot(dy.max(0.)) + dx.max(dy).min(0.) - 12.
 }
 fn command_shadow_alpha(width: f32, height: f32, x: f32, y: f32) -> f32 {
-    if rounded_distance(width, height, x, y) <= 0. { return 0.; }
+    if rounded_distance(width, height, x, y) <= 0. {
+        return 0.;
+    }
     let distance = rounded_distance(width, height, x, y - 22.);
     // Logistic approximation of the measured Gaussian edge response. Keeping
     // the center transparent avoids GPUI shadow culling and interior overdraw.
@@ -162,15 +258,26 @@ fn command_shadow_alpha(width: f32, height: f32, x: f32, y: f32) -> f32 {
 impl ThemeShadowCache {
     fn image(&self, width: u32, height: u32) -> Arc<RenderImage> {
         let mut cache = self.0.borrow_mut();
-        if let Some((w, h, image)) = cache.as_ref().filter(|(w, h, _)| *w == width && *h == height) {
+        if let Some((w, h, image)) = cache
+            .as_ref()
+            .filter(|(w, h, _)| *w == width && *h == height)
+        {
             let _ = (w, h);
             return image.clone();
         }
-        let image = image::RgbaImage::from_fn(width + SHADOW_MARGIN * 2, height + SHADOW_MARGIN * 2, |x, y| {
-            let alpha = command_shadow_alpha(width as f32, height as f32,
-                x as f32 + 0.5 - SHADOW_MARGIN as f32, y as f32 + 0.5 - SHADOW_MARGIN as f32);
-            image::Rgba([0, 0, 0, (alpha * 255.).round() as u8])
-        });
+        let image = image::RgbaImage::from_fn(
+            width + SHADOW_MARGIN * 2,
+            height + SHADOW_MARGIN * 2,
+            |x, y| {
+                let alpha = command_shadow_alpha(
+                    width as f32,
+                    height as f32,
+                    x as f32 + 0.5 - SHADOW_MARGIN as f32,
+                    y as f32 + 0.5 - SHADOW_MARGIN as f32,
+                );
+                image::Rgba([0, 0, 0, (alpha * 255.).round() as u8])
+            },
+        );
         let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
         *cache = Some((width, height, image.clone()));
         image
@@ -192,20 +299,37 @@ pub(crate) struct ChromeColors {
 
 /// Device-pixel strips approximate the rounded boundary without repainting or
 /// stretching the theme field. All coordinates stay relative to the window.
-pub(crate) fn rounded_theme_mask(bounds: Bounds<gpui::Pixels>, radius: f32, scale: f32) -> Vec<Bounds<gpui::Pixels>> {
-    let r = radius.min(f32::from(bounds.size.width) / 2.).min(f32::from(bounds.size.height) / 2.).max(0.);
-    if r == 0. { return vec![bounds]; }
+pub(crate) fn rounded_theme_mask(
+    bounds: Bounds<gpui::Pixels>,
+    radius: f32,
+    scale: f32,
+) -> Vec<Bounds<gpui::Pixels>> {
+    let r = radius
+        .min(f32::from(bounds.size.width) / 2.)
+        .min(f32::from(bounds.size.height) / 2.)
+        .max(0.);
+    if r == 0. {
+        return vec![bounds];
+    }
     let count = (r * scale.max(1.)).ceil() as usize;
     let step = r / count as f32;
-    let mut mask = vec![Bounds::new(bounds.origin + gpui::point(px(0.), px(r)),
-        gpui::size(bounds.size.width, bounds.size.height - px(r * 2.)))];
+    let mut mask = vec![Bounds::new(
+        bounds.origin + gpui::point(px(0.), px(r)),
+        gpui::size(bounds.size.width, bounds.size.height - px(r * 2.)),
+    )];
     for row in 0..count {
         let y = row as f32 * step;
         let dy = r - y - step / 2.;
         let inset = r - (r * r - dy * dy).max(0.).sqrt();
         let width = bounds.size.width - px(inset * 2.);
-        mask.push(Bounds::new(bounds.origin + gpui::point(px(inset), px(y)), gpui::size(width, px(step))));
-        mask.push(Bounds::new(gpui::point(bounds.left() + px(inset), bounds.bottom() - px(y + step)), gpui::size(width, px(step))));
+        mask.push(Bounds::new(
+            bounds.origin + gpui::point(px(inset), px(y)),
+            gpui::size(width, px(step)),
+        ));
+        mask.push(Bounds::new(
+            gpui::point(bounds.left() + px(inset), bounds.bottom() - px(y + step)),
+            gpui::size(width, px(step)),
+        ));
     }
     mask
 }
@@ -215,8 +339,14 @@ impl BrowserWindow {
     pub(crate) fn theme_empty_panel_fill(&self) -> gpui::Hsla {
         // The masked field is opaque; compensate for the native window
         // material already included in Arc's underlying translucent field.
-        if self.theme_is_dark() { gpui::hsla(0., 0., 0.5, 0.21) }
-        else { gpui::hsla(0., 0., 1., 0.70) }
+        let default = self.theme_default_fraction();
+        if self.theme_is_dark() {
+            let alpha = 0.21 * (1. - default) + 0.10 * default;
+            let luminance = (0.5 * 0.21 * (1. - default) + 0.10 * default) / alpha;
+            gpui::hsla(0., 0., luminance, alpha)
+        } else {
+            gpui::hsla(0., 0., 1., 0.70 * (1. - default) + (2. / 3.) * default)
+        }
     }
     /// Keep the shadow outside the translucent panel. Nested outlines leave
     /// its interior untouched, including the six-pixel corner cutouts.
@@ -224,32 +354,83 @@ impl BrowserWindow {
         self.theme_surface_shadow(crate::pages::CONTENT_CORNER_RADIUS)
     }
     pub(crate) fn theme_surface_shadow(&self, radius: f32) -> AnyElement {
-        canvas(|_, _, _| (), move |bounds, _, window, _| {
-            for distance in (1..=8).rev() {
-                let spread = distance as f32;
-                let alpha = 0.05 * (-0.5 * ((spread - 0.5) / 1.5).powi(2)).exp();
-                window.paint_quad(gpui::outline(bounds.dilate(px(spread)),
-                    gpui::hsla(0., 0., 0., alpha), Default::default())
-                    .corner_radii(px(radius + spread)));
-            }
-        }).size_full().into_any_element()
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                for distance in (1..=8).rev() {
+                    let spread = distance as f32;
+                    let alpha = 0.05 * (-0.5 * ((spread - 0.5) / 1.5).powi(2)).exp();
+                    window.paint_quad(
+                        gpui::outline(
+                            bounds.dilate(px(spread)),
+                            gpui::hsla(0., 0., 0., alpha),
+                            Default::default(),
+                        )
+                        .corner_radii(px(radius + spread)),
+                    );
+                }
+            },
+        )
+        .size_full()
+        .into_any_element()
     }
     pub(crate) fn command_bar_shadow(&self) -> AnyElement {
-        let cache = self.command_bar.as_ref().expect("command bar owns its shadow").shadow_cache.clone();
-        canvas(|_, _, _| (), move |bounds, _, window, _| {
-            let image = cache.image(f32::from(bounds.size.width).round() as u32, f32::from(bounds.size.height).round() as u32);
-            let _ = window.paint_image(bounds.dilate(px(SHADOW_MARGIN as f32)), Default::default(), image, 0, false);
-        }).size_full().into_any_element()
+        let cache = self
+            .command_bar
+            .as_ref()
+            .expect("command bar owns its shadow")
+            .shadow_cache
+            .clone();
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let image = cache.image(
+                    f32::from(bounds.size.width).round() as u32,
+                    f32::from(bounds.size.height).round() as u32,
+                );
+                let _ = window.paint_image(
+                    bounds.dilate(px(SHADOW_MARGIN as f32)),
+                    Default::default(),
+                    image,
+                    0,
+                    false,
+                );
+            },
+        )
+        .size_full()
+        .into_any_element()
     }
     pub(crate) fn theme_tab_selection_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
-        gpui::hsla(0., 0., 1., if self.theme_uses_light_ink_for(space) { 0.16 } else { 0.80 })
+        gpui::hsla(
+            0.,
+            0.,
+            1.,
+            if self.theme_uses_light_ink_for(space) {
+                0.16
+            } else {
+                0.80
+            },
+        )
+    }
+    pub(crate) fn theme_address_fill(&self) -> Option<gpui::Hsla> {
+        self.theme_surface_for(self.browser.space()).default_style.then(||
+            gpui::hsla(0., 0., if self.theme_is_dark() { 1. } else { 0. },
+                if self.theme_is_dark() { 0.10 } else { 0.04 }))
     }
     pub(crate) fn command_bar_selection(&self) -> gpui::Hsla {
         let surface = self.theme_surface_for(self.browser.space());
-        if !surface.picked { return gpui::hsla(0., 0., if self.theme_is_dark() { 1. } else { 0. }, 0.10); }
+        if !surface.picked {
+            return gpui::hsla(0., 0., if self.theme_is_dark() { 1. } else { 0. }, 0.10);
+        }
         let color = surface.theme.colors[0];
         let lift = |channel: f32| channel * 0.75 + 0.25;
-        let mut fill: gpui::Hsla = gpui::Rgba { r: lift(color.red), g: lift(color.green), b: lift(color.blue), a: if self.theme_is_dark() { 0.65 } else { 0.30 } }.into();
+        let mut fill: gpui::Hsla = gpui::Rgba {
+            r: lift(color.red),
+            g: lift(color.green),
+            b: lift(color.blue),
+            a: if self.theme_is_dark() { 0.65 } else { 0.30 },
+        }
+        .into();
         if !self.theme_is_dark() {
             fill.s = (fill.s * 1.6).min(1.);
             fill.l = (fill.l - 0.015).max(0.);
@@ -258,9 +439,16 @@ impl BrowserWindow {
     }
     pub(crate) fn command_bar_panel_fill(&self, blurred: bool) -> gpui::Hsla {
         let dark = self.theme_is_dark();
-        gpui::hsla(self.accent(), if dark { 0.08 } else { 0. },
-            if dark { if blurred { 0.055 } else { 0.16 } } else { 1. },
-            if blurred { 0.61 } else { 1. })
+        gpui::hsla(
+            self.accent(),
+            if dark { 0.08 } else { 0. },
+            if dark {
+                if blurred { 0.055 } else { 0.16 }
+            } else {
+                1.
+            },
+            if blurred { 0.61 } else { 1. },
+        )
     }
     pub(crate) fn theme_colors(&self) -> ChromeColors {
         let dark = self.theme_uses_light_ink_for(self.browser.space().id);
@@ -284,7 +472,11 @@ impl BrowserWindow {
         self.theme_is_dark_for(self.browser.space().id)
     }
     pub(crate) fn theme_appearance(&self) -> ThemeAppearance {
-        if self.browser.is_private() { ThemeAppearance::Dark } else { self.browser.settings.theme_appearance }
+        if self.browser.is_private() {
+            ThemeAppearance::Dark
+        } else {
+            self.browser.settings.theme_appearance
+        }
     }
     pub(crate) fn theme_is_dark_for(&self, _space: browser_core::SpaceId) -> bool {
         match self.theme_appearance() {
@@ -295,8 +487,18 @@ impl BrowserWindow {
     }
     pub(crate) fn theme_foreground_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
         let dark = self.theme_uses_light_ink_for(space);
-        let hue = self.browser.spaces.iter().find(|s| s.id == space).map_or(self.accent(), |s| s.accent_hue() / 360.);
-        gpui::hsla(hue, if dark { 0.12 } else { 0. }, if dark { 0.92 } else { 0.1 }, 1.)
+        let hue = self
+            .browser
+            .spaces
+            .iter()
+            .find(|s| s.id == space)
+            .map_or(self.accent(), |s| s.accent_hue() / 360.);
+        gpui::hsla(
+            hue,
+            if dark { 0.12 } else { 0. },
+            if dark { 0.92 } else { 0.1 },
+            1.,
+        )
     }
     fn theme_surface_for(&self, space: &browser_core::Space) -> Surface {
         let mut theme = self
@@ -304,8 +506,11 @@ impl BrowserWindow {
             .as_ref()
             .filter(|e| e.space == space.id)
             .map_or_else(|| space.theme(), |e| e.draft.clone());
-        let picked = space.theme.is_some() || self.theme_editor.as_ref()
-            .is_some_and(|e| e.space == space.id && e.picked);
+        let picked = space.theme.is_some()
+            || self
+                .theme_editor
+                .as_ref()
+                .is_some_and(|e| e.space == space.id && e.picked);
         if space.theme.is_none()
             && !self
                 .theme_editor
@@ -316,14 +521,21 @@ impl BrowserWindow {
             theme.noise = 0.12;
         }
         let dark = self.theme_is_dark_for(space.id);
-        Surface { theme, dark, picked }
+        Surface {
+            theme,
+            dark,
+            picked,
+            default_style: !picked,
+        }
     }
     pub(crate) fn theme_uses_light_ink_for(&self, space: browser_core::SpaceId) -> bool {
-        let Some(target) = self.browser.spaces.iter().find(|s| s.id == space) else { return self.theme_is_dark_for(space); };
+        let Some(target) = self.browser.spaces.iter().find(|s| s.id == space) else {
+            return self.theme_is_dark_for(space);
+        };
         let sample = self.theme_surface_for(target).sample(0.25, 0.5);
         sample.red * 0.2126 + sample.green * 0.7152 + sample.blue * 0.0722 < 0.5
     }
-    pub(crate) fn theme_surface(&self, translucent: bool) -> AnyElement {
+    fn theme_paint_key(&self, translucent: bool) -> PaintKey {
         use crate::sidebar_pages::SidebarPage;
         let surface = |space: &browser_core::Space| self.theme_surface_for(space);
         let fallback = surface(self.browser.space());
@@ -350,6 +562,7 @@ impl BrowserWindow {
                             theme: SpaceTheme::from_hue(draft.hue),
                             dark: false,
                             picked: false,
+                            default_style: false,
                         })
                         .unwrap_or_else(|| fallback.clone()),
                     SidebarPage::Library => fallback.clone(),
@@ -368,47 +581,85 @@ impl BrowserWindow {
             .get(position.ceil() as usize)
             .unwrap_or(&fallback)
             .clone();
-        let (gradient, texture) = self.theme_paint_cache.images(PaintKey {
+        PaintKey {
             from,
             to,
             fraction: position.fract(),
             translucent,
-        });
+        }
+    }
+    pub(crate) fn theme_default_fraction(&self) -> f32 {
+        let key = self.theme_paint_key(false);
+        (if key.from.default_style { 1. } else { 0. }) * (1. - key.fraction)
+            + (if key.to.default_style { 1. } else { 0. }) * key.fraction
+    }
+    pub(crate) fn theme_surface(&self, translucent: bool) -> AnyElement {
+        let (gradient, texture) = self
+            .theme_paint_cache
+            .images(self.theme_paint_key(translucent));
         let private = self.browser.is_private();
-        canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _| {
-                if private {
-                    window.paint_quad(gpui::fill(bounds, gpui::hsla(210. / 360., 0.06, 0.05, 1.)));
-                    return;
-                }
-                let _ = window.paint_image(bounds, Default::default(), gradient, 0, false);
-                window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                    let cols = (f32::from(bounds.size.width) / NOISE_TILE as f32).ceil() as u32;
-                    let rows = (f32::from(bounds.size.height) / NOISE_TILE as f32).ceil() as u32;
-                    for row in 0..rows {
-                        for col in 0..cols {
-                            let tile = Bounds::new(
-                                bounds.origin
-                                    + gpui::point(px(col as f32 * NOISE_TILE as f32), px(row as f32 * NOISE_TILE as f32)),
-                                gpui::size(px(NOISE_TILE as f32), px(NOISE_TILE as f32)),
-                            );
-                            if !tile.intersects(&window.content_mask().bounds) { continue; }
-                            let _ = window.paint_image(
-                                tile,
-                                Default::default(),
-                                texture.clone(),
-                                0,
-                                false,
-                            );
+        gpui::div()
+            .absolute()
+            .size_full()
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        if private {
+                            window.paint_quad(gpui::fill(
+                                bounds,
+                                gpui::hsla(210. / 360., 0.06, 0.05, 1.),
+                            ));
+                        } else {
+                            let _ =
+                                window.paint_image(bounds, Default::default(), gradient, 0, false);
                         }
-                    }
-                });
-            },
-        )
-        .absolute()
-        .size_full()
-        .into_any_element()
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(
+                gpui::div().absolute().inset_0().opacity(GRAIN_OPACITY).child(canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        if private {
+                            return;
+                        }
+                        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                            let cols =
+                                (f32::from(bounds.size.width) / NOISE_TILE as f32).ceil() as u32;
+                            let rows =
+                                (f32::from(bounds.size.height) / NOISE_TILE as f32).ceil() as u32;
+                            for row in 0..rows {
+                                for col in 0..cols {
+                                    let tile = Bounds::new(
+                                        bounds.origin
+                                            + gpui::point(
+                                                px(col as f32 * NOISE_TILE as f32),
+                                                px(row as f32 * NOISE_TILE as f32),
+                                            ),
+                                        gpui::size(px(NOISE_TILE as f32), px(NOISE_TILE as f32)),
+                                    );
+                                    if !tile.intersects(&window.content_mask().bounds) {
+                                        continue;
+                                    }
+                                    let _ = window.paint_image(
+                                        tile,
+                                        Default::default(),
+                                        texture.clone(),
+                                        0,
+                                        false,
+                                    );
+                                }
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .inset_0()),
+            )
+            .into_any_element()
     }
 }
 
@@ -443,6 +694,7 @@ mod tests {
             theme: SpaceTheme::from_hue(0.),
             dark: false,
             picked: true,
+            default_style: false,
         };
         s.theme.colors.push(ThemeColor::from_hsv(120., 0.8, 1.));
         s.theme.colors.push(ThemeColor::from_hsv(240., 0.8, 1.));
@@ -456,8 +708,17 @@ mod tests {
     }
     #[test]
     fn picked_dark_themes_keep_bright_pigments_and_unpicked_chrome_stays_dark() {
-        let mut s = Surface { theme: SpaceTheme::from_hue(280.), dark: true, picked: true };
-        s.theme.colors = vec![ThemeColor { red: 0.651, green: 0.447, blue: 0.616 }];
+        let mut s = Surface {
+            theme: SpaceTheme::from_hue(280.),
+            dark: true,
+            picked: true,
+            default_style: false,
+        };
+        s.theme.colors = vec![ThemeColor {
+            red: 0.651,
+            green: 0.447,
+            blue: 0.616,
+        }];
         let picked = s.sample(0.5, 0.5);
         assert!(picked.red > 0.6 && picked.green > 0.5 && picked.blue > 0.6);
         s.theme.intensity = 0.;
@@ -468,12 +729,56 @@ mod tests {
         assert!((0.12..0.2).contains(&s.sample(0.5, 0.5).red));
     }
     #[test]
+    fn default_field_ignores_legacy_hue_and_blends_with_picked_themes() {
+        let mut from = Surface {
+            theme: SpaceTheme::from_hue(0.),
+            dark: true,
+            picked: false,
+            default_style: true,
+        };
+        let dark = from.sample(0.1, 0.5);
+        from.theme = SpaceTheme::from_hue(180.);
+        assert_eq!(from.sample(0.1, 0.5), dark);
+        assert!(dark.blue > dark.red && dark.red < 0.1);
+        let mut light = from.clone();
+        light.dark = false;
+        assert!(light.sample(0.1, 0.5).red > 0.85);
+        let mut picked = from.clone();
+        picked.default_style = false;
+        picked.picked = true;
+        let key = PaintKey {
+            from: from.clone(),
+            to: picked,
+            fraction: 0.5,
+            translucent: true,
+        };
+        assert_eq!(gradient_alpha(&key), 240);
+        let cache = ThemePaintCache::default();
+        let opaque = PaintKey {
+            from: from.clone(),
+            to: from,
+            fraction: 0.,
+            translucent: false,
+        };
+        let (a, grain_a) = cache.images(opaque.clone());
+        let (b, grain_b) = cache.images(PaintKey {
+            translucent: true,
+            ..opaque
+        });
+        assert!(Arc::ptr_eq(&a, &b) && Arc::ptr_eq(&grain_a, &grain_b));
+    }
+    #[test]
     fn original_sand_matches_reference_mean_contrast_and_neighbour_correlation() {
-        let values: Vec<f32> = (0..100).flat_map(|y| (0..100).map(move |x| noise_opacity(NoiseTexture::Sand, x, y, 1.))).collect();
+        let values: Vec<f32> = (0..100)
+            .flat_map(|y| (0..100).map(move |x| noise_opacity(NoiseTexture::Sand, x, y, 1.)))
+            .collect();
         let mean = values.iter().sum::<f32>() / values.len() as f32;
         let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
-        let covariance = (0..100).flat_map(|y| (1..100).map(move |x| (y, x))).map(|(y, x)|
-            (values[y * 100 + x] - mean) * (values[y * 100 + x - 1] - mean)).sum::<f32>() / 9900.;
+        let covariance = (0..100)
+            .flat_map(|y| (1..100).map(move |x| (y, x)))
+            .map(|(y, x)| (values[y * 100 + x] - mean) * (values[y * 100 + x - 1] - mean))
+            .sum::<f32>()
+            / 9900.;
         assert!((0.045..0.049).contains(&mean));
         assert!((0.022..0.026).contains(&variance.sqrt()));
         assert!((0.08..0.22).contains(&(covariance / variance)));
