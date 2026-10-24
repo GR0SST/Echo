@@ -1,0 +1,74 @@
+# Profiles and Settings follow-up — Arc 1.170.0
+
+Arc is the only reference. Earlier installed-app captures are retained at
+`~/Documents/Bot/parity-evidence/parity/settings/`; this worktree's additional
+captures and native logs are under `target/parity/profiles-settings/`.
+
+The first read-only session claimed one new Arc window, used the existing
+Echo Test Space and verified the shared header crop. Settings initially opened
+its remembered Account pane; no account control was used. The new Settings
+window was identified by its native ID and toolbar before selecting Profiles
+and Shortcuts. Both windows were then closed. No profile, assignment or Space
+was changed. A later double-click did not expose the expected rename sheet;
+it is not evidence for rename behavior. Subsequent inspection stopped before
+Cmd+N because Arc's owner windows had not restored. No replacement Space or
+additional Arc window was created after that stop.
+
+## Previews preferences
+
+Source: `arc_previews.png` in the earlier Settings evidence, plus installed
+Arc executable strings adjacent to `PreferencesFeature/PreviewSettingsDialog.swift`.
+The sheet is 422 × 370 px, centered in the 684 × 650 Settings window, with
+17 px corners and 24 px side insets. The seven choices use 16 px checkboxes
+and 28 px row pitch. The 92 × 36 px Done button has the captured Enter keycap.
+The measured interior sample is RGB (22, 28, 47); the Done fill is
+(51, 57, 241). Product names use Echo's brand, with no Arc artwork.
+
+The panel retains each choice immediately, supports Done/Enter/Escape,
+blocks clicks reaching underlying controls, and exposes the precise support URL
+from Arc's bundled link:
+`https://resources.arc.net/hc/en-us/articles/19335284431639-Previews-Glance-Top-Sites`.
+This is a preferences panel; site-specific hover previews are still missing.
+
+Removed the legacy automatic-update control from General: Arc service updates
+are explicitly out of scope in AGENTS.md, and no excluded placeholder is shown.
+
+The GPUI regression covers measured geometry, immediate choice persistence,
+backdrop isolation, dismissal/reopening and the exact help destination. Native
+comparison and full test results are recorded below when validation completes.
+
+Bundling exposed a stale Chromium credit-source path. Credits now use the same
+resolved CEF distribution directory as the framework bundler, preserving the
+installed version's notices rather than assuming a flat `third_party/cef` tree.
+
+Native Previews validation: `preview-native-run.FpqArX/drive.log` exits with
+status 0 after CEF completes. `echo-previews.png` / `pair-previews-3x.png` were
+inspected at 3× against the original Arc capture. Card geometry, seven-row
+pitch and button placement match; checkbox stroke, keycap/border treatment
+and shared font rendering remain visibly different. The background omits the
+excluded automatic-update row.
+
+`preview-full-tests-2.log`: 1027 browser, 216 core, 13 AI, 136 engine, 2 bundle
+and 4 importer tests passed; one AI test ignored. Existing action-button debug
+selectors are preserved, including Profiles and Air Traffic Control routes.
+
+## Profile management references
+
+The initial recovery gate counted on-screen windows, which was too strict to
+establish whether owner windows were missing. The full native inventory was
+checked before resuming one-window guarded sessions. The attempted recovery
+found existing windows and skipped the restart, leaving them untouched.
+
+The fifth bottom control opens Rename your Profile, rather than Delete unused
+Profiles. `arc-profile-button5.png` captures its 496 × 256 sheet. Its subtitle
+is “This won’t affect the names of any of the Spaces associated with this
+Profile.” The current name is selected; Cancel/ESC and Save/Enter are present.
+No name was edited or saved.
+
+Selecting the existing unused reference profile and pressing the fourth
+control opens `arc-profile-delete.png`: a 450 × 350 sheet, 38 px content
+inset, 64 px illustration, exact-name confirmation and disabled Delete button.
+It was cancelled without typing or deleting. The Default profile's minus
+button is disabled and exposes “The Default Profile cannot be deleted.”
+Both references retain their owned Settings/main window identities before
+input. No owner profile was renamed, deleted or reassigned.

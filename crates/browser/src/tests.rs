@@ -10848,3 +10848,32 @@ fn native_pip_return_intent_precedes_the_renderer_exit_in_one_batch(cx:&mut Test
     assert_eq!(view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id),source);
     assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn preview_preferences_sheet_keeps_seven_choices_and_dismisses_without_changing_other_settings(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (preferences, mut settings) = settings_window(cx);
+    assert!(settings.debug_bounds("settings-toggle-AutomaticUpdates").is_none());
+    click(&mut settings, "settings-button-Previews Settings…");
+    let warn_before = view.read_with(cx, |view,_| view.profile.handle.read_settings(|b| b.settings.enabled(browser_core::settings::Toggle::WarnBeforeQuitting)));
+    click(&mut settings, "settings-toggle-WarnBeforeQuitting");
+    assert_eq!(view.read_with(cx, |view,_| view.profile.handle.read_settings(|b| b.settings.enabled(browser_core::settings::Toggle::WarnBeforeQuitting))), warn_before);
+    assert!(preferences.read_with(&settings, |view,_| view.previews_open()));
+    assert_eq!(settings.debug_bounds("settings-previews-sheet").unwrap().size, gpui::size(gpui::px(422.),gpui::px(370.)));
+    click(&mut settings, "settings-preview-PreviewGoogleMail");
+    assert!(!view.read_with(cx, |view,_| view.profile.handle.read_settings(|b| b.settings.enabled(browser_core::settings::Toggle::PreviewGoogleMail))));
+    settings.simulate_keystrokes("escape");
+    settings.run_until_parked();
+    assert!(!preferences.read_with(&settings, |view,_| view.previews_open()));
+    click(&mut settings, "settings-button-Previews Settings…");
+    settings.simulate_keystrokes("enter");
+    settings.run_until_parked();
+    assert!(!preferences.read_with(&settings, |view,_| view.previews_open()));
+    click(&mut settings, "settings-button-Previews Settings…");
+    click(&mut settings, "settings-previews-learn-more");
+    assert_eq!(settings.cx.opened_url().as_deref(), Some("https://resources.arc.net/hc/en-us/articles/19335284431639-Previews-Glance-Top-Sites"));
+    click(&mut settings, "settings-previews-done");
+    settings.run_until_parked();
+    assert!(!preferences.read_with(&settings, |view,_| view.previews_open()));
+}

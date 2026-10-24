@@ -69,6 +69,7 @@ enum Popup {
 }
 
 mod archive;
+mod previews;
 
 pub(crate) struct SettingsWindow {
     profile: ProfileHandle,
@@ -460,7 +461,9 @@ impl SettingsWindow {
                         } else if action == "Air Traffic Control…" {
                             this.present_atc(window, cx);
                         } else if action == "Previews Settings…" {
+                            this.popup = None;
                             this.previews = true;
+                            this.focus.focus(window);
                             cx.notify();
                         }
                     })),
@@ -469,7 +472,7 @@ impl SettingsWindow {
     }
     fn general(&self, cx: &mut Context<Self>) -> AnyElement {
         div().w(px(556.)).flex().flex_col().gap(px(8.))
-            .child(group().child(self.toggle_row("Automatically update my Echo", Toggle::AutomaticUpdates, cx)).child(rule()).child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
+            .child(group().child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
             .child(group().child(self.action_row("Previews", "Previews Settings…", None, cx)).child(rule())
                 .child(self.action_row("Manage your default search engine, Auto-Archive, and downloads in Profile Settings.", "Profile Settings…", Some(Tab::Profiles), cx)))
             .into_any_element()
@@ -964,19 +967,6 @@ impl SettingsWindow {
                     .child(div().text_size(px(11.)).line_height(px(14.)).text_color(rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
                     .child(div().flex_1()).child(div().flex().gap(px(4.)).child(button("Reset All Shortcuts").px(px(8.)).opacity(0.5)).child(div().size(px(24.)).rounded_full().bg(rgb(0x393b3d)).child(icons::more()).opacity(0.5)))))
             .into_any_element()
-    }
-    fn previews_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let settings = self.profile.read_settings(|b| b.settings.clone());
-        div().absolute().inset_0().bg(gpui::rgba(0x00000050)).flex().items_center().justify_center()
-            .child(div().w(px(422.)).p(px(24.)).rounded(px(17.)).border_1().border_color(rgb(0x050914)).bg(rgb(0x151c30)).shadow_lg().flex().flex_col().gap(px(8.))
-                .child(div().font_weight(gpui::FontWeight::BOLD).text_color(rgb(0xffffff)).child("Show Echo Previews:"))
-                .child("Save a click. Hover your mouse over an Echo Folder, Pinned, or Favorited tab to quickly preview what you need from that site!")
-                .children([("Echo Folders", Toggle::PreviewFolders), ("Google Calendar", Toggle::PreviewGoogleCalendar), ("Google Mail", Toggle::PreviewGoogleMail), ("Outlook Calendar", Toggle::PreviewOutlookCalendar), ("Outlook Mail", Toggle::PreviewOutlookMail), ("Recent pages on Linear, Notion, and Figma", Toggle::PreviewRecentPages), ("Notion Calendar", Toggle::PreviewNotionCalendar)].into_iter().map(|(label, toggle)| {
-                    div().id(SharedString::from(format!("preview-{toggle:?}"))).debug_selector(|| format!("settings-preview-{toggle:?}")).h(px(20.)).flex().items_center().gap(px(12.))
-                        .child(div().size(px(16.)).rounded(px(4.)).bg(rgb(if settings.enabled(toggle) { 0x1684ff } else { 0x555968 })).when(settings.enabled(toggle), |s| s.child(icons::control_sized(Icon::Check, 16.))))
-                        .child(label).on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle, cx)))
-                }))
-                .child(div().flex().justify_end().mt(px(16.)).child(button("Done").h(px(36.)).bg(rgb(0x4037f7)).text_color(rgb(0xffffff)).child(icons::control(Icon::Enter)).on_click(cx.listener(|this, _, _, cx| { this.previews = false; cx.notify(); }))))).into_any_element()
     }
     fn popup_options(&self, popup: Popup) -> Vec<(String, bool)> {
         let browser = self.profile.settings_snapshot();

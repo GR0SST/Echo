@@ -427,7 +427,7 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | General → "Profile Settings…" (search engine, auto-archive, downloads) | partial (opens Profiles in the same Settings window; native capture reviewed) |
 | General → "Archive tabs after" | partial (the installed release places this dropdown in Profiles; no Command Bar interval picker) |
 | General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | missing |
-| General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | partial (observed seven-checkbox panel; choices persist, previews themselves remain missing) |
+| General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | partial (measured 422 × 370 panel, seven persisted choices, Done/Enter/Escape, modal click isolation and the bundled Help destination; site previews themselves remain missing). [Reference](PROFILES_SETTINGS_REFERENCE.md) |
 | General → Warn before quitting | partial (toggle persists; quit confirmation is not integrated) |
 | General → Automatically update my Arc | out of scope (Arc service/account dependency; no UI) |
 | General → Export Data (Spaces and tabs as Markdown, "Arc Data Export.md") | missing |

@@ -121,7 +121,7 @@ pub(super) fn install(app: &Path) {
     std::fs::write(resources.join("Acknowledgements.html"), html)
         .expect("cannot install acknowledgements");
     std::fs::copy(
-        "third_party/cef/CREDITS.html",
+        cef::sys::get_cef_dir().expect("CEF distribution path unavailable").join("CREDITS.html"),
         resources.join("ChromiumCredits.html"),
     )
     .expect("cannot install Chromium acknowledgements");
