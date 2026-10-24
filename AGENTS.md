@@ -31,10 +31,25 @@ Anything beyond that (our own features, departures from Arc) comes after.
   profiles, Pinned and Favorites tabs, tab auto-archiving, Split View,
   Little Arc, Command Bar, Peek, Boosts, Easels, Library, Air Traffic
   Control, Picture-in-Picture, Space themes and colors.
-- Echo is local-only: no Echo account, unified browser login, or cross-device
-  synchronization. These Arc services are outside the parity scope. Local
-  profiles, sessions, browsing data, and website logins remain in scope.
-  Profile creation must not display a synchronization notice or its icon.
+- Echo is a **local-only browser**. There is no cloud backend of ours.
+  **Out of scope (never build):**
+
+  - Echo/Arc accounts, browser-account sign-in, Arc Members, recovery phrases,
+    and unified browser login.
+  - Cross-device sync of Spaces, tabs, Favorites, settings or any browser data.
+  - Cloud sharing through Arc servers: Share Space/Folder/Easel/Split via
+    arc.net links, and publishing Easels/Boosts to the gallery.
+  - Referral features ("Share Arc").
+  - Arc Max, ChatGPT, "Browse for Me", Tidy Tabs and other AI features that
+    require Arc's servers.
+  - Arc's auto-update feed and telemetry.
+
+  Anything dependent on The Browser Company's servers or an Arc account is
+  permanently out of scope, never a missing parity task. Do not add UI for
+  excluded features: no placeholder buttons, account sign-in, sync notices
+  or synchronization icons.
+  Local profiles, local sessions, browsing data, website logins/passwords,
+  local import from other browsers and the system share sheet remain in scope.
 - Native testing may create new Spaces. Never delete a Space in live Arc or
   Echo sessions, including test Spaces; the owner will remove them manually.
   Run profile reassignment checks only in test Spaces; preserve user Space
@@ -43,8 +58,9 @@ Anything beyond that (our own features, departures from Arc) comes after.
   without repeated confirmation. If progress requires the owner's intervention,
   use the Ringmind skill to call and explain the specific help needed.
 - The full list of differences from Arc (built from the Arc 1.169.0 bundle)
-  is `docs/ARC_PARITY.md`, with statuses done / partial / missing. Take tasks
-  from there and update the row's status in the same change that closes it.
+  is `docs/ARC_PARITY.md`, with statuses done / partial / missing / out of scope.
+  Take in-scope tasks from there and update the row's status in the same change
+  that closes it.
 
 ## Platforms and language
 

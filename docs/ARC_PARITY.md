@@ -25,12 +25,24 @@ reference](https://start.arc.net/command-bar-actions) and [release notes](https:
 Easels are left out of the comparison by the owner's decision. Notes (Arc's
 documents) are mentioned once.
 
-Echo is local-only by the owner's decision (2026-10-23). Browser accounts,
-unified browser login, cross-device sync, recovery phrases, and their settings
-and notifications are excluded from this plan. Local profiles, website logins,
-and session persistence remain in scope.
+Echo is a **local-only browser** by the owner's decision. There is no
+Echo/Arc account, browser-account sign-in, unified browser login, cross-device
+sync or cloud backend of ours. Anything dependent on The Browser Company's
+servers or an Arc account is permanently out of scope: Arc Members and account
+recovery; syncing Spaces, tabs, Favorites or settings; arc.net cloud sharing of
+Spaces/Folders/Easels/Splits; publishing Easels/Boosts to the gallery; "Share
+Arc" referrals; Arc Max, ChatGPT, "Browse for Me", Tidy Tabs and other AI
+features requiring Arc's servers; Arc's auto-update feed and telemetry.
+Do not add UI for these features, including placeholder buttons, sync notices
+or synchronization icons. Existing inert controls described below are inventory
+observations, not permission to retain or implement excluded UI.
+Local profiles, local sessions, browsing data, website logins/passwords, local
+import from other browsers and the system share sheet remain in scope.
 
-Statuses: **done**, **partial**, **missing**.
+Statuses: **done** (implemented), **partial** (local parity remains incomplete),
+**missing** (in-scope work not implemented), **out of scope** (permanently
+excluded; never build, not a parity gap). Mixed rows retain the local part's
+status and identify excluded cloud parts separately.
 
 ---
 
@@ -46,10 +58,10 @@ the menu but aren't shown; usually they are alternative shortcuts.
 |---|---|---|---|
 | About Arc | — | missing | About window with licenses (Arc's `Credits.html`) |
 | Preferences… | ⌘, | partial | Separate GPUI Settings window from the app menu, Command Bar and page shortcut; General, Profiles, Links, Shortcuts, Icon and Advanced. Stored controls and remaining integrations are detailed below |
-| Share Arc (referral link) | — | missing | Out of parity (Arc service) |
+| Share Arc (referral link) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Set as Default Browser | — | missing | Registering as the default browser, prompts |
 | Import from Another Browser… | — | missing | See "Onboarding and import" |
-| Check for Updates… | — | missing | Auto-update |
+| Check for Updates… | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Privacy Policy | — | missing | — |
 | Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
 | Quit | ⌘Q | done | No "Warn before quitting" confirmation |
@@ -65,7 +77,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | New Little Arc Window | ⌥⌘N | partial | Standalone Little Echo window and in-app shortcut; see "Little Arc" for remaining parity gaps |
 | Restore Last Closed Tab | ⇧⌘T | done | Brings the last archived tab back to its Space |
 | Open Command Bar (on the current URL) | ⌘L | done | — |
-| New Boost / Edit Boost / Boost Gallery | hidden | missing | See "Boosts" |
+| New Boost / Edit Boost / Boost Gallery | hidden | missing | Local creation/editing remains missing; Boost Gallery and cloud publishing are out of scope. See "Boosts" |
 | New Profile | — | partial | Local name/Space-assignment sheets and menu/Command Bar routes work; exact visual states and Settings entry remain incomplete |
 | New Note | ⌃⇧N | missing | Notes (Arc Notes) |
 | New Note (in Split) | ⌃⌥N (hidden) | missing | — |
@@ -137,7 +149,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Tab… | ⌘T | done | — |
-| New ChatGPT Message… | ⌥⌘G (hidden) | missing | Arc Max feature |
+| New ChatGPT Message… | ⌥⌘G (hidden) | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Join Meeting (link to the next meeting) | ⌃⌘J (hidden) | missing | — |
 | Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
 | Pin/Unpin Tab | ⌘D | done | — |
@@ -198,7 +210,7 @@ Folder duplication follows the right-click action documented in the
 | **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL). Reset to Original URL and Replace Pinned URL with Current are available in the Command Bar; section collapses from the Space name without a separate Pinned header |
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
 | "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | done | "↓ Clear" appears at the right of the Pinned/Today divider on sidebar hover; preserves Pinned and other Spaces |
-| "Tidy Tabs": AI grouping of Today by topic | — | missing | The "Tidy" button is shown next to Clear on sidebar hover but does nothing yet (Arc Max feature, can wait) |
+| "Tidy Tabs": AI grouping of Today by topic | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | partial | Persistent ordered nested Pinned tree with GPUI creation, rename, icons, collapse/expand and folder/tab context menus. Move pages, complete Split Views or folder subtrees across Spaces without recreating pages; tabs and complete folder subtrees can also be dragged onto folder headers or Space icons. Hover a Space icon during a drag to reveal its folders. Invalid self/descendant or over-depth folder drops are rejected. Closed folders stay closed and reveal the active item. Reveal Tab unfolds ancestors. Turn into Space promotes the children into a new Space with the folder's name/icon, preserving page and group identities. Folder sibling insertion, previews and multi-selection remain missing; fresh visual check awaits an unlocked desktop |
 | Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | missing | — |
 | Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | partial | Drag Today, Pinned or Favorite items onto folders, Pinned/Space headers, Today headers / New Tab, or the Favorites dock, including its empty onboarding card. Drop on a row's upper/lower half to insert before/after it and adopt its section/folder; an insertion line shows the edge. Space icon drops preserve Today/Pinned (Favorites become Pinned); hovering 500ms switches Spaces so the drag can continue to a folder or row. Leaving early cancels the hover. Complete Split Views stay atomic and keep their source pane even when the destination Space had another pane selected; loaded CEF views are reused. Closed folders stay closed. The Space name also accepts nested folders at the Pinned root. Favorites can be reordered or inserted at an icon; a full dock allows sorting but rejects new items. Drops outside targets cancel without activating an inactive tab. The empty Favorites card accepts the first drop; its dismissal persists. Exact drag-after-dismiss reference states and edge auto-scroll remain unfinished |
@@ -217,7 +229,7 @@ Folder duplication follows the right-click action documented in the
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost does nothing yet; New Easel is left out |
 | "Springy" click animation on sidebar items | — | missing | — |
 | Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
-| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | — |
+| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Local archive/blocker banners remain missing; Arc update-feed banners are out of scope |
 | Media controls in the sidebar | — | missing | See "Media and PiP" |
 
 ## 3. Spaces
@@ -273,11 +285,11 @@ Folder duplication follows the right-click action documented in the
 | Split: Add Top/Bottom/Left/Right Split, Convert to Vertical/Horizontal | — | done | Command Bar actions and pane context menus; existing pages or URLs can fill up to four panes |
 | Folders: Create New Folder, Collapse/Expand All Folders | — | done | Name editor, current-Space collapse/expand, named Expand Folder / Rename Folder, Pin to <folder> and Pin to New Folder actions |
 | Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab, Reset Tab Name and Mute/Unmute All are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate works for ordinary tabs, Pinned, Favorites and entire Split Views, creating independent page identities |
-| Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
+| Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining local actions need their features. Check for Updates via Arc's feed is out of scope |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
 | Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | partial | Five local tab suggestions with contextual Space/Switch to Tab hints. Feature/help links and Arc's complete recency/ranking policy remain missing. Arc-account, Max and ChatGPT promotion rows are excluded |
-| ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | missing | AI features, lower priority |
+| ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 
 ## 6. Context menus
 
@@ -289,11 +301,11 @@ in code, so some were reconstructed from translator comments (?).
 |---|---|---|
 | **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | partial | Captured Arc 2026-10-24: Today ends with Archive Tab and always-visible Archive Tabs Below (disabled when empty); Pinned ends with Remove Pin; Favorites omit Customize Page and use Remove Favorite. Inactive items offer Open in Split View; the active item offers Add Split View. Edit Pinned Page offers Replace Pinned URL with Current and Edit…. Removed invented top-level Pin/Unpin/Add to Favorites and relative archive entries. Remove Pin archives the item; the sidebar minus button still resets/unloads it. Share, unread badges, playback-dependent Mute enablement, Move to submenu, custom pinned-URL editing and full native menu appearance remain unfinished |
 | **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | missing | — |
-| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | partial | Top-level menu now follows captured Arc sections: Share Folder…, New Nested Folder…, Turn "name" into Space, Change Icon…, Rename…, Duplicate, Move to, Delete for an empty folder / Archive Folder otherwise. Removed extra collapse/expand and copy-link rows. Rename, the 272 × 144 px folder icon picker with 24 symbols, nested creation, duplicate, conversion and empty deletion work. Move to still opens the existing destination picker; its native submenu, Share and nonempty-folder archiving remain unfinished |
+| **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | partial | Top-level menu now follows captured Arc sections: Share Folder…, New Nested Folder…, Turn "name" into Space, Change Icon…, Rename…, Duplicate, Move to, Delete for an empty folder / Archive Folder otherwise. Removed extra collapse/expand and copy-link rows. Rename, the 272 × 144 px folder icon picker with 24 symbols, nested creation, duplicate, conversion and empty deletion work. Move to still opens the existing destination picker; its native submenu, Share and nonempty-folder archiving remain unfinished Share Folder via arc.net is out of scope; no placeholder UI. |
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
-| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Reference layout: Share Split View…, Separate All Tabs, Add Tab…, Convert orientation, a "Tab Options" header with one submenu per pane (Separate from Split View, Share, Mute, Copy Link (as Markdown), Archive Item), Change Icon…, Rename…, Duplicate, Move to, Archive Item and Archive Tabs Below. Share has no action yet |
+| **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Reference layout: Share Split View…, Separate All Tabs, Add Tab…, Convert orientation, a "Tab Options" header with one submenu per pane (Separate from Split View, Share, Mute, Copy Link (as Markdown), Archive Item), Change Icon…, Rename…, Duplicate, Move to, Archive Item and Archive Tabs Below. Cloud Share Split View via arc.net is out of scope; no placeholder UI. Local pane Share uses the system share sheet and remains incomplete |
 | **Split View pane** (control menu): Move, Add Split, Separate Tab from Split, Convert orientation, Share Split View… | partial | Fresh Arc inspection: axis-specific Move backward/forward (unavailable edge stays visible), Add forward/backward Split, Separate Tab from Split, Convert orientation, Share Split View…. GPUI controls target the clicked pane and disable adding at four; fixed vector menu diagrams. Share and exact material/placement fidelity remain |
-| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | partial | Opens from headers, dock icons and empty sidebar space, in the reference order. Change Space Icon…, Rename Space…, Edit Theme Color… and New Folder work; Set Profile, Live Folders, Share Space…, Export into Folder, Manage Spaces… and Delete Space are shown without actions yet. Show/Hide Space Header moved to the Command Bar and Spaces menu |
+| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | partial | Opens from headers, dock icons and empty sidebar space, in the reference order. Change Space Icon…, Rename Space…, Edit Theme Color… and New Folder work; Set Profile, Live Folders, Share Space…, Export into Folder, Manage Spaces… and Delete Space are shown without actions yet. Show/Hide Space Header moved to the Command Bar and Spaces menu Share Space via arc.net is out of scope; no placeholder UI. |
 | **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |
 | **Download**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | missing | — |
 | **Tab group header**: Remove header | missing | — |
@@ -340,7 +352,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 | Separate Page / Separate All Tabs / Expand Current Split | — | partial | All three actions work. Expand Current Split preserves pane identities and focus in both axes, keeps other panes visible, fits small windows and persists sizes. GPUI and native CEF checks passed; expansion animation fidelity remains |
 | Focus pane N / next / previous | (?) | done | Command Bar actions and clickable GPUI pane headers |
 | Split View title ("Split view title text field placeholder") | — | done | Shared sidebar item title; rename/reset and archive search preserve it |
-| Share Split View (link) | — | missing | Arc service |
+| Share Split View (link) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 
 ## 9. Little Arc
 
@@ -377,7 +389,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 | Feature | Status | What's missing |
 |---|---|---|
 | Profile: separate history, cookies, passwords, extensions | partial | Profile-owned history/Favorites and persistent CEF contexts are isolated; cookies, localStorage and IndexedDB survived a full process restart. Password/autofill and extension management remain unimplemented |
-| Creating a profile: name and which Spaces use it | partial | Atomic local creation and Space assignment work; visual matching and Settings entry remain incomplete. The synchronization notice is intentionally omitted at the owner's request |
+| Creating a profile: name and which Spaces use it | partial | Atomic local creation and Space assignment work; visual matching and Settings entry remain incomplete. Synchronization notices and icons are permanently out of scope |
 | Changing a Space's profile, with warnings ("Switch to your … Profile?") | partial | Loaded-page switching preserves the Today URL and recreates the document in the selected storage; empty-window warning policy and final visual matching remain unresolved |
 | Deleting a profile by typing its name, "Delete unused Profiles". The default profile can't be deleted | missing | — |
 | Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | missing | — |
@@ -388,28 +400,31 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 Reference tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account,
 Icon. Echo excludes Account and sync. There is also an internal Staff tab.
 The separate 684 × 650 GPUI Settings window follows the installed Arc reference.
-Account, synchronization and Max are intentionally excluded. Arc artwork and
-referral icon unlocks are not distributed. Controls for features without an
-implementation persist intent only; action-only routes without backing behavior
+Account, synchronization and Max are permanently out of scope; no UI may be added for them. Arc artwork and
+referral icon unlocks are permanently out of scope. Controls for features without an
+implementation persist intent only (this does not authorize excluded UI); action-only routes without backing behavior
 remain unavailable. The installed release puts Auto-Archive in Profiles, not
 General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.png` and `echo_<Tab>.png`. Visual parity remains partial: toolbar vector shapes, the Links illustration, materials and unavailable-action appearance still differ. Native inspection covers dark macOS only; Windows, Linux and light appearance are unverified. The post-reboot check verified all six tab windows, native Cmd+W, and the persisted 7-day archive policy; the full four-thread test suite passed.
 
 | Tab → option | Status |
 |---|---|
+| Account → Echo/Arc account, browser-account sign-in, Arc Members, unified browser login, recovery phrases | out of scope |
+| Cross-device sync → Spaces, tabs, Favorites, settings; sync settings/notices/icons | out of scope |
+| Arc telemetry and our own cloud backend | out of scope |
 | General → Arc is not the default browser ("Set as default" button) | missing |
 | General → "Profile Settings…" (search engine, auto-archive, downloads) | partial (opens Profiles in the same Settings window; native capture reviewed) |
 | General → "Archive tabs after" | partial (the installed release places this dropdown in Profiles; no Command Bar interval picker) |
 | General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | missing |
 | General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | partial (observed seven-checkbox panel; choices persist, previews themselves remain missing) |
 | General → Warn before quitting | partial (toggle persists; quit confirmation is not integrated) |
-| General → Automatically update my Arc | partial (toggle persists; updater remains missing) |
+| General → Automatically update my Arc | out of scope (Arc service/account dependency; no UI) |
 | General → Export Data (Spaces and tabs as Markdown, "Arc Data Export.md") | missing |
 | Profiles → profile list, creating and deleting, Default Search Engine, Include search engine suggestions, Search Settings…, auto-archive, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | partial (real profile inventory and existing creation sheet; search engine and per-profile archive policy wired. Suggestions control the Command Bar; document/download choices persist. Deletion, search management and data-page routes remain unavailable) |
 | Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | partial (reference controls persist intent; Little Arc, Peek and Air Traffic Control integrations remain missing) |
 | Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | partial (searchable observed shortcut catalog, with local Space names. Recording, conflict/priority editing, reset, extension routes and the Favorites-ordering menu remain missing) |
-| Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | missing (AI, lower priority) |
+| Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | out of scope (Arc service/account dependency; no UI) |
 | Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture when leaving a tab with video, dragging the window by the top of the page, Shared Quotes, Show full URL when Toolbar is enabled, restoring windows on launch, Haptic feedback when reordering, Play Arc sound effects | partial (observed three-group layout with nine persisted toggles. Engine/platform integrations and action buttons remain unavailable) |
-| Icon → alternative app icons (unlocked by referrals) | partial (current Echo icon shown; proprietary Arc artwork and referral service intentionally excluded, alternative Echo icons not implemented) |
+| Icon → alternative app icons (unlocked by referrals) | partial (current Echo icon shown; proprietary Arc artwork and referral service permanently out of scope (no UI), alternative Echo icons not implemented) |
 
 ## 14. Library (⇧⌘L)
 
@@ -430,7 +445,8 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | Zap: pick an element to hide (Pick Selector, "Zap all related elements") | missing |
 | Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | missing |
 | Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | missing |
-| Sharing and installing someone else's Boost ("Add this Boost to Arc?"), Boost Gallery | missing (Arc service) |
+| Share Space/Folder/Easel via arc.net; publish Easels/Boosts to the gallery | out of scope |
+| Sharing and installing someone else's Boost ("Add this Boost to Arc?"), Boost Gallery | out of scope (Arc service/account dependency; no UI) |
 
 ## 16. Page, top bar and Site Control Center
 
@@ -477,7 +493,7 @@ are implemented for copied links; the remaining notifications follow below.
 | Cannot Add New Pane (Split View) | done |
 | Import: Now importing… / Success / partial / failure | missing |
 | Translation: Translated to %@ / back to %@ / error | missing |
-| Updates: update pending / failed / in progress | missing |
+| Updates: update pending / failed / in progress | out of scope (Arc service/account dependency; no UI) |
 | Battery Saver Mode Activated/Deactivated | missing |
 | Shortcut tips ("Copy links faster by pressing…", "… to easily show and hide your Sidebar!", Site Search) | missing |
 | Screenshot Copied to Clipboard, Capture in Progress… | missing |
@@ -488,7 +504,7 @@ are implemented for copied links; the remaining notifications follow below.
 |---|---|---|
 | Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | missing | — |
 | Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | missing | — |
-| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | — |
+| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | Local theme, Favorites, blocker and default-browser steps remain missing. Arc Max, Arc Members/member card and browser-account sign-in are out of scope |
 | "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | missing | — |
 | "Essential Keyboard Shortcuts" window (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | missing | — |
 | Empty state: "Open your first tab. Click New Tab or press ⌘T…" | partial | We show a "No tab open / Press ⌘T to open a new tab" placeholder |
@@ -530,18 +546,20 @@ are implemented for copied links; the remaining notifications follow below.
 | Battery Saver mode | missing | — |
 | Task Manager, trace recording | missing | — |
 | Shared Quotes (link to the selected text) | missing | — |
-| Arc Max (AI: Ask on Page, Tidy Titles and Downloads, 5-Second Previews, ChatGPT) | missing | Lower priority than core parity |
+| Arc Max (AI: Ask on Page, Tidy Titles and Downloads, 5-Second Previews, ChatGPT) | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 
 ---
 
 ## Summary
 
 Counted from the table rows above, including rows marked (?). Reference
-rows without a status aren't counted.
+rows without a status aren't counted. **Out of scope** rows are permanent
+exclusions, not outstanding work; mixed rows count only their local status.
 
-- **done**: 71
-- **partial**: 61
-- **missing**: 156
+- **done**: 65
+- **partial**: 109
+- **missing**: 113
+- **out of scope**: 15
 
 ### Biggest gaps (by importance for parity)
 
