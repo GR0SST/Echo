@@ -3,6 +3,7 @@ mod automation;
 mod native;
 mod quit;
 mod find;
+mod max;
 mod toast;
 mod archive;
 mod command_suggestions;

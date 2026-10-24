@@ -1390,3 +1390,35 @@ contracts, official OAuth sources and validation limits are documented in
 credential stores have not been verified; the macOS isolated keychain round-trip
 and offline transport/identity tests passed. Feature request hooks are separate
 follow-up changes; switches alone are not complete Max feature parity.
+
+
+### Tidy Tabs reference limits — 2026-10-25
+
+In guarded Echo Test windows, Tidy appears beside Clear above six Today items;
+hover text is “Organize Today Tabs”. Two local-page requests and a public-page
+request (Rust Book/Cargo/serde, Pasta/Bread, Paris/Rome) produced no grouping or
+undo entry, including a 29-second wait. The seven fixture tabs were individually
+archived after each session, preserving the two existing tabs and all Spaces.
+No existing successful Tidy capture was found in the shared parity evidence.
+The owner authorized a Today-folder fallback and explicitly partial result
+visuals. `target/parity/arc-max/arc_tidy_public_hover.png` and
+`arc_tidy_public_result.png` record the reference; successful Arc group geometry,
+header context menu and feedback remain unverified.
+
+Echo conditionally applies strict JSON grouping only to the captured Today
+items/profile, rejecting unknown/duplicate IDs, changed titles/URLs/order,
+feature disablement and provider changes. Grouping retains split panes and
+native page identities. New tabs and later page titles survive undo/redo; moved
+or closed tabs are never resurrected. Original folder geometry is provisional.
+
+Native Echo validation used one synthetic credential entered through Max settings
+and a loopback compatible provider. Exactly one authorized streaming request
+contained the nine fixture tabs; two folders/five grouped members persisted,
+all nine pages remained, collapse and ⌘Z/⇧⌘Z worked, and the retained Rome page
+kept its position. The generated OS credential was removed afterward. Inspected
+captures: `echo_tidy_hover.png`, `echo_tidy_groups.png`, `echo_tidy_folded.png`,
+`echo_tidy_undo.png` and `echo_tidy_redo.png`, beside the Arc public-page captures
+in `target/parity/arc-max/`. The reference produced no successful groups, so
+`arc_tidy_public_result.png` / `echo_tidy_groups.png` is behavioral evidence,
+not a claim of matching group-result visuals. Fixture Favorites/sidebar widths
+also differ.

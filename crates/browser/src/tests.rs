@@ -1685,7 +1685,7 @@ fn clear_button_archives_background_today_without_touching_the_active_page_or_pi
     let sidebar = cx.debug_bounds("sidebar").unwrap();
     move_mouse(cx, f32::from(sidebar.center().x), f32::from(sidebar.center().y));
     assert!(view.read_with(cx, |w, _| w.sidebar_hovered));
-    assert!(cx.debug_bounds("tidy-today").is_some());
+    assert!(!view.read_with(cx, |w, _| w.browser.can_tidy_tabs(w.browser.space().id)));
     click(cx, "clear-today");
     assert_eq!(today_urls(&view, cx), vec!["https://www.chromium.org".to_string()]);
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().pinned.len()), 2);
@@ -10570,4 +10570,74 @@ fn rereading_import_data_discards_exclusions_from_the_previous_tree(cx:&mut Test
     click(&mut panel,"import-bookmark-0.1");click(&mut panel,"setup-back");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
     click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();
     view.read_with(cx,|v,_|{assert!(v.setup.is_none());assert_eq!(v.browser.space().pinned.len(),2);});
+}
+
+mod max_feature_tests {
+    use super::*;
+    use echo_ai::{ProviderConfig, Provider, client::{AiError,Cancellation,ChatRequest},credentials::CredentialStore};
+    use std::{sync::{Arc,Mutex},task::{Poll,Waker}};
+    #[derive(Default)]
+    struct Reply(Mutex<(Option<Result<String,AiError>>,Option<Waker>)>);
+    impl Reply {
+        fn complete(&self,answer:Result<String,AiError>){let mut state=self.0.lock().unwrap();state.0=Some(answer);if let Some(waker)=state.1.take(){waker.wake();}}
+    }
+    struct Pending(Arc<Reply>);
+    impl std::future::Future for Pending {
+        type Output=Result<String,AiError>;
+        fn poll(self:std::pin::Pin<&mut Self>,cx:&mut std::task::Context<'_>)->Poll<Self::Output>{
+            let mut state=self.0.0.lock().unwrap();if let Some(reply)=state.0.take(){Poll::Ready(reply)}else{state.1=Some(cx.waker().clone());Poll::Pending}
+        }
+    }
+    #[derive(Default)]
+    struct ProviderRequests(Mutex<Vec<(Vec<serde_json::Value>,Arc<Reply>)>>);
+    impl crate::max::Inference for ProviderRequests {
+        fn start(&self,config:ProviderConfig,request:ChatRequest,_:Arc<dyn CredentialStore>,_:Cancellation,executor:&gpui::BackgroundExecutor)->gpui::Task<Result<String,AiError>>{
+            assert_eq!(config.model,"local-model");assert!(request.instructions.contains("untrusted"));
+            let tabs:Vec<serde_json::Value>=serde_json::from_str(&request.messages[0].text).unwrap();
+            let reply=Arc::new(Reply::default());self.0.lock().unwrap().push((tabs,reply.clone()));executor.spawn(Pending(reply))
+        }
+    }
+    fn enable(view:&Entity<BrowserWindow>,cx:&mut gpui::VisualTestContext){
+        view.update(cx,|w,cx|{
+            w.edit_profile(|b|{b.settings.max.set_enabled(echo_ai::MaxFeature::TidyTabs,true);b.settings.max.provider=ProviderConfig{provider:Provider::OpenAiCompatible,base_url:"http://127.0.0.1:8129/v1".into(),model:"local-model".into(),api_key_id:"opaque-reference".into(),..Default::default()};});
+            w.edit_browser(|b|{while b.space().today.len()<7{let i=b.space().today.len();b.new_tab(format!("https://test.example/{i}"),std::time::SystemTime::UNIX_EPOCH);}});cx.notify();
+        });cx.run_until_parked();
+    }
+    fn answer(requests:&ProviderRequests,index:usize)->(Arc<Reply>,String){
+        let requests=requests.0.lock().unwrap();let (tabs,reply)=&requests[index];
+        (reply.clone(),serde_json::json!({"groups":[{"title":"Rust","tabs":[tabs[0]["id"],tabs[2]["id"]]},{"title":"Cooking","tabs":[tabs[1]["id"],tabs[3]["id"]]}]}).to_string())
+    }
+    #[gpui::test]
+    fn tidy_click_groups_today_folds_rows_and_undo_preserves_pages(cx:&mut TestAppContext){
+        let(view,cx,fake)=open_pages(cx);let requests=Arc::new(ProviderRequests::default());
+        cx.update(|_,cx|cx.set_global(crate::max::InferenceService(requests.clone())));enable(&view,cx);
+        let before=view.read_with(cx,|w,_|w.browser.all_tabs().map(|t|t.id).collect::<std::collections::HashSet<_>>());fake.take_calls();
+        click(cx,"tidy-today");assert_eq!(requests.0.lock().unwrap().len(),1);
+        let(reply,json)=answer(&requests,0);reply.complete(Ok(json));cx.run_until_parked();
+        let groups=view.read_with(cx,|w,_|w.browser.today_groups(w.browser.space().id));assert_eq!(groups.len(),2);
+        modifier_click(cx,test_selector(format!("tab-{}",groups[0].tabs[0].get())),Modifiers {platform:true,..Modifiers::none()});
+        click(cx,test_selector(format!("today-group-{}",groups[0].id)));
+        view.read_with(cx,|w,_|{assert!(w.browser.today_groups(w.browser.space().id)[0].collapsed);assert!(!w.sidebar_selection_items().contains(&groups[0].tabs[0]));});
+        cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+        view.read_with(cx,|w,_|{assert!(w.browser.today_groups(w.browser.space().id).is_empty());assert_eq!(w.browser.all_tabs().map(|t|t.id).collect::<std::collections::HashSet<_>>(),before);});
+        cx.simulate_keystrokes("cmd-shift-z");cx.run_until_parked();view.read_with(cx,|w,_|assert_eq!(w.browser.today_groups(w.browser.space().id).len(),2));
+        assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(..)|Call::Navigate(..)|Call::Close(..))),"grouping must retain native pages");
+    }
+    #[gpui::test]
+    fn tidy_late_navigation_and_provider_signout_answers_are_inert(cx:&mut TestAppContext){
+        let(view,cx)=open(cx);let requests=Arc::new(ProviderRequests::default());cx.update(|_,cx|cx.set_global(crate::max::InferenceService(requests.clone())));enable(&view,cx);
+        click(cx,"tidy-today");view.update(cx,|w,cx|{w.edit_browser(|b|{let id=b.space().today[0].id;b.navigate(id,"https://changed.example");});cx.notify();});
+        let(reply,json)=answer(&requests,0);reply.complete(Ok(json));cx.run_until_parked();
+        view.read_with(cx,|w,_|assert!(w.browser.today_groups(w.browser.space().id).is_empty()));
+        click(cx,"tidy-today");view.update(cx,|w,cx|{w.edit_profile(|b|b.settings.max.provider.authentication=echo_ai::Authentication::Disconnected);cx.notify();});
+        let(reply,json)=answer(&requests,1);reply.complete(Ok(json));cx.run_until_parked();view.read_with(cx,|w,_|assert!(w.browser.today_groups(w.browser.space().id).is_empty()));
+    }
+    #[gpui::test]
+    fn tidy_appears_only_after_six_today_items_and_empty_response_keeps_tabs(cx:&mut TestAppContext){
+        let(view,cx)=open(cx);let requests=Arc::new(ProviderRequests::default());cx.update(|_,cx|cx.set_global(crate::max::InferenceService(requests.clone())));
+        view.update(cx,|w,cx|{w.edit_profile(|b|b.settings.max.set_enabled(echo_ai::MaxFeature::TidyTabs,true));w.edit_browser(|b|while b.space().today.len()<6 {b.new_tab("https://six.example",std::time::SystemTime::UNIX_EPOCH);});cx.notify();});cx.run_until_parked();
+        assert!(cx.debug_bounds("tidy-today").is_none());enable(&view,cx);assert!(cx.debug_bounds("tidy-today").is_some());
+        let before=today_urls(&view,cx);click(cx,"tidy-today");let(reply,_)=answer(&requests,0);reply.complete(Ok("{\"groups\":[]}".into()));cx.run_until_parked();
+        assert_eq!(today_urls(&view,cx),before);assert_eq!(view.read_with(cx,|w,_|w.toast.as_ref().map(|t|t.message.clone())).as_deref(),Some("No tab groups found"));
+    }
 }

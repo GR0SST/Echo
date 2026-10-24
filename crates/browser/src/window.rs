@@ -616,6 +616,7 @@ pub struct BrowserWindow {
     pub(crate) profile: crate::profile::ProfileBinding,
     pub(crate) sidebar_navigation: crate::sidebar_navigation::SidebarNavigation,
     pub(crate) mini_player: crate::mini_player::MiniPlayer,
+    pub(crate) max: crate::max::State,
     pub(crate) sidebar_debug_namespace: Option<String>,
     pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
@@ -880,6 +881,7 @@ impl BrowserWindow {
             profile,
             sidebar_navigation,
             mini_player: Default::default(),
+            max: Default::default(),
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
@@ -2387,7 +2389,7 @@ impl BrowserWindow {
 
     pub(crate) fn scroll_to_today_item(&mut self, tab: TabId, cx: &mut Context<Self>) {
         let anchor = self.browser.item_anchor(tab);
-        if let Some(index) = self.browser.space().today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor) {
+        if let Some(index) = self.today_row_index(self.browser.space().id, anchor) {
             self.sidebar_scrolls.entry(self.browser.space().id).or_default().pending.set(Some((Section::Today, index)));
         }
         cx.notify();
@@ -2403,14 +2405,19 @@ impl BrowserWindow {
         if !self.sidebar_visible { self.toggle_sidebar(cx); }
         self.close_floating_sidebar(cx);
         for folder in self.browser.folder_ancestors(active) { self.edit_browser(|browser| browser.set_folder_collapsed(folder, false)); }
+        let groups = self.browser.today_groups(self.browser.space().id);
+        let active_anchor = self.browser.item_anchor(active);
+        for group in groups.into_iter().filter(|g|g.collapsed && g.tabs.contains(&active_anchor)) {
+            let space=self.browser.space().id;
+            self.edit_browser(|b|b.toggle_today_group(space,group.id));
+        }
         let anchor = self.browser.item_anchor(active);
         let space = self.browser.space();
         let section = if space.pinned.iter().any(|tab| tab.id == anchor) { Some(Section::Pinned) }
             else if space.today.iter().any(|tab| tab.id == anchor) { Some(Section::Today) } else { None };
         if let Some(section) = section {
-            let tabs = if section == Section::Pinned { &space.pinned } else { &space.today };
             let index = if section == Section::Pinned { self.browser.pinned_rows(space.id, false).iter().position(|row| self.browser.pinned_item_tab(space.id, row.item) == Some(anchor)) }
-                else { tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).position(|tab| tab.id == anchor) };
+                else { self.today_row_index(space.id, anchor) };
             let scrolls = self.sidebar_scrolls.entry(space.id).or_default();
             if let Some(index) = index { scrolls.pending.set(Some((section, index))); }
             if section == Section::Pinned { self.edit_browser(|browser| browser.spaces[browser.active_space].pinned_collapsed = false); }
@@ -3373,24 +3380,18 @@ impl BrowserWindow {
         let space_id = space.id;
         let hue = space.accent_hue() / 360.0;
         let current = index == self.browser.active_space;
-        let tabs = |tabs: &[Tab], section, cx: &mut Context<Self>| -> Vec<AnyElement> {
-            tabs.iter().filter(|tab| !self.browser.is_split_secondary(tab.id))
-                .map(|tab| {
-                    let active = space.active_tab.is_some_and(|id| self.browser.item_anchor(id) == tab.id);
-                    self.render_tab(tab, section, active, hue, cx).into_any_element()
-                })
-                .collect()
-        };
         let pinned = self.render_folder_rows(space.id, hue, cx);
-        let today = tabs(&space.today, Section::Today, cx);
+        let today = self.render_today_rows(space.id, hue, cx);
         let reveal = self.pinned_reveals.get(&space.id)
             .filter(|reveal| reveal.collapsed == space.pinned_collapsed)
             .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
         let pinned_height = pinned.len() as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
         let header_group = SharedString::from(format!("space-header-{index}"));
         let has_today = !space.today.is_empty();
-        let today_actions = has_today && self.sidebar_hovered;
-        let line_end = TODAY_ACTIONS_WIDTH + 11.;
+        let can_tidy = self.browser.can_tidy_tabs(space.id);
+        let today_actions = has_today && self.sidebar_hovered && !self.max.is_tidying(space.id);
+        let action_width = if can_tidy { TODAY_ACTIONS_WIDTH } else { 44. };
+        let line_end = action_width + 11.;
         let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
         let icon_picker_open = self.command_bar.as_ref().is_some_and(|bar| bar.target == Target::Icon(crate::icons::IconTarget::Space(space_id)));
 
@@ -3471,13 +3472,13 @@ impl BrowserWindow {
                         let shown = if today_actions { delta } else { 1. - delta };
                         line.right(px(10. + line_end * shown))
                     })))
-                .when(!space.today.is_empty(), |this| this.child(hover_fade(div().absolute().right(px(10.)).top_0().h_full().w(px(TODAY_ACTIONS_WIDTH))
+                .when(!space.today.is_empty(), |this| this.child(hover_fade(div().absolute().right(px(10.)).top_0().h_full().w(px(action_width))
                     .flex().items_center().justify_end()
                     .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0., 0., ink, 0.35))
-                    .child(div().id(("tidy-today", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "tidy-today".into())())))
+                    .when(can_tidy, |this| this.child(div().id(("tidy-today", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "tidy-today".into())())))
                         .flex().items_center().gap(px(3.)).hover(move |s| s.text_color(hsla(0., 0., ink, 0.6)))
-                        .child(crate::icons::control_sized(crate::icons::Icon::Tidy, 12.)).child("Tidy"))
-                    .child(div().mx(px(8.)).w(px(1.)).h(px(10.)).bg(hsla(0., 0., ink, 0.25)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.tidy_today(space_id, cx)))
+                        .child(crate::icons::control_sized(crate::icons::Icon::Tidy, 12.)).child("Tidy").mr(px(16.))))
                     .child(div().id(("clear-today", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "clear-today".into())())))
                         .flex().items_center().gap(px(2.)).hover(move |s| s.text_color(hsla(0., 0., ink, 0.6)))
                         .on_click(cx.listener(move |this, _, _, cx| {

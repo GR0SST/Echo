@@ -162,7 +162,7 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { Batch(Vec<SidebarEdit>), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
+enum SidebarEdit { Batch(Vec<SidebarEdit>), Tidy(crate::max::TidyEdit), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
@@ -177,6 +177,7 @@ impl SidebarEdit {
                 if !apply(&mut edits.clone(), &mut browser.clone()) { return false; }
                 apply(edits, browser)
             }
+            Self::Tidy(edit) => edit.apply(redo, browser),
             Self::PeekClose(_) => false,
             Self::Theme { space, before, after } => {
                 let (source, target) = if redo { (&*before, &*after) } else { (&*after, &*before) };
@@ -208,6 +209,10 @@ impl SidebarEdit {
 pub(crate) struct SidebarHistory { undo: Vec<SidebarEdit>, redo: Vec<SidebarEdit> }
 
 impl SidebarHistory {
+    pub(crate) fn record_tidy(&mut self, space: SpaceId, profile: crate::UserProfileId, before:Vec<crate::max::TodayGroup>, after:Vec<crate::max::TodayGroup>, before_order:Vec<TabId>, after_order:Vec<TabId>) {
+        self.record(SidebarEdit::Tidy(crate::max::TidyEdit {space,profile,before,after,before_order,after_order}));
+    }
+
     pub(crate) fn record_theme(&mut self, space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme>) {
         if before != after { self.record(SidebarEdit::Theme { space, before, after }); }
     }
@@ -263,10 +268,10 @@ impl Browser {
         else { self.sidebar_history.undo.push(edit); false }
     }
     pub fn sidebar_undo_action(&self) -> Option<&'static str> {
-        match self.sidebar_history.undo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
+        match self.sidebar_history.undo.last() { Some(SidebarEdit::Tidy(_)) => Some("Tidy Tabs"), Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
     }
     pub fn sidebar_redo_action(&self) -> Option<&'static str> {
-        match self.sidebar_history.redo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
+        match self.sidebar_history.redo.last() { Some(SidebarEdit::Tidy(_)) => Some("Tidy Tabs"), Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
     }
 
     /// The UI owns the retained live renderer; the core only orders its opaque

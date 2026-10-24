@@ -17,6 +17,7 @@ pub mod splits;
 pub mod bulk_archive;
 pub mod preferences;
 pub mod settings;
+pub mod max;
 pub mod routing;
 pub mod site_settings;
 pub mod icons;
@@ -112,6 +113,8 @@ pub struct Space {
     #[serde(default)]
     pub pinned_collapsed: bool,
     pub today: Vec<Tab>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub today_groups: Vec<max::TodayGroup>,
     pub active_tab: Option<TabId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub splits: Vec<splits::SplitView>,
@@ -273,6 +276,7 @@ impl Browser {
         self.repair_profile_tab_ids();
         self.repair_splits();
         self.repair_folders();
+        self.repair_today_groups();
         for space in &mut self.spaces {
             if space.active_tab.is_some_and(|id| !space.tabs().any(|tab| tab.id == id) && !self.profiles[&space.user_profile_id].favorites.iter().any(|tab| tab.id == id)) {
                 space.active_tab = None;
@@ -316,6 +320,7 @@ impl Browser {
             folders: Vec::new(),
             pinned_collapsed: false,
             today: Vec::new(),
+            today_groups: Vec::new(),
             active_tab: None,
             splits: Vec::new(),
         });

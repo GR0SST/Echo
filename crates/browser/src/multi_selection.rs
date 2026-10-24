@@ -15,7 +15,7 @@ impl BrowserWindow {
     fn selectable_sidebar_items(&self) -> Vec<TabId> {
         self.browser.pinned_rows(self.browser.space().id, false).into_iter()
             .filter_map(|row| self.browser.pinned_item_tab(self.browser.space().id, row.item).filter(|_| !matches!(row.item, PinnedItem::Folder(_))))
-            .chain(self.browser.space().today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| tab.id)).collect()
+            .chain(self.browser.today_rows(self.browser.space().id).into_iter().filter_map(|row|match row {browser_core::max::TodayRow::Tab(id)=>Some(id),browser_core::max::TodayRow::Group(_)=>None})).collect()
     }
     pub(crate) fn sidebar_selection_items(&self) -> Vec<TabId> {
         if self.sidebar_selection.space != Some(self.browser.space().id) { return vec![]; }
