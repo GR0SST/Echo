@@ -17,6 +17,7 @@ mod retirement;
 mod native_requests;
 pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
+mod audio;
 mod editing;
 mod boosts;
 mod boost_picker;
@@ -75,6 +76,7 @@ pub struct Shortcut {
 pub enum Event {
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
+    AudioStateChanged { view: ViewId, audible: bool },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     Focused { view: ViewId },
     EditFocusChanged { view: ViewId, editable: bool },
@@ -103,6 +105,7 @@ pub enum Event {
 #[derive(Debug)]
 enum RawEvent {
     BoostZap(String),
+    Audio(bool),
     Title(String),
     Favicon(String, Vec<u8>),
     Focused,
@@ -160,6 +163,7 @@ thread_local! {
 
 struct Runtime {
     root: PathBuf,
+    audio: Option<audio::Output>,
     persistent: storage::PersistentContexts<RequestContext>,
     private: std::cell::RefCell<std::rc::Weak<RequestContext>>,
     readiness: storage::ContextReadiness<RequestContext>,
@@ -344,6 +348,7 @@ impl Engine {
 
             let runtime = std::rc::Rc::new(Runtime {
                 root: root_cache,
+                audio: audio::Output::open(),
                 lifecycle: shutdown::Lifecycle::default(),
                 persistent: storage::PersistentContexts::default(),
                 private: std::cell::RefCell::new(std::rc::Weak::new()),
@@ -674,12 +679,12 @@ impl Engine {
         let boost_state=if let Some((_,boosts))=self.boosts.iter().find(|(context,_)|std::rc::Weak::ptr_eq(context,&weak)){boosts.clone()}else{let state=Arc::new(Mutex::new(Vec::<SiteBoost>::new()));self.boosts.push((weak,state.clone()));state};
         let mut extra=if role==ViewRole::Page { boosts::extra(&boost_state.lock().unwrap()) } else {None};
         let policy = Arc::new(Mutex::new(PeekPolicy::default()));
-        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone());
+        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture));
         if let ViewRole::Inspector(id) = role {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default());
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default(), None);
         }
         let prepared_downloads = if role == ViewRole::Page {
             if let Some(owner) = download_owner {
@@ -698,7 +703,7 @@ impl Engine {
         if let Some(prepared) = &prepared_downloads {
             client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None,
                 runtime.lifecycle.queue.clone(), Some(prepared.registration.handler()),
-                Some(prepared.registration.gate()), policy.clone(), boost_state.clone());
+                Some(prepared.registration.gate()), policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture));
         }
         let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
@@ -747,6 +752,9 @@ impl Engine {
         let id = ViewId(self.next_id);
         self.next_id += 1;
         self.by_browser_id.insert(browser.identifier(), id);
+        if role == ViewRole::Page {
+            if let Some(audio) = &self._runtime.audio { audio.register(browser.identifier()); }
+        }
         self.views.insert(
             id,
             View {
@@ -819,14 +827,15 @@ impl Engine {
         self.snapshots.close(id);
         let view = self.views.remove(&id)?;
         let browser = view.browser.identifier();
-        view.callback_events.redirect(browser, &self.events, &target.events, |event| matches!(event,
-            RawEvent::Title(_) | RawEvent::Favicon(..) | RawEvent::EditFocus(_) | RawEvent::Find(..)
-            | RawEvent::Url(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..)));
+        view.callback_events.redirect(browser, &self.events, &target.events, transferable_metadata);
         self.by_browser_id.remove(&browser);
         let imported = ViewId(target.next_id);
         target.next_id = next;
         target.by_browser_id.insert(browser, imported);
         target.views.insert(imported, view);
+        if let Some(audible) = self._runtime.audio.as_ref().and_then(|output| output.audible(browser)) {
+            target.events.push((browser, RawEvent::Audio(audible)));
+        }
         Some(imported)
     }
 
@@ -922,7 +931,10 @@ impl Engine {
     }
 
     pub fn set_audio_muted(&mut self, id: ViewId, muted: bool) {
-        if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) { host.set_audio_muted(muted.into()); }
+        if let Some(view) = self.views.get(&id) {
+            if let Some(audio) = &self._runtime.audio { audio.mute(view.browser.identifier(), muted); }
+            if let Some(host) = view.browser.host() { host.set_audio_muted(muted.into()); }
+        }
     }
 
     /// Per-document CSS preference. None restores the platform preference;
@@ -1123,6 +1135,7 @@ impl Engine {
         self.snapshots.close(id);
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
+            if let Some(audio) = &self._runtime.audio { audio.close(view.browser.identifier()); }
             // Runtime owns the exact context and child host until OnBeforeClose.
             // Close is queued: no CEF call or callback while page state is borrowed.
             if !self._runtime.downloads.borrow_mut().queue_retirement(view.browser.identifier()) {
@@ -1162,6 +1175,12 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
     }
 }
 
+fn transferable_metadata(event: &RawEvent) -> bool {
+    matches!(event, RawEvent::Audio(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
+        | RawEvent::EditFocus(_) | RawEvent::Find(..) | RawEvent::Url(_)
+        | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
+}
+
 fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     if role != ViewRole::Page { return None; }
     if let RawEvent::Shortcut(shortcut) = event {
@@ -1170,6 +1189,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     Some(match event {
         RawEvent::Shortcut(_) => unreachable!(),
         RawEvent::LoadError(_, _, _) => return None,
+        RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
         RawEvent::Title(title) => Event::TitleChanged { view, title },
         RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
         RawEvent::Focused => Event::Focused { view },
@@ -1207,9 +1227,14 @@ wrap_client! {
         download_gate: Option<downloads::DownloadGate>,
         policy: Arc<Mutex<PeekPolicy>>,
         boosts: Arc<Mutex<Vec<SiteBoost>>>,
+        audio: Option<audio::Capture>,
     }
 
     impl Client {
+        fn audio_handler(&self) -> Option<AudioHandler> {
+            if self.inspector.is_some() { return None; }
+            self.audio.clone().map(|capture| audio::Handler::new(capture, self.events.clone()))
+        }
         fn on_process_message_received(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
             if let Some((id, queue)) = &self.inspector {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
@@ -1598,11 +1623,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn audible_state_is_preserved_when_live_callback_ownership_moves() {
+        let original = EventQueue::default();
+        let target = EventQueue::default();
+        original.push((7, RawEvent::Audio(true)));
+        original.push((7, RawEvent::Focused));
+        original.redirect(7, &original, &target, transferable_metadata);
+        assert!(original.take().is_empty());
+        let events = target.take();
+        assert!(matches!(&events[..], [(7, RawEvent::Audio(true))]));
+        original.push((7, RawEvent::Audio(false)));
+        assert!(matches!(&target.take()[..], [(7, RawEvent::Audio(false))]));
+    }
+
+    #[test]
     fn inspector_callbacks_never_become_tab_events() {
         let view = ViewId::from_raw(8);
         let role = ViewRole::Inspector(InspectorId(3));
         for event in [
-            RawEvent::Title("DevTools".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()),
+            RawEvent::Audio(true), RawEvent::Title("DevTools".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()),
             RawEvent::Loading(false, false, false), RawEvent::Focused,
             RawEvent::EditFocus(true), RawEvent::Status("internal".into()),
             RawEvent::Popup("https://example.com".into()), RawEvent::Shortcut(Shortcut::default()),

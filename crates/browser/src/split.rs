@@ -231,6 +231,7 @@ impl BrowserWindow {
                     // The inactive item has hairlines; the selected item has equal pills.
                     .when(!selected && index + 1 < count, |this| this.child(div().absolute().right_0().top(px(6.)).h(px(18.)).w(px(1.)).bg(hsla(0., 0., 0., 0.15))))
                     .child(self.render_favicon(tab, hue))
+                    .when(self.show_tab_audio(tab), |this| this.child(self.render_mute_control(tab, false, cx)))
                     .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-title-{}", id.get()))())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(22.))).overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
                     .when(close_visible, |this| this.child(div().id(("sidebar-pane-close",id.get() as usize))
                         .debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-close-{}",id.get()))()))
@@ -245,6 +246,7 @@ impl BrowserWindow {
         }
         div().flex_1().min_w_0().flex().items_center().gap(px(9.))
             .child(self.render_item_icon(tab, hue))
+            .when(self.show_tab_audio(tab), |this| this.child(self.render_mute_control(tab, false, cx)))
             .child(self.render_inline_tab_name(tab.id, cx).unwrap_or_else(|| div().debug_selector(|| self.sidebar_debug_name(format!("sidebar-item-title-{}", tab.id.get()))).flex_1().min_w_0().overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(self.browser.item_title(tab.id))).into_any_element())).into_any_element()
     }
 

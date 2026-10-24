@@ -3127,6 +3127,67 @@ fn context_reset_and_replace_original_url_work_on_an_inactive_pinned_tab(cx: &mu
 }
 
 #[gpui::test]
+fn silent_tab_mute_menu_is_disabled_until_cef_reports_audio(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    right_click(cx, "tab-8");
+    click(&mut tab_menu(&view, cx), "tab-menu-mute");
+    assert!(!view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Mute(_, _))));
+    tab_menu(&view, cx).simulate_keystrokes("escape");
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: true });
+    right_click(cx, "tab-8");
+    click(&mut tab_menu(&view, cx), "tab-menu-mute");
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
+}
+
+#[gpui::test]
+fn audible_callbacks_show_inline_control_and_click_mutes_without_activation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-7");
+    click(cx, "tab-8");
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    fake.send(cx, Event::AudioStateChanged { view: page(2), audible: true });
+    let icon = cx.debug_bounds("unmute-7").expect("background audio has a control");
+    let title = cx.debug_bounds("sidebar-item-title-7").unwrap();
+    assert!(icon.origin.x < title.origin.x, "audio is before the title");
+    click(cx, "unmute-7");
+    assert!(fake.take_calls().contains(&Call::Mute(2, true)));
+    assert_eq!(active_url(&view, cx), original);
+    assert!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id.get() == 7).unwrap().muted));
+    fake.send(cx, Event::AudioStateChanged { view: page(2), audible: false });
+    assert!(cx.debug_bounds("unmute-7").is_some(), "muted control survives silence");
+    click(cx, "unmute-7");
+    assert!(fake.take_calls().contains(&Call::Mute(2, false)));
+    view.read_with(cx, |w, _| {
+        let tab = w.browser.all_tabs().find(|tab| tab.id.get() == 7).unwrap();
+        assert!(!tab.muted && !w.tab_audible(tab.id));
+    });
+    assert_eq!(active_url(&view, cx), original);
+    // GPUI 0.2 retains removed selectors in alternating frame maps. Click
+    // the former control position to verify that it is now an ordinary row.
+    let target = view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id.get() == 7).unwrap().url.clone());
+    cx.simulate_click(icon.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx), Some(target));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Mute(_, _))));
+}
+
+#[gpui::test]
+fn silence_clears_an_unmuted_indicator_and_unknown_audio_cannot_mark_active_tab(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original_x = cx.debug_bounds("sidebar-item-title-8").unwrap().origin.x;
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: true });
+    assert!(cx.debug_bounds("unmute-8").is_some());
+    assert!(cx.debug_bounds("sidebar-item-title-8").unwrap().origin.x > original_x);
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: false });
+    assert_eq!(cx.debug_bounds("sidebar-item-title-8").unwrap().origin.x, original_x);
+    fake.send(cx, Event::AudioStateChanged { view: page(999), audible: true });
+    assert_eq!(cx.debug_bounds("sidebar-item-title-8").unwrap().origin.x, original_x);
+    assert!(!view.read_with(cx, |w, _| w.tab_audible(w.browser.active_tab().unwrap().id)));
+}
+
+#[gpui::test]
 fn mute_command_and_sidebar_button_control_the_current_page(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let original = active_url(&view, cx);
@@ -3149,6 +3210,7 @@ fn context_muting_a_background_page_does_not_activate_it(cx: &mut TestAppContext
     click(cx, "tab-8");
     fake.take_calls();
     let original = active_url(&view, cx);
+    fake.send(cx, Event::AudioStateChanged { view: page(2), audible: true });
     right_click(cx, "tab-7");
     click(&mut tab_menu(&view, cx), "tab-menu-mute");
     let calls = fake.take_calls();
@@ -3577,6 +3639,7 @@ fn pane_menu_targets_an_inactive_pane_and_moves_it_without_changing_focus(cx: &m
 #[gpui::test]
 fn sidebar_tab_options_mute_only_their_pane_and_header_close_preserves_other_pages(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 3);
+    for raw in 1..=3 { fake.send(cx, Event::AudioStateChanged { view: page(raw), audible: true }); }
     let panes = view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.clone());
     for pane in panes.iter().take(2) {
         right_click(cx, "tab-2");

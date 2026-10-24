@@ -1142,6 +1142,7 @@ impl BrowserWindow {
                         self.remember_library_native_popup_focus();
                     }
                 }
+                Event::AudioStateChanged { .. } => { cx.notify(); }
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = identity.map(|identity| identity.tab) {
                         if !title.is_empty() {
@@ -2698,7 +2699,7 @@ impl BrowserWindow {
         let private = self.theme_uses_light_ink_for(self.browser.space().id);
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
         let renaming = self.tab_rename.as_ref().is_some_and(|editor| editor.tab == id);
-        let reserve_close = !segmented && !tab.muted && !renaming;
+        let reserve_close = !segmented && !renaming;
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
@@ -2746,9 +2747,9 @@ impl BrowserWindow {
             .relative()
             .pl(px(9.))
             // Titles run to the edge; the close control takes room only on
-            // hover. A mute control keeps its place left of it.
+            // hover. Audio takes an inline slot between favicon and title.
             // Hover alone only repaints, so the padding follows hover state.
-            .pr(px(if tab.muted || (reserve_close && self.hovered_row == Some(id)) { 34. } else { 6. }))
+            .pr(px(if reserve_close && self.hovered_row == Some(id) { 34. } else { 6. }))
             .text_size(px(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -2780,7 +2781,6 @@ impl BrowserWindow {
                 cx.notify();
             }))
             .child(self.render_sidebar_item_contents(tab, hue, cx))
-            .when(tab.muted, |this| this.child(self.render_mute_control(tab, false, cx)))
             .when(!segmented, |this| this.child(
                 div()
                     .id(("close", key))
@@ -2850,25 +2850,25 @@ impl BrowserWindow {
                 cx.notify();
             }))
             .child(self.render_item_icon(tab, self.accent()))
-            .when(tab.muted, |this| this.child(self.render_mute_control(tab, true, cx)))
+            .when(self.show_tab_audio(tab), |this| this.child(self.render_mute_control(tab, true, cx)))
     }
 
-    fn render_mute_control(&self, tab: &Tab, favorite: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_mute_control(&self, tab: &Tab, favorite: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let id = tab.id;
         let painted_space = self.browser.space().id;
         let painted_profile = self.browser.active_user_profile_id();
         let key = id.get() as usize;
-        let title = tab.title.clone();
+        let muted = tab.muted;
+        let foreground = self.theme_foreground_for(painted_space);
         div().id(("unmute", key)).debug_selector(|| self.sidebar_debug_name((move || format!("unmute-{key}"))()))
-            .flex_none().px_1().rounded_sm().text_sm()
+            .flex_none().w(px(18.)).h(px(18.)).rounded(px(4.)).text_color(foreground.opacity(0.65))
             .when(favorite, |this| this.absolute().bottom(px(1.)).left(px(1.)))
-            .hover(|s| s.bg(hsla(0., 0., 0., 0.1)))
-            .tooltip(move |_, cx| cx.new(|_| TabTooltip { title: "Unmute Tab".into(), url: title.clone() }).into())
+            .hover(move |s| s.bg(foreground.opacity(0.1)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
-                this.set_tab_muted(id, false, cx);
-            })).child(crate::icons::control(crate::icons::Icon::Mute))
+                this.set_tab_muted(id, !muted, cx);
+            })).child(crate::icons::speaker(muted))
     }
 
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, self.browser.is_private()) }
@@ -4187,17 +4187,6 @@ impl Render for BrowserWindow {
             .child(release_hover_on_exit())
             .into_any_element()
 
-    }
-}
-
-struct TabTooltip { title: String, url: String }
-
-impl Render for TabTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().flex().flex_col().gap_1().p_2().rounded_md().bg(gpui::white()).shadow_md()
-            .text_sm().text_color(gpui::black()).max_w(px(320.0))
-            .child(self.title.clone())
-            .child(div().text_xs().text_color(hsla(0.0, 0.0, 0.0, 0.5)).child(self.url.clone()))
     }
 }
 

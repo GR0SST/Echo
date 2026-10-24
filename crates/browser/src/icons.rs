@@ -121,6 +121,26 @@ pub(crate) fn ionicon(name: &str, size: f32, zoom: f32) -> AnyElement {
 
 pub(crate) fn control(icon: Icon) -> AnyElement { control_sized(icon, 18.) }
 
+/// Inline tab audio control; its geometry stays fixed when the title elides.
+pub(crate) fn speaker(muted: bool) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let offset = if muted { 3. } else { 0. };
+        let mut paths = vec![vec![(1.5 + offset, 7.), (4. + offset, 7.),
+            (7.5 + offset, 4.), (7.5 + offset, 14.), (4. + offset, 11.),
+            (1.5 + offset, 11.), (1.5 + offset, 7.)]];
+        if muted { paths.push(vec![(2.5, 2.5), (15.5, 15.5)]); }
+        else { for radius in [4., 6., 8.] { paths.push(arc(7.5, 9., radius, -0.72, 0.72)); } }
+        for points in paths {
+            let mut path = gpui::PathBuilder::stroke(px(1.1));
+            for (index, (x, y)) in points.into_iter().enumerate() {
+                let point = bounds.origin + gpui::point(px(x), px(y));
+                if index == 0 { path.move_to(point); } else { path.line_to(point); }
+            }
+            if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+        }
+    }).size(px(18.)).flex_none().into_any_element()
+}
+
 /// A catalog-backed control scaled to `size`; frame controls keep the 18 px grid.
 pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement { zoomed(icon, size, 1.) }
 

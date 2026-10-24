@@ -323,7 +323,7 @@ impl BrowserWindow {
                     item("Separate from Split View", Command::SeparatePane).pane(pane.id).into(),
                     Entry::Separator,
                     pending("Share").submenu(vec![item("Copy Link as Markdown", Command::CopyMarkdown).pane(pane.id).into()]).into(),
-                    item(if pane.muted { "Unmute" } else { "Mute" }, Command::Mute).pane(pane.id).enabled(!pane_internal).into(),
+                    item(if pane.muted { "Unmute" } else { "Mute" }, Command::Mute).pane(pane.id).enabled(!pane_internal && self.show_tab_audio(pane)).into(),
                     item("Copy Link", Command::Copy).shortcut("⇧⌘C").pane(pane.id).into(),
                     item("Copy link as Markdown", Command::CopyMarkdown).pane(pane.id).into(),
                     Entry::Separator,
@@ -348,7 +348,7 @@ impl BrowserWindow {
         if favorite { rows.extend([pending("Show Unread Badge").checked(true).into(), Entry::Separator]); }
         rows.extend([item("Change Icon…", Command::Icon).into(), item("Rename…", Command::Rename).into()]);
         if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(item("Reset Name and Icon", Command::ResetCustomization).into()); }
-        rows.push(item(if tab.muted { "Unmute" } else { "Mute" }, Command::Mute).enabled(!internal).into());
+        rows.push(item(if tab.muted { "Unmute" } else { "Mute" }, Command::Mute).enabled(!internal && self.show_tab_audio(tab)).into());
         if !favorite { rows.push(item("Customize Page…",Command::CustomizePage).into()); }
         if pinned {
             let moved = tab.pinned_url.as_ref().is_some_and(|url| *url != tab.url);

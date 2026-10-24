@@ -722,7 +722,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 .map(|pages| pages.borrow().state(tab.id))
                 .unwrap_or_default();
             out += &format!(
-                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?} visible={}\n",
+                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?} audible={} visible={}\n",
                 if active { "*" } else { " " },
                 if shown == Some(tab.id) { "shown" } else { "     " },
                 tab.title,
@@ -732,6 +732,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 this.browser.favicon(this.browser.active_user_profile_id(), &tab.url).map_or(0, |png| png.len()),
                 tab.muted,
                 this.pages.as_ref().and_then(|pages| pages.borrow().audio_muted(tab.id)),
+                this.tab_audible(tab.id),
                 this.pages.as_ref().is_some_and(|pages| pages.borrow().is_visible(tab.id)),
             );
         }

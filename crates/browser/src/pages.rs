@@ -40,7 +40,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -337,6 +337,7 @@ pub struct PageState {
     pub can_go_forward: bool,
     pub status: String,
     pub editable: bool,
+    pub audible: bool,
 }
 
 struct Page {
@@ -407,7 +408,7 @@ pub(crate) struct PageEvent {
 impl PageEvent {
     pub(crate) fn is_metadata(&self) -> bool {
         matches!(self.event, Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
-            | Event::StatusChanged { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
+            | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
     }
 }
 
@@ -1604,6 +1605,9 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         let PageStore { pages, .. } = &mut *store;
         match event {
+            Event::AudioStateChanged { view, audible } => {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.audible = *audible; }
+            }
             Event::EditFocusChanged { view, editable } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }
             }

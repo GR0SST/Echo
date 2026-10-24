@@ -228,7 +228,7 @@ Folder duplication follows the right-click action documented in the
 | Renaming a tab by double-click ("Double-click to rename") | double-click | partial | Today/Pinned single-page tabs use an inline sidebar field from double-click, Rename… and the Command Bar action. Enter or leaving the field saves; Escape cancels; an empty name restores the latest page title. Loaded pages and inactive-tab selection survive. Favorites and Split View group editor placement still differ; custom icons use a graphical popover |
 | Custom tab icon ("Customize Tab") | — | partial | Graphical emoji/symbol popover for tabs and Split View groups: emoji search, category scrolling, eight-column cells, the 56-symbol catalog, removal, pointer states and keyboard navigation. Named portable symbols and emoji persist through pinning, Favorites, moves, duplication, archive and sessions. Uploaded images, popup positioning outside the browser window and exact native popup animation remain missing |
 | Close button on hover (× for Today, − for Pinned) | hover | done | — |
-| Audio indicator, Mute/Unmute in the context menu | — | partial | Mute/Unmute works from the context menu; muted tabs/Favorites show a clickable Unmute indicator. Actual audio-playing detection remains missing |
+| Audio indicator, Mute/Unmute in the context menu | — | partial | CEF PCM callbacks report real per-page audio activity, including background pages. Playing/muted controls sit before the tab title and toggle without activating the tab; silent unmuted context-menu actions are disabled. Exact Favorites placement, tooltip and theme fidelity remain unverified |
 | Camera/microphone indicator on a tab | — | missing | — |
 | Split View item in the sidebar (tab group) | — | partial | One item for 2–4 pages; shared title, Favorites, pinning, archive and last focused pane. Unnamed groups have equal pane segments and independent hover close targets. Favorite-group treatment and remaining theme/hover fidelity need comparison |
 | Space header (name), Show/Hide Space Header | — | done | Visibility persists per Space; Command Bar and Spaces menu. The name and Space icon form the collapse/expand control for Pinned tabs and folders; hover replaces the icon with a vector chevron and reveals Space actions at the right. Collapsed state keeps the rightward chevron visible; the actions button does not toggle pins |
@@ -486,11 +486,12 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Mini player in the sidebar: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | missing | — |
-| Automatic PiP when leaving a tab with video (option) | missing | — |
+| Mini player in the sidebar: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | missing | Guarded background Wikimedia Ogg reference shows a 212×32 transport strip at the bottom of the sidebar (return to tab, previous, pause/next and volume); implementation and full metadata/hover flows remain |
+| Automatic PiP when leaving a tab with video (option) | missing | Background Wikimedia WebM and YouTube playback inspected in a guarded test Space. Browser-only snapshots do not establish automatic PiP behavior: Arc restores its floating window on another display; dedicated floating-window reference capture remains |
 | PiP window: Back to Tab, ±15 seconds, seeking by dragging up, Keep Window on Top, minimize or close, remembered position | missing | — |
 | PiP for Google Meet (with chat) and Document PiP | missing | — |
-| Mute/Unmute a tab, Mute All / Unmute All | done | CEF tab audio control through Command Bar, Tabs menu and tab context menus. Persists per tab and applies before a restored page is shown; Mute All preserves unloaded tabs without loading them |
+| Per-tab audio activity | partial | CEF loopback PCM callbacks, bounded stereo output through CPAL (CEF capture silences its source), silence hysteresis, and provenance-checked background updates. Capture falls back to native playback when output initialization is unavailable; output device changes/recovery and exact Favorites/theme fidelity remain |
+| Mute/Unmute a tab, Mute All / Unmute All | done | Playing/muted sidebar controls and disabled silent context-menu actions. CEF tab audio control through Command Bar, Tabs menu and tab context menus. Persists per tab and applies before a restored page is shown; Mute All preserves unloaded tabs without loading them |
 
 ## 18. Notifications and toasts
 
