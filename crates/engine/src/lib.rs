@@ -19,6 +19,7 @@ pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod editing;
 mod boosts;
+mod boost_picker;
 pub use boosts::SiteBoost;
 mod printing;
 pub use printing::{PrintDispatch, PrintRequest};
@@ -72,6 +73,7 @@ pub struct Shortcut {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     Focused { view: ViewId },
@@ -100,6 +102,7 @@ pub enum Event {
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
 #[derive(Debug)]
 enum RawEvent {
+    BoostZap(String),
     Title(String),
     Favicon(String, Vec<u8>),
     Focused,
@@ -257,7 +260,7 @@ pub struct Engine {
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
     snapshots: snapshot::Snapshots,
-    boosts: Vec<(std::rc::Weak<RequestContext>, Vec<SiteBoost>)>,
+    boosts: Vec<(std::rc::Weak<RequestContext>, Arc<Mutex<Vec<SiteBoost>>>)>,
     message_ids: devtools::MessageIds,
     inspectors: devtools::Inspectors,
     // Always the actual CEF context, including the global normal profile.
@@ -541,21 +544,22 @@ impl Engine {
     /// Configure document-start Boosts for pages subsequently created in this
     /// exact storage context. Existing documents receive live CSS updates;
     /// JavaScript changes take effect when the document is next created.
-    /// Renderer replacement currently bootstraps from the browser creation
-    /// snapshot; updated snapshots need recreation plumbing before editor UI.
     pub fn set_site_boosts(&mut self, context: &StorageContext, boosts: Vec<SiteBoost>) -> Result<(), String> {
         self.check_storage_context(context)?;
         self.boosts.retain(|(context, _)| context.strong_count() > 0);
         let weak = std::rc::Rc::downgrade(&context.context);
         if let Some((_, current)) = self.boosts.iter_mut().find(|(context, _)| std::rc::Weak::ptr_eq(context, &weak)) {
+            let mut current=current.lock().unwrap();
             if *current == boosts { return Ok(()); }
             *current = boosts.clone();
-        } else { self.boosts.push((weak, boosts.clone())); }
+        } else { self.boosts.push((weak, Arc::new(Mutex::new(boosts.clone())))); }
         for view in self.views.values().filter(|view| view.role == ViewRole::Page && std::rc::Rc::ptr_eq(&view.context, &context.context)) {
             boosts::update(&view.browser, &boosts);
         }
         Ok(())
     }
+
+    pub fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { if let Some(view)=self.views.get(&view).filter(|view|view.role==ViewRole::Page) { boost_picker::request(&view.browser,enabled); } }
 
     /// Creates a page over `ui_view` (the toolkit's `NSView*` on macOS),
     /// with `frame` in that view's coordinates, clipped to `corner_radius`.
@@ -664,17 +668,16 @@ impl Engine {
             ..Default::default()
         }
         .set_as_child(page_parent as _, &bounds);
-        let mut extra = if role == ViewRole::Page {
-            let weak = std::rc::Rc::downgrade(&context);
-            self.boosts.iter().find(|(context, _)| std::rc::Weak::ptr_eq(context, &weak)).and_then(|(_, boosts)| boosts::extra(boosts))
-        } else { None };
+        let weak=std::rc::Rc::downgrade(&context);
+        let boost_state=if let Some((_,boosts))=self.boosts.iter().find(|(context,_)|std::rc::Weak::ptr_eq(context,&weak)){boosts.clone()}else{let state=Arc::new(Mutex::new(Vec::<SiteBoost>::new()));self.boosts.push((weak,state.clone()));state};
+        let mut extra=if role==ViewRole::Page { boosts::extra(&boost_state.lock().unwrap()) } else {None};
         let policy = Arc::new(Mutex::new(PeekPolicy::default()));
-        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone());
+        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone());
         if let ViewRole::Inspector(id) = role {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default());
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default());
         }
         let prepared_downloads = if role == ViewRole::Page {
             if let Some(owner) = download_owner {
@@ -693,7 +696,7 @@ impl Engine {
         if let Some(prepared) = &prepared_downloads {
             client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None,
                 runtime.lifecycle.queue.clone(), Some(prepared.registration.handler()),
-                Some(prepared.registration.gate()), policy.clone());
+                Some(prepared.registration.gate()), policy.clone(), boost_state.clone());
         }
         let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
@@ -1147,6 +1150,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
         RawEvent::Url(url) => Event::UrlChanged { view, url },
         RawEvent::Status(text) => Event::StatusChanged { view, text },
+        RawEvent::BoostZap(selector) => Event::BoostZap { view, selector },
         RawEvent::Loading(loading, can_go_back, can_go_forward) => {
             Event::LoadingChanged {
                 view,
@@ -1175,12 +1179,22 @@ wrap_client! {
         downloads: Option<DownloadHandler>,
         download_gate: Option<downloads::DownloadGate>,
         policy: Arc<Mutex<PeekPolicy>>,
+        boosts: Arc<Mutex<Vec<SiteBoost>>>,
     }
 
     impl Client {
         fn on_process_message_received(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
             if let Some((id, queue)) = &self.inspector {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
+            }
+            if source_process == ProcessId::RENDERER {
+                if let Some(message) = message.as_ref().filter(|message| CefString::from(&message.name()).to_string()==boost_picker::RESULT) {
+                    if let Some(args)=message.argument_list().filter(|args|args.size()==1&&args.get_type(0)==ValueType::STRING) {
+                        let selector=CefString::from(&args.string(0)).to_string();
+                        if selector.len()<=4096 { push(&self.events,browser,RawEvent::BoostZap(selector)); }
+                    }
+                    return 1;
+                }
             }
             let Some(message) = message.filter(|message| source_process == ProcessId::RENDERER && CefString::from(&message.name()).to_string() == editing::EDIT_FOCUS_MESSAGE) else { return 0; };
             let Some(arguments) = message.argument_list() else { return 0; };
@@ -1190,7 +1204,7 @@ wrap_client! {
         }
         fn request_handler(&self) -> Option<RequestHandler> {
             if let Some((id, queue)) = &self.inspector { Some(devtools::InspectorRequestHandler::new(*id, queue.clone())) }
-            else { Some(PeekRequestHandler::new(self.events.clone(), self.policy.clone())) }
+            else { Some(PeekRequestHandler::new(self.events.clone(), self.policy.clone(),self.boosts.clone())) }
         }
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(self.downloads.clone().unwrap_or_else(downloads::denied_handler))
@@ -1228,9 +1242,13 @@ fn peek_cross_domain(current: &str, target: &str, pinned: bool, gesture: bool, r
 }
 
 wrap_request_handler! {
-    struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>> }
+    struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>>, boosts: Arc<Mutex<Vec<SiteBoost>>> }
     impl RequestHandler {
+        fn on_render_view_ready(&self,browser:Option<&mut Browser>) {
+            if let Some(browser)=browser { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
+        }
         fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, gesture: i32, redirect: i32) -> i32 {
+            if let Some(browser)=browser.as_deref() { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return 0; };
             let Some(request) = request else { return 0; };
             let target = CefString::from(&request.url()).to_string();

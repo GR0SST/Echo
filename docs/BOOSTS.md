@@ -19,20 +19,33 @@ is evaluated separately; syntax errors cannot stop other Boosts or their CSS.
 Live configuration messages replace CSS, while JavaScript waits for the next
 document. Inspector pages never receive Boost configuration.
 
+## Editor and picker
+
+New Boost is available from the dock menu, Spaces menu, Command Bar and site
+controls. Customize Page opens an existing site Boost when available. The
+floating GPUI panel retains the reference's 184 x 590 frame; Code expands to
+480 x 590 while keeping the right edge fixed. CSS and JS use a multiline GPUI
+text buffer with IME, clipboard, selection and local undo. Refresh to Run
+reloads the captured page. Simple controls persist tint, font, size, case,
+inversion, contrast, brightness and saturation independently of custom code.
+
+The engine picker has a native capability scoped to a renderer context. Trusted
+pointer events highlight an element and a trusted click reports a selector.
+Browser events retain page/profile ownership before modifying a Boost; Undo
+removes the last Zap selector. The native request handler sends the current
+profile configuration again before navigation and when a render view is ready.
+
 ## Remaining work
 
-This is a model/engine foundation, not a completed user-facing Boost feature.
-Creation commands, the simple and code editors, the element picker, Library,
-site controls and the Boost indicator are still missing. Constructed stylesheets
-do not support CSS `@import` rules. Updated configurations also need native
-browser recreation or another document-start synchronization mechanism before
-shipping the editor: a replacement renderer can currently receive the browser's
-original creation snapshot instead of subsequent edits.
+Library management is the next UI piece. Related-element Zap selector editing
+and full color remapping fidelity remain unfinished. Constructed stylesheets do
+not support CSS `@import` rules. Renderer replacement synchronization has native
+hooks but still needs dedicated crash/recovery acceptance coverage.
 
 The installed Arc was inspected in the fresh `Echo Boosts Oct24` test Space.
 Its simple editor is a separate narrow floating panel; the expanded Code panel
 has CSS and JS tabs. Its editor content currently displays "Internal debugging
-pages are currently disabled". No visual parity is claimed for Echo.
+pages are currently disabled". Arc/Echo crops are retained for visual comparison; exact color remapping parity is not claimed.
 
 Evidence and native fixture logs are under `target/parity/boosts/`. The local
 fixture checks that the first inline page script sees a value set by a Boost,

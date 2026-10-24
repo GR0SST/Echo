@@ -57,7 +57,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
@@ -66,6 +66,7 @@ impl Command {
     fn selector(self) -> &'static str {
         match self {
             Self::Download(action) => action.selector(),
+            Self::CustomizePage => "customize-page",
             Self::SpaceTheme => "edit-theme-color",
             Self::SpaceProfile => "set-profile", Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceNewFolder => "space-new-folder",
             Self::FolderDuplicate => "folder-duplicate",
@@ -348,7 +349,7 @@ impl BrowserWindow {
         rows.extend([item("Change Icon…", Command::Icon).into(), item("Rename…", Command::Rename).into()]);
         if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(item("Reset Name and Icon", Command::ResetCustomization).into()); }
         rows.push(item(if tab.muted { "Unmute" } else { "Mute" }, Command::Mute).enabled(!internal).into());
-        if !favorite { rows.push(pending("Customize Page…").into()); }
+        if !favorite { rows.push(item("Customize Page…",Command::CustomizePage).into()); }
         if pinned {
             let moved = tab.pinned_url.as_ref().is_some_and(|url| *url != tab.url);
             rows.push(pending("Edit Pinned Page").submenu(vec![
@@ -443,6 +444,7 @@ impl BrowserWindow {
             MenuTarget::Tab(id) => item.pane.unwrap_or(id),
         };
         match command {
+            Command::CustomizePage => { self.edit_browser(|browser|browser.activate_tab(id,std::time::SystemTime::now()));self.customize_page(cx); }
             Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),
             Command::MoveToFolder => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
             Command::Add(mut placement) => {

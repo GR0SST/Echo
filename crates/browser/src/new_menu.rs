@@ -123,8 +123,7 @@ impl BrowserWindow {
         match item {
             Item::Space => self.begin_space_creation(self.browser.space().id, cx),
             Item::Folder => self.open_folder_creator(None, None, window, cx),
-            // Boosts are not implemented yet.
-            Item::Boost => {}
+            Item::Boost => self.new_boost(cx),
             Item::Split => self.open_command_action(Command::AddSplit(None), window, cx),
             Item::Tab => self.open_command_bar(Target::NewTab, "", window, cx),
         }

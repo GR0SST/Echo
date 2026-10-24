@@ -16,6 +16,8 @@ pub struct Boost {
     pub css: String,
     pub javascript: String,
     pub zap_selectors: Vec<String>,
+    #[serde(default)]
+    pub appearance: BoostAppearance,
 }
 impl Boost {
     pub fn domain(&self) -> &str {
@@ -25,13 +27,82 @@ impl Boost {
         self.enabled && domain(url).as_deref() == Some(self.domain.as_str())
     }
     pub fn stylesheet(&self) -> String {
-        let mut css = self.css.clone();
+        let mut css = self.appearance.stylesheet();
+        css.push_str(&self.css);
         for selector in &self.zap_selectors {
             if !selector.trim().is_empty() {
                 css.push_str("\n");
                 css.push_str(selector);
                 css.push_str(" { display: none !important; }\n");
             }
+        }
+        css
+    }
+}
+
+/// Local simple-editor controls; the code editor remains independent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BoostAppearance {
+    pub tint: Option<u16>,
+    pub font: Option<String>,
+    pub size: i8,
+    pub case: u8,
+    pub inverted: bool,
+    pub contrast: Option<u16>,
+    pub brightness: Option<u16>,
+    pub saturation: Option<u16>,
+}
+impl BoostAppearance {
+    pub fn stylesheet(&self) -> String {
+        let mut css = String::new();
+        if let Some(hue) = self.tint {
+            css.push_str(&format!("html, body {{ background-color: hsl({}, 55%, 88%) !important; color: hsl({}, 35%, 16%) !important; }}\n", hue % 360, hue % 360));
+        }
+        if let Some(font) = &self.font {
+            // Font names are CSS string data, never raw source.
+            css.push_str(&format!(
+                "* {{ font-family: {} !important; }}\n",
+                if font == "system-ui" {
+                    font.clone()
+                } else {
+                    serde_json::to_string(font).unwrap()
+                }
+            ));
+        }
+        if self.size != 0 {
+            css.push_str(&format!(
+                "html {{ font-size: {}% !important; }}\n",
+                100 + i16::from(self.size.clamp(-5, 10)) * 10
+            ));
+        }
+        let case = match self.case {
+            1 => Some("uppercase"),
+            2 => Some("lowercase"),
+            3 => Some("capitalize"),
+            _ => None,
+        };
+        if let Some(case) = case {
+            css.push_str(&format!("* {{ text-transform: {case} !important; }}\n"));
+        }
+        let mut filters = Vec::new();
+        if self.inverted {
+            filters.push("invert(1) hue-rotate(180deg)".into());
+        }
+        for (name, value) in [
+            ("contrast", self.contrast),
+            ("brightness", self.brightness),
+            ("saturate", self.saturation),
+        ] {
+            if let Some(value) = value {
+                filters.push(format!("{name}({}%)", value.min(200)));
+            }
+        }
+        if !filters.is_empty() {
+            css.push_str(&format!(
+                "html {{ filter: {} !important; }}\n",
+                filters.join(" ")
+            ));
         }
         css
     }
@@ -85,6 +156,7 @@ impl Boosts {
             css: String::new(),
             javascript: String::new(),
             zap_selectors: Vec::new(),
+            appearance: BoostAppearance::default(),
         });
         Some(id)
     }

@@ -26,7 +26,7 @@ impl StorageSelection {
 pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     match event {
         Event::OpenInNewTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
-        Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
+        Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::Shortcut { view, .. } => Some(*view),
@@ -54,6 +54,7 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn set_boost_picker(&mut self, _view: ViewId, _enabled: bool) {}
     fn set_site_boosts(&mut self, _storage: &StorageSelection, _boosts: Vec<engine::SiteBoost>) {}
     fn prepare_paste_and_match_style(&mut self, _view: ViewId) -> Option<NativePaste> { None }
     fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
@@ -155,6 +156,7 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { self.engine.set_boost_picker(view,enabled); }
     fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
@@ -1316,6 +1318,8 @@ impl Pages {
         if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.redo(view); }
     }
 
+    pub(crate) fn set_boost_picker(&mut self, tab: TabId, enabled: bool) { if let Some(view)=self.view(tab) { self.store.borrow_mut().engine.set_boost_picker(view,enabled); } }
+
     pub fn reload(&mut self, tab: TabId) {
         if let Some(view) = self.view(tab) {
             self.store.borrow_mut().engine.reload(view);
@@ -1566,7 +1570,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }

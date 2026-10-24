@@ -8938,3 +8938,57 @@ fn peek_tracks_its_owner_resize_without_recreating_or_navigating_pages(cx: &mut 
         assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
     }
 }
+
+fn boost_panel(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
+    cx.run_until_parked();
+    let handle=view.read_with(cx,|view,_|view.boost_editor).expect("Boost editor opened");
+    let visual=VisualTestContext::from_window(handle.into(),&cx.cx);visual.run_until_parked();visual
+}
+#[gpui::test]
+fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),1);
+    let mut panel=boost_panel(&view,cx);
+    let bounds=panel.debug_bounds("boost-editor").unwrap();assert_eq!(bounds.size,gpui::size(gpui::px(184.),gpui::px(590.)));
+    for selector in ["boost-color","boost-font-0","boost-size","boost-case","boost-zap","boost-code"] {assert!(panel.debug_bounds(selector).is_some(),"{selector}");}
+    click(&mut panel,"boost-size");click(&mut panel,"boost-case");click(&mut panel,"boost-font-0");
+    view.read_with(cx,|view,_|{let boost=view.browser.active_user_profile().boosts.iter().next().unwrap();assert_eq!(boost.appearance.size,1);assert_eq!(boost.appearance.case,1);assert_eq!(boost.appearance.font.as_deref(),Some("system-ui"));});
+    panel.simulate_keystrokes("escape");cx.run_until_parked();assert!(view.read_with(cx,|view,_|view.boost_editor.is_none()));
+}
+#[gpui::test]
+fn boost_code_tabs_edit_multiline_css_and_javascript_with_local_undo(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
+    let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
+    panel.simulate_input("body {");panel.simulate_keystrokes("enter");panel.simulate_input("color: red;");panel.simulate_keystrokes("enter");panel.simulate_input("}");panel.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().css.clone()),"body {\ncolor: red;\n}");
+    click(&mut panel,"boost-tab-js");panel.simulate_input("window.boost = 1;");panel.simulate_keystrokes("enter");panel.simulate_input("window.second = 2;");panel.run_until_parked();
+    let javascript=view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().javascript.clone());
+    assert!(javascript.contains("\nwindow.second"),"actual JS: {javascript:?}");
+    panel.simulate_keystrokes("cmd-z");panel.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),1);
+    click(&mut panel,"boost-code-back");let mut panel=boost_panel(&view,cx);assert!(panel.debug_bounds("boost-color").is_some());
+}
+#[gpui::test]
+fn boost_picker_events_are_scoped_to_the_editor_page_and_undo_uses_zap_history(cx:&mut TestAppContext) {
+    let fake=FakeEngine::default();let (view,cx)=open_with(cx,Some(Box::new(fake.clone())));
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
+    let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-zap");
+    fake.send(cx,Event::BoostZap{view:page(1),selector:"#advert".into()});cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().zap_selectors.clone()),vec!["#advert"]);
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().zap_selectors.is_empty()));
+}
+#[gpui::test]
+fn site_boost_toggle_removes_indicator_without_touching_another_profile(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
+    let mut panel=boost_panel(&view,cx);panel.simulate_keystrokes("escape");cx.run_until_parked();
+    assert!(cx.debug_bounds("boost-indicator").is_some());
+    click(cx,"address-site-controls");
+    let overlay=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(overlay.into(),&cx.cx);controls.run_until_parked();
+    click(&mut controls,"site-boost-toggle");cx.run_until_parked();
+    assert!(!view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().enabled));
+    controls.simulate_keystrokes("escape");cx.cx.refresh().unwrap();cx.executor().advance_clock(Duration::from_millis(100));cx.run_until_parked();
+    let states=view.read_with(cx,|view,_|view.site_boosts().iter().map(|boost|(boost.name.clone(),boost.enabled)).collect::<Vec<_>>());
+    assert_eq!(cx.debug_bounds("boost-indicator").unwrap().size.width,gpui::px(0.),"site states: {states:?}");
+}

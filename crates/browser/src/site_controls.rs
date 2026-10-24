@@ -87,6 +87,8 @@ impl BrowserWindow {
 
     pub(crate) fn render_site_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(panel) = &self.site_controls else { return div().into_any_element(); };
+        let boosts=self.site_boosts();
+        let profile=self.browser.active_user_profile_id();
         let secure = self.browser.active_tab().is_some_and(|tab| tab.url.starts_with("https://"));
         let tile = |id: &'static str| div().id(id).debug_selector(move || id.into())
             .flex_none().w(px(TILE_WIDTH)).h(px(TILE_HEIGHT)).rounded(px(8.)).flex().items_center().justify_center()
@@ -104,12 +106,19 @@ impl BrowserWindow {
                 .child(div().flex().gap(px(TILE_GAP))
                     .child(tile("site-share").on_click(cx.listener(|this, _, _, cx| { this.close_site_controls(cx); this.copy_url(false, cx); }))
                         .child(crate::icons::control(Icon::Share)))
-                    .child(tile("site-boost").child(crate::icons::control(Icon::Boost)))
+                    .child(tile("site-boost").on_click(cx.listener(|this,_,_,cx|this.customize_page(cx))).child(crate::icons::control(Icon::Boost)))
                     .child(tile("site-capture").child(crate::icons::control(Icon::Capture)))
                     .child(tile("site-screenshot").child(crate::icons::control(Icon::Screenshot))))
                 .child(heading("Extensions"))
                 .child(div().flex().flex_wrap().gap(px(TILE_GAP))
                     .child(tile("site-add-extension").text_color(hsla(0., 0., 1., 0.7)).child(crate::icons::control(Icon::Plus))))
+                .when(!boosts.is_empty(),|panel|panel.child(heading("Boosts")).children(boosts.into_iter().map(|boost| {
+                    let id=boost.id;let enabled=boost.enabled;
+                    div().id(gpui::SharedString::from(format!("site-boost-{id:?}"))).debug_selector(||"site-boost-toggle".into()).flex().items_center().h(px(40.)).gap(px(8.)).cursor_pointer().rounded(px(6.)).hover(|el|el.bg(hsla(0.,0.,1.,0.08)))
+                        .child(div().size(px(32.)).rounded_full().flex().items_center().justify_center().bg(hsla(0.,0.,1.,0.9)).text_color(hsla(0.,0.,0.2,1.)).child(crate::icons::control_sized(Icon::Boost,22.)))
+                        .child(div().flex().flex_col().flex_1().min_w_0().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(boost.name).child(div().text_size(px(12.)).font_weight(gpui::FontWeight::NORMAL).text_color(hsla(0.,0.,1.,0.55)).child(if enabled {"Enabled"}else{"Disabled"})))
+                        .on_click(cx.listener(move|this,_,_,cx|{this.edit_browser(|model|{if let Some(boost)=model.user_profile_mut(profile).and_then(|profile|profile.boosts.get_mut(id)){boost.enabled=!boost.enabled;}});this.sync_boosts(cx);}))
+                })))
                 .child(div().mt(px(14.)).flex().items_center().justify_between()
                     .child(div().id("site-security").debug_selector(|| "site-security".into())
                         .h(px(TILE_HEIGHT)).px(px(9.)).rounded(px(8.)).flex().items_center().gap(px(5.))

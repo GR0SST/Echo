@@ -10,6 +10,7 @@ mod menus;
 mod history;
 mod tab_menu;
 mod site_controls;
+mod boosts;
 mod panel;
 mod material;
 mod favicon_style;
@@ -101,6 +102,7 @@ pub fn init(cx: &mut App) {
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
+    boosts::bind_keys(cx);
     new_menu::bind_keys(cx);
     theme_editor::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);

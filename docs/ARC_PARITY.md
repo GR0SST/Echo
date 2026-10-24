@@ -86,7 +86,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | New Little Arc Window | ⌥⌘N | partial | Standalone Little Echo window and in-app shortcut; see "Little Arc" for remaining parity gaps |
 | Restore Last Closed Tab | ⇧⌘T | done | Brings the last archived tab back to its Space |
 | Open Command Bar (on the current URL) | ⌘L | done | — |
-| New Boost / Edit Boost / Boost Gallery | hidden | missing | Local creation/editing remains missing; Boost Gallery and cloud publishing are out of scope. See "Boosts" |
+| New Boost / Edit Boost / Boost Gallery | hidden | partial | Local New Boost and Edit Boost open the floating editor. Boost Gallery and cloud publishing are out of scope. See "Boosts" |
 | New Profile | — | partial | Local name/Space-assignment sheets and menu/Command Bar routes work; exact visual states and Settings entry remain incomplete |
 | New Note | ⌃⇧N | missing | Notes (Arc Notes) |
 | New Note (in Split) | ⌃⌥N (hidden) | missing | — |
@@ -235,7 +235,7 @@ Folder duplication follows the right-click action documented in the
 | Sidebar interaction states and Space dock | — | partial | Space dock uses measured 8 px active and 4 px inactive dots inside unchanged 22 px hit targets (inactive was 7 px). Close/reset hover targets match Arc’s 24 × 24 px square, centered vertically with 5 px corners; Today close glyph uses a 22 px vector canvas; context menu corners are 12 px. Native comparison at `target/parity/sidebar-states/` confirms 208 px Today and 200 px Pinned menus, a darker translucent hue-tinted native menu material with opaque fallback when installation is unavailable, and matching close target size. Folder nesting advances 16 px, and hover keeps the open/closed icon without invented inline actions. Ordinary rows compress 1 px at each side while pressed and restore on release, retaining nested indentation. Drag states, playback indicator and reorder animation remain under comparison; no theme palette/material changes |
 | Browser chrome iconography | — | partial | 1108 MIT-licensed non-brand Ionicons from the installed Arc reference are embedded as portable contours. Existing navigation, folder, search, sound, history and action controls use this catalog; reference-specific sidebar/split/key controls use fixed vector geometry. Font look-alikes and default folder/mute emoji are removed. Sidebar navigation and toggle controls are visible beside native window buttons. User-selected emoji and website favicons remain content. Graphical Space/tab symbol pickers and the compact folder catalog now use these contours |
 | Spaces dock at the bottom (Space icons) | click | done | Custom emoji and named vector symbols persist per Space and render in the dock. Default marks are monochrome: 8 px for the active Space, 4 px for inactive Spaces |
-| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost does nothing yet; New Easel is left out |
+| "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost opens the floating page editor; New Easel is left out |
 | "Springy" click animation on sidebar items | — | partial | Ordinary tab rows ease 1 px inward per edge over 60 ms, then expand from the current inset on release; nested indentation and drag-card grab points are retained. Native Arc/Echo recordings confirm 212 → 210 → 212 px at the same sidebar width. Other sidebar item types and reorder settling remain unfinished |
 | Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
 | Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Local archive/blocker banners remain missing; Arc update-feed banners are out of scope |
@@ -454,11 +454,11 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 
 | Feature | Status |
 |---|---|
-| Editor: color (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), font, text size and case | missing |
+| Editor: color (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), font, text size and case | partial — floating GPUI simple editor, tint, 20 font specimens, size/case, inversion and advanced sliders; visual comparison retained under target/parity/boosts/round2 |
 | Local per-domain Boost model, enabled state, CSS/JS and Zap selectors persisted per profile | done |
-| Zap: pick an element to hide (Pick Selector, "Zap all related elements") | partial — persisted selectors generate hiding CSS; picker and related-element controls missing |
-| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | partial — profile-scoped document-start injection, live CSS updates and JS on the next document; editor and refresh control missing |
-| Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | missing |
+| Zap: pick an element to hide (Pick Selector, "Zap all related elements") | partial — trusted hover/click element picker, persisted selectors and Zap undo; related-element selector controls remain |
+| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | done — floating CSS/JS editor, multiline input with clipboard/IME/local undo, live CSS and Refresh to Run JavaScript; local only |
+| Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | done — site controls expose the Boost name and enabled status; editor opens from dock, native menu, Command Bar, site controls and tab context menu |
 | Share Space/Folder/Easel via arc.net; publish Easels/Boosts to the gallery | out of scope |
 | Sharing and installing someone else's Boost ("Add this Boost to Arc?"), Boost Gallery | out of scope (Arc service/account dependency; no UI) |
 

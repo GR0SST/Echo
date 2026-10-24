@@ -81,6 +81,7 @@ actions!(
         OpenCommandBar,
         CopyUrl,
         CopyUrlAsMarkdown,
+        NewBoost,
         NewFolder,
         CollapseAllFolders,
         ExpandAllFolders,
@@ -383,6 +384,7 @@ pub enum Suggestion {
 /// Commands currently implemented by the browser, also exposed by name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    NewBoost,
     AddSplit(Option<browser_core::splits::Placement>),
     CloseSplitPane,
     SplitAxis(browser_core::splits::Axis),
@@ -644,6 +646,8 @@ pub struct BrowserWindow {
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
     pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     pub(crate) new_menu: Option<crate::new_menu::NewMenu>,
+    pub(crate) boost_editor: Option<WindowHandle<crate::boosts::BoostEditor>>,
+    pub(crate) boost_creation_pending: bool,
     pub(crate) new_menu_anchor: crate::site_controls::Anchor,
     /// Times the New menu opened or closed, keying the plus rotation.
     pub(crate) new_menu_toggles: u64,
@@ -898,6 +902,8 @@ impl BrowserWindow {
             site_controls: None,
             site_controls_anchor: Default::default(),
             new_menu: None,
+            boost_editor: None,
+            boost_creation_pending: false,
             new_menu_anchor: Default::default(),
             new_menu_toggles: 0,
             pressed_control: None,
@@ -1047,6 +1053,7 @@ impl BrowserWindow {
             cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.close_window(cx)); });
         }
         let children = [
+            self.boost_editor.take().map(|handle|handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),
@@ -1154,6 +1161,11 @@ impl BrowserWindow {
                         if let Some(title) = title { self.edit_profile(|browser| browser.update_history_title(page_profile.expect("page provenance"), &url, &title)); }
                     }
                 }
+                Event::BoostZap { selector, .. } => {
+                    if let (Some(identity),Some(editor))=(identity,self.boost_editor) {
+                        cx.defer(move |cx| { let _=editor.update(cx,|editor,_,cx|editor.receive_zap(identity.profile,identity.tab,selector,cx)); });
+                    }
+                }
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
                 Event::EditFocusChanged { .. } => {},
                 Event::OpenPeek { url, .. } => {
@@ -1256,6 +1268,11 @@ impl BrowserWindow {
     }
 
     fn edit_undo(&mut self, redo: bool, cx: &mut Context<Self>) {
+        if !redo {
+            if let Some(editor)=self.boost_editor.filter(|editor|editor.read_with(cx,|editor,_|editor.picking).unwrap_or(false)) {
+                cx.defer(move|cx|{let _=editor.update(cx,|editor,_,cx|editor.undo_last_zap(cx));});return;
+            }
+        }
         let before = self.browser.all_tabs().count();
         let editable = self.browser.active_tab().is_some_and(|tab|
             self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
@@ -1593,6 +1610,7 @@ impl BrowserWindow {
             let favorite = active.is_some_and(|tab| self.browser.is_favorite(tab.id));
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::NewBoost, "New Boost", "new boost|customize page", true),
                 (Command::NewFolder, "New Folder…", "new folder|create folder|add folder", true),
                 (Command::MoveToFolder, "Move to Folder…", "move to folder|pin to folder", active.is_some()),
                 (Command::NewFolderWithTab, "Pin to New Folder…", "pin to new folder|new folder with current tab", active.is_some()),
@@ -1885,12 +1903,14 @@ impl BrowserWindow {
             },
         }
         self.close_command_bar(cx);
+        if self.boost_creation_pending && self.browser.active_tab().is_some_and(|tab|tab.url.starts_with("http://")||tab.url.starts_with("https://")) { self.boost_creation_pending=false; self.new_boost(cx); }
     }
 
     pub(crate) fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() { return; }
         if !self.blank_allows_command(command) { return; }
         match command {
+            Command::NewBoost => self.new_boost(cx),
             Command::NewFolder => self.edit_new_folder(None, None, cx),
             Command::NewFolderWithTab => { if let Some(id) = self.browser.space().active_tab { self.edit_new_folder(None, Some(id), cx); } }
             Command::PinToFolder(folder) => {
@@ -2075,6 +2095,7 @@ impl BrowserWindow {
                 else if this.command_bar.is_some() { this.close_command_bar(cx); }
                 else { this.close_focused_tab(cx); }
             }))
+            .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
             .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))
@@ -2924,6 +2945,7 @@ impl BrowserWindow {
         let control = |id: &'static str| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())())).flex_none().size(px(28.)).rounded_md()
             .flex().items_center().justify_center().text_color(hsla(0., 0., if dark { 1. } else { 0. }, 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
         let controls_open = self.site_controls.is_some();
+        let has_site_boost=self.site_boosts().iter().any(|boost|boost.enabled);
         let anchor = if self.sidebar_debug_namespace.is_none() { self.site_controls_anchor.clone() } else { Default::default() };
         let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .group(id).relative().flex_none().size(px(24.)).flex().items_center().justify_center()
@@ -2991,6 +3013,7 @@ impl BrowserWindow {
                             cx.stop_propagation();
                             this.open_sidebar_menu(crate::tab_menu::MenuTarget::Address, event.position, window, cx);
                         }))
+                        .child(div().id("boost-indicator").debug_selector(||"boost-indicator".into()).flex_none().overflow_hidden().when(has_site_boost,|el|el.size(px(18.))).when(!has_site_boost,|el|el.absolute().size_0()).cursor_pointer().child(crate::icons::control_sized(crate::icons::Icon::Boost,14.)).on_click(cx.listener(|this,_,_,cx|{cx.stop_propagation();this.customize_page(cx);})))
                         .child(div().flex_1().min_w_0().overflow_hidden().child(url))
                         // Page actions appear only while the pointer is over the sidebar.
                         .when(self.browser.active_tab().is_some(), |this| this.child(hover_fade(div().flex().items_center().gap(px(4.))
@@ -3849,7 +3872,7 @@ impl BrowserWindow {
             .items_center()
             .pt(px(top))
             .bg(gpui::transparent_black())
-            .on_click(cx.listener(|this, _, _, cx| this.close_command_bar(cx)))
+            .on_click(cx.listener(|this, _, _, cx| {this.boost_creation_pending=false;this.close_command_bar(cx);}))
             .child(
                 div()
                     .id("command-bar")
@@ -3880,6 +3903,7 @@ impl BrowserWindow {
                         this.confirm(index, cx)
                     }))
                     .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
+                        this.boost_creation_pending=false;
                         this.close_command_bar(cx);
                         if this.transient.is_some() && this.browser.active_tab().is_none() { this.close_window(cx); }
                     }))
@@ -4104,6 +4128,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
             .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
             .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
             .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))

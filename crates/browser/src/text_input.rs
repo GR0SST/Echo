@@ -15,6 +15,10 @@ use unicode_segmentation::UnicodeSegmentation;
 actions!(
     text_input,
     [
+        Newline,
+        Indent,
+        LineUp,
+        LineDown,
         Backspace,
         Delete,
         Left,
@@ -34,6 +38,7 @@ actions!(
     ]
 );
 
+mod multiline;
 const CONTEXT: &str = "TextInput";
 
 /// Replace each CR/LF separately so UTF-16 offsets supplied by an IME stay
@@ -48,6 +53,10 @@ fn single_line_text(text: &str) -> Cow<'_, str> {
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("enter", Newline, Some("CodeInput")),
+        KeyBinding::new("tab", Indent, Some("CodeInput")),
+        KeyBinding::new("up", LineUp, Some("CodeInput")),
+        KeyBinding::new("down", LineDown, Some("CodeInput")),
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
         KeyBinding::new("left", Left, Some(CONTEXT)),
@@ -82,6 +91,8 @@ struct EditState {
 }
 
 pub struct TextInput {
+    multiline: bool,
+    lines: Vec<(usize, ShapedLine, Bounds<Pixels>)>,
     focus_handle: FocusHandle,
     content: SharedString,
     placeholder: SharedString,
@@ -114,6 +125,7 @@ impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         let placeholder = placeholder.into();
         Self {
+            multiline: false, lines: Vec::new(),
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
             placeholder: single_line_text(&placeholder).into_owned().into(),
@@ -131,6 +143,23 @@ impl TextInput {
         }
     }
 
+    pub(crate) fn code(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new("", cx); input.multiline = true; input
+    }
+    fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) { self.replace_text_in_range(None, "\n", window, cx); }
+    fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) { self.replace_text_in_range(None, "  ", window, cx); }
+    fn line_up(&mut self, _: &LineUp, _: &mut Window, cx: &mut Context<Self>) { self.move_line(-1, cx); }
+    fn line_down(&mut self, _: &LineDown, _: &mut Window, cx: &mut Context<Self>) { self.move_line(1, cx); }
+    fn move_line(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let cursor = self.cursor_offset();
+        if let Some(index) = self.lines.iter().rposition(|(start, _, _)| *start <= cursor) {
+            let (start, line, _) = &self.lines[index];
+            let x = line.x_for_index(cursor - start);
+            let target = (index as isize + delta).clamp(0, self.lines.len().saturating_sub(1) as isize) as usize;
+            let (start, line, _) = &self.lines[target];
+            self.move_to(start + line.closest_index_for_x(x), cx);
+        }
+    }
     pub fn scroll_x(&self) -> Pixels {
         self.scroll_x
     }
@@ -167,7 +196,7 @@ impl TextInput {
     /// Replaces the text and selects all of it, so typing overwrites it.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         let text = text.into();
-        self.content = single_line_text(&text).into_owned().into();
+        self.content = if self.multiline { text } else { single_line_text(&text).into_owned().into() };
         self.complete_after_edit = false;
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
@@ -352,8 +381,11 @@ impl TextInput {
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
-        if self.content.is_empty() {
-            return 0;
+        if self.content.is_empty() { return 0; }
+        if self.multiline {
+            if let Some((start, line, bounds)) = self.lines.iter().find(|(_, _, bounds)| position.y < bounds.bottom()).or_else(|| self.lines.last()) {
+                return start + line.closest_index_for_x(position.x - bounds.left());
+            }
         }
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
         else {
@@ -478,7 +510,7 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_text = single_line_text(new_text);
+        let new_text = if self.multiline { Cow::Borrowed(new_text) } else { single_line_text(new_text) };
         let new_text = new_text.as_ref();
         let old_text = self.content.clone();
         let before = self.composition_before.take().unwrap_or_else(|| self.edit_state());
@@ -508,7 +540,7 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_text = single_line_text(new_text);
+        let new_text = if self.multiline { Cow::Borrowed(new_text) } else { single_line_text(new_text) };
         let new_text = new_text.as_ref();
         if self.composition_before.is_none() { self.composition_before = Some(self.edit_state()); }
         let old_text = self.content.clone();
@@ -542,8 +574,13 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        if self.multiline {
+            let (start, line, bounds) = self.lines.iter().rev().find(|(start, _, _)| *start <= range.start)?;
+            let x = line.x_for_index(range.start - start);
+            return Some(Bounds::new(point(bounds.left() + x, bounds.top()), size(px(2.), bounds.size.height)));
+        }
+        let last_layout = self.last_layout.as_ref()?;
         let left = bounds.left() - self.scroll_x;
         Some(Bounds::from_corners(
             point(left + last_layout.x_for_index(range.start), bounds.top()),
@@ -557,6 +594,7 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.multiline { return Some(self.offset_to_utf16(self.index_for_mouse_position(point))); }
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
         let utf8_index = last_layout.index_for_x(point.x - line_point.x + self.scroll_x)?;
@@ -759,9 +797,13 @@ impl Render for TextInput {
         div()
             .flex()
             .w_full()
-            .key_context(CONTEXT)
+            .key_context(if self.multiline { "TextInput CodeInput" } else { CONTEXT })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::indent))
+            .on_action(cx.listener(Self::line_up))
+            .on_action(cx.listener(Self::line_down))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -784,10 +826,9 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .child(TextElement {
-                input: cx.entity(),
-                cursor_color: hsla(0.6, 0.8, 0.5, 1.0),
-            })
+            .child(if self.multiline { multiline::CodeElement { input: cx.entity() }.into_any_element() } else { TextElement {
+                input: cx.entity(), cursor_color: hsla(0.6, 0.8, 0.5, 1.0),
+            }.into_any_element() })
     }
 }
 
