@@ -120,4 +120,37 @@ handler or fake playing-state detection was added.
 Motion references: `arc-r2-press.mov`, `arc-r2-reorder.mov`,
 `reorder-contact.png`. Reorder shows a lifted card, insertion marker, retained
 source slot and settling motion after release. These are measurement artifacts;
-Echo's row spring and reorder animation are not complete.
+The ordinary-press follow-up below implements compression; reorder animation remains incomplete.
+
+
+## Round 2: ordinary pressed rows
+
+`arc-r2-press.mov` and `press-all-contact.png` show the held ordinary row
+inset by 1 px at each edge, then restored on release. Echo now applies the same
+centered 2 px compression without changing height or sibling placement. Nested
+Pinned rows retain their indentation while pressed; unnamed segmented Split
+Views keep their existing rendering. GPUI tests hold, cancel and release an
+ordinary row, verify activation waits for release, and check nested geometry.
+Additional 20 ms and 500 ms captures (`arc-r2-press-quick.mov`,
+`arc-r2-press-long.mov`) isolate a roughly 50–60 ms compression/expansion
+transition on a held selected row. Echo uses a 60 ms elapsed-time smooth
+transition, reverses from the current inset on early release, and honors reduced
+motion. The drag grab point accounts for the currently painted inset.
+Reorder settling remains unfinished.
+
+
+Native press validation: `echo-r2-press-pin-228.mov`,
+`pair-r2-pressed-pin-3x.png` (Arc and Echo Pinned held states). The private Echo
+process is activated with `require-focus`; Quartz verifies its PID and exact
+{100,100,1000,760} frame before recording. Automation `position` uses AppKit's
+bottom-left origin: this display needs `position 100 1300` for screen y=100.
+Double-clicking the resize handle restores Arc's 228 px sidebar, so the measured
+row is 212 px wide and compresses to 210 px. Earlier `echo-r2-press.mov` and
+`echo-press-frames` captured an unrelated screen area and are INVALID evidence.
+System Events later returned AX error -25211 (assistive access denied); further
+Arc input is blocked until that access is available. No owner contact was made
+under the latest no-contact rule.
+
+The validated 150 ms held Echo Pinned sample stays at the thresholded 210 px width
+for 175 ms before returning to 212 px; both native clips and the zoomed pair were
+inspected. Underlying theme and glyph rasterization differences remain visible.

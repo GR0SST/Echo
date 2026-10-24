@@ -6116,6 +6116,87 @@ fn nested_folder_rows_advance_sixteen_pixels_and_reopen_without_moving(cx: &mut 
 }
 
 #[gpui::test]
+fn ordinary_sidebar_press_compresses_two_pixels_and_cancel_restores_geometry(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.take_calls();
+    let row = cx.debug_bounds("tab-7").unwrap();
+    let sibling = cx.debug_bounds("tab-6").unwrap();
+    cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-7").unwrap(), row, "the transition starts from its painted geometry");
+    cx.executor().advance_clock(Duration::from_millis(30));
+    cx.run_until_parked();
+    let halfway = cx.debug_bounds("tab-7").unwrap();
+    assert!(halfway.size.width < row.size.width && halfway.size.width > row.size.width - gpui::px(2.));
+    cx.executor().advance_clock(Duration::from_millis(64));
+    cx.run_until_parked();
+    let pressed = cx.debug_bounds("tab-7").unwrap();
+    assert_eq!(pressed.origin.x, row.origin.x + gpui::px(1.));
+    assert_eq!(pressed.size.width, row.size.width - gpui::px(2.));
+    assert_eq!(pressed.center(), row.center());
+    assert_eq!(cx.debug_bounds("tab-6").unwrap(), sibling);
+    assert_eq!(active_url(&view, cx), original, "activation waits for release");
+    let outside = gpui::point(gpui::px(500.), gpui::px(500.));
+    cx.simulate_mouse_up(outside, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(64));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-7").unwrap(), row);
+    assert_eq!(active_url(&view, cx), original);
+    assert!(fake.take_calls().is_empty());
+    cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.executor().advance_clock(Duration::from_millis(30));
+    cx.run_until_parked();
+    let reversing = cx.debug_bounds("tab-7").unwrap();
+    assert!(reversing.size.width < row.size.width);
+    cx.simulate_mouse_up(row.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-7").unwrap(), reversing, "early release reverses without jumping");
+    cx.executor().advance_clock(Duration::from_millis(30));
+    cx.run_until_parked();
+    let expanding = cx.debug_bounds("tab-7").unwrap();
+    // Subpixel insets can share the same rasterized bounds at this scale.
+    assert!(expanding.size.width >= reversing.size.width && expanding.size.width <= row.size.width);
+    cx.executor().advance_clock(Duration::from_millis(64));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-7").unwrap(), row);
+    click(cx, "tab-7");
+    cx.executor().advance_clock(Duration::from_millis(64));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-7").unwrap(), row);
+    assert_ne!(active_url(&view, cx), original);
+}
+
+#[gpui::test]
+fn nested_ordinary_tab_press_keeps_its_folder_indentation(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_folder_pages(cx);
+    view.update(cx, |w, cx| {
+        let tab = w.browser.space().today[0].id;
+        let folder = w.browser.space().folders[1].id;
+        w.edit_browser(|browser| browser.move_item_to_folder(tab, folder));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let row = cx.debug_bounds("tab-7").unwrap();
+    cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+    cx.simulate_mouse_down(row.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(64));
+    cx.run_until_parked();
+    let pressed = cx.debug_bounds("tab-7").unwrap();
+    assert_eq!(pressed.origin.x, row.origin.x + gpui::px(1.));
+    assert_eq!(pressed.right(), row.right() - gpui::px(1.));
+    cx.simulate_mouse_up(row.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(64));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-7").unwrap(), row);
+}
+
+#[gpui::test]
 fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://www.youtube.com/watch?v=1".into() });

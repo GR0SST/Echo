@@ -613,6 +613,8 @@ pub struct BrowserWindow {
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     pub(crate) tab_drag_active: bool,
     tab_drag_press: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
+    sidebar_press: Option<(TabId, f32, f32, Instant)>,
+    sidebar_press_task: Option<Task<()>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_drop: Option<crate::split_drop::SplitDropPreview>,
     pub(crate) split_drop_generation: u64,
@@ -850,6 +852,8 @@ impl BrowserWindow {
             tab_drop_edges: RefCell::new(HashMap::new()),
             tab_drag_active: false,
             tab_drag_press: Rc::new(Cell::new(None)),
+            sidebar_press: None,
+            sidebar_press_task: None,
             space_drag_hover: None,
             split_drop: None,
             split_drop_generation: 0,
@@ -2610,6 +2614,38 @@ impl BrowserWindow {
 
     // Rendering.
 
+    pub(crate) fn sidebar_press_inset(&self, id: TabId, cx: &Context<Self>) -> f32 {
+        self.sidebar_press.filter(|press| press.0 == id).map_or(0., |(_, from, to, started)| {
+            let t = (cx.background_executor().now().saturating_duration_since(started).as_secs_f32() / 0.06).clamp(0., 1.);
+            from + (to - from) * t * t * (3. - 2. * t)
+        })
+    }
+
+    fn set_sidebar_pressed(&mut self, id: TabId, pressed: bool, cx: &mut Context<Self>) {
+        if !pressed && !self.sidebar_press.is_some_and(|press| press.0 == id) { return; }
+        let from = self.sidebar_press_inset(id, cx);
+        let to = if pressed { 1. } else { 0. };
+        if crate::native::prefers_reduced_motion() {
+            self.sidebar_press_task = None;
+            self.sidebar_press = pressed.then(|| (id, to, to, cx.background_executor().now()));
+            cx.notify();
+            return;
+        }
+        let started = cx.background_executor().now();
+        self.sidebar_press = Some((id, from, to, started));
+        self.sidebar_press_task = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(8)).await;
+            let done = this.update(cx, |this, cx| {
+                let done = cx.background_executor().now().saturating_duration_since(started) >= Duration::from_millis(60);
+                if done && !pressed { this.sidebar_press = None; }
+                cx.notify();
+                done
+            });
+            if !matches!(done, Ok(false)) { break; }
+        }));
+        cx.notify();
+    }
+
     pub(crate) fn render_tab(
         &self,
         tab: &Tab,
@@ -2636,17 +2672,26 @@ impl BrowserWindow {
         let drag_row_width = (self.sidebar_width() - 16.).max(1.);
         let drag_press = self.tab_drag_press.clone();
         let record_drag_press = drag_press.clone();
+        let press_inset = if segmented { 0. } else { self.sidebar_press_inset(id, cx) };
 
         div()
             .id(("tab", key))
             .relative().child(self.track_icon_anchor(crate::icons::IconTarget::Tab(id)))
             .debug_selector(|| self.sidebar_debug_name((|| format!("tab-{key}"))()))
             .group(group.clone())
-            .on_mouse_down(gpui::MouseButton::Left, move |event, _, _| record_drag_press.set(Some(event.position)))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                record_drag_press.set(Some(event.position));
+                if !segmented { this.set_sidebar_pressed(id, true, cx); }
+            }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| this.set_sidebar_pressed(id, false, cx)))
+            .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| this.set_sidebar_pressed(id, false, cx)))
             .on_drag(self.tab_drag(tab), move |drag, offset, window, cx| {
                 // GPUI reports the first move past its threshold, rather than
                 // the press. Preserve the original grab point on the larger card.
                 let offset = offset - (window.mouse_position() - drag_press.get().unwrap_or(window.mouse_position()));
+                // The pressed row moves right during compression. Normalize the
+                // grab point back to its uncompressed frame for the drag card.
+                let offset = offset + gpui::point(px(press_inset), px(0.));
                 drag.start_at(drag_owner.clone(),offset,drag_row_width,if segmented {36.} else {SIDEBAR_ROW_HEIGHT},cx)
             })
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
@@ -2676,6 +2721,8 @@ impl BrowserWindow {
             }))
             .when(segmented, |this| this.px_1().gap_0().h(px(36.)))
             .rounded(px(SIDEBAR_ROW_RADIUS))
+            // Arc eases ordinary rows into a one-pixel inset at each edge while held.
+            .mx(px(press_inset))
             .when(active, |this| this.bg(self.theme_tab_selection_for(painted_space)))
             .when(active && segmented && self.theme_uses_light_ink_for(painted_space), |this| this.bg(hsla(0.,0.,1.,0.2)))
             .text_color(self.theme_foreground_for(painted_space))

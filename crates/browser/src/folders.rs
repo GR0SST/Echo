@@ -401,7 +401,10 @@ impl BrowserWindow {
                     let tab = self.browser.all_tabs().find(|tab| tab.id == id)?;
                     let active = self.browser.spaces.iter().find(|entry| entry.id == space).and_then(|space| space.active_tab).is_some_and(|active| self.browser.item_anchor(active) == id);
                     // Indent the row itself: a wrapper makes ellipsized titles measure too narrow.
-                    Some(self.render_tab(tab, Section::Pinned, active, hue, cx).ml(px(indent)).into_any_element())
+                    let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
+                    let inset = if segmented { 0. } else { self.sidebar_press_inset(id, cx) };
+                    Some(self.render_tab(tab, Section::Pinned, active, hue, cx).ml(px(indent + inset))
+                        .into_any_element())
                 }
             }
         }).collect()
