@@ -151,7 +151,8 @@ impl BrowserWindow {
                         .child(profile_avatar()).child(self.browser.active_user_profile().name().to_owned())
                         .on_click(cx.listener(|this, _, window, cx| this.toggle_lookup_picker(PickerKind::Profiles, window, cx))))
                     .child(div().id("little-address").debug_selector(|| "little-address".into()).flex_1().min_w_0()
-                        .h_full().text_size(px(13.)).text_center().truncate().child(title)
+                        .h_full().flex().items_center().justify_center().text_size(px(13.)).text_center()
+                        .child(div().debug_selector(|| "little-address-title".into()).relative().top(px(1.)).min_w_0().truncate().child(title))
                         .on_click(cx.listener(|this, _, window, cx| {
                             let target = this.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone()));
                             if let Some((target, url)) = target { this.open_command_bar(target, &url, window, cx); }

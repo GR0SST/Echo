@@ -9798,6 +9798,10 @@ fn little_address_click_edits_the_full_url_without_changing_normal_tabs(cx: &mut
     bar(&little, &mut compact).simulate_keystrokes("enter"); compact.run_until_parked();
     let tab = little.read_with(&compact, |view, _| view.browser.active_tab().unwrap().id);
     let engine = fake.0.borrow().forks.last().unwrap().clone(); engine.take_calls();
+    let address = compact.debug_bounds("little-address").unwrap();
+    let title = compact.debug_bounds("little-address-title").unwrap();
+    assert_eq!(title.center().y, address.center().y + gpui::px(1.));
+    assert_eq!(address.size.height, gpui::px(32.));
     let center = compact.update(|window, _| gpui::point(window.viewport_size().width / 2., gpui::px(23.)));
     compact.simulate_mouse_move(center, None, Modifiers::none());
     compact.simulate_mouse_down(center, gpui::MouseButton::Left, Modifiers::none());

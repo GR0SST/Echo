@@ -265,7 +265,7 @@ impl BrowserWindow {
         let content = div().key_context("Peek").track_focus(&self.focus_handle).size_full().relative()
             .child(div().absolute().size_0().track_focus(&self.native_action_focus))
             .child(div().id("peek-backdrop").absolute().top(px(19.)).bottom(px(19.)).left(px(sidebar + 9.)).right(px(19.))
-                .rounded(px(8.)).opacity(0.6 * amount.clamp(0., 1.)).child(self.theme_surface(false)).on_click(cx.listener(|view, _, _, cx| view.exit_peek(cx))))
+                .rounded(px(8.)).opacity(0.7 * amount.clamp(0., 1.)).child(self.theme_surface(false)).on_click(cx.listener(|view, _, _, cx| view.exit_peek(cx))))
             .child(div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(height))
                 .opacity(amount.clamp(0., 1.)).child(card_shadow()))
             .child(div().debug_selector(|| "peek-card".into()).absolute().left(px(left)).top(px(top))
