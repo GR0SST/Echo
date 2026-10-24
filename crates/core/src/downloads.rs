@@ -152,6 +152,15 @@ impl Browser {
         registry.last_sequence = sequence;
         Ok(id)
     }
+    /// Hiding a completed record never deletes its file or reuses its identity.
+    pub fn hide_completed_download(&mut self, id: CompletedDownloadId) -> bool {
+        if self.is_private() || self.is_blank() { return false; }
+        let Some(profile) = self.profiles.get_mut(&id.profile) else { return false; };
+        let records = &mut profile.downloads.records;
+        let before = records.len();
+        records.retain(|record| record.id != id);
+        records.len() != before
+    }
     pub fn completed_downloads(&self, profile: UserProfileId) -> Option<&[CompletedDownload]> {
         self.profiles
             .get(&profile)

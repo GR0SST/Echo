@@ -307,3 +307,20 @@ fn foreign_native_path_encoding_is_rejected_without_lossy_conversion() {
     }
     assert!(session::from_json(&value.to_string()).is_err());
 }
+
+#[test]
+fn hiding_downloads_preserves_other_profiles_and_persisted_identity_watermarks() {
+    let mut browser = Browser::new();
+    let first = browser.default_user_profile_id();
+    let second = browser.create_user_profile("Second").unwrap();
+    let hidden = browser.record_completed_download(first, completion("same.bin")).unwrap();
+    let retained = browser.record_completed_download(second, completion("same.bin")).unwrap();
+    assert!(browser.hide_completed_download(hidden));
+    assert!(!browser.hide_completed_download(hidden));
+    assert!(browser.completed_downloads(first).unwrap().is_empty());
+    assert_eq!(browser.completed_downloads(second).unwrap()[0].id(),retained);
+    let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
+    let next = restored.record_completed_download(first, completion("same.bin")).unwrap();
+    assert_eq!(next.sequence(),hidden.sequence()+1);
+    assert_eq!(restored.completed_downloads(second).unwrap()[0].id(),retained);
+}
