@@ -117,7 +117,8 @@ enum RawEvent {
     Shortcut(Shortcut),
 }
 
-type EventQueue = Arc<Mutex<Vec<(i32, RawEvent)>>>;
+mod routed_events;
+type EventQueue = routed_events::RoutedEvents<RawEvent>;
 type Shortcuts = Arc<Vec<Shortcut>>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -134,6 +135,7 @@ enum ViewRole { Page, Inspector(InspectorId) }
 // the actual view ownership without loading CEF or constructing a native host.
 struct View<B = Browser, C = RequestContext> {
     action_lifetime: std::rc::Rc<()>,
+    callback_events: EventQueue,
     role: ViewRole,
     browser: B,
     // Retain the exact registry Rc, not just a clone of the native CEF handle.
@@ -516,7 +518,7 @@ impl Engine {
     }
 
     fn drain_events(&mut self, ordered_input: bool) -> Vec<Event> {
-        let raw = std::mem::take(&mut *self.events.lock().unwrap());
+        let raw = self.events.take();
         raw.into_iter()
             .filter_map(|(browser_id, event)| {
                 let view = *self.by_browser_id.get(&browser_id)?;
@@ -749,6 +751,7 @@ impl Engine {
             id,
             View {
                 action_lifetime: std::rc::Rc::new(()),
+                callback_events: self.events.clone(),
                 role,
                 browser,
                 context,
@@ -801,6 +804,30 @@ impl Engine {
         }
         self.set_frame(id, frame);
         true
+    }
+
+    /// Move the existing CEF browser into another pool. Its request context,
+    /// document, history and native host remain the same. Only pool-local IDs
+    /// and the destination for future callbacks change.
+    pub fn transfer_view(&mut self, id: ViewId, target: &mut Self, parent: *mut c_void, frame: Bounds) -> Option<ViewId> {
+        if !std::rc::Rc::ptr_eq(&self._runtime, &target._runtime)
+            || self._runtime.lifecycle.require_running().is_err()
+            || self.views.get(&id)?.role != ViewRole::Page
+            || self.inspectors.sessions.values().any(|session| session.status.inspected == id) { return None; }
+        let next = target.next_id.checked_add(1)?;
+        if !self.move_view(id, parent, frame) { return None; }
+        self.snapshots.close(id);
+        let view = self.views.remove(&id)?;
+        let browser = view.browser.identifier();
+        view.callback_events.redirect(browser, &self.events, &target.events, |event| matches!(event,
+            RawEvent::Title(_) | RawEvent::Favicon(..) | RawEvent::EditFocus(_) | RawEvent::Find(..)
+            | RawEvent::Url(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..)));
+        self.by_browser_id.remove(&browser);
+        let imported = ViewId(target.next_id);
+        target.next_id = next;
+        target.by_browser_id.insert(browser, imported);
+        target.views.insert(imported, view);
+        Some(imported)
     }
 
     /// Per-document link intent; only Peek pages capture unmodified Escape.
@@ -1166,7 +1193,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
 
 fn push(events: &EventQueue, browser: Option<&mut Browser>, event: RawEvent) {
     if let Some(browser) = browser {
-        events.lock().unwrap().push((browser.identifier(), event));
+        events.push((browser.identifier(), event));
     }
 }
 
@@ -1353,7 +1380,7 @@ wrap_download_image_callback! {
             if width <= 0 || height <= 0 || width > 128 || height > 128 || data.size() > 64 * 1024 { return; }
             let mut png = vec![0; data.size()];
             if data.data(Some(&mut png), 0) != png.len() { return; }
-            self.events.lock().unwrap().push((self.browser_id, RawEvent::Favicon(self.page_url.clone(), png)));
+            self.events.push((self.browser_id, RawEvent::Favicon(self.page_url.clone(), png)));
         }
     }
 }
@@ -1525,7 +1552,7 @@ wrap_keyboard_handler! {
             let peek_escape = self.policy.lock().unwrap().capture_escape && event.type_ == KeyEventType::RAWKEYDOWN && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
             let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts)) else { return 0; };
             if shortcut.key == "z" {
-                if let Some(browser) = browser.as_ref() { self.events.lock().unwrap().push((browser.identifier(), RawEvent::EditFocus(false))); }
+                if let Some(browser) = browser.as_ref() { self.events.push((browser.identifier(), RawEvent::EditFocus(false))); }
             }
             push(&self.events, browser, RawEvent::Shortcut(shortcut));
             1
@@ -1654,6 +1681,7 @@ mod view_storage_lifetime_tests {
     fn view<C>(role: ViewRole, context: Rc<C>) -> View<(), C> {
         View {
             action_lifetime: Rc::new(()),
+            callback_events: EventQueue::default(),
             role,
             browser: (),
             context,

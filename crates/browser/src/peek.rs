@@ -153,8 +153,8 @@ impl BrowserWindow {
 
     fn split_peek(&mut self, cx: &mut Context<Self>) {
         let Some(state) = &self.peek_owner else { return; };
-        let Some(tab) = self.browser.active_tab() else { return; };
-        let url = tab.url.clone();
+        let Some(tab) = self.browser.active_tab().cloned() else { return; };
+        let pages = self.pages.clone();
         let owner = state.owner.clone();
         let child = cx.weak_entity();
         cx.defer(move |cx| {
@@ -162,8 +162,15 @@ impl BrowserWindow {
                 let Some(source) = view.browser.space().active_tab else { return false; };
                 if !view.can_add_split(source) { return false; }
                 view.begin_split(source, Placement::Right, cx);
-                let Some(draft) = view.split_draft.take() else { return false; };
-                view.edit_browser(|browser| browser.set_url(draft.pane, url));
+                let Some(draft) = view.split_draft.as_ref() else { return false; };
+                let pane = draft.pane;
+                view.edit_browser(|browser| { browser.set_url(pane, tab.url.clone()); browser.set_title(pane, tab.title.clone()); browser.set_tab_muted(pane, tab.muted); });
+                if !crate::transient::transfer_lookup_document(pages.as_ref(), tab.id, view.pages.as_ref(), pane, &view.browser) {
+                    view.cancel_split_draft();
+                    cx.notify();
+                    return false;
+                }
+                view.split_draft.take();
                 cx.notify();
                 true
             }).unwrap_or(false);

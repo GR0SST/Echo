@@ -163,6 +163,7 @@ impl BrowserWindow {
         let Some(transient) = &self.transient else { return; };
         let Some(tab) = self.browser.active_tab().cloned() else { return; };
         let source = transient.source.clone();
+        let lookup_pages = self.pages.clone();
         let space = destination.unwrap_or(transient.space);
         let roots: Vec<_> = cx.windows().into_iter().filter_map(|w| w.downcast::<BrowserWindow>()).collect();
         let target = roots.into_iter().find(|handle| handle.read(cx).is_ok_and(|view|
@@ -179,13 +180,21 @@ impl BrowserWindow {
                 let moved = target.update(cx, |view, window, cx| {
                     view.refresh_profile_projection();
                     if !view.browser.spaces.iter().any(|candidate| candidate.id == space) { return false; }
-                    view.edit_browser(|browser| {
-                        if let Some(index) = browser.spaces.iter().position(|candidate| candidate.id == space) {
-                            browser.switch_space(index);
-                            let id = browser.new_tab(tab.url.clone(), SystemTime::now());
-                            browser.set_title(id, tab.title.clone());
-                        }
+                    let pages = view.pages.clone();
+                    let moved = view.edit_browser(|browser| {
+                        let previous = browser.active_space;
+                        let index = browser.spaces.iter().position(|candidate| candidate.id == space).unwrap();
+                        browser.switch_space(index);
+                        let adopted = browser.adopt_lookup_tab(tab.clone(), SystemTime::now(), |browser, id| {
+                            transfer_lookup_document(lookup_pages.as_ref(), tab.id, pages.as_ref(), id, browser)
+                        }).is_some();
+                        if !adopted { browser.switch_space(previous); }
+                        adopted
                     });
+                    if !moved {
+                        if let Some(pages) = &pages { pages.borrow_mut().reconcile_inventory(&view.browser); }
+                        return false;
+                    }
                     window.activate_window();
                     view.focus(window);
                     cx.notify();
@@ -296,4 +305,14 @@ impl BrowserWindow {
                     }))))
             .into_any_element()
     }
+}
+
+
+/// A lookup without a renderer has no live document to transfer. Once a
+/// document exists, promotion is accepted only when native adoption succeeds.
+pub(crate) fn transfer_lookup_document(source: Option<&std::rc::Rc<std::cell::RefCell<Pages>>>, tab: browser_core::TabId,
+    target: Option<&std::rc::Rc<std::cell::RefCell<Pages>>>, destination: browser_core::TabId, browser: &browser_core::Browser) -> bool {
+    let Some(source) = source.filter(|source| source.borrow().has_page(tab)) else { return true; };
+    let Some(target) = target else { return false; };
+    source.borrow_mut().transfer_page(tab, &mut target.borrow_mut(), destination, browser)
 }

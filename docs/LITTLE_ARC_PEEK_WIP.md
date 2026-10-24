@@ -4,7 +4,7 @@
 
 Standalone lookup windows use an independent Blank model and page store in the source website storage context. Cmd+Option+N is handled by the menu, window and native page shortcut paths. External HTTP/HTTPS app events also create lookups. They inherit the source Space theme and use the shared chrome/material APIs. Closing a lookup does not modify regular Pinned/Favorites/Today selections. Launching a Little window from Incognito/Blank Peek uses the retained normal workspace, never the ephemeral Peek profile; the regression covers both origins.
 
-The resting toolbar shows the hostname. Editing and copying retain the full URL. Cmd+O promotes directly; the arrow opens a searchable Space picker with current Space first. Promotion currently creates a regular page from the URL, so the live document and navigation history are not transferred. Global shortcut registration, the initial standalone search prompt, exact saved placement/opening motion, Extensions, profile switching and downloads remain unfinished. ARC_PARITY stays partial.
+The resting toolbar shows the hostname. Editing and copying retain the full URL. Cmd+O promotes directly; the arrow opens a searchable Space picker with current Space first. Same-profile promotion now adopts the existing CEF browser and native host into a newly allocated canonical Today identity. DOM/form state and back/forward history survive; no replacement browser or navigation is issued. Adoption failure leaves the lookup open and rolls back the unpublished Today tab. Cross-profile adoption is rejected because it must not leak the source website context into another profile. Global shortcut registration, the initial standalone search prompt, exact saved placement/opening motion, Extensions, profile switching and downloads remain unfinished. ARC_PARITY stays partial.
 
 ## Measurements and evidence
 
@@ -22,7 +22,7 @@ Round 2 guarded evidence: `round2-reference-valid/` contains idle/sidebar/addres
 
 Peek now observes owner bounds and resizes its child viewport while preserving the live document. A GPUI regression checks the resize request, card layout and absence of create/navigate/close calls. Native pair: `round2-resize/resized.png` / `round2-echo-resized.png`; zooms: `round2-resize-{arc,echo}-zoom.png`. Both place the 778×776 card at x325/y12 in a 1200×800 owner. Page zoom/profile/theme still differ.
 
-Remaining: exact spring/close timing and shadow, nested Peek/Little links, Undo Close Peek, live page/history transfer, and a dedicated Peek Space picker. Native Arc Cmd+Escape was rechecked with a visibly open card and leaves it open; plain Escape dismisses it.
+Remaining: exact spring/close timing and shadow, nested Peek/Little links, Undo Close Peek, and a dedicated Peek Space picker. Native Arc Cmd+Escape was rechecked with a visibly open card and leaves it open; plain Escape dismisses it.
 
 ## Native inspection safety
 
@@ -39,3 +39,12 @@ The native pointer bridge reads the source window’s live native pointer in top
 Peek retains its render marker throughout asynchronous native close preparation. Clearing that marker early briefly rendered the Little toolbar while CEF retired the child; only its parent attachment is detached at close admission.
 
 Closing an owner requests the Peek child’s own asynchronous close boundary rather than directly removing its native window; the child page host retires even when a caller retains the GPUI Entity.
+
+
+## Live page adoption (Round 2)
+
+The engine moves the same CEF browser/clip host between independent pools, allocates a new pool-local ViewId and redirects callbacks through their original router. Repeated moves and returning to the original pool are covered; queued old-attachment input is discarded. Pages explicitly remaps unclaimed metadata to the new canonical identity. The original request-context lease remains with the same document. Inspector-open documents reject adoption; no reload fallback is used. Transfer is limited to the same user profile.
+
+Core exposes a guarded lookup-adoption transaction, restoring selection without archives/Undo when native adoption fails. GPUI regressions cover Peek and Little live promotion, renderer history, adoption rejection/retry and pending metadata. Split promotion uses the same live transfer.
+
+Arc reference: `round2-transfer-reference-b/{edited,nested,history-back,undo-close,expanded}.png`. Echo: `round2-echo-live/{peek-history-back,peek-expanded,peek-forward,peek-back-after-expand,little-history-back,little-promoted,little-forward,little-back-after-promotion}.png`. Text survives promotion and both history directions. Server `/dest` counts rise 2→4 only for the initial Peek/Little loads; `/nested` rises 1→3 only for the initial nested navigations. No promotion/history request occurs. The isolated run reaches CEF Complete. Arc enables its localhost developer toolbar after expansion; that separate feature is outside this change.

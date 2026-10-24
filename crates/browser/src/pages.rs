@@ -23,6 +23,18 @@ impl StorageSelection {
     }
 }
 
+fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) -> bool {
+    let view = match event {
+        Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::EditFocusChanged { view, .. }
+        | Event::FindResult { view, .. } | Event::UrlChanged { view, .. } | Event::StatusChanged { view, .. }
+        | Event::LoadingChanged { view, .. } => view,
+        _ => return false,
+    };
+    if *view != previous { return false; }
+    *view = current;
+    true
+}
+
 pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     match event {
         Event::OpenInNewTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
@@ -55,6 +67,8 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 /// app and by a recording fake in tests.
 pub trait WebEngine {
     fn set_boost_picker(&mut self, _view: ViewId, _enabled: bool) {}
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
+    fn transfer_view(&mut self, _view: ViewId, _target: &mut dyn WebEngine, _parent: *mut c_void, _bounds: Bounds) -> Option<ViewId> { None }
     fn set_site_boosts(&mut self, _storage: &StorageSelection, _boosts: Vec<engine::SiteBoost>) {}
     fn prepare_paste_and_match_style(&mut self, _view: ViewId) -> Option<NativePaste> { None }
     fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
@@ -157,6 +171,11 @@ impl Chromium {
 
 impl WebEngine for Chromium {
     fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { self.engine.set_boost_picker(view,enabled); }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
+    fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut c_void, bounds: Bounds) -> Option<ViewId> {
+        let target = target.as_any_mut()?.downcast_mut::<Self>()?;
+        self.engine.transfer_view(view, &mut target.engine, parent, bounds)
+    }
     fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
@@ -612,6 +631,60 @@ impl Pages {
         let mut pages = Self::new(engine);
         pages.set_parent(parent);
         Some(pages)
+    }
+
+    pub(crate) fn has_page(&self, tab: TabId) -> bool {
+        self.store.borrow().pages.get(&tab).is_some_and(|page| page.owner == self.host)
+    }
+
+    /// Adopt a document from an independent lookup namespace. Never navigate
+    /// or create a replacement browser. Rejected transfers leave the source live.
+    pub(crate) fn transfer_page(&mut self, tab: TabId, target: &mut Self, destination: TabId, browser: &Browser) -> bool {
+        if Rc::ptr_eq(&self.store, &target.store) || crate::quit::is_quitting() { return false; }
+        target.reconcile_inventory(browser);
+        let mut source = self.store.borrow_mut();
+        let mut target_store = target.store.borrow_mut();
+        let Some(identity) = target_store.identities.get(&destination).copied() else { return false; };
+        let Some(page) = source.pages.get(&tab).filter(|page| page.owner == self.host && page.identity.profile == identity.profile) else { return false; };
+        if target_store.pages.contains_key(&destination) { return false; }
+        let frame = target.bounds.unwrap_or(page.frame);
+        let original_view = page.view;
+        let Some(view) = source.engine.transfer_view(original_view, &mut *target_store.engine, target.parent, frame) else { return false; };
+        source.cancel_handoff(tab);
+        let mut page = source.pages.remove(&tab).unwrap();
+        let old_view = page.view;
+        page.view = view;
+        page.identity = identity;
+        page.source_space = browser.space().id;
+        page.owner = target.host;
+        page.frame = frame;
+        page.input_attachment = page.input_attachment.checked_add(1).expect("input attachment generations exhausted");
+        page.snapshot = None; page.snapshot_pending = None; page.snapshot_origin = None; page.snapshot_good_origin = None;
+        page.visible = false;
+        // Metadata already in flight will update the adopted model on its next
+        // poll. Until then reconciliation must not navigate to a stale model URL.
+        if let Some(tab) = browser.all_tabs().find(|tab| tab.id == destination) { page.url = tab.url.clone(); }
+        target_store.engine.set_visible(view, false);
+        target_store.engine.set_corner_radius(view, if target.peek_mode { 8. } else { f64::from(CONTENT_CORNER_RADIUS) });
+        target_store.pages.insert(destination, page);
+        let metadata: Vec<_> = source.metadata.values().filter(|(event, _)| event.identity.tab == tab).map(|(event, _)| event.event.clone()).collect();
+        source.metadata.retain(|_, (event, _)| event.identity.tab != tab);
+        source.events.retain(|event| event.identity.tab != tab);
+        source.identities.remove(&tab);
+        source.frozen.retain(|(_, id), _| *id != tab);
+        for layout in source.layouts.values_mut() { layout.remove(&tab); }
+        for mut event in metadata {
+            if retarget_page_metadata(&mut event, old_view, view) {
+                if let Some(event) = target_store.capture_event(event) { target_store.events.push(event); }
+            }
+        }
+        source.mirror_revision = source.mirror_revision.wrapping_add(1);
+        target_store.mirror_revision = target_store.mirror_revision.wrapping_add(1);
+        self.visible.remove(&tab);
+        if self.shown == Some(tab) { self.shown = None; }
+        target.visible.remove(&destination);
+        target.shown = None;
+        true
     }
 
     pub(crate) fn identity_for(&self, view: ViewId) -> Option<PageIdentity> {

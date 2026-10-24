@@ -162,7 +162,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Join Meeting (link to the next meeting) | ⌃⌘J (hidden) | missing | — |
 | Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
 | Pin/Unpin Tab | ⌘D | done | — |
-| Open Little Arc or Peek in… (pick a Space) | ⌘O | partial | Little Echo and Peek promote into the originating Space. Little’s arrow opens a searchable Space list. Promotion reloads the URL; live document/history transfer remains unfinished |
+| Open Little Arc or Peek in… (pick a Space) | ⌘O | partial | Little Echo and Peek promote into the originating Space. Little’s arrow opens a searchable Space list. Same-profile promotion adopts the existing CEF browser, retaining DOM, form state and navigation history. Failed native adoption leaves the lookup open without publishing a tab. Cross-profile promotion still needs a reference-verified storage transition |
 | New Folder… | ⇧⌘N per nib (?) | partial | GPUI name editor from Spaces menu and Command Bar; the nib's shortcut conflicts with Incognito, so no binding is assigned yet |
 | Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | done | Tab duplication/rename and current-Space folder collapse/expand are available from menus and the Command Bar |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
@@ -383,7 +383,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 | Links to other sites from Pinned/Favorites open in Peek (option) | partial | Main-frame user GET navigation across hosts opens an isolated child card, with source Space material backdrop and three vector controls. Existing Peek setting gates routing. The child follows owner resize without recreating pages; a 1200×800 reference produces a 778×776 card at x325/y12 with a 228 px sidebar. Subdomain rules and exact material/motion parity need further validation |
 | Shift-click opens a link in Peek (option) | partial | CEF NEW_WINDOW user disposition opens the card, gated by the existing setting. Nested Peek/Little routing remains unfinished |
 | Closing Peek (⌘Esc / Esc), Undo "Close Peek" | partial | Close control, backdrop click and Escape restore the source without archiving it. Arc 1.170.0 leaves the card open on Cmd+Escape; Echo matches. Closing captures the live document, hides the native page and scales its pixels for 180 ms toward the source link, with bounded capture fallback. Opening uses a damped spring. Exact tint/shadow, motion calibration and Undo remain unfinished |
-| Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | partial | Expand and Cmd+O create a Today tab in the source Space. Split control fills a new pane and preserves Pinned/Favorite originals. Live page/history transfer and the dedicated Space picker remain unfinished |
+| Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | partial | Expand and Cmd+O create a Today tab in the source Space. Split control fills a new pane and preserves Pinned/Favorite originals. Same-profile expansion and Split View adopt the existing renderer and preserve history. A dedicated Peek Space picker and cross-profile transitions remain unfinished |
 | Swipe to dismiss the modal (`modal-v2-native-gestures`) (?) | missing | — |
 
 ## 11. Air Traffic Control (link routing)

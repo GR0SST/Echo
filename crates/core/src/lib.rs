@@ -365,6 +365,24 @@ impl Browser {
         id
     }
 
+    /// Publish a lookup as a Today tab only if its live document can be adopted.
+    /// The acceptance callback runs before the model is published; rejection
+    /// restores selection and leaves no archive or sidebar Undo entry.
+    pub fn adopt_lookup_tab(&mut self, mut tab: Tab, now: SystemTime,
+        accept: impl FnOnce(&Self, TabId) -> bool) -> Option<TabId> {
+        let previous = self.space().active_tab;
+        let id = self.new_tab(tab.url.clone(), now);
+        tab.id = id;
+        tab.last_active = now;
+        tab.pinned_url = None;
+        tab.pinned_title = None;
+        *self.spaces[self.active_space].today.first_mut().expect("new lookup tab") = tab;
+        if accept(self, id) { return Some(id); }
+        self.remove_tab(id);
+        self.spaces[self.active_space].active_tab = previous;
+        None
+    }
+
     pub fn activate_tab(&mut self, id: TabId, now: SystemTime) {
         if let Some(tab) = self.active_user_profile_mut().favorites.iter_mut().find(|tab| tab.id == id) {
             tab.last_active = now;
@@ -721,6 +739,34 @@ fn neighbor(space: &Space, section: Section, i: usize) -> Option<TabId> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn adopting_lookup_copies_metadata_and_keeps_existing_tabs() {
+        let now = std::time::SystemTime::UNIX_EPOCH;
+        let mut browser = super::Browser::new();
+        let original = browser.new_tab("https://source.example", now);
+        let mut lookup = browser.active_tab().unwrap().clone();
+        lookup.url = "https://lookup.example".into(); lookup.title = "Live lookup".into(); lookup.muted = true;
+        let id = browser.adopt_lookup_tab(lookup, now, |browser, id| browser.active_tab().unwrap().id == id).unwrap();
+        assert_ne!(id, original);
+        assert_eq!(browser.active_tab().unwrap().title, "Live lookup");
+        assert!(browser.active_tab().unwrap().muted);
+        assert_eq!(browser.spaces[browser.active_space].today.iter().find(|tab| tab.id == original).unwrap().url, "https://source.example");
+    }
+
+    #[test]
+    fn rejected_lookup_adoption_restores_selection_without_archiving_or_undo() {
+        let now = std::time::SystemTime::UNIX_EPOCH;
+        let mut browser = super::Browser::new();
+        let original = browser.new_tab("https://source.example", now);
+        browser.clear_sidebar_history();
+        let lookup = browser.active_tab().unwrap().clone();
+        assert!(browser.adopt_lookup_tab(lookup, now, |_, _| false).is_none());
+        assert_eq!(browser.active_tab().unwrap().id, original);
+        assert_eq!(browser.all_tabs().count(), 1);
+        assert!(browser.archive.is_empty());
+        assert!(!browser.undo_sidebar(now));
+    }
+
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);

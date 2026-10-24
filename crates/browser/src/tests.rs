@@ -211,6 +211,7 @@ enum Call {
     InspectorPasteStyle(engine::InspectorId),
     Close(u64),
     Snapshot(u64, u64),
+    Transfer(u64, u64),
     InspectorOpen(u64, usize, Bounds, engine::InspectorPanel, bool),
     InspectorFocus(engine::InspectorId),
     InspectorClose(engine::InspectorId),
@@ -278,6 +279,20 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
+    fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut std::ffi::c_void, bounds: Bounds) -> Option<ViewId> {
+        let target = target.as_any_mut()?.downcast_mut::<Self>()?;
+        if !self.move_view(view, parent, bounds) { return None; }
+        let mut source = self.0.borrow_mut();
+        let mut destination = target.0.borrow_mut();
+        destination.next_view += 1;
+        let id = destination.next_view;
+        destination.bounds.insert(id, bounds);
+        if let Some(storage) = source.storage.remove(&raw(view)) { destination.storage.insert(id, storage); }
+        source.bounds.remove(&raw(view));
+        destination.calls.push(Call::Transfer(raw(view), id));
+        Some(ViewId::from_raw(id))
+    }
     fn set_color_scheme(&mut self, view: ViewId, dark: Option<bool>) -> bool {
         self.call(Call::ColorScheme(raw(view), dark)); true
     }
@@ -8991,4 +9006,80 @@ fn site_boost_toggle_removes_indicator_without_touching_another_profile(cx:&mut 
     controls.simulate_keystrokes("escape");cx.cx.refresh().unwrap();cx.executor().advance_clock(Duration::from_millis(100));cx.run_until_parked();
     let states=view.read_with(cx,|view,_|view.site_boosts().iter().map(|boost|(boost.name.clone(),boost.enabled)).collect::<Vec<_>>());
     assert_eq!(cx.debug_bounds("boost-indicator").unwrap().size.width,gpui::px(0.),"site states: {states:?}");
+}
+
+
+#[gpui::test]
+fn peek_expansion_adopts_the_renderer_and_preserves_navigation_history(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/history".into() });
+    let (_, mut peek) = peek_window(&owner, cx);
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    child.send(&mut peek, Event::LoadingChanged { view: page(1), loading: false, can_go_back: true, can_go_forward: false });
+    fake.take_calls(); child.take_calls();
+    click(&mut peek, "peek-expand"); cx.run_until_parked();
+    let calls = fake.take_calls();
+    let imported = calls.iter().find_map(|call| if let Call::Transfer(1, id) = call { Some(*id) } else { None }).expect("same renderer imported");
+    assert!(!calls.iter().chain(child.take_calls().iter()).any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+    owner.read_with(cx, |view, _| assert!(view.pages.as_ref().unwrap().borrow().state(view.browser.active_tab().unwrap().id).can_go_back));
+    cx.simulate_keystrokes("cmd-["); cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::Back(imported)));
+    fake.send(cx, Event::UrlChanged { view: page(imported), url: "https://peek.example/previous".into() });
+    assert_eq!(active_url(&owner, cx).as_deref(), Some("https://peek.example/previous"));
+}
+
+#[gpui::test]
+fn little_promotion_adopts_its_live_renderer_without_a_second_load(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-alt-n"); cx.run_until_parked();
+    let (little, mut compact) = little_root(cx);
+    bar(&little, &mut compact).simulate_input("https://little.example/live");
+    bar(&little, &mut compact).simulate_keystrokes("enter"); compact.run_until_parked();
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    child.send(&mut compact, Event::LoadingChanged { view: page(1), loading: false, can_go_back: true, can_go_forward: true });
+    fake.take_calls(); child.take_calls();
+    compact.simulate_keystrokes("cmd-o"); compact.run_until_parked(); cx.run_until_parked();
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::Transfer(1, _))));
+    assert!(!calls.iter().chain(child.take_calls().iter()).any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+    owner.read_with(cx, |view, _| {
+        let state = view.pages.as_ref().unwrap().borrow().state(view.browser.active_tab().unwrap().id);
+        assert!(state.can_go_back && state.can_go_forward);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://little.example/live");
+    });
+}
+
+#[gpui::test]
+fn rejected_peek_transfer_keeps_the_lookup_live_and_does_not_publish_a_tab(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    let before = owner.read_with(cx, |view, _| (view.browser.all_tabs().count(), view.browser.archive.len(), view.browser.space().active_tab));
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/retry".into() });
+    let (_, mut peek) = peek_window(&owner, cx);
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    child.0.borrow_mut().reject_move = true;
+    fake.take_calls(); child.take_calls();
+    click(&mut peek, "peek-expand"); cx.run_until_parked();
+    owner.read_with(cx, |view, _| {
+        assert!(view.peek_child.is_some());
+        assert_eq!((view.browser.all_tabs().count(), view.browser.archive.len(), view.browser.space().active_tab), before);
+    });
+    assert!(!fake.take_calls().iter().chain(child.take_calls().iter()).any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    child.0.borrow_mut().reject_move = false;
+    click(&mut peek, "peek-expand"); cx.run_until_parked();
+    assert_eq!(active_url(&owner, cx).as_deref(), Some("https://peek.example/retry"));
+    assert!(owner.read_with(cx, |view, _| view.peek_child.is_none()));
+}
+
+#[gpui::test]
+fn lookup_transfer_delivers_unclaimed_metadata_to_the_adopted_identity(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/metadata".into() });
+    let (child, mut peek) = peek_window(&owner, cx);
+    child.update(&mut peek, |view, _| {
+        let pages = view.pages.as_ref().unwrap().borrow();
+        pages.capture_event(Event::TitleChanged { view: page(1), title: "Pending renderer title".into() }).unwrap();
+    });
+    click(&mut peek, "peek-expand"); cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(10)); cx.run_until_parked();
+    owner.read_with(cx, |view, _| assert_eq!(view.browser.active_tab().unwrap().title, "Pending renderer title"));
 }
