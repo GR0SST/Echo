@@ -97,7 +97,7 @@ Run each selection once, with no automatic retries:
 The exact executed test names and counts are recorded in
 [qualification.json](../patches/cef154/qualification.json). Review the listed
 suite names against that record before using a selection from another revision.
-The checkpoint passed 18 IO tests and 135 State/deferred tests exactly once.
+The checkpoint passed 18 IO tests and 149 State/deferred tests exactly once.
 
 On macOS, run the native selection from a separate copy of the completed bundle:
 
@@ -178,7 +178,7 @@ no Echo default. Use the test HTTP server: the legacy CefServer's 1 MiB queued
 write limit rejected the first fallback body. The same 35 tests passed with
 CefTestServer, without reducing the payload or relaxing assertions.
 
-The 153 selected C++ tests also cover exact-target nonce consumption, failed RPC
+The 167 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
 BeginNavigation through deferred Init. A public-value assignment guard covers
 the out-of-line OpenURLParams copy assignment required by opaque receipt types.
@@ -274,8 +274,36 @@ TEST bodies are preserved; their shared LoadURL fixture now distinguishes an
 accepted pre-Closing call from an API call first made after Closing. Five new
 C++ tests cover POST/copies/one-shot use, foreign/child rejection, actual primary
 RFH replacement, frozen legacy absence and rejection without replacing a pending
-request. All 153 selected C++ tests and 42 native tests pass once. Queued Reload
-and History commands still need their own capture and acceptance work.
+request. Those 153 selected C++ tests and 42 native tests passed at that
+checkpoint.
+
+Reload, IgnoreCache, Back and Forward now capture before the same CEF queue.
+The one-shot closure binds the original controller, entry ID and each planned
+frame's request identity. Replay cannot select another history entry or obtain
+new admission. A removed/changed entry or frame plan rejects before pending
+navigation mutation. Scroll updates remain allowed: the identity guard compares
+URL, method, POST ID and document/item sequence numbers rather than incidental
+PageState bytes. The original POST receipt also survives the repost dialog.
+
+A WebContents observer reports Shutdown if its source disappears while the
+embedder still owns the queued callback. Lease release waits for that callback;
+dropping an unexecuted live-source command reports Abandoned exactly once.
+The four native queue regressions failed without early capture, then passed
+with original tokens and expected target URLs after Closing. Rejection tests
+invoke their APIs after Closing; accepted tests invoke before it. Existing 42 native
+TEST bodies are preserved. Fourteen added C++ regressions cover this ownership,
+removed entries, POST replacement, scroll updates and distinct subframe plans.
+All 167 selected C++ tests and 46 native tests pass once on macOS Alloy.
+
+The initial native fixture incorrectly assumed every accepted command replaces
+the pending network request. A rapid identical NORMAL reload is suppressed by
+Navigator: the queued receipt must produce factual Abandoned before the fixture
+releases the original held response, which then completes normally. IgnoreCache
+does replace it. Back/Forward must restore BFCache with status 0 and no new
+OnBeforeBrowse. The corrected fixture requires those concrete branches; all 46
+native TEST bodies remain unchanged from the early-capture red run. Five upstream
+navigation/security/SavePackage test translation units passed fresh syntax-only
+compilation; their full test suites were not executed.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

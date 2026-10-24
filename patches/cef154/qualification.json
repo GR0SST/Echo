@@ -3,7 +3,7 @@
   "chromium_commit": "b859317bf11f6be47f9b7799ec690a0a42a1fb33",
   "cef_commit": "14c5a089e8452874cb1a556dc3fde26ed2d87723",
   "selected_units": {
-    "count": 153,
+    "count": 167,
     "io": [
       "DownloadResponseHandlerTest.BlobRequestRejectsManualRedirect",
       "DownloadResponseHandlerTest.BlobRequestRejectsRedirect",
@@ -53,6 +53,7 @@
       "DeferredNavigationReceiptTest.DestroyingQueuedRendererSourceReleasesItsOriginalAdmissionOnce",
       "DeferredNavigationReceiptTest.DestroyingSourceDuringRepostDrainsItsOriginalReceiptExactlyOnce",
       "DeferredNavigationReceiptTest.DroppedCheckAfterSourceCloseAbandonsOnce",
+      "DeferredNavigationReceiptTest.DroppedQueuedReloadAbandonsOnceWithoutControllerMutation",
       "DeferredNavigationReceiptTest.DroppedUnsentCommandReleasesOriginalAdmissionOnce",
       "DeferredNavigationReceiptTest.ExistingResumeServiceWorkerResultDoesNotNeedNewReceipt",
       "DeferredNavigationReceiptTest.ExplicitReceiptRequirementRejectsUnboundServiceWorkerResult",
@@ -80,6 +81,19 @@
       "DeferredNavigationReceiptTest.PostCommitErrorPageCarriesOneOriginalAdmissionWithoutReacquisition",
       "DeferredNavigationReceiptTest.PreClosingReceiptContinuesAfterServiceWorkerInterception",
       "DeferredNavigationReceiptTest.PreClosingReceiptStillAssociatesAfterDeferredIdBeforeMetadataAttach",
+      "DeferredNavigationReceiptTest.QueuedBackAcceptsScrollUpdateOfCapturedTargetEntry",
+      "DeferredNavigationReceiptTest.QueuedBackCannotRetargetRemovedEntry",
+      "DeferredNavigationReceiptTest.QueuedBackKeepsCapturedTargetAcrossAnotherCommittedNavigation",
+      "DeferredNavigationReceiptTest.QueuedBackPreservesTwoDistinctSubframeAdmissions",
+      "DeferredNavigationReceiptTest.QueuedBackUsesOriginalPostEntryAfterClosing",
+      "DeferredNavigationReceiptTest.QueuedForwardUsesOriginalPostEntryAfterClosing",
+      "DeferredNavigationReceiptTest.QueuedHistoryRejectsChangedFramePlanBeforePendingMutation",
+      "DeferredNavigationReceiptTest.QueuedHistorySourceLossSettlesEveryOriginalBeforeLateAction",
+      "DeferredNavigationReceiptTest.QueuedReloadAcceptsScrollUpdateOfSameOriginalRequest",
+      "DeferredNavigationReceiptTest.QueuedReloadKeepsPostThroughClosingAndRepost",
+      "DeferredNavigationReceiptTest.QueuedReloadOwnerDestructionSettlesBeforeQueueRelease",
+      "DeferredNavigationReceiptTest.QueuedReloadRejectsChangedOriginalEntryBeforeMutation",
+      "DeferredNavigationReceiptTest.QueuedReloadRejectsChangedPostIdentityBeforeDialogOrMutation",
       "DeferredNavigationReceiptTest.QueuedRendererAdmissionSurvivesClosingUntilRealInit",
       "DeferredNavigationReceiptTest.RefusedSavePageCannotStopAnAlreadyAdmittedNavigation",
       "DeferredNavigationReceiptTest.RejectedFallbackRequestCannotReplaceEarlierNavigatorRequest",
@@ -163,10 +177,10 @@
     ],
     "all_once_successful": true,
     "io_binary_sha256": "2e8e6ed6d76159e2114d41000ddf30344aae6f8c1a553ff2e08074bb7d062eec",
-    "state_binary_sha256": "c0ea862715ac7051a0cd8afd2dbc27ede93ca8f60584c6e3b8365782dae57678"
+    "state_binary_sha256": "792e2f79bf44f3f125ea008afd49e5dd5fdae941eb32049bc66ac13360a10ccb"
   },
   "native": {
-    "count": 42,
+    "count": 46,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -209,10 +223,14 @@
       "EchoDownloadBridge.SavePageNetworkFailureCannotReportPhantomCompletion",
       "EchoDownloadBridge.InterruptedKnownItemResumesAfterUnregisterAndBlank",
       "EchoDownloadBridge.InterruptedKnownItemCancelsAfterUnregisterAndBlank",
-      "EchoDownloadBridge.MainFrameLoadUrlKeepsAdmissionAcrossNavigationLockAndClosing"
+      "EchoDownloadBridge.MainFrameLoadUrlKeepsAdmissionAcrossNavigationLockAndClosing",
+      "EchoDownloadBridge.QueuedReloadRetainsOriginalAdmissionAfterClosing",
+      "EchoDownloadBridge.QueuedIgnoreCacheRetainsOriginalAdmissionAfterClosing",
+      "EchoDownloadBridge.QueuedBackRetainsOriginalEntryAndAdmissionAfterClosing",
+      "EchoDownloadBridge.QueuedForwardRetainsOriginalEntryAndAdmissionAfterClosing"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "e36839d4d49a00d12325a6c168add5253ec834d7adc4b28166bbe4ee412ee09f",
+    "test_source_sha256": "a30c53890553487c5aa7a8f82f66df18f5c17c689a9701373a3daa9141ac0937",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -258,7 +276,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "6eb316979d279d35fc9254f927714faa80e9c45571f2b70bd2e3d55834bb7893",
+  "native_xml_sha256": "1b1549935be38c38122a9ae64c00780192cdc7cd1cef9fe9fc4132c4d84f6336",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -276,6 +294,18 @@
       "target": "obj/content/test/content_browsertests/security_exploit_browsertest.o",
       "exit": 0,
       "compiler_arguments_sha256": "5891ba45e20b0548bc3ae6f02613f67aafefcbe28717791af6a23f598db2391d",
+      "syntax_only": true
+    },
+    {
+      "target": "obj/content/test/content_unittests/save_package_unittest.o",
+      "exit": 0,
+      "compiler_arguments_sha256": "1e88343b639f4f8633be86c0c1b92a7b36df8e20b0dab337d9a19c25112ef5bc",
+      "syntax_only": true
+    },
+    {
+      "target": "obj/content/test/content_browsertests/save_package_browsertest.o",
+      "exit": 0,
+      "compiler_arguments_sha256": "24220ab8a58a7546e47af8916bf83fedcc20346da03a8dea10647f8dc9b7b98c",
       "syntax_only": true
     }
   ],
@@ -317,7 +347,10 @@
     "queued_controller": "LoadURL reserves before real CEF NavigationLock; original opaque admission follows queued parameter copies after Closing into genuine item association and exact 1 MiB output",
     "queued_controller_red": "native test failed early-capture assertion on old source; identical native source passes after production fix; existing 41 TEST bodies retained, shared LoadURL fixture timing distinguishes before-Closing admission from a genuinely later API request",
     "queued_controller_identity": "five added C++ regressions: POST/copy/one-shot consumption, child/foreign owner rejection, primary RFH replacement within same root, frozen legacy absence and no pending-navigation mutation on late rejection; renderer transfers remain exact-RFH-bound",
-    "queued_controller_scope": "normal registered macOS Alloy main-frame LoadURL only; unregistered legacy route unchanged; queued Reload/History and complete public fence remain unqualified"
+    "queued_controller_scope": "normal registered macOS Alloy main-frame LoadURL; unregistered legacy route unchanged; complete public fence remains unqualified",
+    "queued_history": "four unchanged native red tests now preserve early receipt through NavigationLock and Closing; reject commands first requested after Closing without canceling original request; keep captured entry ID and frame plan",
+    "queued_history_identity": "source observer reports Shutdown before queued action release; stale entry, POST identity and changed frame plan reject before mutation; scroll state changes remain allowed; two-subframe distinct receipts retained",
+    "queued_history_fixture": "first fixture incorrectly required every accepted command to replace the pending network request; native/source evidence established duplicate NORMAL reload suppression and BFCache history bypass. Corrected constraints require actual queued Abandoned before releasing original reload, and status0 plus zero new OnBeforeBrowse for Back/Forward; all 46 native TEST bodies unchanged from red"
   },
   "native_save_page": {
     "formats": {
@@ -329,7 +362,7 @@
       },
       "MHTML": {
         "size": 894,
-        "sha256": "d5c2bb917998d1b82c506cb2591af8b0d93b8070a2145f58f9636c15cf8d6bcf",
+        "sha256": "b32cb7fa8e534ae8a942d26b0ba20f1114520ce628c0ef0e19ac6a45a0c13cf3",
         "verified": true,
         "verification": "live DOM/title markers"
       }
@@ -361,7 +394,24 @@
     },
     "navigation_lock_and_closing_observed": true,
     "original_token_association": true,
-    "native_source_unchanged_from_red": true,
-    "scope": "normal registered macOS Alloy main-frame LoadURL; queued Reload and History remain open"
+    "scope": "normal registered macOS Alloy main-frame LoadURL",
+    "loadurl_fixture_and_test_unchanged_from_its_red": true
+  },
+  "native_queued_history": {
+    "commands": [
+      "Reload",
+      "IgnoreCache",
+      "Back",
+      "Forward"
+    ],
+    "before_closing_admission": true,
+    "expected_native_target_url_and_token_after_queue": true,
+    "source_shutdown_and_changed_entry_frame_plan_unit_coverage": true,
+    "view_scroll_state_not_request_identity": true,
+    "capabilities": 17,
+    "full_fence": false,
+    "normal_reload_duplicate_abandons_queued_then_original_completes": true,
+    "history_restores_bfcache_without_new_browse": true,
+    "fixture_constraints_updated_after_native_evidence": true
   }
 }

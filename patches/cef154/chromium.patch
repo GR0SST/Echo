@@ -3075,17 +3075,163 @@ diff --git a/content/browser/loader/navigation_url_loader_unittest.cc b/content/
 diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/content/browser/renderer_host/navigation_controller_impl.cc
 --- a/content/browser/renderer_host/navigation_controller_impl.cc
 +++ b/content/browser/renderer_host/navigation_controller_impl.cc
-@@ -34,6 +34,8 @@
+@@ -34,8 +34,12 @@
   */
  
  #include "content/browser/renderer_host/navigation_controller_impl.h"
 +#include "content/public/browser/download_request_utils.h"
++#include "content/public/browser/web_contents_observer.h"
 +#include "content/public/browser/web_contents.h"
  
  #include <algorithm>
++#include <tuple>
  #include <utility>
-@@ -967,6 +969,13 @@
  
+ #include "base/command_line.h"
+@@ -965,8 +969,155 @@
+   FinishRestore(selected_navigation, type);
+ }
+ 
++namespace {
++using QueuedRequestIdentity = std::tuple<GURL, std::string, int64_t, int64_t, int64_t>;
++QueuedRequestIdentity QueuedIdentity(FrameNavigationEntry* item) {
++  return {item->url(), item->method(), item->post_id(),
++          item->item_sequence_number(), item->document_sequence_number()};
++}
++using QueuedHistoryIdentities = std::map<FrameTreeNodeId, QueuedRequestIdentity>;
++// The embedder may retain its queue beyond WebContents destruction. Outcomes
++// follow the actual owner lifetime, while callback/lease release still waits
++// for the queued action to unwind. No owner or native view is kept alive.
++class QueuedControllerLifetime : public WebContentsObserver {
++ public:
++  explicit QueuedControllerLifetime(WebContents* owner)
++      : WebContentsObserver(owner) {}
++  ~QueuedControllerLifetime() override { Settle(Reason::kAbandoned); }
++  void Retain(const NavigationReceiptAdmission& admission) {
++    if (admission.receipt) receipts_.push_back(admission.receipt);
++  }
++  bool valid() const {
++    if (!live_) return false;
++    for (const auto& receipt : receipts_)
++      if (!receipt->is_pending()) return false;
++    return true;
++  }
++  void Dispatch() { receipts_.clear(); }
++  void WebContentsDestroyed() override {
++    live_ = false;
++    Settle(Reason::kShutdown);
++  }
++ private:
++  using Reason = download::DownloadRequestReceipt::NoItemReason;
++  void Settle(Reason reason) {
++    auto receipts = std::move(receipts_);
++    for (const auto& receipt : receipts)
++      if (receipt->is_pending()) receipt->ResolveNoItem(reason);
++  }
++  bool live_ = true;
++  std::vector<scoped_refptr<download::DownloadRequestReceipt>> receipts_;
++};
++}  // namespace
++
++base::OnceClosure DownloadRequestUtils::PrepareQueuedControllerCommand(
++    NavigationController& controller, QueuedControllerCommand command) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  return static_cast<NavigationControllerImpl&>(controller)
++      .PrepareQueuedControllerCommand(command);
++}
++
++NavigationEntryImpl* NavigationControllerImpl::GetReloadReceiptEntry() {
++  if (entry_replaced_by_post_commit_error_)
++    return entry_replaced_by_post_commit_error_.get();
++  if (IsInitialNavigation() && pending_entry_) return pending_entry_;
++  const int index = GetCurrentEntryIndex();
++  return index == -1 ? nullptr : GetEntryAtIndex(index);
++}
++
++base::OnceClosure NavigationControllerImpl::PrepareQueuedControllerCommand(
++    DownloadRequestUtils::QueuedControllerCommand command) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  using Command = DownloadRequestUtils::QueuedControllerCommand;
++  auto* owner = WebContents::FromRenderFrameHost(
++      frame_tree_->root()->current_frame_host());
++  auto lifetime = std::make_unique<QueuedControllerLifetime>(owner);
++  if (command == Command::kReload || command == Command::kIgnoreCache) {
++    auto* entry = GetReloadReceiptEntry();
++    if (!entry || entry->IsInitialEntryNotForSynchronousAboutBlank()) return {};
++    auto* item = entry->GetFrameEntry(frame_tree_->root());
++    if (!item) return {};
++    auto admission = DownloadRequestUtils::PrepareNavigationReceipt(
++        owner, item->url(), item->method());
++    if (!admission.allowed) return {};
++    lifetime->Retain(admission);
++    const int id = entry->GetUniqueID();
++    const auto identity = QueuedIdentity(item);
++    const auto type = command == Command::kReload ? ReloadType::NORMAL
++                                                : ReloadType::BYPASSING_CACHE;
++    return base::BindOnce(
++        [](base::WeakPtr<NavigationControllerImpl> controller,
++           std::unique_ptr<QueuedControllerLifetime> lifetime, int id,
++           QueuedRequestIdentity identity, ReloadType type,
++           NavigationReceiptAdmission admission) {
++          if (!controller || !lifetime->valid()) return;
++          auto* entry = controller->GetReloadReceiptEntry();
++          if (!entry || entry->GetUniqueID() != id) return;
++          auto* item = entry->GetFrameEntry(controller->frame_tree_->root());
++          if (!item || QueuedIdentity(item) != identity)
++            return;
++          lifetime->Dispatch();
++          controller->ReloadWithReceipt(type, true, std::move(admission), id);
++        }, weak_factory_.GetWeakPtr(), std::move(lifetime), id, identity,
++        type, std::move(admission));
++  }
++
++  const auto index = command == Command::kBack ? GetIndexForGoBack()
++                                              : GetIndexForGoForward();
++  if (!index) return {};
++  auto* entry = GetEntryAtIndex(*index);
++  if (entry->IsInitialEntryNotForSynchronousAboutBlank()) return {};
++  HistoryReceiptTargets targets;
++  if (!CompleteHistoryReceiptTargets(entry, *index, &targets)) return {};
++  HistoryReceiptAdmissions admissions;
++  for (const auto& [id, metadata] : targets) {
++    auto admission = DownloadRequestUtils::PrepareNavigationReceipt(
++        owner, metadata.first, metadata.second);
++    if (!admission.allowed) return {};
++    lifetime->Retain(admission);
++    admissions.emplace(id, std::move(admission));
++  }
++  const int id = entry->GetUniqueID();
++  QueuedHistoryIdentities identities;
++  for (const auto& [node_id, metadata] : targets) {
++    auto* node = FrameTreeNode::GloballyFindByID(node_id);
++    auto* item = node ? entry->GetFrameEntry(node) : nullptr;
++    if (!item) return {};
++    identities.emplace(node_id, QueuedIdentity(item));
++  }
++  return base::BindOnce(
++      [](base::WeakPtr<NavigationControllerImpl> controller,
++         std::unique_ptr<QueuedControllerLifetime> lifetime, int id,
++         QueuedHistoryIdentities identities, HistoryReceiptTargets targets,
++         HistoryReceiptAdmissions admissions) {
++        if (!controller || !lifetime->valid()) return;
++        const int index = controller->GetEntryIndexWithUniqueID(id);
++        if (index < 0) return;
++        auto* entry = controller->GetEntryAtIndex(index);
++        for (const auto& [node_id, identity] : identities) {
++          auto* node = FrameTreeNode::GloballyFindByID(node_id);
++          auto* item = node ? entry->GetFrameEntry(node) : nullptr;
++          if (!item || QueuedIdentity(item) != identity) return;
++        }
++        HistoryReceiptTargets current;
++        if (!controller->CompleteHistoryReceiptTargets(entry, index, &current) ||
++            current != targets) return;
++        lifetime->Dispatch();
++        controller->DispatchAdmittedHistoryEntry(index, nullptr, std::nullopt,
++            nullptr, base::TimeTicks::Now(), admissions);
++      }, weak_factory_.GetWeakPtr(), std::move(lifetime), id,
++      std::move(identities), std::move(targets), std::move(admissions));
++}
++
  void NavigationControllerImpl::Reload(ReloadType reload_type,
                                        bool check_for_repost) {
 +  ReloadWithReceipt(reload_type, check_for_repost, std::nullopt, 0);
@@ -3098,7 +3244,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    base::TimeTicks actual_navigation_start = base::TimeTicks::Now();
    SCOPED_CRASH_KEY_NUMBER("nav_reentrancy_caller1", "Reload_type",
                            (int)reload_type);
-@@ -975,6 +984,35 @@
+@@ -975,6 +1126,28 @@
    DCHECK_NE(ReloadType::NONE, reload_type);
    NavigationEntryImpl* entry = nullptr;
    int current_index = -1;
@@ -3106,14 +3252,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
 +  // Capture the reload's original receipt before DiscardNonCommittedEntries
 +  // can replace a live request/pending entry. This lookup does not mutate the
 +  // controller. Keep the original selection logic below unchanged.
-+  NavigationEntryImpl* receipt_entry = nullptr;
-+  if (entry_replaced_by_post_commit_error_) {
-+    receipt_entry = entry_replaced_by_post_commit_error_.get();
-+  } else if (IsInitialNavigation() && pending_entry_) {
-+    receipt_entry = pending_entry_;
-+  } else if (GetCurrentEntryIndex() != -1) {
-+    receipt_entry = GetEntryAtIndex(GetCurrentEntryIndex());
-+  }
++  NavigationEntryImpl* receipt_entry = GetReloadReceiptEntry();
 +  if (expected_entry_id &&
 +      (!receipt_entry || receipt_entry->GetUniqueID() != expected_entry_id))
 +    return;
@@ -3134,7 +3273,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    if (entry_replaced_by_post_commit_error_) {
      // If there is an entry that was replaced by a currently active post-commit
-@@ -1025,6 +1063,8 @@
+@@ -1025,6 +1198,8 @@
      delegate_->NotifyBeforeFormRepostWarningShow();
  
      pending_reload_ = reload_type;
@@ -3143,7 +3282,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
      delegate_->ActivateAndShowRepostFormWarningDialog();
      return;
    }
-@@ -1046,11 +1086,14 @@
+@@ -1046,11 +1221,14 @@
        reload_type,
        /*initiator_rfh=*/nullptr,
        /*soft_navigation_heuristics_task_id=*/std::nullopt,
@@ -3159,7 +3298,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  }
  
  void NavigationControllerImpl::ContinuePendingReload() {
-@@ -1059,8 +1102,11 @@
+@@ -1059,8 +1237,11 @@
    if (pending_reload_ == ReloadType::NONE) {
      return;
    }
@@ -3173,7 +3312,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  }
  
  bool NavigationControllerImpl::IsInitialNavigation() {
-@@ -1637,6 +1683,27 @@
+@@ -1637,6 +1818,38 @@
      return {};
    }
  
@@ -3198,10 +3337,21 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
 +    admissions.emplace(root->frame_tree_node_id(), std::move(admission));
 +  }
 +
++  return DispatchAdmittedHistoryEntry(index, initiator_rfh,
++      soft_navigation_heuristics_task_id, navigation_api_key,
++      actual_navigation_start, admissions);
++}
++
++std::vector<base::WeakPtr<NavigationRequest>>
++NavigationControllerImpl::DispatchAdmittedHistoryEntry(
++    int index, RenderFrameHostImpl* initiator_rfh,
++    std::optional<blink::scheduler::TaskAttributionId> soft_navigation_heuristics_task_id,
++    const std::string* navigation_api_key, base::TimeTicks actual_navigation_start,
++    const HistoryReceiptAdmissions& admissions) {
    DiscardNonCommittedEntries();
  
    DCHECK_EQ(nullptr, pending_entry_);
-@@ -1648,7 +1715,8 @@
+@@ -1648,7 +1861,8 @@
        pending_entry_->GetTransitionType() | ui::PAGE_TRANSITION_FORWARD_BACK));
    return NavigateToExistingPendingEntry(
        ReloadType::NONE, initiator_rfh, soft_navigation_heuristics_task_id,
@@ -3211,7 +3361,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  }
  
  void NavigationControllerImpl::GoToOffset(int offset) {
-@@ -1752,6 +1820,17 @@
+@@ -1752,6 +1966,17 @@
    // TODO(crbug.com/385170155): Consider whether tracking this earlier work with
    // an earlier start time is worthwhile for metrics.
    base::TimeTicks actual_navigation_start = base::TimeTicks::Now();
@@ -3229,7 +3379,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    if (params.is_renderer_initiated) {
      DCHECK(params.initiator_origin.has_value());
-@@ -1800,7 +1879,8 @@
+@@ -1800,7 +2025,8 @@
    // The user initiated a load, we don't need to reload anymore.
    needs_reload_ = false;
  
@@ -3239,7 +3389,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  }
  
  void NavigationControllerImpl::LoadOriginalRequestURL() {
-@@ -1862,7 +1942,7 @@
+@@ -1862,7 +2088,7 @@
  
    // Any pending request to repost a form submission is no longer valid, since a
    // different NavigationEntry is committing.
@@ -3248,7 +3398,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    // Save the previous state before we clobber it.
    bool overriding_user_agent_changed = false;
-@@ -3224,7 +3304,8 @@
+@@ -3224,7 +3450,8 @@
      blink::LocalFrameToken initiator_frame_token,
      ChildProcessId initiator_process_id,
      scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
@@ -3258,7 +3408,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    NavigationEntryImpl* entry =
        GetEntryWithUniqueID(render_frame_host->nav_entry_id());
    if (!entry) {
-@@ -3242,7 +3323,8 @@
+@@ -3242,7 +3469,8 @@
        ReloadType::NONE, false /* is_same_document_history_load */,
        true /* is_history_navigation_in_new_child */, initiator_frame_token,
        initiator_process_id, initiator_navigation_state,
@@ -3268,7 +3418,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    if (!request) {
      return false;
-@@ -3700,7 +3782,9 @@
+@@ -3700,7 +3928,9 @@
      std::optional<blink::scheduler::TaskAttributionId>
          soft_navigation_heuristics_task_id,
      const std::string* navigation_api_key,
@@ -3279,7 +3429,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    TRACE_EVENT0("navigation",
                 "NavigationControllerImpl::NavigateToExistingPendingEntry");
    DCHECK(pending_entry_);
-@@ -3755,7 +3839,8 @@
+@@ -3755,7 +3985,8 @@
    FindFramesToNavigate(
        root, reload_type, initiator_frame_token, initiator_process_id,
        initiator_navigation_state, soft_navigation_heuristics_task_id,
@@ -3289,7 +3439,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    if (same_document_loads.empty() && different_document_loads.empty()) {
      // We were unable to match any frames to navigate.  This can happen if a
-@@ -3775,6 +3860,17 @@
+@@ -3775,6 +4006,17 @@
      // need to repeat history navigations until finding the one that works.
      // Consider changing this behavior to keep looking for the first valid
      // history entry that finds frames to navigate.
@@ -3307,7 +3457,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
      std::unique_ptr<NavigationRequest> navigation_request =
          CreateNavigationRequestFromEntry(
              root, pending_entry_, pending_entry_->GetFrameEntry(root),
-@@ -3782,7 +3878,9 @@
+@@ -3782,7 +4024,9 @@
              true /* is_same_document_history_load */,
              false /* is_history_navigation_in_new_child */,
              initiator_frame_token, initiator_process_id,
@@ -3318,7 +3468,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
      if (!navigation_request) {
        // If this navigation cannot start, delete the pending NavigationEntry.
        DiscardPendingEntry(false);
-@@ -3891,12 +3989,37 @@
+@@ -3891,12 +4135,37 @@
        // discards any previously created NavigationRequests, even though the new
        // request is identical to the sole existing request.
        // TODO(crbug.com/417251428): Remove this path once we measure the impact.
@@ -3357,7 +3507,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
        request = navigation_request->GetWeakPtr();
  
        // Ensure that no re-entrant calls or discards of the pending entry occur
-@@ -4085,6 +4208,14 @@
+@@ -4085,6 +4354,14 @@
      }
    }
  
@@ -3372,7 +3522,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    // Reloads should result in a different-document load.  Note that reloads may
    // also happen via the |needs_reload_| mechanism where the reload_type is
    // NONE, so detect this by comparing whether we're going to the same
-@@ -4093,7 +4224,7 @@
+@@ -4093,7 +4370,7 @@
    // via a different path that doesn't involve FindFramesToNavigate (see
    // RenderFrameHost::Reload()).
    if (reload_type != ReloadType::NONE ||
@@ -3381,7 +3531,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
      DCHECK(frame->IsMainFrame());
      return HistoryNavigationAction::kDifferentDocument;
    }
-@@ -4113,7 +4244,7 @@
+@@ -4113,7 +4390,7 @@
    // might be null, and in that case we still shouldn't change what's loaded in
    // this frame.  Note that scheduling any loads assumes that |new_item| is
    // non-null.  See https://crbug.com/1088354.
@@ -3390,13 +3540,13 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    if (!new_item) {
      return HistoryNavigationAction::kStopLooking;
    }
-@@ -4198,6 +4329,42 @@
+@@ -4198,6 +4475,69 @@
    return HistoryNavigationAction::kKeepLooking;
  }
  
-+bool NavigationControllerImpl::PrepareHistoryReceiptAdmissions(
++bool NavigationControllerImpl::CollectHistoryReceiptTargets(
 +    FrameTreeNode* frame, NavigationEntryImpl* target_entry, int target_index,
-+    HistoryReceiptAdmissions* admissions) {
++    HistoryReceiptTargets* targets) {
 +  auto* host = frame->current_frame_host();
 +  // Planning must not evict BFCache entries, cancel prerenders, notify the
 +  // renderer or touch the pending entry. The original lifecycle checks still
@@ -3414,18 +3564,45 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
 +    auto* item = target_entry->GetFrameEntry(frame);
 +    if (!item)
 +      return false;
-+    auto admission = DownloadRequestUtils::PrepareNavigationReceipt(
-+        WebContents::FromRenderFrameHost(host), item->url(), item->method());
-+    if (!admission.allowed)
-+      return false;
-+    admissions->emplace(frame->frame_tree_node_id(), std::move(admission));
++    targets->emplace(frame->frame_tree_node_id(),
++                     std::make_pair(item->url(), item->method()));
 +    if (action == HistoryNavigationAction::kDifferentDocument)
 +      return true;
 +  }
 +  for (size_t i = 0; i < frame->child_count(); ++i) {
-+    if (!PrepareHistoryReceiptAdmissions(frame->child_at(i), target_entry,
-+                                         target_index, admissions))
++    if (!CollectHistoryReceiptTargets(frame->child_at(i), target_entry,
++                                         target_index, targets))
 +      return false;
++  }
++  return true;
++}
++
++bool NavigationControllerImpl::PrepareHistoryReceiptAdmissions(
++    FrameTreeNode* frame, NavigationEntryImpl* target_entry, int target_index,
++    HistoryReceiptAdmissions* admissions) {
++  HistoryReceiptTargets targets;
++  if (!CollectHistoryReceiptTargets(frame, target_entry, target_index, &targets))
++    return false;
++  for (const auto& [id, metadata] : targets) {
++    auto admission = DownloadRequestUtils::PrepareNavigationReceipt(
++        WebContents::FromRenderFrameHost(frame->current_frame_host()),
++        metadata.first, metadata.second);
++    if (!admission.allowed) return false;
++    admissions->emplace(id, std::move(admission));
++  }
++  return true;
++}
++
++bool NavigationControllerImpl::CompleteHistoryReceiptTargets(
++    NavigationEntryImpl* entry, int index, HistoryReceiptTargets* targets) {
++  if (!CollectHistoryReceiptTargets(frame_tree_->root(), entry, index, targets))
++    return false;
++  if (targets->empty()) {
++    auto* root = frame_tree_->root();
++    auto* item = entry->GetFrameEntry(root);
++    if (!item) return false;
++    targets->emplace(root->frame_tree_node_id(),
++                     std::make_pair(item->url(), item->method()));
 +  }
 +  return true;
 +}
@@ -3433,7 +3610,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  void NavigationControllerImpl::FindFramesToNavigate(
      FrameTreeNode* frame,
      ReloadType reload_type,
-@@ -4208,11 +4375,26 @@
+@@ -4208,11 +4548,26 @@
          soft_navigation_heuristics_task_id,
      base::TimeTicks actual_navigation_start,
      std::vector<std::unique_ptr<NavigationRequest>>* same_document_loads,
@@ -3461,7 +3638,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    if (action == HistoryNavigationAction::kSameDocument) {
      std::unique_ptr<NavigationRequest> navigation_request =
-@@ -4222,7 +4404,7 @@
+@@ -4222,7 +4577,7 @@
              /*is_history_navigation_in_new_child_frame=*/false,
              initiator_frame_token, initiator_process_id,
              initiator_navigation_state, actual_navigation_start,
@@ -3470,7 +3647,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
      if (navigation_request) {
        // Only add the request if was properly created. It's possible for the
        // creation to fail in certain cases, e.g. when the URL is invalid.
-@@ -4235,7 +4417,9 @@
+@@ -4235,7 +4590,9 @@
              false /* is_same_document_history_load */,
              false /* is_history_navigation_in_new_child */,
              initiator_frame_token, initiator_process_id,
@@ -3481,7 +3658,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
      if (navigation_request) {
        // Only add the request if was properly created. It's possible for the
        // creation to fail in certain cases, e.g. when the URL is invalid.
-@@ -4256,13 +4440,15 @@
+@@ -4256,13 +4613,15 @@
                           initiator_process_id, initiator_navigation_state,
                           /*soft_navigation_heuristics_task_id=*/std::nullopt,
                           actual_navigation_start, same_document_loads,
@@ -3499,7 +3676,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    FrameTreeNode* node = GetTargetFrameTreeNodeForNavigation(params);
  
    // Compute overrides to the LoadURLParams for |override_user_agent|,
-@@ -4385,7 +4571,10 @@
+@@ -4385,7 +4744,10 @@
            node, params, override_user_agent, should_replace_current_entry,
            network::mojom::SourceLocation::New(), reload_type, pending_entry_,
            pending_entry_->GetFrameEntry(node), actual_navigation_start,
@@ -3511,7 +3688,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    // If the navigation couldn't start, return immediately and discard the
    // pending NavigationEntry.
-@@ -4586,7 +4775,8 @@
+@@ -4586,7 +4948,8 @@
      bool from_frame_proxy,
      bool is_embedder_initiated_fenced_frame_navigation,
      bool is_unfenced_top_navigation,
@@ -3521,7 +3698,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    DCHECK_EQ(-1, GetIndexOfEntry(entry));
  
    // TODO(https://crbug.com/40467594): Add a CHECK(frame_entry) once all
-@@ -4839,7 +5029,8 @@
+@@ -4839,7 +5202,8 @@
        params.navigation_ui_data ? params.navigation_ui_data->Clone() : nullptr,
        started_with_transient_activation, params.started_by_ad,
        embedder_isolation_mode, is_embedder_initiated_fenced_frame_navigation,
@@ -3531,7 +3708,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    if (!navigation_request) {
      return nullptr;
-@@ -4871,7 +5062,8 @@
+@@ -4871,7 +5235,8 @@
      scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
      base::TimeTicks actual_navigation_start,
      std::optional<blink::scheduler::TaskAttributionId>
@@ -3541,7 +3718,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    DCHECK(frame_entry);
    GURL dest_url = frame_entry->url();
    // We should never navigate to an existing initial NavigationEntry that is the
-@@ -4986,6 +5178,19 @@
+@@ -4986,6 +5351,19 @@
      commit_params->srcdoc_value = frame_tree_node->srcdoc_value();
    }
    const bool is_browser_initiated = !initiator_frame_token;
@@ -3561,7 +3738,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    std::unique_ptr<NavigationRequest> request = NavigationRequest::Create(
        frame_tree_node, std::move(common_params), std::move(commit_params),
        is_browser_initiated, false /* was_opener_suppressed */,
-@@ -4994,7 +5199,10 @@
+@@ -4994,7 +5372,10 @@
        entry->extra_headers(), frame_entry, entry, is_form_submission,
        nullptr /* navigation_ui_data */,
        false /* started_with_transient_activation */, false /* started_by_ad */,
@@ -3573,7 +3750,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    request->set_remove_extra_headers_on_cross_origin_redirect(
        entry->GetRemoveExtraHeadersOnCrossOriginRedirect());
-@@ -5054,6 +5262,26 @@
+@@ -5054,6 +5435,26 @@
  
    UMA_HISTOGRAM_ENUMERATION("Navigation.LoadIfNecessaryType",
                              needs_reload_type_);
@@ -3600,7 +3777,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
  
    // Calling Reload() results in ignoring state, and not loading.
    // Explicitly use NavigateToExistingPendingEntry so that the renderer uses the
-@@ -5072,13 +5300,15 @@
+@@ -5072,13 +5473,15 @@
          ReloadType::NONE,
          /*initiator_rfh=*/nullptr,
          /*soft_navigation_heuristics_task_id=*/std::nullopt,
@@ -3618,7 +3795,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    } else if (!GetLastCommittedEntry()
                    ->IsInitialEntryNotForSynchronousAboutBlank()) {
      pending_entry_ = entries_[last_committed_entry_index_].get();
-@@ -5087,7 +5317,8 @@
+@@ -5087,7 +5490,8 @@
          ReloadType::NONE,
          /*initiator_rfh=*/nullptr,
          /*soft_navigation_heuristics_task_id=*/std::nullopt,
@@ -3628,7 +3805,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    } else {
      // We should never navigate to an existing initial NavigationEntry that is
      // the initial NavigationEntry for the initial empty document that hasn't
-@@ -5853,6 +6084,14 @@
+@@ -5853,6 +6257,14 @@
      common_params->should_replace_current_entry = true;
    }
  
@@ -3643,7 +3820,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.cc b/conte
    blink::mojom::CommitNavigationParamsPtr commit_params =
        blink::CreateCommitNavigationParams();
    // It is safe to convert GURL to an Origin and back in the code below because
-@@ -5875,7 +6114,9 @@
+@@ -5875,7 +6287,9 @@
            false /* was_opener_suppressed */, "" /* extra_headers */,
            nullptr /* frame_entry */, nullptr /* entry */,
            false /* is_form_submission */, nullptr /* navigation_ui_data */,
@@ -3683,7 +3860,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.h b/conten
  
    // Reloads the |frame_tree_node| and returns true. In some rare cases, there
    // is no history related to the frame, nothing happens and this returns false.
-@@ -688,13 +691,33 @@
+@@ -688,13 +691,49 @@
    // |soft_navigation_heuristics_task_id|: The task in the renderer that
    // initiated this call (if any).
    // |actual_navigation_start| is the time the navigation began, for metrics.
@@ -3691,6 +3868,22 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.h b/conten
 +  // identities, not positions, URLs or a shared credit for the whole batch.
 +  using HistoryReceiptAdmissions =
 +      std::map<FrameTreeNodeId, NavigationReceiptAdmission>;
++  friend class DownloadRequestUtils;
++  using HistoryReceiptTargets =
++      std::map<FrameTreeNodeId, std::pair<GURL, std::string>>;
++  bool CollectHistoryReceiptTargets(FrameTreeNode* frame,
++      NavigationEntryImpl* target_entry, int target_index,
++      HistoryReceiptTargets* targets);
++  bool CompleteHistoryReceiptTargets(NavigationEntryImpl* entry, int index,
++      HistoryReceiptTargets* targets);
++  NavigationEntryImpl* GetReloadReceiptEntry();
++  base::OnceClosure PrepareQueuedControllerCommand(
++      DownloadRequestUtils::QueuedControllerCommand command);
++  std::vector<base::WeakPtr<NavigationRequest>> DispatchAdmittedHistoryEntry(
++      int index, RenderFrameHostImpl* initiator_rfh,
++      std::optional<blink::scheduler::TaskAttributionId> attribution,
++      const std::string* navigation_api_key, base::TimeTicks start,
++      const HistoryReceiptAdmissions& admissions);
 +  bool PrepareHistoryReceiptAdmissions(
 +      FrameTreeNode* frame, NavigationEntryImpl* target_entry, int target_index,
 +      HistoryReceiptAdmissions* admissions);
@@ -3718,7 +3911,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.h b/conten
  
    // Helper function used by FindFramesToNavigate to determine the appropriate
    // action to take for a particular frame while navigating to
-@@ -721,14 +744,17 @@
+@@ -721,14 +760,17 @@
        base::TimeTicks actual_navigation_start,
        std::vector<std::unique_ptr<NavigationRequest>>* same_document_loads,
        std::vector<std::unique_ptr<NavigationRequest>>*
@@ -3738,7 +3931,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.h b/conten
  
    // Handles a navigation to a renderer-debug URL.
    void HandleRendererDebugURL(FrameTreeNode* frame_tree_node, const GURL& url);
-@@ -774,7 +800,8 @@
+@@ -774,7 +816,8 @@
        bool from_frame_proxy,
        bool is_embedder_initiated_fenced_frame_navigation = false,
        bool is_unfenced_top_navigation = false,
@@ -3748,7 +3941,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.h b/conten
  
    // Creates and returns a NavigationRequest for a navigation to |entry|. Will
    // return nullptr if the parameters are invalid and the navigation cannot
-@@ -795,7 +822,8 @@
+@@ -795,7 +838,8 @@
        scoped_refptr<InitiatorNavigationState> initiator_navigation_state,
        base::TimeTicks actual_navigation_start,
        std::optional<blink::scheduler::TaskAttributionId>
@@ -3758,7 +3951,7 @@ diff --git a/content/browser/renderer_host/navigation_controller_impl.h b/conten
  
    // Returns whether there is a pending NavigationEntry whose unique ID matches
    // the given NavigationRequest's pending_nav_entry_id.
-@@ -1202,6 +1230,10 @@
+@@ -1202,6 +1246,10 @@
    // If a repost is pending, its type (RELOAD or RELOAD_BYPASSING_CACHE),
    // NO_RELOAD otherwise.
    ReloadType pending_reload_ = ReloadType::NONE;
@@ -4736,11 +4929,12 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
  #include "components/download/public/common/download_url_parameters.h"
  #include "content/common/content_export.h"
  #include "net/traffic_annotation/network_traffic_annotation.h"
-@@ -14,10 +23,134 @@
+@@ -14,10 +23,142 @@
  namespace content {
  
  class WebContents;
 +class RenderFrameHost;
++class NavigationController;
 +
 +// Move-only UI ingress admission. This is the original receipt, not a lookup
 +// credit. A prepared legacy admission also prevents a later factory lookup.
@@ -4819,6 +5013,13 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
 +  static void AbandonNavigationCommand(
 +      RenderFrameHost* frame, const base::UnguessableToken& nonce);
 +
++  enum class QueuedControllerCommand { kReload, kIgnoreCache, kBack, kForward };
++  // UI-only, one-shot action bound to the original controller, entry and frame
++  // plan. Capture before an embedder queue. Null means rejected/no navigation.
++  // Dropping the closure abandons; source destruction settles Shutdown.
++  static base::OnceClosure PrepareQueuedControllerCommand(
++      NavigationController& controller, QueuedControllerCommand command);
++
 +  // Browser/controller command: reserve before queueing, freeze legacy absence,
 +  // and bind to this contents' primary root node across renderer replacement.
 +  // Null rejects. The caller cannot supply another source's prepared receipt.
@@ -4871,7 +5072,7 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
    // Construct download::DownloadUrlParameters for downloading the resource at
    // |url| and associating the download with the main frame of the given
    // WebContents.
-@@ -26,6 +159,14 @@
+@@ -26,6 +167,14 @@
        WebContents* web_contents,
        const GURL& url,
        const net::NetworkTrafficAnnotationTag& traffic_annotation);

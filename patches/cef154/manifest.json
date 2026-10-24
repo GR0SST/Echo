@@ -35,11 +35,11 @@
   "patch_files": [
     {
       "path": "chromium.patch",
-      "sha256": "81a0a92beab2c5ba84eec32863f4bcd3f27cc47bb372b7f4d8d01869733ab97e"
+      "sha256": "78f0399ee7493c374b3d809aebbbc6bafae3310c34e36256df4e82b929142dc0"
     },
     {
       "path": "cef.patch",
-      "sha256": "d6154127f69b055ea6b50bb03a027e9f31fadafa326da68075f51ffe67e854e4"
+      "sha256": "4eb06bfe2c89df45f5eb3ae4d805e2684e408f8894af08ff267b5f11e994b61b"
     }
   ],
   "standard_patch_files": [
@@ -2496,13 +2496,13 @@
     {
       "path": "content/browser/renderer_host/navigation_controller_impl.cc",
       "base_sha256": "c35c54b3940aaa1d6807080b3d10cf01f30df9875ee16e907005e00e843b65e9",
-      "result_sha256": "d3161fe5de6557863ddd506456f6389d10ec0de52821cf3415aba96e88ee68dd",
+      "result_sha256": "15fdf649b22e6f4fab69b29850d303b10a48e2f888158f392c263d1a10ceddf8",
       "mode": "100644"
     },
     {
       "path": "content/browser/renderer_host/navigation_controller_impl.h",
       "base_sha256": "5a16f9e8fe943577557973c498547b1cce8ff94edb00707d192f222264bb3881",
-      "result_sha256": "c7bbe6b30ab8c11e9cce108f9399eaab504cc53ba8a10aa367b9694b500a77a6",
+      "result_sha256": "bae14223c5aa1fdf0d0dec8d8d96f8a1053c74111d20a6fe8c6446433c6df883",
       "mode": "100644"
     },
     {
@@ -2580,7 +2580,7 @@
     {
       "path": "content/public/browser/download_request_utils.h",
       "base_sha256": "527633edbfdb5a22a59875556e7f0d0bf7fc6ad26ecaad9d2f31a7c946b3c9a6",
-      "result_sha256": "c3f614c0fa860ce81ad3535c46b4f9710c14b6401c82e607f6ea6078a5487166",
+      "result_sha256": "1845ffbac20b17b7bb494783a63b287bc3b1d10c447a60de40f8e8c398a66c5d",
       "mode": "100644"
     },
     {
@@ -2742,7 +2742,7 @@
     {
       "path": "cef/libcef/browser/browser_host_base.cc",
       "base_sha256": "d593c15c931ffa7de4eeb9d1b54ac04b82db9abe2d89c8144089ebed0888b06c",
-      "result_sha256": "a1a4e1df3a04e11dabe40c7faac27a7ae4752d2290055d85792a03a7e3d0bf85",
+      "result_sha256": "05629e32daaeddd194561f73ee1b4719f36eb97323c27910e0584be0011c860e",
       "mode": "100644"
     },
     {
@@ -2760,7 +2760,7 @@
     {
       "path": "cef/libcef/browser/download_bridge_deferred_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "a5e71e37333a3495447c6f13037aeac7c0948107d5f7e646a39514d073156152",
+      "result_sha256": "4a9aab113d3f66fa5fcc8291b02075ef098bca2c272276785b8f064e1d3273dc",
       "mode": "100644"
     },
     {
@@ -2844,7 +2844,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "e36839d4d49a00d12325a6c168add5253ec834d7adc4b28166bbe4ee412ee09f",
+      "result_sha256": "a30c53890553487c5aa7a8f82f66df18f5c17c689a9701373a3daa9141ac0937",
       "mode": "100644"
     },
     {

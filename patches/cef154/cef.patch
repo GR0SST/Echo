@@ -331,7 +331,7 @@ diff --git a/libcef/browser/alloy/alloy_browser_host_impl.cc b/libcef/browser/al
 diff --git a/libcef/browser/browser_host_base.cc b/libcef/browser/browser_host_base.cc
 --- a/libcef/browser/browser_host_base.cc
 +++ b/libcef/browser/browser_host_base.cc
-@@ -3,6 +3,7 @@
+@@ -3,10 +3,12 @@
  // found in the LICENSE file.
  
  #include "cef/libcef/browser/browser_host_base.h"
@@ -339,7 +339,29 @@ diff --git a/libcef/browser/browser_host_base.cc b/libcef/browser/browser_host_b
  
  #include <tuple>
  
-@@ -524,29 +525,46 @@
+ #include "base/logging.h"
++#include "base/memory/ref_counted.h"
+ #include "cef/libcef/browser/browser_guest_util.h"
+ #include "cef/libcef/browser/browser_info_manager.h"
+ #include "cef/libcef/browser/browser_platform_delegate.h"
+@@ -46,6 +48,16 @@
+ 
+ namespace {
+ 
++using QueuedControllerAction = base::RefCountedData<base::OnceClosure>;
++void RunQueuedControllerAction(CefRefPtr<CefBrowserHostBase> browser,
++                              scoped_refptr<QueuedControllerAction> action) {
++  CEF_REQUIRE_UIT();
++  auto replay = base::BindOnce(&RunQueuedControllerAction, browser, action);
++  if (browser->browser_info()->IsNavigationLocked(std::move(replay))) return;
++  if (action->data) std::move(action->data).Run();
++}
++
++
+ // Associates a CefBrowserHostBase instance with a WebContents. This object will
+ // be deleted automatically when the WebContents is destroyed.
+ class WebContentsUserDataAdapter : public base::SupportsUserData::Data {
+@@ -524,29 +536,46 @@
      return;
    }
  
@@ -403,7 +425,95 @@ diff --git a/libcef/browser/browser_host_base.cc b/libcef/browser/browser_host_b
    manager->DownloadUrl(std::move(params));
  }
  
-@@ -1370,20 +1388,31 @@
+@@ -1114,6 +1143,21 @@
+     return;
+   }
+ 
++  if (IsAlloyStyle()) {
++    auto gate = cef::download_bridge::CaptureFrameNavigationGate(this);
++    if (gate) {
++      if (!gate.Run()) return;
++      auto* contents = GetWebContents();
++      if (!contents) return;
++      auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++          contents->GetController(),
++          content::DownloadRequestUtils::QueuedControllerCommand::kBack);
++      if (action) RunQueuedControllerAction(this,
++          base::MakeRefCounted<QueuedControllerAction>(std::move(action)));
++      return;
++    }
++  }
++
+   if (browser_info_->IsNavigationLocked(std::move(callback))) {
+     return;
+   }
+@@ -1136,6 +1180,21 @@
+     return;
+   }
+ 
++  if (IsAlloyStyle()) {
++    auto gate = cef::download_bridge::CaptureFrameNavigationGate(this);
++    if (gate) {
++      if (!gate.Run()) return;
++      auto* contents = GetWebContents();
++      if (!contents) return;
++      auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++          contents->GetController(),
++          content::DownloadRequestUtils::QueuedControllerCommand::kForward);
++      if (action) RunQueuedControllerAction(this,
++          base::MakeRefCounted<QueuedControllerAction>(std::move(action)));
++      return;
++    }
++  }
++
+   if (browser_info_->IsNavigationLocked(std::move(callback))) {
+     return;
+   }
+@@ -1158,6 +1217,21 @@
+     return;
+   }
+ 
++  if (IsAlloyStyle()) {
++    auto gate = cef::download_bridge::CaptureFrameNavigationGate(this);
++    if (gate) {
++      if (!gate.Run()) return;
++      auto* contents = GetWebContents();
++      if (!contents) return;
++      auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++          contents->GetController(),
++          content::DownloadRequestUtils::QueuedControllerCommand::kReload);
++      if (action) RunQueuedControllerAction(this,
++          base::MakeRefCounted<QueuedControllerAction>(std::move(action)));
++      return;
++    }
++  }
++
+   if (browser_info_->IsNavigationLocked(std::move(callback))) {
+     return;
+   }
+@@ -1173,6 +1247,21 @@
+   if (!CEF_CURRENTLY_ON_UIT()) {
+     CEF_POST_TASK(CEF_UIT, std::move(callback));
+     return;
++  }
++
++  if (IsAlloyStyle()) {
++    auto gate = cef::download_bridge::CaptureFrameNavigationGate(this);
++    if (gate) {
++      if (!gate.Run()) return;
++      auto* contents = GetWebContents();
++      if (!contents) return;
++      auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++          contents->GetController(),
++          content::DownloadRequestUtils::QueuedControllerCommand::kIgnoreCache);
++      if (action) RunQueuedControllerAction(this,
++          base::MakeRefCounted<QueuedControllerAction>(std::move(action)));
++      return;
++    }
+   }
+ 
+   if (browser_info_->IsNavigationLocked(std::move(callback))) {
+@@ -1370,20 +1459,31 @@
  
  void CefBrowserHostBase::LoadMainFrameURL(
      const content::OpenURLParams& params) {
@@ -449,7 +559,7 @@ diff --git a/libcef/browser/browser_host_base.cc b/libcef/browser/browser_host_b
  }
  
  bool CefBrowserHostBase::Navigate(const content::OpenURLParams& params) {
-@@ -1395,6 +1424,11 @@
+@@ -1395,6 +1495,11 @@
        return false;
      }
  
@@ -461,7 +571,7 @@ diff --git a/libcef/browser/browser_host_base.cc b/libcef/browser/browser_host_b
      web_contents->GetController().LoadURL(
          gurl, params.referrer, params.transition, params.extra_headers);
      return true;
-@@ -1497,6 +1531,7 @@
+@@ -1497,6 +1602,7 @@
  
  void CefBrowserHostBase::OnAfterCreated() {
    CEF_REQUIRE_UIT();
@@ -905,7 +1015,7 @@ diff --git a/libcef/browser/download_bridge_deferred_unittest.cc b/libcef/browse
 new file mode 100644
 --- /dev/null
 +++ b/libcef/browser/download_bridge_deferred_unittest.cc
-@@ -0,0 +1,3270 @@
+@@ -0,0 +1,3509 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +
@@ -955,6 +1065,8 @@ new file mode 100644
 +#include "content/public/browser/network_service_util.h"
 +#include "content/public/browser/web_contents_observer.h"
 +#include "content/public/test/navigation_simulator.h"
++#include "third_party/blink/public/common/page_state/page_state_serialization.h"
++#include <tuple>
 +#include "content/public/test/test_content_client_initializer.h"
 +#include "content/test/test_render_frame_host.h"
 +#include "content/test/navigation_simulator_impl.h"
@@ -4176,6 +4288,243 @@ new file mode 100644
 +}
 +
 +}  // namespace cef::download_bridge
++
++namespace cef::download_bridge {
++using QueueCommand = content::DownloadRequestUtils::QueuedControllerCommand;
++TEST_F(DeferredNavigationReceiptTest, QueuedReloadKeepsPostThroughClosingAndRepost) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  RepostObserver observer(contents());
++  auto& controller = contents()->GetController();
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++      controller, QueueCommand::kIgnoreCache);
++  ASSERT_TRUE(action); EXPECT_EQ(0, observer.warnings);
++  EXPECT_FALSE(controller.GetPendingEntry());
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  std::move(action).Run();
++  ASSERT_EQ(1, observer.warnings);
++  EXPECT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
++  controller.ContinuePendingReload();
++  auto* request = main_test_rfh()->frame_tree_node()->navigation_request();
++  ASSERT_TRUE(request); EXPECT_EQ("POST", request->common_params().method);
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedReloadRejectsChangedOriginalEntryBeforeMutation) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = contents()->GetController();
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++      controller, QueueCommand::kReload);
++  ASSERT_TRUE(action); ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  controller.GetLastCommittedEntry()->SetURL(GURL("https://changed.test/"));
++  const int id = controller.GetLastCommittedEntry()->GetUniqueID();
++  std::move(action).Run();
++  EXPECT_FALSE(controller.GetPendingEntry());
++  EXPECT_EQ(id, controller.GetLastCommittedEntry()->GetUniqueID());
++  EXPECT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, releases_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}), reasons_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedReloadOwnerDestructionSettlesBeforeQueueRelease) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++      contents()->GetController(), QueueCommand::kReload);
++  ASSERT_TRUE(action); ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_SHUTDOWN}), reasons_);
++  EXPECT_EQ(0, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  std::move(action).Run();
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, releases_);
++  EXPECT_EQ(1u, outcomes_.size()); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, DroppedQueuedReloadAbandonsOnceWithoutControllerMutation) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(
++      contents()->GetController(), QueueCommand::kReload);
++  ASSERT_TRUE(action); ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  action.Reset();
++  EXPECT_FALSE(contents()->GetController().GetPendingEntry());
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}), reasons_);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedBackUsesOriginalPostEntryAfterClosing) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = contents()->GetController();
++  const int target = controller.GetLastCommittedEntry()->GetUniqueID();
++  Bridge::SetReserveCallback(contents(), {});
++  NavigateAndCommit(GURL("https://receipt.test/other"));
++  Bridge::SetReserveCallback(contents(), base::BindRepeating(
++      &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action); EXPECT_FALSE(controller.GetPendingEntry());
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  ASSERT_TRUE(controller.GetPendingEntry()); EXPECT_EQ(target, controller.GetPendingEntry()->GetUniqueID());
++  auto* request = main_test_rfh()->frame_tree_node()->navigation_request();
++  ASSERT_TRUE(request); EXPECT_EQ("POST", request->common_params().method);
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedForwardUsesOriginalPostEntryAfterClosing) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = contents()->GetController();
++  const int target = controller.GetLastCommittedEntry()->GetUniqueID();
++  Bridge::SetReserveCallback(contents(), {});
++  content::NavigationSimulator::GoBack(contents());
++  Bridge::SetReserveCallback(contents(), base::BindRepeating(
++      &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kForward);
++  ASSERT_TRUE(action); ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  ASSERT_TRUE(controller.GetPendingEntry()); EXPECT_EQ(target, controller.GetPendingEntry()->GetUniqueID());
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedBackCannotRetargetRemovedEntry) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = contents()->GetController(); const int target = controller.GetCurrentEntryIndex();
++  Bridge::SetReserveCallback(contents(), {}); NavigateAndCommit(GURL("https://receipt.test/other"));
++  Bridge::SetReserveCallback(contents(), base::BindRepeating(
++      &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action); ASSERT_TRUE(controller.RemoveEntryAtIndex(target));
++  const int current = controller.GetLastCommittedEntry()->GetUniqueID();
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  EXPECT_FALSE(controller.GetPendingEntry()); EXPECT_EQ(current, controller.GetLastCommittedEntry()->GetUniqueID());
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedBackPreservesTwoDistinctSubframeAdmissions) {
++  int target = -1; content::FrameTreeNode *left = nullptr, *right = nullptr;
++  ASSERT_NO_FATAL_FAILURE(PrepareTwoChildHistory(&target, &left, &right));
++  auto& controller = contents()->GetController(); ASSERT_TRUE(controller.RemoveEntryAtIndex(target + 1));
++  static_cast<content::NavigationEntryImpl*>(controller.GetEntryAtIndex(target))->set_should_skip_on_back_forward_ui(false);
++  ASSERT_TRUE(controller.CanGoBack());
++  ASSERT_EQ(target, *static_cast<content::NavigationControllerImpl&>(controller).GetIndexForGoBack());
++  distinct_tokens_ = true;
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action); EXPECT_EQ(2, reserves_); EXPECT_FALSE(controller.GetPendingEntry());
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  ASSERT_TRUE(left->navigation_request()); ASSERT_TRUE(right->navigation_request());
++  EXPECT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
++  EXPECT_EQ(2, attempts_); EXPECT_EQ(2, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle(); std::sort(outcomes_.begin(), outcomes_.end());
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken, kOriginalToken + 1}), outcomes_);
++  EXPECT_EQ(2, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedHistoryRejectsChangedFramePlanBeforePendingMutation) {
++  int target = -1; content::FrameTreeNode *left = nullptr, *right = nullptr;
++  ASSERT_NO_FATAL_FAILURE(PrepareTwoChildHistory(&target, &left, &right));
++  auto& controller = contents()->GetController(); ASSERT_TRUE(controller.RemoveEntryAtIndex(target + 1));
++  static_cast<content::NavigationEntryImpl*>(controller.GetEntryAtIndex(target))->set_should_skip_on_back_forward_ui(false);
++  ASSERT_TRUE(controller.CanGoBack());
++  ASSERT_EQ(target, *static_cast<content::NavigationControllerImpl&>(controller).GetIndexForGoBack());
++  distinct_tokens_ = true;
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action); const int current = controller.GetLastCommittedEntry()->GetUniqueID();
++  static_cast<content::TestRenderFrameHost*>(left->current_frame_host())->Detach();
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  EXPECT_FALSE(controller.GetPendingEntry()); EXPECT_FALSE(right->navigation_request());
++  EXPECT_EQ(current, controller.GetLastCommittedEntry()->GetUniqueID());
++  EXPECT_EQ(2, attempts_); EXPECT_EQ(2, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedHistorySourceLossSettlesEveryOriginalBeforeLateAction) {
++  int target = -1; content::FrameTreeNode *left = nullptr, *right = nullptr;
++  ASSERT_NO_FATAL_FAILURE(PrepareTwoChildHistory(&target, &left, &right));
++  auto& controller = contents()->GetController(); ASSERT_TRUE(controller.RemoveEntryAtIndex(target + 1));
++  static_cast<content::NavigationEntryImpl*>(controller.GetEntryAtIndex(target))->set_should_skip_on_back_forward_ui(false);
++  ASSERT_TRUE(controller.CanGoBack());
++  ASSERT_EQ(target, *static_cast<content::NavigationControllerImpl&>(controller).GetIndexForGoBack());
++  distinct_tokens_ = true;
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action); ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(std::vector<uint32_t>(2, ECHO_CEF_DOWNLOAD_NO_ITEM_SHUTDOWN), reasons_);
++  EXPECT_EQ(0, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  std::move(action).Run(); EXPECT_EQ(2, releases_); EXPECT_EQ(2, attempts_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++
++}  // namespace cef::download_bridge
++
++namespace cef::download_bridge {
++// Scrolling changes PageState without selecting a new request or document.
++// Queue guards must compare request identity, not freeze incidental view state.
++void ChangeQueuedTargetScroll(content::NavigationEntryImpl* entry) {
++  auto identity = [](auto* item) {
++    return std::make_tuple(item->url(), item->method(), item->post_id(),
++        item->item_sequence_number(), item->document_sequence_number());
++  };
++  const auto original = identity(entry->root_node()->frame_entry.get());
++  blink::ExplodedPageState state;
++  ASSERT_TRUE(blink::DecodePageState(entry->GetPageState().ToEncodedData(), &state));
++  state.top.scroll_offset = gfx::Point(19, 211);
++  std::string encoded;
++  blink::EncodePageState(state, &encoded);
++  ASSERT_NE(encoded, entry->GetPageState().ToEncodedData());
++  entry->root_node()->frame_entry->SetPageState(blink::PageState::CreateFromEncodedData(encoded));
++  ASSERT_EQ(original, identity(entry->root_node()->frame_entry.get()));
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedReloadAcceptsScrollUpdateOfSameOriginalRequest) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = static_cast<content::NavigationControllerImpl&>(contents()->GetController());
++  RepostObserver observer(contents());
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kReload);
++  ASSERT_TRUE(action);
++  ASSERT_NO_FATAL_FAILURE(ChangeQueuedTargetScroll(controller.GetLastCommittedEntry()));
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  ASSERT_EQ(1, observer.warnings); controller.ContinuePendingReload();
++  ASSERT_TRUE(main_test_rfh()->frame_tree_node()->navigation_request());
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedBackAcceptsScrollUpdateOfCapturedTargetEntry) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = static_cast<content::NavigationControllerImpl&>(contents()->GetController());
++  auto* target = controller.GetLastCommittedEntry(); const int id = target->GetUniqueID();
++  Bridge::SetReserveCallback(contents(), {}); NavigateAndCommit(GURL("https://receipt.test/other"));
++  Bridge::SetReserveCallback(contents(), base::BindRepeating(
++      &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action); ASSERT_NO_FATAL_FAILURE(ChangeQueuedTargetScroll(target));
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  ASSERT_TRUE(controller.GetPendingEntry()); EXPECT_EQ(id, controller.GetPendingEntry()->GetUniqueID());
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedReloadRejectsChangedPostIdentityBeforeDialogOrMutation) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = static_cast<content::NavigationControllerImpl&>(contents()->GetController());
++  RepostObserver observer(contents());
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kReload);
++  ASSERT_TRUE(action);
++  auto* item = controller.GetLastCommittedEntry()->GetFrameEntry(main_test_rfh()->frame_tree_node());
++  item->set_post_id(item->post_id() + 1);
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  EXPECT_EQ(0, observer.warnings); EXPECT_FALSE(controller.GetPendingEntry());
++  EXPECT_FALSE(main_test_rfh()->frame_tree_node()->navigation_request());
++  controller.CancelPendingReload();
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest, QueuedBackKeepsCapturedTargetAcrossAnotherCommittedNavigation) {
++  ASSERT_NO_FATAL_FAILURE(PrepareCommittedPostForRepost());
++  auto& controller = contents()->GetController(); const int target = controller.GetLastCommittedEntry()->GetUniqueID();
++  Bridge::SetReserveCallback(contents(), {}); NavigateAndCommit(GURL("https://receipt.test/second"));
++  Bridge::SetReserveCallback(contents(), base::BindRepeating(
++      &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  auto action = content::DownloadRequestUtils::PrepareQueuedControllerCommand(controller, QueueCommand::kBack);
++  ASSERT_TRUE(action);
++  Bridge::SetReserveCallback(contents(), {}); NavigateAndCommit(GURL("https://receipt.test/third"));
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin()); std::move(action).Run();
++  ASSERT_TRUE(controller.GetPendingEntry()); EXPECT_EQ(target, controller.GetPendingEntry()->GetUniqueID());
++  EXPECT_EQ(1, attempts_); EXPECT_EQ(1, authorizes_);
++  DeleteContents(); base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++
++}  // namespace cef::download_bridge
 diff --git a/libcef/browser/download_bridge_state.cc b/libcef/browser/download_bridge_state.cc
 new file mode 100644
 --- /dev/null
@@ -5667,7 +6016,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,3907 @@
+@@ -0,0 +1,3991 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -6145,7 +6494,8 @@ new file mode 100644
 + public:
 +  enum Command { kLoadUrl, kReload, kIgnoreCache, kBack, kForward, kStop,
 +                 kLoadUrlAllowed, kRendererGetClosed, kRendererPostClosed,
-+                 kRendererAllowed };
++                 kRendererAllowed, kReloadAdmitted, kIgnoreCacheAdmitted,
++                 kBackAdmitted, kForwardAdmitted };
 +  explicit QueuedNavigationHandler(Command command) : command_(command) {}
 +  ~QueuedNavigationHandler() override {
 +    if (probe_->registration) {
@@ -6190,8 +6540,9 @@ new file mode 100644
 +  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 +      CefRefPtr<CefRequest> request, bool, bool) override {
 +    if (finished_ || phase_ != kOriginal) return false;
-+    if (request->GetURL() == kQueuedTarget && AdmissionOpen()) {
++    if (lock_callback_seen_ && ReplacementAccepted() && request->GetURL() == TargetURL()) {
 +      ++queued_browses_;
++      hold_original_.store(false);  // Reload's accepted request has the same URL.
 +      EXPECT_TRUE(lock_callback_seen_);
 +      EXPECT_EQ(2, probe_->reserves);
 +      return false;
@@ -6208,18 +6559,24 @@ new file mode 100644
 +    switch (command_) {
 +      case kLoadUrl: break;  // Exercise a genuinely post-Closing API call below.
 +      case kLoadUrlAllowed: frame->LoadURL(kQueuedTarget); break;
-+      case kReload: browser->Reload(); break;
-+      case kIgnoreCache: browser->ReloadIgnoreCache(); break;
-+      case kBack: browser->GoBack(); break;
-+      case kForward: browser->GoForward(); break;
++      case kReload: break;  // Called after Closing below.
++      case kReloadAdmitted: browser->Reload(); break;
++      case kIgnoreCache: break;  // Called after Closing below.
++      case kIgnoreCacheAdmitted: browser->ReloadIgnoreCache(); break;
++      case kBack: break;  // Called after Closing below.
++      case kBackAdmitted: browser->GoBack(); break;
++      case kForward: break;  // Called after Closing below.
++      case kForwardAdmitted: browser->GoForward(); break;
 +      case kStop: browser->StopLoad(); break;
 +      case kRendererGetClosed:
 +      case kRendererPostClosed:
 +      case kRendererAllowed: break;  // Send only after the close boundary below.
 +    }
-+    // Other controller commands are still admitted on execution. LoadURL's
-+    // open-admission case is checked exactly when its target browse occurs.
-+    if (command_ != kLoadUrlAllowed) EXPECT_EQ(1, probe_->reserves);
++    if (BeforeClosingAdmitted()) {
++      early_admitted_ = probe_->reserves == 2;
++      EXPECT_TRUE(early_admitted_) << "history/reload command has no early receipt";
++      EXPECT_EQ(2, probe_->authorizations);
++    } else if (command_ != kLoadUrlAllowed) EXPECT_EQ(1, probe_->reserves);
 +    EXPECT_EQ(1, original_browses_);
 +    EXPECT_TRUE(probe_->no_item.empty());
 +    if (!AdmissionOpen()) {
@@ -6229,6 +6586,10 @@ new file mode 100644
 +                probe_->api.unregister_poll(probe_->registration));
 +    }
 +    if (command_ == kLoadUrl) frame->LoadURL(kQueuedTarget);
++    if (command_ == kReload) browser->Reload();
++    if (command_ == kIgnoreCache) browser->ReloadIgnoreCache();
++    if (command_ == kBack) browser->GoBack();
++    if (command_ == kForward) browser->GoForward();
 +    if (RendererCommand()) {
 +      auto queued_request = CefRequest::Create();
 +      queued_request->SetURL(kQueuedTarget);
@@ -6262,8 +6623,9 @@ new file mode 100644
 +    if (finished_ || !frame->IsMain() || failing_) return;
 +    // Require the real BFCache restoration branch, not a network fallback.
 +    // Its legacy redundant-request path must conserve the original receipt.
-+    if (phase_ == kSeedBack)
-+      EXPECT_EQ(0, status);
++    if (phase_ == kSeedBack ||
++        (phase_ == kOriginal && (command_ == kBackAdmitted || command_ == kForwardAdmitted)))
++      EXPECT_EQ(0, status);  // Require actual BFCache, not a network fallback.
 +    else
 +      EXPECT_EQ(200, status);
 +    const std::string url = frame->GetURL();
@@ -6293,7 +6655,7 @@ new file mode 100644
 +                                         this));
 +        break;
 +      case kOriginal:
-+        if (url == kQueuedTarget && AdmissionOpen()) {
++        if (url == TargetURL() && ReplacementAccepted() && command_ != kReloadAdmitted) {
 +          queued_finished_ = true;
 +        } else {
 +          EXPECT_EQ(kQueueB, url);
@@ -6316,11 +6678,11 @@ new file mode 100644
 +    }
 +    EXPECT_EQ(ERR_ABORTED, code);
 +    EXPECT_EQ(kQueueB, url.ToString());
-+    EXPECT_TRUE(command_ == kStop || AdmissionOpen());
++    EXPECT_TRUE(command_ == kStop || ReplacementAccepted());
 +    EXPECT_EQ(kOriginal, phase_);
 +    original_aborted_ = true;
 +    held_response_ = nullptr;  // Only after actual CEF cancellation was observed.
-+    if (command_ != kStop && !AdmissionOpen()) {
++    if (command_ != kStop && !ReplacementAccepted()) {
 +      // The assertions above are a real failure. Drain safely instead of
 +      // stranding callback userdata when a rejected command canceled the source.
 +      failing_ = true;
@@ -6357,7 +6719,9 @@ new file mode 100644
 +    if (!held_response_ || !queue_turn_seen_) return;
 +    // Stop and the open-admission replacement must cause actual cancellation;
 +    // this fixture never cancels or continues their original pending response.
-+    if (command_ == kStop || AdmissionOpen()) return;
++    if (command_ == kStop ||
++        (ReplacementAccepted() && command_ != kReloadAdmitted)) return;
++    if (command_ == kReloadAdmitted && !duplicate_reload_observed_) return;
 +    response_released_ = true;
 +    auto callback = held_response_;
 +    held_response_ = nullptr;
@@ -6431,7 +6795,14 @@ new file mode 100644
 +    queue_turn_seen_ = true;
 +    EXPECT_TRUE(lock_callback_seen_);
 +    EXPECT_EQ(1, original_browses_);
-+    if (!AdmissionOpen()) {
++    if (BeforeClosingAdmitted() && !early_admitted_) {
++      ADD_FAILURE() << "queued receipt was not captured before Closing";
++      failing_ = true; phase_ = kDraining;
++      GetBrowser()->StopLoad(); held_response_ = nullptr;
++      CefPostTask(TID_UI, base::BindOnce(&QueuedNavigationHandler::PollDrain, this));
++      return;
++    }
++    if (!ReplacementAccepted()) {
 +      EXPECT_EQ(1, probe_->reserves);
 +      EXPECT_EQ(1, probe_->authorizations);
 +      EXPECT_EQ(0, queued_browses_);
@@ -6442,12 +6813,27 @@ new file mode 100644
 +    }
 +    if (RendererCommand() && !AdmissionOpen())
 +      EXPECT_TRUE(renderer_acknowledged_);
++    if (command_ == kReloadAdmitted) {
++      // Navigator suppresses a rapid identical GET reload. The real queued
++      // receipt must be Abandoned before we release the original response.
++      duplicate_reload_observed_ = probe_->navigation_tokens.size() == 2 &&
++          probe_->no_item_tokens == std::vector<uint64_t>{probe_->navigation_tokens[1]} &&
++          probe_->no_item == std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED};
++      EXPECT_TRUE(duplicate_reload_observed_);
++      if (!duplicate_reload_observed_) {
++        failing_ = true; phase_ = kDraining;
++        GetBrowser()->StopLoad(); held_response_ = nullptr;
++        CefPostTask(TID_UI, base::BindOnce(&QueuedNavigationHandler::PollDrain, this));
++        return;
++      }
++    }
 +    MaybeReleaseResponse();
 +    MaybeDrain();
 +  }
 +  void MaybeDrain() {
 +    if (finished_ || phase_ != kOriginal || !queue_turn_seen_) return;
-+    if (AdmissionOpen() ? !queued_finished_
++    if (command_ == kReloadAdmitted ? !original_finished_
++        : ReplacementAccepted() ? !queued_finished_
 +        : command_ == kStop ? !original_aborted_ : !original_finished_)
 +      return;
 +    phase_ = kDraining;
@@ -6484,11 +6870,21 @@ new file mode 100644
 +    }
 +    EXPECT_EQ(browser_id_, GetBrowser()->GetIdentifier());
 +    EXPECT_EQ(0, probe_->associated);
-+    if (AdmissionOpen()) {
++    if (command_ == kReloadAdmitted) {
++      EXPECT_TRUE(duplicate_reload_observed_);
++      EXPECT_EQ(2, probe_->reserves); EXPECT_EQ(2, probe_->authorizations);
++      EXPECT_EQ(0, queued_browses_); EXPECT_EQ(1, original_browses_);
++      EXPECT_TRUE(original_finished_); EXPECT_FALSE(original_aborted_);
++      EXPECT_TRUE(response_held_); EXPECT_TRUE(response_released_);
++      EXPECT_EQ(kQueueB, GetBrowser()->GetMainFrame()->GetURL().ToString());
++      ASSERT_EQ(2u, probe_->navigation_tokens.size());
++      EXPECT_EQ((std::vector<uint64_t>{probe_->navigation_tokens[1], probe_->navigation_tokens[0]}), probe_->no_item_tokens);
++      EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED, ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD}), probe_->no_item);
++    } else if (ReplacementAccepted()) {
 +      EXPECT_EQ(2, probe_->reserves);
 +      EXPECT_EQ(2, probe_->authorizations);
-+      EXPECT_EQ(1, queued_browses_);
-+      EXPECT_EQ(kQueuedTarget, GetBrowser()->GetMainFrame()->GetURL().ToString());
++      EXPECT_EQ((command_ == kBackAdmitted || command_ == kForwardAdmitted) ? 0 : 1, queued_browses_);
++      EXPECT_EQ(TargetURL(), GetBrowser()->GetMainFrame()->GetURL().ToString());
 +      auto accepted = probe_->navigation_tokens;
 +      auto outcomes = probe_->no_item_tokens;
 +      std::sort(accepted.begin(), accepted.end());
@@ -6566,6 +6962,17 @@ new file mode 100644
 +  bool AdmissionOpen() const {
 +    return command_ == kLoadUrlAllowed || command_ == kRendererAllowed;
 +  }
++  bool BeforeClosingAdmitted() const {
++    return command_ == kReloadAdmitted || command_ == kIgnoreCacheAdmitted ||
++           command_ == kBackAdmitted || command_ == kForwardAdmitted;
++  }
++  bool ReplacementAccepted() const { return AdmissionOpen() || BeforeClosingAdmitted(); }
++  std::string TargetURL() const {
++    if (command_ == kBackAdmitted) return kQueueA;
++    if (command_ == kForwardAdmitted) return kQueueC;
++    if (command_ == kReloadAdmitted || command_ == kIgnoreCacheAdmitted) return kQueueB;
++    return kQueuedTarget;
++  }
 +  bool RendererCommand() const {
 +    return command_ == kRendererGetClosed || command_ == kRendererPostClosed ||
 +           command_ == kRendererAllowed;
@@ -6596,6 +7003,8 @@ new file mode 100644
 +  bool response_released_ = false;
 +  bool failing_ = false;
 +  bool finished_ = false;
++  bool early_admitted_ = false;
++  bool duplicate_reload_observed_ = false;
 +  IMPLEMENT_REFCOUNTING(QueuedNavigationHandler);
 +};
 +
@@ -9575,6 +9984,30 @@ new file mode 100644
 +}
 +
 +}  // namespace
++
++TEST(EchoDownloadBridge, QueuedReloadRetainsOriginalAdmissionAfterClosing) {
++  CefRefPtr<QueuedNavigationHandler> handler = new QueuedNavigationHandler(QueuedNavigationHandler::kReloadAdmitted);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, QueuedIgnoreCacheRetainsOriginalAdmissionAfterClosing) {
++  CefRefPtr<QueuedNavigationHandler> handler = new QueuedNavigationHandler(QueuedNavigationHandler::kIgnoreCacheAdmitted);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, QueuedBackRetainsOriginalEntryAndAdmissionAfterClosing) {
++  CefRefPtr<QueuedNavigationHandler> handler = new QueuedNavigationHandler(QueuedNavigationHandler::kBackAdmitted);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, QueuedForwardRetainsOriginalEntryAndAdmissionAfterClosing) {
++  CefRefPtr<QueuedNavigationHandler> handler = new QueuedNavigationHandler(QueuedNavigationHandler::kForwardAdmitted);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
 diff --git a/tests/ceftests/echo_download_bridge_loader.cc b/tests/ceftests/echo_download_bridge_loader.cc
 new file mode 100644
 --- /dev/null
