@@ -24,6 +24,8 @@ mod page_context_tests;
 mod space_context_tests;
 #[path = "page_zoom_tests.rs"]
 mod page_zoom_tests;
+#[path = "page_loading_tests.rs"]
+mod page_loading_tests;
 #[path = "site_controls_tests.rs"]
 mod site_controls_tests;
 #[path = "main_menu_tests.rs"]

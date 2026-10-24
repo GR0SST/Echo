@@ -31,6 +31,7 @@ pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
 /// Sidebar metrics measured from the reference at 1x.
 const SIDEBAR_INSET: f32 = 8.0;
 const SIDEBAR_TOOLBAR_HEIGHT: f32 = 47.0;
+pub(crate) const TOP_TOOLBAR_HEIGHT: f32 = 33.;
 pub(crate) const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
 pub(crate) const SIDEBAR_ROW_GAP: f32 = 3.0;
 pub(crate) const SIDEBAR_ROW_RADIUS: f32 = 10.0;
@@ -676,6 +677,7 @@ pub struct BrowserWindow {
     pub(crate) page_zoom_observed: Vec<(browser_core::UserProfileId, TabId, String, u16)>,
     pub(crate) page_zoom_generation: u64,
     pub(crate) page_zoom_refresh: bool,
+    pub(crate) loading_indicators: crate::page_loading::LoadingIndicators,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
@@ -942,6 +944,7 @@ impl BrowserWindow {
             page_zoom_observed: Vec::new(),
             page_zoom_generation: 0,
             page_zoom_refresh: false,
+            loading_indicators: Default::default(),
             history_page: crate::history::HistoryPage::new(cx),
             pages,
             pending_engine_events: Default::default(),
@@ -3763,8 +3766,8 @@ impl BrowserWindow {
         let state = self.browser.active_tab().and_then(|tab| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(tab.id))).unwrap_or_default();
         let text = self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default();
         let anchor = self.site_controls_anchor.clone();
-        let button = |id: &'static str, icon| div().id(id).debug_selector(move || id.into()).flex_none().w(px(38.)).h(px(33.)).flex().items_center().justify_center().rounded(px(5.)).hover(|s|s.bg(hsla(0.,0.,1.,0.08))).child(crate::icons::control_sized(icon, if matches!(icon, crate::icons::Icon::Reload) { 16. } else { 18. }));
-        div().debug_selector(|| "top-toolbar".into()).absolute().top_0().left_0().right_0().h(px(33.)).px(px(2.)).flex().items_center().bg(gpui::rgb(0x222222)).border_b_1().border_color(gpui::rgb(0x2d2d2d)).text_color(hsla(0.,0.,1.,0.675))
+        let button = |id: &'static str, icon| div().id(id).debug_selector(move || id.into()).flex_none().w(px(38.)).h(px(TOP_TOOLBAR_HEIGHT)).flex().items_center().justify_center().rounded(px(5.)).hover(|s|s.bg(hsla(0.,0.,1.,0.08))).child(crate::icons::control_sized(icon, if matches!(icon, crate::icons::Icon::Reload) { 16. } else { 18. }));
+        div().debug_selector(|| "top-toolbar".into()).absolute().top_0().left_0().right_0().h(px(TOP_TOOLBAR_HEIGHT)).px(px(2.)).flex().items_center().bg(gpui::rgb(0x222222)).border_b_1().border_color(gpui::rgb(0x2d2d2d)).text_color(hsla(0.,0.,1.,0.675))
             .child(button("toolbar-back",crate::icons::Icon::Back).opacity(if state.can_go_back {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_back(tab)))))
             .child(button("toolbar-forward",crate::icons::Icon::Forward).opacity(if state.can_go_forward {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_forward(tab)))))
             .child(button("toolbar-reload",if state.loading {crate::icons::Icon::Close} else {crate::icons::Icon::Reload}).on_click(cx.listener(move |this,_,_,_|this.with_active_page(|pages,tab|if state.loading {pages.stop_loading(tab)} else {pages.reload(tab)}))))
@@ -3835,7 +3838,7 @@ impl BrowserWindow {
                             .child(self.theme_surface_mask(panel_bounds, viewport, panel_mask))
                             .child(div().absolute().inset_0().rounded(px(CONTENT_CORNER_RADIUS)).bg(self.theme_empty_panel_fill())))))
                     .child(div().debug_selector(|| "page-document-surface".into()).absolute().left_0().right_0().bottom_0()
-                        .top(px(if has_page && self.toolbar_shown() && !split_open { 33. } else { 0. }))
+                        .top(px(if has_page && self.toolbar_shown() && !split_open { TOP_TOOLBAR_HEIGHT } else { 0. }))
                         .flex().flex_col().items_center().justify_center().gap_2()
                         .when(!split_open, |this| this.px_8())
                     .when(split_open, |this| this.child(self.render_split(cx)))
@@ -4295,6 +4298,7 @@ impl Render for BrowserWindow {
         if self.split_drop.is_some() && !cx.has_active_drag() { self.close_split_drop(cx); }
         self.sync_link_status(window, cx);
         self.sync_page_zoom(window, cx);
+        self.sync_page_loading(window, cx);
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
         let window_controls_offset = self.window_controls_offset();
@@ -4440,6 +4444,7 @@ impl Render for BrowserWindow {
             .when_some(library, |this, library| this.child(library))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))
+            .child(self.render_page_loading(cx))
             .child(release_hover_on_exit())
             .into_any_element()
 

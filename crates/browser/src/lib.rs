@@ -55,6 +55,7 @@ mod folder_drag;
 mod inline_rename;
 mod link_status;
 mod page_zoom;
+mod page_loading;
 mod status_url;
 mod private;
 mod profile;

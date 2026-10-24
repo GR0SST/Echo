@@ -1288,6 +1288,23 @@ impl Pages {
         surfaces
     }
 
+    /// Owned loading state and the enclosing chrome frame; querying this never
+    /// calls CEF and a reentrant render may defer it while the store is busy.
+    pub(crate) fn loading_layout(&self) -> Option<Vec<(PageIdentity, Bounds, bool)>> {
+        let store = self.store.try_borrow().ok()?;
+        Some(self.wanted.iter().zip(self.pane_bounds()).filter_map(|(intent, pane)| {
+            let page = store.pages.get(&intent.tab).filter(|page|
+                page.identity == intent.identity && page.owner == self.host && page.visible && self.visible.contains(&intent.tab))?;
+            let mut frame = pane.frame;
+            if self.top_toolbar && !self.split {
+                let height = f64::from(crate::window::TOP_TOOLBAR_HEIGHT);
+                frame.y -= height;
+                frame.height += height;
+            }
+            Some((page.identity, frame, page.state.loading && page.state.loading_progress < 1000))
+        }).collect())
+    }
+
     pub fn surface_layout(&self) -> Vec<(TabId, Bounds)> {
         self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| {
             let store = self.store.borrow();
