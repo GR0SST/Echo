@@ -1353,6 +1353,8 @@ impl Pages {
         if let Some(view) = self.view(tab) { self.store.borrow_mut().engine.stop_finding(view); }
     }
 
+    pub(crate) fn supports_snapshots(&self) -> bool { self.store.borrow().engine.supports_snapshots() }
+
     /// Captures the existing document; concurrent requests for a tab coalesce.
     pub fn request_snapshot(&mut self, tab: TabId) -> Option<u64> {
         let mut store = self.store.borrow_mut();

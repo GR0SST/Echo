@@ -8632,17 +8632,18 @@ fn peek_link_leaves_source_tabs_untouched_and_escape_restores_the_page(cx: &mut 
 }
 
 #[gpui::test]
-fn peek_native_escape_and_command_escape_close_only_the_card(cx: &mut TestAppContext) {
+fn peek_command_escape_leaves_the_card_open_and_plain_escape_closes_it(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
-    for cmd in [false, true] {
-        fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
-        let (_, mut peek) = peek_window(&view, cx);
-        let child = fake.0.borrow().forks.last().unwrap().clone();
-        child.send(&mut peek, child.shortcut(Shortcut { cmd, key: "escape".into(), ..Default::default() }));
-        peek.run_until_parked(); peek.executor().advance_clock(Duration::from_millis(210)); peek.run_until_parked(); cx.run_until_parked();
-        assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
-        assert!(view.read_with(cx, |view, _| view.browser.active_tab().is_some()));
-    }
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&view, cx);
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    child.send(&mut peek, child.shortcut(Shortcut { cmd: true, key: "escape".into(), ..Default::default() }));
+    peek.run_until_parked(); peek.executor().advance_clock(Duration::from_millis(210)); peek.run_until_parked(); cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.peek_child.is_some()));
+    child.send(&mut peek, child.shortcut(Shortcut { key: "escape".into(), ..Default::default() }));
+    peek.run_until_parked(); peek.executor().advance_clock(Duration::from_millis(210)); peek.run_until_parked(); cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
+    assert!(view.read_with(cx, |view, _| view.browser.active_tab().is_some()));
 }
 
 #[gpui::test]
@@ -8871,4 +8872,45 @@ fn inactive_space_theme_preview_updates_its_retained_page_and_preserves_the_acti
     cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
     assert!(fake.take_calls().contains(&Call::ColorScheme(1, Some(true))));
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), active);
+}
+
+
+#[gpui::test]
+fn peek_exit_scales_a_fresh_document_snapshot_and_hides_native_content(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (child, mut peek) = peek_window(&view, cx);
+    let engine = fake.0.borrow().forks.last().unwrap().clone();
+    engine.0.borrow_mut().capture_supported = true;
+    engine.take_calls();
+    peek.simulate_keystrokes("escape"); peek.run_until_parked();
+    let (view_id, request) = engine.take_calls().into_iter().find_map(|call| match call {
+        Call::Snapshot(view, request) => Some((view, request)), _ => None,
+    }).expect("closing captures the current document");
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    engine.0.borrow_mut().snapshots.push(engine::PageSnapshot { view: page(view_id), request, png: Some(png.into_inner()) });
+    child.update(&mut peek, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
+    peek.executor().advance_clock(Duration::from_millis(20)); peek.run_until_parked();
+    let initial = peek.debug_bounds("peek-closing-image").unwrap();
+    let native_bounds = engine.0.borrow().bounds.clone();
+    peek.executor().advance_clock(Duration::from_millis(80));
+    child.update(&mut peek, |_, cx| cx.notify()); peek.run_until_parked();
+    assert!(peek.debug_bounds("peek-closing-image").unwrap().size.width < initial.size.width);
+    assert_eq!(engine.0.borrow().bounds, native_bounds, "closing scales pixels rather than resizing the live document");
+    assert!(engine.take_calls().iter().any(|call| matches!(call, Call::Visible(_, false))));
+    peek.executor().advance_clock(Duration::from_millis(200)); peek.run_until_parked(); cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
+}
+
+#[gpui::test]
+fn peek_exit_does_not_wait_indefinitely_for_a_missing_snapshot(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&view, cx);
+    fake.0.borrow().forks.last().unwrap().0.borrow_mut().capture_supported = true;
+    peek.simulate_keystrokes("escape"); peek.run_until_parked();
+    for _ in 0..10 { peek.executor().advance_clock(Duration::from_millis(10)); peek.run_until_parked(); }
+    peek.executor().advance_clock(Duration::from_millis(200)); peek.run_until_parked(); cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
 }

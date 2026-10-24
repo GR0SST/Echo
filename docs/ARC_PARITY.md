@@ -139,7 +139,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Developer: Allow JavaScript from Apple Events | — | missing | — |
 | Toggle Developer Mode (per site) | ⌃D | missing | — |
 | Enter/Exit Full Screen | ⌃⌘F | partial | View menu, page shortcuts and overlays target the main window; Enter/Exit commands work in GPUI tests. macOS bundle entry/exit verified with guarded input, native fullscreen state and inspected screenshots; native toolbar buttons stay under AppKit control. Other platforms and exact Arc transition presentation remain unverified |
-| Exit (leave a context: Peek, full screen) | ⌘Esc | partial | Peek handles Escape and Cmd+Escape through GPUI and native page input; full-screen exit remains unfinished |
+| Exit (leave a context: Peek, full screen) | ⌘Esc | partial | Peek closes with Escape. Guarded Arc 1.170.0 leaves Peek open on Cmd+Escape, which Echo now matches; full-screen exit remains unfinished |
 
 ### Spaces
 
@@ -382,7 +382,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 |---|---|---|
 | Links to other sites from Pinned/Favorites open in Peek (option) | partial | Main-frame user GET navigation across hosts opens an isolated child card, with source Space material backdrop and three vector controls. Existing Peek setting gates routing. Subdomain rules and native resize/motion parity need further validation |
 | Shift-click opens a link in Peek (option) | partial | CEF NEW_WINDOW user disposition opens the card, gated by the existing setting. Nested Peek/Little routing remains unfinished |
-| Closing Peek (⌘Esc / Esc), Undo "Close Peek" | partial | Close control, backdrop click, Escape and Cmd+Escape restore the source without archiving it. Native page click coordinates anchor the shrink. Opening uses a damped spring; closing 180 ms. Exact motion, Undo and Cmd+Escape reference behavior need further verification |
+| Closing Peek (⌘Esc / Esc), Undo "Close Peek" | partial | Close control, backdrop click and Escape restore the source without archiving it. Arc 1.170.0 leaves the card open on Cmd+Escape; Echo matches. Closing captures the live document, hides the native page and scales its pixels for 180 ms toward the source link, with bounded capture fallback. Opening uses a damped spring. Exact tint/shadow, motion calibration and Undo remain unfinished |
 | Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | partial | Expand and Cmd+O create a Today tab in the source Space. Split control fills a new pane and preserves Pinned/Favorite originals. Live page/history transfer and the dedicated Space picker remain unfinished |
 | Swipe to dismiss the modal (`modal-v2-native-gestures`) (?) | missing | — |
 

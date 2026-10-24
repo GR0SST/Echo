@@ -14,6 +14,8 @@ pub(crate) struct PeekOwner {
     origin: gpui::Point<gpui::Pixels>,
     closing: Option<Instant>,
     detached: bool,
+    close_requested: bool,
+    close_image: Option<std::sync::Arc<gpui::RenderImage>>,
 }
 
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -62,7 +64,7 @@ impl BrowserWindow {
                     if let Some(pages) = &view.pages { pages.borrow_mut().peek_mode = true; }
                     view.sidebar_visible = false;
                     view.transient = Some(Transient { source, space, picker: None });
-                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false });
+                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);
                     view
                 })
@@ -75,15 +77,41 @@ impl BrowserWindow {
 
     pub(crate) fn exit_peek(&mut self, cx: &mut Context<Self>) {
         if let Some(state) = &mut self.peek_owner {
-            if state.closing.is_none() {
-                state.closing = Some(cx.background_executor().now());
-                let child = cx.weak_entity();
-                cx.spawn(async move |_, cx| {
-                    cx.background_executor().timer(std::time::Duration::from_millis(180)).await;
-                    let _ = child.update(cx, |view, cx| view.close_window(cx));
-                }).detach();
-                cx.notify();
-            }
+            if state.close_requested { return; }
+            state.close_requested = true;
+            let capture = self.browser.active_tab().and_then(|tab| {
+                let pages = self.pages.as_ref()?;
+                if !pages.borrow().supports_snapshots() { return None; }
+                let request = pages.borrow_mut().request_snapshot(tab.id)?;
+                Some((tab.id, request, pages.clone()))
+            });
+            let child = cx.weak_entity();
+            cx.spawn(async move |_, cx| {
+                // Keep the live viewport fixed until its photograph arrives. Never
+                // shrink a native web view: that reflows the document during exit.
+                let mut image = None;
+                if let Some((tab, request, pages)) = capture {
+                    for _ in 0..10 {
+                        let snapshot = pages.borrow().snapshot(tab).filter(|(id, _)| *id == request);
+                        if let Some((_, png)) = snapshot {
+                            image = child.update(cx, |view, _| view.snapshot_images.borrow_mut().image(tab, &png)).ok().flatten();
+                            break;
+                        }
+                        if !pages.borrow().snapshot_pending(tab, request) { break; }
+                        cx.background_executor().timer(std::time::Duration::from_millis(10)).await;
+                    }
+                }
+                if std::env::var_os("BROWSER_SCRIPT").is_some() { eprintln!("[peek] close snapshot ready={}", image.is_some()); }
+                let _ = child.update(cx, |view, cx| {
+                    if let Some(state) = &mut view.peek_owner {
+                        state.close_image = image;
+                        state.closing = Some(cx.background_executor().now());
+                        cx.notify();
+                    }
+                });
+                cx.background_executor().timer(std::time::Duration::from_millis(180)).await;
+                let _ = child.update(cx, |view, cx| view.close_window(cx));
+            }).detach();
         } else if let Some(child) = self.peek_child {
             cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.exit_peek(cx)); });
         }
@@ -142,6 +170,7 @@ impl BrowserWindow {
         // Arc overshoots the settled 618 px card by approximately one pixel.
         let amount = closing.map_or(progress.min(1.009), |t| 1. - t.clamp(0., 1.).powi(2));
         if elapsed < 0.34 || closing.is_some() { cx.on_next_frame(window, |_, _, cx| cx.notify()); }
+        let close_image = state.close_image.clone();
         let sidebar = state.sidebar;
         let extent = window.viewport_size();
         let available = (f32::from(extent.width) - sidebar).max(0.);
@@ -164,18 +193,20 @@ impl BrowserWindow {
             .child(icon);
         let content = div().key_context("Peek").track_focus(&self.focus_handle).size_full().relative()
             .child(div().absolute().size_0().track_focus(&self.native_action_focus))
-            .child(div().id("peek-backdrop").absolute().top(px(10.)).bottom(px(10.)).left(px(sidebar)).right(px(10.))
+            .child(div().id("peek-backdrop").absolute().top(px(19.)).bottom(px(19.)).left(px(sidebar + 9.)).right(px(19.))
                 .rounded(px(8.)).opacity(0.6 * amount.clamp(0., 1.)).child(self.theme_surface(false)).on_click(cx.listener(|view, _, _, cx| view.exit_peek(cx))))
             .child(div().debug_selector(|| "peek-card".into()).absolute().left(px(left)).top(px(top))
                 .w(px(width)).h(px(height)).rounded(px(8.)).bg(gpui::white()).shadow_xl()
                 .when(self.pages.is_none(), |view| view.child(self.browser.active_tab().map(|tab| tab.url.clone()).unwrap_or_default()))
-                .children(self.render_page_viewport_canvas()))
+                .overflow_hidden()
+                .when_some(close_image.clone(), |card, image| card.child(div().debug_selector(|| "peek-closing-image".into()).w(px(width)).h(px(height)).child(gpui::img(image).w(px(width)).h(px(height)).object_fit(gpui::ObjectFit::Fill))))
+                .when(close_image.is_none(), |card| card.children(self.render_page_viewport_canvas())))
             .child(div().absolute().left(px(left + width + 13.)).top(px(20.)).opacity(amount.clamp(0., 1.)).flex().flex_col().gap(px(9.5))
                 .child(button("peek-close", icons::control_sized(Icon::Close, 24.)).on_click(cx.listener(|view, _, _, cx| view.exit_peek(cx))))
                 .child(button("peek-expand", expand_icon()).on_click(cx.listener(|view, _, _, cx| view.promote_transient(None, cx))))
                 .child(button("peek-split", icons::control(Icon::Split)).on_click(cx.listener(|view, _, _, cx| view.split_peek(cx)))))
             .into_any_element();
-        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, close_image.is_none()); }
         self.render_overlay_shell(content, cx)
     }
 }

@@ -179,7 +179,6 @@ window_shortcuts! {
     "ctrl-cmd-n" => crate::menus::BlankWindow,
     "cmd-n" => crate::menus::NewWindow,
     "cmd-alt-n" => crate::transient::NewLittleWindow,
-    "cmd-escape" => crate::peek::ExitPeek,
     "cmd-o" => crate::transient::OpenInSpace,
     "cmd-shift-n" => crate::menus::NewIncognitoWindow,
     "ctrl-shift-=" => AddSplit,
@@ -800,6 +799,16 @@ impl BrowserWindow {
                     };
                     let mirrors_changed = mirror_revision != revision;
                     mirror_revision = revision;
+                    // CEF consumes mouse events, including exits from the rail.
+                    // Reconcile both edges against the native pointer rather than
+                    // leaving GPUI's cached hover stuck after a page interaction.
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Some((x, y)) = this.native_view.and_then(crate::native::pointer_in_view) {
+                            let hovered = (window.is_window_active() || this.peek_child.is_some())
+                                && x >= 0. && x < this.sidebar_width() && y >= 0. && y < f32::from(window.viewport_size().height);
+                            if this.sidebar_hovered != hovered { this.sidebar_hovered = hovered; cx.notify(); }
+                        }
+                    });
                     if events.is_empty() && !mirrors_changed && !retry_creation {
                         continue;
                     }
@@ -3488,7 +3497,6 @@ impl BrowserWindow {
     pub(crate) fn render_page_viewport_canvas(&self) -> Option<AnyElement> {
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
-        let peek_inset = if self.peek_child.is_some() { 9. } else { 0. };
         self.pages.clone().and_then(|pages| {
                         let generation = pages.try_borrow().ok()?.viewport_generation();
                         let divider_pages = pages.clone();
@@ -3496,10 +3504,10 @@ impl BrowserWindow {
                         Some(canvas(
                             move |bounds, _, cx| {
                                 let bounds = engine::Bounds {
-                                    x: f64::from(f32::from(bounds.origin.x)) + peek_inset,
-                                    y: f64::from(f32::from(bounds.origin.y)) + peek_inset,
-                                    width: f64::from(f32::from(bounds.size.width)) - 2. * peek_inset,
-                                    height: f64::from(f32::from(bounds.size.height)) - 2. * peek_inset,
+                                    x: f64::from(f32::from(bounds.origin.x)),
+                                    y: f64::from(f32::from(bounds.origin.y)),
+                                    width: f64::from(f32::from(bounds.size.width)),
+                                    height: f64::from(f32::from(bounds.size.height)),
                                 };
                                 let surfaces = match pages.try_borrow_mut() {
                                     Ok(mut pages) => { if pages.set_viewport_bounds(generation, bounds) { Some(pages.surface_bounds()) } else { None } }
@@ -3566,9 +3574,9 @@ impl BrowserWindow {
             // Never grow wider than the window because of content.
             .min_w_0()
             .h_full()
-            .py(px(CONTENT_INSET))
-            .pr(px(CONTENT_INSET))
-            .pl(px(CONTENT_INSET * (1. - self.sidebar_amount())))
+            .py(px(CONTENT_INSET + if self.peek_child.is_some() { 9. } else { 0. }))
+            .pr(px(CONTENT_INSET + if self.peek_child.is_some() { 9. } else { 0. }))
+            .pl(px(CONTENT_INSET * (1. - self.sidebar_amount()) + if self.peek_child.is_some() { 9. } else { 0. }))
             .relative()
             .when(empty_canvas, |this| this.child(div()
                 .debug_selector(|| "empty-space-panel-shadow".into())
