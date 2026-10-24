@@ -162,11 +162,18 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit) }
+enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
         match self {
+            Self::Theme { space, before, after } => {
+                let (source, target) = if redo { (&*before, &*after) } else { (&*after, &*before) };
+                let Some(space) = browser.spaces.iter_mut().find(|entry| entry.id == *space) else { return false; };
+                if &space.theme != source { return false; }
+                space.theme = target.clone();
+                true
+            }
             Self::Pin(edit) => if redo { edit.after.apply(&edit.before, browser) } else { edit.before.apply(&edit.after, browser) },
             Self::Archive(edit) => edit.apply(redo, browser, now),
             Self::Pane(edit) => edit.apply(redo, browser, now),
@@ -178,6 +185,9 @@ impl SidebarEdit {
 pub(crate) struct SidebarHistory { undo: Vec<SidebarEdit>, redo: Vec<SidebarEdit> }
 
 impl SidebarHistory {
+    pub(crate) fn record_theme(&mut self, space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme>) {
+        if before != after { self.record(SidebarEdit::Theme { space, before, after }); }
+    }
     pub(crate) fn record_pin(&mut self, before: PinState, after: PinState) {
         if before == after { return; }
         self.record(SidebarEdit::Pin(PinEdit { before, after }));
@@ -191,6 +201,12 @@ impl SidebarHistory {
 }
 
 impl Browser {
+    pub fn sidebar_undo_action(&self) -> Option<&'static str> {
+        match self.sidebar_history.undo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), _ => None }
+    }
+    pub fn sidebar_redo_action(&self) -> Option<&'static str> {
+        match self.sidebar_history.redo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), _ => None }
+    }
     /// Initial profile seeding is not a user action.
     pub fn clear_sidebar_history(&mut self) { self.sidebar_history = SidebarHistory::default(); }
 

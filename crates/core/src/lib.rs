@@ -18,6 +18,7 @@ pub mod settings;
 pub mod icons;
 pub mod folders;
 pub mod undo;
+pub mod themes;
 pub mod windows;
 pub mod profiles;
 pub mod downloads;
@@ -92,6 +93,8 @@ pub struct Space {
     pub name: String,
     /// Accent hue in degrees, 0..360.
     pub hue: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<themes::SpaceTheme>,
     #[serde(default = "default_enabled")]
     pub show_header: bool,
     #[serde(default)]
@@ -297,6 +300,7 @@ impl Browser {
             user_profile_id,
             name: name.into(),
             hue,
+            theme: None,
             show_header: true,
             custom_icon: None,
             pinned: Vec::new(),

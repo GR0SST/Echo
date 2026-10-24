@@ -54,6 +54,9 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
         // downward or infer a fresh Default on malformed versioned input.
         return Err(serde_json::Error::custom("invalid user profile identity watermark"));
     }
+    if browser.spaces.iter().any(|space| space.theme.as_ref().is_some_and(|theme| !theme.valid())) {
+        return Err(serde_json::Error::custom("invalid Space theme"));
+    }
     browser.validate_downloads().map_err(serde_json::Error::custom)?;
     browser.repair();
     Ok(browser)
