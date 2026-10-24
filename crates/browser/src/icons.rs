@@ -337,3 +337,77 @@ impl BrowserWindow {
         cx.notify();
     }
 }
+
+/// Library artwork traced as our own geometry from the installed reference.
+/// The 24 px slot includes a 3 px optical baseline correction. Selected artwork
+/// gains an accent fill and white contours; the tile surface remains theme-owned.
+pub(crate) fn library_section(section: crate::library::LibrarySection, selected: bool) -> AnyElement {
+    use crate::library::LibrarySection as S;
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let ink = if selected { gpui::rgb(0xf4f4ff).into() } else { window.text_style().color };
+        let accent = gpui::rgb(0x262ff5).into();
+        let at = |x, y| bounds.origin + gpui::point(px(x), px(y + 3.));
+        // Filled contours deliberately precede their matching outlines.
+        let mut contours: Vec<(Vec<(f32, f32)>, bool, bool)> = Vec::new();
+        let mut outline = |points| contours.push((points, false, false));
+        match section {
+            S::Media => {
+                outline(vec![(2.,4.),(17.,2.),(18.,7.)]);
+                outline(vec![(2.,4.),(3.5,17.),(7.,17.)]);
+                outline(rounded_rect(7.,7.,17.,14.,2.));
+            }
+            S::Downloads => {
+                if selected { contours.push((arc(12.,12.,9.5,0.,std::f32::consts::TAU),true,true)); }
+                contours.push((arc(12.,12.,9.5,0.,std::f32::consts::TAU),false,false));
+                contours.push((vec![(12.,7.),(12.,17.),(8.,13.),(12.,17.),(16.,13.)],false,false));
+            }
+            S::Easels => {
+                outline(rounded_rect(3.,4.,18.,16.,2.));
+                outline(vec![(3.,7.),(21.,7.)]);
+                outline(vec![(15.,10.),(11.,9.),(10.,10.5),(15.,15.),(13.5,17.),(8.,12.5),(7.,14.),(11.5,18.)]);
+                contours.push((rounded_rect(3.,3.,18.,4.,1.5),true,false));
+            }
+            S::Spaces => {
+                outline(vec![(8.,20.),(5.,19.),(1.5,5.),(3.,3.),(12.,0.5),(14.,2.),(15.,5.)]);
+                outline(rounded_rect(9.,5.,13.,19.,2.5));
+            }
+            S::Boosts => {
+                outline(vec![(3.,10.),(1.5,5.),(3.,2.),(17.,0.),(20.,2.),(23.,16.),(21.,19.),(14.,21.)]);
+                outline(vec![(7.,9.),(10.,5.),(18.,12.),(14.,17.),(7.,9.)]);
+                outline(vec![(10.,14.),(7.,17.),(5.,16.),(1.,20.),(1.,22.),(3.,23.),(7.,19.),(7.,17.)]);
+                outline(vec![(17.,4.),(17.,8.)]);
+                outline(vec![(15.,6.),(19.,6.)]);
+            }
+            S::ArchivedTabs => {
+                outline(rounded_rect(3.,4.,18.,4.,1.));
+                outline(rounded_rect(5.,8.,14.,13.,1.5));
+                outline(vec![(9.,12.),(15.,12.)]);
+            }
+        }
+        if selected && section != S::Downloads {
+            // Each backing panel has its own solid accent rather than tinting
+            // the label or painting a blue tile behind the whole control.
+            let panels = match section {
+                S::Media => vec![vec![(2.,4.),(17.,2.),(18.,7.),(7.,7.),(7.,17.),(3.5,17.)], rounded_rect(7.,7.,17.,14.,2.)],
+                S::Easels => vec![rounded_rect(3.,4.,18.,16.,2.)],
+                S::Spaces => vec![vec![(1.5,5.),(12.,0.5),(15.,5.),(9.,5.),(9.,24.),(5.,19.)],rounded_rect(9.,5.,13.,19.,2.5)],
+                S::Boosts => vec![vec![(3.,10.),(1.5,5.),(3.,2.),(17.,0.),(20.,2.),(23.,16.),(21.,19.),(14.,21.)]],
+                S::ArchivedTabs => vec![rounded_rect(5.,8.,14.,13.,1.5)],
+                _ => vec![],
+            };
+            for panel in panels.into_iter().rev() { contours.insert(0,(panel,true,true)); }
+        }
+        if section == S::Media {
+            contours.push((vec![(7.,17.),(11.,13.),(14.,16.),(18.,12.),(24.,17.),(24.,20.),(22.,21.),(9.,21.),(7.,20.)],true,false));
+            contours.push((arc(12.,11.,1.5,0.,std::f32::consts::TAU),true,false));
+        }
+        for (points, filled, blue) in contours {
+            let mut path = if filled { gpui::PathBuilder::fill() } else { gpui::PathBuilder::stroke(px(1.5)) };
+            for (index, (x,y)) in points.into_iter().enumerate() {
+                if index == 0 { path.move_to(at(x,y)); } else { path.line_to(at(x,y)); }
+            }
+            if filled { path.close(); }
+            if let Ok(path) = path.build() { window.paint_path(path, if blue { accent } else { ink }); }
+        }
+    }).size(px(24.)).flex_none().into_any_element()
+}

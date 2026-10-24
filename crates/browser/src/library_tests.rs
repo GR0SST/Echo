@@ -405,7 +405,7 @@ fn assert_reference_navigation(visual: &mut VisualTestContext, first_y: f32) {
         );
         assert_eq!(icon.size, gpui::size(px(24.), px(24.)));
         assert_eq!(icon.origin - tile.origin, gpui::point(px(36.), px(16.)));
-        assert_eq!(label.origin.y - tile.origin.y, px(48.));
+        assert_eq!(label.origin.y - tile.origin.y, px(50.));
         assert_eq!(label.size.height, px(12.));
         assert_eq!(label.center().x, tile.center().x);
     }
@@ -478,4 +478,21 @@ fn short_navigation_keeps_tile_geometry_and_scrolls_to_last_route(cx: &mut TestA
         *log.borrow(),
         vec![LibraryIntent::Navigate(LibrarySection::ArchivedTabs)]
     );
+}
+
+#[gpui::test]
+fn hovering_another_rail_tile_preserves_selection_until_activation(cx: &mut TestAppContext) {
+    let (view, visual, log) = open(cx, &fixture(), LibraryActions {
+        downloads: true, media: true, ..Default::default()
+    });
+    view.update(visual, |view, cx| { view.section = LibrarySection::Downloads; cx.notify(); });
+    visual.run_until_parked();
+    let selected = visual.debug_bounds("library-nav-downloads").unwrap();
+    let media = visual.debug_bounds("library-nav-media").unwrap();
+    visual.simulate_mouse_move(media.center(), None, Modifiers::none());
+    visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("library-nav-selected-fill"), Some(selected));
+    assert!(log.borrow().is_empty(), "hover must not activate another section");
+    click(visual, "library-nav-media-icon");
+    assert_eq!(*log.borrow(), vec![LibraryIntent::Navigate(LibrarySection::Media)]);
 }

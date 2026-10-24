@@ -249,7 +249,7 @@ pub(crate) fn render_library(
                                 .top(px(16.))
                                 .size(px(24.))
                                 .flex_none()
-                                .child(navigation_icon(item, 1.)),
+                                .child(crate::icons::library_section(item, item == section)),
                         )
                         .child(
                             div()
@@ -257,12 +257,12 @@ pub(crate) fn render_library(
                                 .absolute()
                                 .left_0()
                                 .right_0()
-                                .top(px(48.))
+                                .top(px(50.))
                                 .h(px(12.))
                                 .text_center()
-                                .text_size(px(12.))
+                                .text_size(px(11.5))
                                 .line_height(px(12.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .font_weight(gpui::FontWeight::BOLD)
                                 .whitespace_nowrap()
                                 .child(item.label()),
                         )
@@ -345,7 +345,7 @@ pub(crate) fn render_library(
     root.into_any_element()
 }
 
-/// Unbranded, fixed 24 px section artwork. No font-dependent control glyphs.
+/// Retain the previously calibrated empty-state illustration independently of rail artwork.
 fn navigation_icon(section: LibrarySection, scale: f32) -> AnyElement {
     let contours = match section {
         LibrarySection::Media => vec![
