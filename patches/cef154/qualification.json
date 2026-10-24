@@ -144,7 +144,7 @@
     "state_binary_sha256": "35bbadc8cf7fd0aa8313942c1afbd39bf61d321732c5a1479bb8ae9eebfc899d"
   },
   "native": {
-    "count": 25,
+    "count": 28,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -170,10 +170,13 @@
       "EchoDownloadBridge.DelayedSameUrlSiblingAssociatesAfterClosingAndCompletes",
       "EchoDownloadBridge.PreClosingLoadRequestGetSurvivesRendererDelay",
       "EchoDownloadBridge.PreClosingLoadRequestPostSurvivesRendererDelay",
-      "EchoDownloadBridge.SameDocumentLoadRequestSettlesWithoutReplacingDocument"
+      "EchoDownloadBridge.SameDocumentLoadRequestSettlesWithoutReplacingDocument",
+      "EchoDownloadBridge.BeforeUnloadCancelSettlesOriginalFrameCommand",
+      "EchoDownloadBridge.SubframeGetKeepsParentAndOriginalAdmissionAfterClosing",
+      "EchoDownloadBridge.SubframePostKeepsBodyParentAndOriginalAdmissionAfterClosing"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "a43dd634c26223c58cc3e5f7bd32afa5bbde20e268daa7c20cbc677dd3e3f984",
+    "test_source_sha256": "e8ecf916aaa2c1acac020272247f410b0bee828dfa7a6617916bb83ba3e05ba0",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -207,7 +210,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "306e75d32bb8a5fe42b221cd438a9eeb3c840da90d319042160890af4146a502",
+  "native_xml_sha256": "68498a7a3765a817b57939ccd182851312b2cb6ed6b567abe4201070e2dd5b28",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -236,5 +239,12 @@
     "repositories": 7,
     "selected_fixture_only": true,
     "new_build_performed_for_replay": false
+  },
+  "coverage_notes": {
+    "production_sources_changed_since_25_case_checkpoint": false,
+    "beforeunload": "cancel path with genuine dialog callback",
+    "subframes": "same-origin GET and POST, preserved parent DOM",
+    "postdata_observation": "actual IO resource request, copied facts asserted on UI",
+    "navigation_handle_metadata_has_postdata": false
   }
 }

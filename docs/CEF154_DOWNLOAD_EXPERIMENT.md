@@ -113,7 +113,7 @@ ditto "$out/ceftests.app" "$owned/ceftests.app"
   > "$owned/native-tests.log" 2>&1
 ```
 
-Require a successful process exit and all 25 cases with no skips or failures.
+Require a successful process exit and all 28 cases with no skips or failures.
 The BFCache flag selects the legacy request-replacement path covered by these
 tests; it is not an Echo application default. Retain the owned log/XML and check
 that its helper processes have exited. A failed copy is evidence of that attempt;
@@ -135,6 +135,15 @@ before dispatch. A same-document case first exposed a renderer crash in trusted
 null-origin fragment navigation. The unchanged test now verifies the original
 DOM, fragment URL, original-token outcome and final unregister.
 
+Additional native cases cancel a real beforeunload dialog while unregister is
+Pending, then verify the original document and one original-token outcome.
+Same-origin iframe GET and POST commands retain the parent's exact DOM/nonce and
+URL while completing in the named child after Closing. The POST case checks its
+exact body on the IO resource request and transfers owned observations to UI.
+CEF154's NavigationHandle-backed OnBeforeBrowse metadata does not contain
+postdata; checking it there produced the initial fixture failure, not evidence
+that transport dropped the body.
+
 The 131 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
 BeginNavigation through deferred Init. A public-value assignment guard covers
@@ -146,8 +155,9 @@ their configured compiler flags; their full test suites were not executed.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Complete
-beforeunload, subframe, request rewriting, duplicate suppression, frame/context
-loss and endpoint-disconnect coverage. Actual Service Worker paths, other early
+beforeunload allow, cross-origin/retargeted subframe, request rewriting,
+duplicate suppression, frame/context loss and endpoint-disconnect coverage.
+Actual Service Worker paths, other early
 ingress/no-item exits, SavePackage/resume and ordered public seal/drain/failure
 semantics remain open. A timeout, first association or nonloading source is not
 an admission fence.

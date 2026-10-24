@@ -4942,7 +4942,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,2384 @@
+@@ -0,0 +1,2702 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -4961,6 +4961,7 @@ new file mode 100644
 +#include "include/cef_devtools_message_observer.h"
 +#include "include/cef_parser.h"
 +#include "include/cef_request_context_handler.h"
++#include "include/test/cef_test_helpers.h"
 +#include "tests/ceftests/echo_download_bridge_loader.h"
 +#include "include/base/cef_build.h"
 +#if defined(OS_MAC)
@@ -7322,6 +7323,323 @@ new file mode 100644
 +TEST(EchoDownloadBridge, SameDocumentLoadRequestSettlesWithoutReplacingDocument) {
 +  CefRefPtr<SameDocumentFrameCommandHandler> handler =
 +      new SameDocumentFrameCommandHandler;
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++constexpr char kBoundarySource[] = "https://echo-frame-boundary.test/source";
++constexpr char kBoundaryChild[] = "https://echo-frame-boundary.test/child";
++constexpr char kBoundaryTarget[] = "https://echo-frame-boundary.test/target";
++constexpr char kBoundaryChildName[] = "receipt-child";
++constexpr char kBoundaryPostBody[] = "receipt=iframe-post";
++class FrameCommandBoundaryHandler : public TestHandler {
++ public:
++  enum Mode { kBeforeUnloadCancel, kSubframeGet, kSubframePost };
++  explicit FrameCommandBoundaryHandler(Mode mode) : mode_(mode) {}
++  ~FrameCommandBoundaryHandler() override {
++    if (probe_->registration) {
++      static auto* retained = new std::vector<std::shared_ptr<Probe>>;
++      retained->push_back(probe_);
++    }
++  }
++  void RunTest() override {
++    SetTestTimeout();
++    SetSignalTestCompletionCount(1);
++    probe_->get_api = echo_download_test::ResolveGetApi();
++    if (!probe_->get_api) {
++      ADD_FAILURE() << "custom bridge not loaded";
++      DestroyTest();
++      SignalExtraOnce();
++      return;
++    }
++    SetUseViews(false);
++    SetUseAlloyStyle(true, false);
++    std::string page = "<html><body>parent document<script>"
++        "document.body.dataset.receiptNonce=crypto.randomUUID();";
++    if (mode_ == kBeforeUnloadCancel)
++      page += "window.onbeforeunload=()=> 'retain original document';";
++    page += "</script>";
++    if (IsChild())
++      page += "<iframe name='receipt-child' src='https://echo-frame-boundary.test/child'></iframe>";
++    page += "</body></html>";
++    AddResource(kBoundarySource, page, "text/html");
++    AddResource(kBoundaryChild, "<html><body>child source document</body></html>", "text/html");
++    AddResource(kBoundaryTarget, "<html><body>child-target-document</body></html>", "text/html");
++    CefRequestContextSettings settings;
++    CreateBrowser(kBoundarySource, CefRequestContext::CreateContext(settings, nullptr));
++  }
++  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnAfterCreated(browser);
++    browser_id_ = browser->GetIdentifier();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, echo_download_test::CallGetApi(
++        probe_->get_api, sizeof(probe_->api), &probe_->api));
++    auto callbacks = probe_->Callbacks();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.register_browser(browser_id_,
++        {probe_->browser_generation, probe_->context_generation},
++        &callbacks, &probe_->registration));
++  }
++  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int status) override {
++    if (finished_) return;
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    if (command_sent_ && frame->GetURL() == kBoundaryTarget) {
++      if (!IsChild()) {
++        ADD_FAILURE() << "beforeunload cancellation replaced the document";
++        Finish();
++        return;
++      }
++      EXPECT_FALSE(frame->IsMain());
++      EXPECT_EQ(kBoundaryChildName, frame->GetName().ToString());
++      auto parent = frame->GetParent();
++      EXPECT_TRUE(parent && parent->IsMain());
++      EXPECT_EQ(200, status);
++      target_loaded_ = true;
++      return;
++    }
++    if (!frame->IsMain() || started_) return;
++    EXPECT_EQ(kBoundarySource, frame->GetURL().ToString());
++    EXPECT_EQ(200, status);
++    started_ = true;
++    if (mode_ == kBeforeUnloadCancel) {
++      // The upstream JSDialog tests use this real renderer activation helper.
++      // GetSource is the frame-channel barrier before sending the next command.
++      CefExecuteJavaScriptWithUserGestureForTests(frame, CefString());
++    }
++    frame->GetSource(new RendererSourceAck(base::BindOnce(
++        &FrameCommandBoundaryHandler::OriginalSource, this)));
++  }
++  void OriginalSource(const CefString& source) {
++    if (finished_) return;
++    original_source_ = source.ToString();
++    ASSERT_NE(std::string::npos, original_source_.find("data-receipt-nonce="));
++    WaitForInitialOutcomes();
++  }
++  void WaitForInitialOutcomes() {
++    if (finished_) return;
++    auto expected = probe_->navigation_tokens;
++    auto observed = probe_->no_item_tokens;
++    std::sort(expected.begin(), expected.end());
++    std::sort(observed.begin(), observed.end());
++    if (expected != observed) {
++      if (++initial_polls_ <= 500) {
++        CefPostDelayedTask(TID_UI, base::BindOnce(
++            &FrameCommandBoundaryHandler::WaitForInitialOutcomes, this), 10);
++        return;
++      }
++      ADD_FAILURE() << "initial parent/child outcomes did not drain";
++      Finish();
++      return;
++    }
++    EXPECT_GT(probe_->reserves, 0);
++    probe_->reserves = 0;
++    probe_->authorizations = 0;
++    probe_->navigation_tokens.clear();
++    probe_->no_item_tokens.clear();
++    probe_->no_item.clear();
++    probe_->expected_method = mode_ == kSubframePost ? "POST" : "GET";
++    auto browser = GetBrowser();
++    auto frame = IsChild() ? browser->GetFrameByName(kBoundaryChildName)
++                           : browser->GetMainFrame();
++    ASSERT_TRUE(frame);
++    EXPECT_EQ(!IsChild(), frame->IsMain());
++    auto request = CefRequest::Create();
++    request->SetURL(kBoundaryTarget);
++    request->SetMethod(probe_->expected_method);
++    if (mode_ == kSubframePost) {
++      auto body = CefPostData::Create();
++      auto element = CefPostDataElement::Create();
++      element->SetToBytes(sizeof(kBoundaryPostBody) - 1, kBoundaryPostBody);
++      body->AddElement(element);
++      request->SetPostData(body);
++    }
++    command_sent_ = true;
++    frame->LoadRequest(request);
++    EXPECT_EQ(1, probe_->reserves);
++    EXPECT_EQ(1, probe_->authorizations);
++    EXPECT_EQ(1u, probe_->navigation_tokens.size());
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, probe_->api.unregister_poll(probe_->registration));
++    CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::Poll, this));
++  }
++  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
++      CefRefPtr<CefRequest> request, bool, bool) override {
++    if (finished_ || !command_sent_ || request->GetURL() != kBoundaryTarget) return false;
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    EXPECT_EQ(!IsChild(), frame->IsMain());
++    EXPECT_EQ(probe_->expected_method, request->GetMethod().ToString());
++    target_browse_seen_ = true;
++    return false;
++  }
++  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
++      CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request) override {
++    if (mode_ == kSubframePost && request->GetURL() == kBoundaryTarget) {
++      // NavigationHandle-backed OnBeforeBrowse metadata omits POST data.
++      // Copy the actual resource request's bytes on IO, then assert on UI.
++      auto post = request->GetPostData();
++      CefPostData::ElementVector elements;
++      if (post) post->GetElements(elements);
++      const bool byte_element = elements.size() == 1 && elements[0]->GetType() == PDE_TYPE_BYTES;
++      const size_t byte_count = byte_element ? elements[0]->GetBytesCount() : 0;
++      std::string bytes(byte_count, '\0');
++      const size_t copied = byte_element ? elements[0]->GetBytes(bytes.size(), bytes.data()) : 0;
++      CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::PostBodyObserved,
++          this, request->GetMethod().ToString(), !!post, elements.size(),
++          byte_element, byte_count, copied, std::move(bytes)));
++    }
++    return TestHandler::GetResourceHandler(browser, frame, request);
++  }
++  void PostBodyObserved(std::string method, bool present, size_t elements,
++      bool byte_element, size_t byte_count, size_t copied, std::string bytes) {
++    EXPECT_TRUE(CefCurrentlyOn(TID_UI));
++    if (finished_) return;
++    EXPECT_EQ("POST", method);
++    EXPECT_TRUE(present);
++    EXPECT_EQ(1u, elements);
++    EXPECT_TRUE(byte_element);
++    EXPECT_EQ(sizeof(kBoundaryPostBody) - 1, byte_count);
++    EXPECT_EQ(byte_count, copied);
++    EXPECT_EQ(kBoundaryPostBody, bytes);
++    post_body_seen_ = true;
++  }
++  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser>, const CefString&, bool is_reload,
++      CefRefPtr<CefJSDialogCallback> callback) override {
++    if (finished_) {
++      callback->Continue(true, CefString());  // Allow final test teardown.
++      return true;
++    }
++    EXPECT_EQ(kBeforeUnloadCancel, mode_);
++    EXPECT_FALSE(is_reload);
++    EXPECT_TRUE(command_sent_);
++    EXPECT_FALSE(canceled_);
++    EXPECT_EQ(1, probe_->reserves);
++    EXPECT_EQ(1, probe_->authorizations);
++    EXPECT_TRUE(probe_->no_item_tokens.empty());
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, probe_->api.unregister_poll(probe_->registration));
++    dialog_seen_ = true;
++    canceled_ = true;
++    callback->Continue(false, CefString());
++    return true;
++  }
++  void Poll() {
++    if (finished_ || final_source_requested_) return;
++    if (probe_->registration) {
++      const auto status = probe_->api.unregister_poll(probe_->registration);
++      if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
++      else if (status != ECHO_CEF_DOWNLOAD_PENDING) {
++        ADD_FAILURE() << "frame boundary drain failed " << status;
++        Finish();
++        return;
++      }
++    }
++    const bool observed = IsChild()
++        ? (target_loaded_ && (mode_ != kSubframePost || post_body_seen_))
++        : (dialog_seen_ && canceled_);
++    if (!probe_->registration && !observed && !IsChild()) {
++      ADD_FAILURE() << "unregister completed before beforeunload cancellation";
++      Finish();
++      return;
++    }
++    if (probe_->registration || !observed) {
++      if (++polls_ <= 500) {
++        CefPostDelayedTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::Poll, this), 10);
++        return;
++      }
++      ADD_FAILURE() << "frame boundary did not settle mode=" << mode_
++          << " registration=" << probe_->registration << " dialog=" << dialog_seen_
++          << " target_loaded=" << target_loaded_;
++      Finish();
++      return;
++    }
++    EXPECT_EQ(1, probe_->reserves);
++    EXPECT_EQ(1, probe_->authorizations);
++    EXPECT_EQ(probe_->navigation_tokens, probe_->no_item_tokens);
++    EXPECT_EQ((std::vector<uint32_t>{IsChild() ? ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD
++                                             : ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}),
++              probe_->no_item);
++    if (IsChild()) EXPECT_TRUE(target_browse_seen_);
++    final_source_requested_ = true;
++    GetBrowser()->GetMainFrame()->GetSource(new RendererSourceAck(base::BindOnce(
++        &FrameCommandBoundaryHandler::FinalSource, this)));
++  }
++  void FinalSource(const CefString& source) {
++    if (finished_) return;
++    EXPECT_EQ(original_source_, source.ToString());
++    EXPECT_EQ(kBoundarySource, GetBrowser()->GetMainFrame()->GetURL().ToString());
++    if (IsChild()) {
++      auto child = GetBrowser()->GetFrameByName(kBoundaryChildName);
++      EXPECT_TRUE(child && !child->IsMain());
++      if (!child) { Finish(); return; }
++      EXPECT_EQ(kBoundaryTarget, child->GetURL().ToString());
++      child->GetSource(new RendererSourceAck(base::BindOnce(
++          &FrameCommandBoundaryHandler::FinalChildSource, this)));
++      return;
++    }
++    EXPECT_FALSE(target_loaded_);
++    Finish();
++  }
++  void FinalChildSource(const CefString& source) {
++    if (finished_) return;
++    EXPECT_NE(std::string::npos, source.ToString().find("child-target-document"));
++    Finish();
++  }
++  void Finish() {
++    if (finished_) return;
++    finished_ = true;
++    if (probe_->registration)
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    DestroyTest();
++    if (!probe_->registration) SignalExtraOnce();
++  }
++  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnBeforeClose(browser);
++    if (finished_ && probe_->registration)
++      CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::PollAfterClose, this));
++  }
++  void PollAfterClose() {
++    const auto status = probe_->api.unregister_poll(probe_->registration);
++    if (status == ECHO_CEF_DOWNLOAD_PENDING && ++cleanup_polls_ <= 500) {
++      CefPostDelayedTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::PollAfterClose, this), 10);
++      return;
++    }
++    if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
++    else ADD_FAILURE() << "frame boundary cleanup failed " << status;
++    SignalExtraOnce();
++  }
++  void SignalExtraOnce() {
++    if (!extra_signaled_) { extra_signaled_ = true; SignalTestCompletion(); }
++  }
++ protected:
++  void OnTestTimeout(int timeout, bool error) override {
++    if (error) ADD_FAILURE() << "frame boundary timeout " << timeout << " mode=" << mode_;
++    if (probe_->registration) probe_->api.unregister_begin(probe_->registration);
++    Finish();
++  }
++ private:
++  bool IsChild() const { return mode_ != kBeforeUnloadCancel; }
++  const Mode mode_;
++  const std::shared_ptr<Probe> probe_ = std::make_shared<Probe>();
++  std::string original_source_;
++  int browser_id_ = 0, polls_ = 0, cleanup_polls_ = 0, initial_polls_ = 0;
++  bool started_ = false, command_sent_ = false, finished_ = false;
++  bool target_loaded_ = false, target_browse_seen_ = false, dialog_seen_ = false;
++  bool canceled_ = false, final_source_requested_ = false, extra_signaled_ = false;
++  bool post_body_seen_ = false;
++  IMPLEMENT_REFCOUNTING(FrameCommandBoundaryHandler);
++};
++TEST(EchoDownloadBridge, BeforeUnloadCancelSettlesOriginalFrameCommand) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kBeforeUnloadCancel);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, SubframeGetKeepsParentAndOriginalAdmissionAfterClosing) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kSubframeGet);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, SubframePostKeepsBodyParentAndOriginalAdmissionAfterClosing) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kSubframePost);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
 +}
