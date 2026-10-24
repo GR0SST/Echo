@@ -68,6 +68,8 @@ enum Popup {
     LittleArchive,
 }
 
+mod archive;
+
 pub(crate) struct SettingsWindow {
     profile: ProfileHandle,
     owner: Option<WeakEntity<BrowserWindow>>,
@@ -76,6 +78,7 @@ pub(crate) struct SettingsWindow {
     focus: FocusHandle,
     popup: Option<Popup>,
     popup_selection: usize,
+    archive_scope: Option<archive::ArchiveScope>,
     previews: bool,
     pub(crate) atc: Option<Entity<crate::atc::AtcPanel>>,
     atc_return_focus: bool,
@@ -92,6 +95,7 @@ impl Focusable for SettingsWindow {
 }
 
 pub(crate) fn init(cx: &mut App) {
+    archive::init(cx);
     cx.on_action(|_: &crate::menus::Settings, cx| {
         cx.defer(|cx| {
             if crate::quit::is_quitting() {
@@ -210,6 +214,7 @@ fn open(
                     focus,
                     popup: None,
                     popup_selection: 0,
+                    archive_scope: None,
                     previews: false,
                     atc: None,
                     atc_return_focus: false,
@@ -1090,14 +1095,21 @@ impl SettingsWindow {
                                 s.child(icons::control_sized(Icon::Check, 14.))
                             }))
                             .child(label)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.choose(popup, index, cx);
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.choose(popup, index, window, cx);
                             }))
                     }),
             )
             .into_any_element()
     }
-    fn choose(&mut self, popup: Popup, index: usize, cx: &mut Context<Self>) {
+    fn choose(&mut self, popup: Popup, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if popup == Popup::Archive {
+            self.choose_archive(index, cx);
+            self.popup = None;
+            self.focus.focus(window);
+            cx.notify();
+            return;
+        }
         let id = self.selected_profile;
         self.profile.edit_settings(|browser| {
             if popup == Popup::LittleArchive {
@@ -1110,10 +1122,7 @@ impl SettingsWindow {
             };
             match popup {
                 Popup::Search => profile.settings.search.engine = SearchEngine::ALL[index],
-                Popup::Archive => {
-                    profile.archive_after =
-                        Some(Duration::from_secs([43200, 86400, 604800, 2592000][index]))
-                }
+                Popup::Archive => unreachable!("archive changes include the profile-scope question"),
                 Popup::Documents => {
                     profile.settings.document_app = [
                         "—",
@@ -1202,8 +1211,20 @@ impl Render for SettingsWindow {
             .text_size(px(13.))
             .line_height(px(16.))
             .track_focus(&self.focus)
-            .key_context("SettingsWindow")
+            .key_context(if self.archive_scope.is_some() { "ArchiveScope" } else { "SettingsWindow" })
+            .on_action(cx.listener(|this, _: &archive::AllProfiles, _, cx| this.finish_archive_scope(true, cx)))
+            .on_action(cx.listener(|this, _: &archive::OnlyThisProfile, _, cx| this.finish_archive_scope(false, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.archive_scope.is_some() {
+                    match event.keystroke.key.as_str() {
+                        "enter" => this.finish_archive_scope(true, cx),
+                        "escape" => this.finish_archive_scope(false, cx),
+                        "w" if event.keystroke.modifiers.platform => window.remove_window(),
+                        _ => {},
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
                 if let Some(popup) = this.popup {
                     let count = this.popup_options(popup).len();
                     match event.keystroke.key.as_str() {
@@ -1220,7 +1241,7 @@ impl Render for SettingsWindow {
                             return;
                         }
                         "enter" => {
-                            this.choose(popup, this.popup_selection, cx);
+                            this.choose(popup, this.popup_selection, window, cx);
                             cx.stop_propagation();
                             return;
                         }
@@ -1342,6 +1363,7 @@ impl Render for SettingsWindow {
                 )
             })
             .when(self.previews, |s| s.child(self.previews_panel(cx)))
+            .when(self.archive_scope.is_some(), |s| s.child(self.archive_scope_panel(cx)))
             .when_some(self.atc.clone(), |s, panel| s.child(div().absolute().inset_0().bg(gpui::hsla(0., 0., 0., 0.35))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().absolute().top(px(88.)).left(gpui::relative(0.5)).ml(px(-255.)).child(panel))))

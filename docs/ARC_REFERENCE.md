@@ -1545,3 +1545,29 @@ encoding plus three GPUI regressions cover Tab/Backspace, stale disabled scope
 and keeping ChatGPT text in a rename form. The full suite passed: 995 browser,
 213 core, 13 AI, 135 engine and 6 importer tests; the OS credential integration
 test remains opt-in.
+
+## Archive interval scope question (2026-10-25)
+
+The installed Arc applies a changed archive interval to the selected profile
+before presenting the scope question. Its buttons are “Only this Profile”
+(Escape) and “All Profiles” (Return); Escape retains the selected profile's
+change. The question is a centered 450 × 228 px card with 18 px corners,
+38 px left text inset, a 28 px right/bottom button inset, 164/124 × 36 px
+buttons and an 8 px gap. Echo uses its own product name in the heading.
+
+Reference and private native acceptance evidence are under
+`target/parity/sweep/`: `arc-archive-scope-question.png`,
+`echo-archive-scope-question.png`, `pair-archive-scope.png` and its zoomed crop.
+`native-archive-only.json` records 24/12-hour profile intervals after Escape;
+`native-archive-all.json` records seven days in both profiles after Return.
+The Arc test used only the unused “Echo Profile Reference 20261023” profile;
+All Profiles was never confirmed in live Arc. Its seven-day interval was
+restored through the selector; the restoration's Only this Profile dismissal
+remains guarded because another Arc window moved ahead of the recorded alert.
+No live Space was created/deleted and no tabs were opened in Echo Test.
+
+Three GPUI regressions cover pointer and keyboard scope choices, unchanged
+selection, persistence, blocked background clicks and rejection of a prompt
+superseded by a newer selected-profile interval. GPUI 0.2.2 retains removed
+selector bounds in its debug-frame map, so dismissal assertions inspect modal
+state alongside the canonical profile data, rather than stale selector bounds.

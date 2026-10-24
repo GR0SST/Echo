@@ -8211,6 +8211,76 @@ fn settings_toggles_persist_without_affecting_other_profiles(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn archive_scope_escape_keeps_only_the_clicked_profile_and_blocks_background_selection(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let (original, work) = view.update(cx, |w, _| w.edit_profile(|b| {
+        (b.active_user_profile_id(), b.create_user_profile("Archive Work").unwrap())
+    }));
+    cx.simulate_keystrokes("cmd-,");
+    let (settings_view, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-profile-Archive Work");
+    click(&mut settings, "settings-popup-Archive tabs after");
+    click(&mut settings, "settings-choice-1");
+    let bounds = settings.debug_bounds("archive-scope-dialog").unwrap();
+    assert_eq!(bounds.size, gpui::size(gpui::px(450.), gpui::px(228.)));
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.user_profile(work).unwrap().archive_after, Some(Duration::from_secs(86400)));
+        assert_eq!(w.browser.user_profile(original).unwrap().archive_after, Some(Duration::from_secs(43200)));
+    });
+    click(&mut settings, "settings-tab-Advanced");
+    assert_eq!(settings_view.read_with(&settings, |s, _| s.tab), crate::settings::Tab::Profiles);
+    assert!(settings.debug_bounds("archive-scope-dialog").is_some());
+    settings.simulate_keystrokes("escape");
+    settings.run_until_parked();
+    assert!(!settings_view.read_with(&settings, |s, _| s.archive_scope_is_open()));
+    assert!(settings.debug_bounds("settings-popup-Archive tabs after").is_some());
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_user_profile_id(), original);
+        assert_eq!(w.browser.user_profile(work).unwrap().archive_after, Some(Duration::from_secs(86400)));
+        assert_eq!(w.browser.user_profile(original).unwrap().archive_after, Some(Duration::from_secs(43200)));
+    });
+}
+
+#[gpui::test]
+fn archive_scope_return_applies_to_all_profiles_and_persists(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, _| w.edit_profile(|b| { b.create_user_profile("Archive Other").unwrap(); }));
+    cx.simulate_keystrokes("cmd-,");
+    let (settings_view, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-popup-Archive tabs after");
+    click(&mut settings, "settings-choice-2");
+    assert!(settings.debug_bounds("archive-scope-all").is_some());
+    settings.simulate_keystrokes("enter");
+    settings.run_until_parked();
+    assert!(!settings_view.read_with(&settings, |s, _| s.archive_scope_is_open()));
+    let saved = view.read_with(cx, |w, _| w.profile.session_json(&w.split_draft));
+    let restored = browser_core::session::from_json(&saved).unwrap();
+    assert!(restored.user_profiles().all(|p| p.archive_after == Some(Duration::from_secs(604800))));
+    click(&mut settings, "settings-popup-Archive tabs after");
+    click(&mut settings, "settings-choice-2");
+    assert!(!settings_view.read_with(&settings, |s, _| s.archive_scope_is_open()));
+}
+
+#[gpui::test]
+fn stale_archive_scope_cannot_extend_a_newer_profile_interval(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let other = view.update(cx, |w, _| w.edit_profile(|b| b.create_user_profile("Archive Other").unwrap()));
+    cx.simulate_keystrokes("cmd-,");
+    let (settings_view, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-popup-Archive tabs after");
+    click(&mut settings, "settings-choice-1");
+    view.update(cx, |w, _| w.edit_profile(|b| b.active_user_profile_mut().archive_after = Some(Duration::from_secs(604800))));
+    click(&mut settings, "archive-scope-all");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.active_user_profile().archive_after, Some(Duration::from_secs(604800)));
+        assert_eq!(w.browser.user_profile(other).unwrap().archive_after, Some(Duration::from_secs(43200)));
+    });
+}
+
+#[gpui::test]
 fn settings_menu_and_native_page_shortcut_open_the_same_window(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
