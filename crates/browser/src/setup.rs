@@ -115,12 +115,12 @@ pub(crate) enum Step {
     Reading,
     Bookmarks,
     Passwords,
-    Complete,
     Shortcuts,
 }
 #[derive(Clone)]
 enum Event {
     Close,
+    Imported(bool),
     Advance(SetupStep),
     Theme(usize),
     Favorite(usize),
@@ -316,13 +316,6 @@ impl SetupDialog {
             Step::Destination => self.read(cx),
             Step::Bookmarks => self.change(Step::Passwords, cx),
             Step::Passwords => self.publish(cx),
-            Step::Complete => {
-                if self.onboarding {
-                    self.advance(SetupStep::Import, cx)
-                } else {
-                    self.close(cx)
-                }
-            }
             Step::Reading | Step::SafariAccess => {}
             Step::Shortcuts => self.change(Step::Onboard(SetupStep::Basics), cx),
         }
@@ -351,6 +344,13 @@ impl SetupDialog {
         let Some(source) = self.source.and_then(|i| self.sources.get(i)).cloned() else {
             return;
         };
+        // A new read replaces the tree addressed by checkbox paths. Never apply
+        // an old tree's exclusions or password file to a different snapshot.
+        self.blocked_bookmarks.clear();
+        self.credentials.clear();
+        self.password_file = false;
+        self.report = None;
+        *self.current_category.lock().unwrap() = None;
         self.busy = true;
         self.change(Step::Reading, cx);
         let cancel = self.cancel.clone();
@@ -423,9 +423,26 @@ impl SetupDialog {
         let Some(source) = self.source.and_then(|i| self.sources.get(i)) else {
             return;
         };
+        let data = self.selected_data();
+        if data.bookmarks.is_empty()
+            && data.history.is_empty()
+            && data.tabs.is_empty()
+            && self.credentials.is_empty()
+            && self.report.as_ref().is_some_and(|r| !r.issues.is_empty())
+        {
+            self.error = self.report.as_ref().map(|r| {
+                r.issues
+                    .iter()
+                    .map(|i| i.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            cx.notify();
+            return;
+        }
         self.busy = true;
         cx.emit(Event::Publish(
-            Rc::new(self.selected_data()),
+            Rc::new(data),
             destination,
             format!("From {}", source.browser.name()),
         ));
@@ -437,7 +454,7 @@ impl SetupDialog {
         };
         if self.credentials.is_empty() {
             self.busy = false;
-            self.change(Step::Complete, cx);
+            self.finish_import(cx);
             return;
         }
         let credentials = std::mem::take(&mut self.credentials);
@@ -459,7 +476,7 @@ impl SetupDialog {
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
                 match result {
-                    Ok(()) => this.change(Step::Complete, cx),
+                    Ok(()) => this.finish_import(cx),
                     Err(error) => {
                         this.credentials = credentials;
                         this.error = Some(error);
@@ -469,6 +486,16 @@ impl SetupDialog {
             });
         })
         .detach();
+    }
+    fn finish_import(&mut self, cx: &mut Context<Self>) {
+        self.busy = false;
+        if self.onboarding {
+            self.advance(SetupStep::Import, cx);
+        } else {
+            cx.emit(Event::Imported(
+                self.report.as_ref().is_some_and(|r| !r.issues.is_empty()),
+            ));
+        }
     }
     fn choose_passwords(&mut self, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -558,7 +585,6 @@ impl SetupDialog {
             Step::Reading => "Now importing",
             Step::Bookmarks => "Treat your bookmarks to an upgrade.",
             Step::Passwords => "Upload your Passwords.csv file to Echo",
-            Step::Complete => "Finished importing",
         }
     }
     fn back(&mut self, cx: &mut Context<Self>) {
@@ -589,7 +615,6 @@ impl SetupDialog {
         Step::Reading=>self.current_category.lock().unwrap().map(|c|format!("{}…",match c {importer::Category::Bookmarks=>"Bookmarks",importer::Category::History=>"History",importer::Category::OpenTabs=>"Open Tabs"})).unwrap_or_else(||"Importing…".into()),
         Step::Bookmarks=>"It’s easy to import the rest later.".into(),
         Step::Passwords=>"To manually import passwords, you’ll have to export them. Once imported, your passwords will be encrypted locally on your computer.".into(),
-        Step::Complete=>if self.report.as_ref().is_some_and(|r|!r.issues.is_empty()) {"Some items could not be imported.".into()}else{"Your tabs and bookmarks are ready in your sidebar.".into()},
     }
     }
     fn button(
@@ -902,7 +927,11 @@ impl gpui::Render for SetupDialog {
                 }
             }
             Step::Sources => {
-                right = right.left(px(332.)).overflow_y_scroll().flex_shrink_0();
+                right = right
+                    .left(px(332.))
+                    .overflow_y_scroll()
+                    .flex_shrink_0()
+                    .when(self.sources.len() > 4, |s| s.justify_start());
                 if self.sources.is_empty() {
                     right = right.child("No browser profiles found.");
                 }
@@ -927,7 +956,9 @@ impl gpui::Render for SetupDialog {
                 }
             }
             Step::Destination => {
-                right = right.overflow_y_scroll();
+                right = right
+                    .overflow_y_scroll()
+                    .when(self.profiles.len() > 4, |s| s.justify_start());
                 for (i, (id, name)) in self.profiles.iter().enumerate() {
                     let id = *id;
                     let title = if self.profiles.len() == 1 {
@@ -1058,7 +1089,7 @@ impl gpui::Render for SetupDialog {
         let access = self.step == Step::SafariAccess;
         let label = match self.step {
             Step::Onboard(SetupStep::DefaultBrowser) => "Set as Default",
-            Step::Complete | Step::Shortcuts | Step::Onboard(SetupStep::Basics) => "Done",
+            Step::Shortcuts | Step::Onboard(SetupStep::Basics) => "Done",
             Step::SafariAccess => "Restart Echo",
             Step::Reading => "Importing…",
             _ => "Next",
@@ -1066,7 +1097,7 @@ impl gpui::Render for SetupDialog {
         let errors = self.error.clone().or_else(|| {
             self.report
                 .as_ref()
-                .filter(|_| self.step == Step::Bookmarks || self.step == Step::Complete)
+                .filter(|_| self.step == Step::Bookmarks)
                 .and_then(|r| {
                     (!r.issues.is_empty()).then(|| {
                         r.issues
@@ -1355,6 +1386,18 @@ impl BrowserWindow {
         self.refresh_profile_projection();
         match event {
             Event::Close => self.close_setup(cx),
+            Event::Imported(partial) => {
+                self.close_setup(cx);
+                self.show_toast(
+                    if partial {
+                        "Only some of your data imported. Please try again!"
+                    } else {
+                        "Success! We imported all of your stuff"
+                    }
+                    .into(),
+                    cx,
+                );
+            }
             Event::Advance(step) => {
                 if !self.edit_browser(|b| b.advance_setup(step)) {
                     if let Some(current) = self.browser.onboarding {
@@ -1469,9 +1512,6 @@ impl BrowserWindow {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| match result {
-                Ok(DefaultState::Ours) => {
-                    this.show_toast("Echo is your default browser".into(), cx)
-                }
                 Ok(_) => {}
                 Err(error) => this.show_toast(error, cx),
             });

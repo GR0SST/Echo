@@ -10417,9 +10417,9 @@ fn local_import_filters_bookmarks_and_publishes_once_into_a_new_profile_and_spac
     panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
     assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Bookmarks);
     click(&mut panel,"import-bookmark-0.1");click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Complete);
+    assert!(view.read_with(cx,|v,_|v.setup.is_none()));
+    assert_eq!(view.read_with(cx,|v,_|v.toast.as_ref().map(|t|t.message.as_str().to_owned())).as_deref(),Some("Success! We imported all of your stuff"));
     view.read_with(cx,|v,_|{assert_eq!(v.browser.spaces.len(),spaces+1);assert_ne!(v.browser.space().id,space);assert_ne!(v.browser.active_user_profile_id(),profile);assert_eq!(v.browser.space().pinned.len(),1);assert_eq!(v.browser.space().pinned[0].title,"Keep");assert_eq!(v.browser.space().folders[0].name,"Bookmarks bar");});
-    click(&mut panel,"setup-next");cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.setup.is_none()));
 }
 #[gpui::test]
 fn closing_import_owner_cancels_worker_and_discards_a_late_result(cx:&mut TestAppContext) {
@@ -10500,7 +10500,8 @@ fn imported_passwords_only_reach_the_credential_store_and_never_the_session(cx:&
     let path=fixture.path().join("Passwords.csv");std::fs::write(&path,"url,username,password\nhttps://vault.example/login,alice,fixture-secret-unique\n").unwrap();
     dialog.update(&mut panel,|d,cx|d.load_password_file(path,cx));panel.run_until_parked();
     click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Complete);
+    assert!(view.read_with(cx,|v,_|v.setup.is_none()));
+    assert_eq!(view.read_with(cx,|v,_|v.toast.as_ref().map(|t|t.message.as_str().to_owned())).as_deref(),Some("Success! We imported all of your stuff"));
     let saved=store.0.lock().unwrap();assert_eq!(saved.len(),1);assert_eq!(saved[0].1,"https://vault.example");assert_eq!(saved[0].2,"fixture-secret-unique");
     let session=view.read_with(cx,|v,_|browser_core::session::to_json(&v.browser));assert!(!session.contains("fixture-secret-unique"));assert!(!session.contains("vault.example"));
 }
@@ -10515,4 +10516,58 @@ fn local_setup_card_stays_centered_when_its_owner_resizes(cx:&mut TestAppContext
     cx.simulate_resize(gpui::size(gpui::px(900.),gpui::px(700.)));cx.run_until_parked();panel.run_until_parked();
     let requested=panel.update(|w,_|w.bounds().size);assert_eq!(requested,cx.update(|w,_|w.viewport_size()));panel.simulate_resize(requested);panel.run_until_parked();
     assert_eq!(panel.debug_bounds("setup-card").unwrap().origin,gpui::point(gpui::px(160.),gpui::px(123.)));
+}
+
+#[gpui::test]
+fn onboarding_import_returns_directly_to_default_step_without_an_extra_completion_screen(cx:&mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);let _fixture=import_fixture(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Import));v.open_setup(true,cx);});
+    let (dialog,mut panel)=local_setup(&view,cx);click(&mut panel,"setup-next");
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::DefaultBrowser));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::DefaultBrowser));
+}
+
+#[gpui::test]
+fn partial_import_closes_the_picker_and_uses_the_reference_partial_success_toast(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);let fixture=import_fixture(cx);
+    std::fs::write(fixture.path().join("History"),"invalid database fixture").unwrap();
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (_,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();
+    view.read_with(cx,|v,_|{assert!(v.setup.is_none());assert_eq!(v.browser.space().pinned.len(),2);assert_eq!(v.toast.as_ref().unwrap().message,"Only some of your data imported. Please try again!");});
+}
+
+#[gpui::test]
+fn failed_import_with_no_data_never_creates_an_empty_space_or_profile(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);let fixture=import_fixture(cx);
+    std::fs::write(fixture.path().join("Bookmarks"),"invalid bookmarks fixture").unwrap();
+    let before=view.read_with(cx,|v,_|browser_core::session::to_json(&v.browser));
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (dialog,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-new-profile");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Passwords);
+    assert_eq!(view.read_with(cx,|v,_|browser_core::session::to_json(&v.browser)),before);
+    panel.simulate_keystrokes("escape");panel.run_until_parked();cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.setup.is_none()));
+}
+
+#[gpui::test]
+fn long_import_profile_list_keeps_the_first_profile_visible_and_selectable(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);let fixture=import_fixture(cx);
+    cx.cx.update(|cx|cx.set_global(crate::setup::ImportSources((0..10).map(|i|importer::SourceProfile {browser:importer::BrowserKind::Chrome,name:format!("Profile {i}"),path:fixture.path().into()}).collect())));
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (dialog,mut panel)=local_setup(&view,cx);
+    let card=panel.debug_bounds("setup-card").unwrap();let first=panel.debug_bounds("import-source-0").unwrap();assert!(first.origin.y>=card.origin.y+gpui::px(90.));
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Destination);
+}
+
+#[gpui::test]
+fn rereading_import_data_discards_exclusions_from_the_previous_tree(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);let _fixture=import_fixture(cx);
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (_,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"import-bookmark-0.1");click(&mut panel,"setup-back");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();
+    view.read_with(cx,|v,_|{assert!(v.setup.is_none());assert_eq!(v.browser.space().pinned.len(),2);});
 }

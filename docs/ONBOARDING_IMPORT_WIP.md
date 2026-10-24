@@ -30,7 +30,10 @@ Settings process and both owned Arc windows were closed after capture.
   selected destination profile, Pinned bookmarks/folders, open-tab order and
   history merge. Existing Spaces and profile data remain intact.
 - GPUI import source/destination/bookmark selection, category progress,
-  cancellation, password CSV chooser/drop, and completion. Read errors are
+  cancellation, password CSV chooser/drop, and resource-backed completion toasts.
+  There is no additional completion screen; onboarding continues directly to
+  its default-browser step. A wholly failed read without passwords publishes
+  neither a new Space nor a new profile. Read errors are
   surfaced per category. A closed owner cancels reading and rejects late data.
 - CSV passwords use a separate credential-store interface, never session JSON.
   The macOS implementation stores generic passwords in the local Keychain,
@@ -72,14 +75,22 @@ All paths below are relative to `target/parity/onboarding-import/`:
 ## Validation
 
 - `RUST_TEST_THREADS=4 cargo test`: 939 browser, 195 core, 126 engine,
-  2 importer unit and 4 importer integration tests passed in the pre-push run
-  (`full-tests-prepush.log`); the required push-lock run repeats all tests.
-- Nine GPUI tests cover disabled Next/cancel, bookmark selection/new profile,
+  2 importer unit and 4 importer integration tests passed before rebasing
+  (`full-tests-prepush.log`). The first push-lock run after rebase passed 960
+  browser, 198 core, 128 engine and 6 importer tests, plus the AI tests.
+  Final outcome-flow validation (`full-tests-outcomes.log`) passed 965 browser,
+  198 core, 128 engine and 6 importer tests; AI tests passed with their existing
+  live-provider test ignored. The required push-lock sequence repeats the suite.
+- Fourteen GPUI tests cover disabled Next/cancel, bookmark selection/new profile,
   owner retirement during reads, explicit default consent/cancel, resuming theme
   and Favorites without duplication, shortcuts Esc, concurrent default requests,
-  credential-store/session separation, and owner resize.
-- Native fixture import and first-run/relaunch scripts exit cleanly through the
-  CEF teardown barrier; `onboarding` is absent after Done.
+  credential-store/session separation, owner resize, direct onboarding continuation,
+  partial-success feedback, wholly failed imports, long profile lists, and discarding old tree/password selections on a new read.
+- Native fixture import (`echo-import-first/complete.png`) closes the picker
+  and displays the resource-backed success toast. The import-inclusive first-run
+  run (`echo-onboarding-import-final/default.png`) proceeds directly to default
+  setup; `session-after.json` clears onboarding after Done, and `reopened.png`
+  confirms it remains dismissed. Both scripts exit cleanly through CEF teardown.
 - `arc-source-picker-zoom.png` and `echo-source-picker-zoom.png` are 2× crops
   inspected directly. Final fixture session proves history, folders, excluded
   bookmark and ordered-tab behavior. No owner passwords/defaults were changed.
