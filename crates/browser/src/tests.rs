@@ -190,6 +190,7 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    Quote(u64, u64),
     Create(u64, String),
     MoveHost(u64, usize, Bounds),
     Visible(u64, bool),
@@ -282,6 +283,7 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.call(Call::Quote(raw(view), request)); true }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
     fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut std::ffi::c_void, bounds: Bounds) -> Option<ViewId> {
         let target = target.as_any_mut()?.downcast_mut::<Self>()?;
@@ -2025,6 +2027,93 @@ fn toast_share_button_uses_the_copied_url_after_switching_spaces(cx: &mut TestAp
     assert_eq!(view.read_with(cx, |w, _| w.share_picker.as_ref().unwrap().urls.clone()), vec![copied]);
 }
 
+fn current_toast(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
+    cx.executor().advance_clock(Duration::from_millis(650));
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.toast.as_ref().unwrap().overlay.unwrap());
+    let mut toast = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    toast.run_until_parked();
+    toast
+}
+
+#[gpui::test]
+fn archive_toast_undo_restores_its_transaction_and_rejects_a_later_pin(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let original = active_url(&view, cx);
+    cx.simulate_keystrokes("cmd-w");
+    assert!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.ends_with(". ⌘Z to Undo.")));
+    click(&mut current_toast(&view, cx), "toast-undo-shortcut");
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx), original);
+    assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+    cx.simulate_keystrokes("cmd-w");
+    let mut toast = current_toast(&view, cx);
+    let count = view.read_with(cx, |w, _| w.browser.archive.len());
+    cx.simulate_keystrokes("cmd-d");
+    let pin = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.clone());
+    click(&mut toast, "toast-undo-shortcut");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), count);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.clone()), pin);
+}
+
+#[gpui::test]
+fn background_command_bar_keeps_the_page_and_toast_reveals_the_created_tab(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let original = active_url(&view, cx);
+    cx.simulate_keystrokes("cmd-s cmd-t");
+    bar(&view, cx).simulate_input("https://background.example/path");
+    bar(&view, cx).simulate_keystrokes("cmd-enter");
+    assert_eq!(active_url(&view, cx), original);
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "New Tab Created in Personal");
+    assert!(bar_text(&view, cx).is_none());
+    click(&mut current_toast(&view, cx), "toast");
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://background.example/path"));
+}
+
+#[gpui::test]
+fn background_engine_request_keeps_focus_and_uses_the_hidden_sidebar_feedback(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/a".into() });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(view.read_with(cx, |w, _| w.toast.is_none()));
+    cx.simulate_keystrokes("cmd-s");
+    fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/b".into() });
+    assert_eq!(active_url(&view, cx), original);
+    click(&mut current_toast(&view, cx), "toast");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://background.example/b"));
+}
+
+#[gpui::test]
+fn move_toast_reveals_its_tab_after_the_user_switches_spaces(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let original = active_url(&view, cx);
+    run_named_command(&view, cx, "move to today in work");
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Tab moved! Click to go there.");
+    cx.simulate_keystrokes("ctrl-1");
+    click(&mut current_toast(&view, cx), "toast");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    assert_eq!(active_url(&view, cx), original);
+}
+
+#[gpui::test]
+fn quote_command_copies_a_local_text_fragment_and_ignores_navigation_races(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx).unwrap();
+    run_named_command(&view, cx, "copy current url as quote");
+    let request = fake.take_calls().into_iter().find_map(|call| if let Call::Quote(_, request) = call { Some(request) } else { None }).unwrap();
+    fake.send(cx, Event::QuoteSelection { view: page(1), request, text: "Hello, world!".into(), source_url: original.clone() });
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())), Some(format!("{original}#:~:text=Hello%2C%20world%21")));
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Copied Current URL");
+    run_named_command(&view, cx, "copy current url as quote");
+    let request = fake.take_calls().into_iter().find_map(|call| if let Call::Quote(_, request) = call { Some(request) } else { None }).unwrap();
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("preserve".into())));
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://changed.example/".into() });
+    fake.send(cx, Event::QuoteSelection { view: page(1), request, text: "late selection".into(), source_url: original });
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())), Some("preserve".into()));
+}
+
 #[gpui::test]
 fn clear_today_feedback_advertises_the_working_undo_shortcut(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
@@ -2093,7 +2182,7 @@ fn archive_search_restores_a_selected_tab_to_its_original_space(cx: &mut TestApp
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.chromium.org"));
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
     assert_eq!(bar_text(&view, cx), None);
-    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Tab restored to Personal"));
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Tab restored to Personal. Click to view."));
 }
 
 #[gpui::test]
@@ -3946,7 +4035,7 @@ fn archive_above_removes_the_active_page_and_focuses_its_reference_without_reloa
         assert_eq!(w.browser.archive[0].tab.id.get(), 8);
         assert_eq!(w.browser.space().pinned.len(), 2);
         assert_eq!(w.browser.space().today.len(), 2);
-        assert_eq!(w.toast.as_ref().unwrap().message, "Archived 1 tab");
+        assert!(w.toast.as_ref().unwrap().message.ends_with(". ⌘Z to Undo."));
     });
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Close(1)));
@@ -4947,6 +5036,7 @@ fn dragging_a_today_tab_into_a_closed_folder_pins_it_and_reuses_the_other_loaded
         let tab = w.browser.space().active_tab.unwrap();
         assert_eq!(tab.get(), 7);
         assert!(w.browser.space().today.is_empty());
+        assert_eq!(w.toast.as_ref().unwrap().message, "Pinned to Research");
         assert_eq!(w.browser.folder_ancestors(tab).last().unwrap().get(), 3);
         assert!(w.browser.space().folders[1].collapsed);
         assert_eq!(w.browser.all_tabs().count(), 3);
@@ -5466,6 +5556,7 @@ fn dropping_a_today_tab_on_a_space_icon_preserves_its_section_and_live_page(cx: 
     drag_between(cx, "tab-8", "space-1");
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.space().name, "Work");
+        assert_eq!(w.toast.as_ref().unwrap().message, "Tab moved! Click to go there.");
         assert_eq!(w.browser.space().today[0].id.get(), 8);
         assert!(w.browser.space().pinned.is_empty());
         assert!(w.browser.space().today[0].pinned_url.is_none());

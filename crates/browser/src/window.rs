@@ -81,6 +81,7 @@ actions!(
         OpenCommandBar,
         CopyUrl,
         CopyUrlAsMarkdown,
+        CopyUrlAsQuote,
         NewBoost,
         NewFolder,
         CollapseAllFolders,
@@ -131,6 +132,7 @@ actions!(
         SelectNext,
         SelectPrevious,
         Confirm,
+        ConfirmBackground,
         Dismiss,
     ]
 );
@@ -281,6 +283,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-n", SelectNext, bar),
         KeyBinding::new("ctrl-p", SelectPrevious, bar),
         KeyBinding::new("enter", Confirm, bar),
+        KeyBinding::new("cmd-enter", ConfirmBackground, bar),
         KeyBinding::new("escape", Dismiss, bar),
     ]);
 }
@@ -435,6 +438,7 @@ pub enum Command {
     ReplacePinnedUrl,
     CopyUrl,
     CopyUrlAsMarkdown,
+    CopyUrlAsQuote,
     ToggleSpaceHeader,
     ToggleFavoritesOrdering,
     RevealTab,
@@ -652,6 +656,8 @@ pub struct BrowserWindow {
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
+    pub(crate) quote_request: u64,
+    pub(crate) pending_quote: Option<(u64, crate::pages::PageIdentity, String)>,
     pub(crate) retiring_toasts: Vec<crate::toast::Toast>,
     pub(crate) share_picker: Option<crate::native::sharing::SharePicker>,
     pub(crate) link_status: Option<crate::link_status::LinkStatus>,
@@ -906,6 +912,8 @@ impl BrowserWindow {
             find_bar: None,
             toast: None,
             toast_generation: 0,
+            quote_request: 0,
+            pending_quote: None,
             retiring_toasts: Vec::new(),
             share_picker: None,
             link_status: None,
@@ -1190,6 +1198,9 @@ impl BrowserWindow {
                         if let Some(title) = title { self.edit_profile(|browser| browser.update_history_title(page_profile.expect("page provenance"), &url, &title)); }
                     }
                 }
+                Event::QuoteSelection { request, text, source_url, .. } => {
+                    self.complete_quote(request, identity, &text, &source_url, cx);
+                }
                 Event::BoostZap { selector, .. } => {
                     if let (Some(identity),Some(editor))=(identity,self.boost_editor) {
                         let source=self.main_window.window_id();
@@ -1204,17 +1215,20 @@ impl BrowserWindow {
                         self.open_peek(url, window, cx);
                     }
                 }
-                Event::OpenInNewTab { url, .. } => {
+                event @ (Event::OpenInNewTab { .. } | Event::OpenInBackgroundTab { .. }) => {
+                    let requested_background = matches!(event, Event::OpenInBackgroundTab { .. });
+                    let (Event::OpenInNewTab { url, .. } | Event::OpenInBackgroundTab { url, .. }) = event else { unreachable!() };
                     let Some(source) = source_space.and_then(|id| self.browser.spaces.iter().position(|space| space.id == id && Some(space.user_profile_id) == page_profile)) else { continue; };
                     let id = self.edit_browser(|browser| {
                         let mut selection = browser.window_selection();
-                        let background = browser.active_space != source;
+                        let background = requested_background || browser.active_space != source;
                         browser.switch_space(source);
                         let id = browser.new_tab(url.clone(), SystemTime::now());
                         if background { browser.edit_in_window(&mut selection, |_| {}); }
                         id
                     });
                     self.edit_profile(|browser| browser.set_title(id, display_url(&url)));
+                    if requested_background { self.show_background_tab(id, cx); }
                 }
                 Event::InspectorInput(input) => {
                     let input = pages.borrow_mut().record_inspector_input(&input);
@@ -1308,6 +1322,7 @@ impl BrowserWindow {
             self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
         if !editable && self.peek_owner.is_some() { self.edit_peek_history(redo, window, cx); return; }
         if !editable && if redo { self.edit_browser(|browser| browser.redo_sidebar(SystemTime::now())) } else { self.edit_browser(|browser| browser.undo_sidebar(SystemTime::now())) } {
+            if !redo { self.dismiss_archive_feedback(cx); }
             self.settle_pager(cx);
             if self.browser.all_tabs().count() < before { self.after_tab_removal(cx); }
             cx.notify();
@@ -1670,6 +1685,7 @@ impl BrowserWindow {
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
+                (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::Settings, "Settings…", "settings|preferences|search settings", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
@@ -1819,7 +1835,20 @@ impl BrowserWindow {
         }
     }
 
-    pub fn confirm(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn new_command_tab(&mut self, url: &str, background: bool, cx: &mut Context<Self>) -> TabId {
+        let id = self.edit_browser(|browser| {
+            let mut selection = browser.window_selection();
+            let id = browser.new_tab(url, SystemTime::now());
+            if background { browser.edit_in_window(&mut selection, |_| {}); }
+            id
+        });
+        if background { self.show_background_tab(id, cx); }
+        id
+    }
+
+    pub fn confirm(&mut self, index: usize, cx: &mut Context<Self>) { self.confirm_with_background(index, false, cx); }
+
+    fn confirm_with_background(&mut self, index: usize, background: bool, cx: &mut Context<Self>) {
         let Some(target) = self.command_bar.as_ref().map(|bar| bar.target) else {
             return;
         };
@@ -1855,7 +1884,7 @@ impl BrowserWindow {
                         self.edit_browser(|browser| browser.navigate(id, resolved.url()));
                         id
                     }
-                    Target::NewTab => self.edit_browser(|browser| browser.new_tab(resolved.url(), now)),
+                    Target::NewTab => self.new_command_tab(resolved.url(), background, cx),
                     Target::Tab(id) => {
                         self.edit_browser(|browser| browser.navigate(id, resolved.url()));
                         id
@@ -1867,7 +1896,7 @@ impl BrowserWindow {
             Suggestion::History { title, url } => {
                 if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 let id = match target {
-                    Target::NewTab => self.edit_browser(|browser| browser.new_tab(&url, now)),
+                    Target::NewTab => self.new_command_tab(&url, background, cx),
                     Target::Tab(id) => { self.edit_browser(|browser| browser.navigate(id, &url)); id }
                     Target::Split { .. } => {
                         let Some(draft) = self.split_draft.take() else { return; };
@@ -1905,7 +1934,7 @@ impl BrowserWindow {
             Suggestion::ArchivedTab { id, .. } => {
                 if self.edit_browser(|browser| browser.restore_archived(id, now)).is_some() {
                     self.settle_pager(cx);
-                    self.show_toast(format!("Tab restored to {}", self.browser.space().name), cx);
+                    self.show_reveal_toast(format!("Tab restored to {}. Click to view.", self.browser.space().name), id, cx);
                 }
             }
             Suggestion::MoreArchive { .. } => {
@@ -2017,6 +2046,7 @@ impl BrowserWindow {
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
             Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
+            Command::CopyUrlAsQuote => self.copy_url_as_quote(cx),
             Command::Settings => self.open_settings(cx),
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.begin_space_creation(self.browser.space().id, cx),
@@ -2077,7 +2107,7 @@ impl BrowserWindow {
                         if let Some(index) = self.browser.spaces.iter().position(|candidate| candidate.id == space) {
                             self.switch_space(index, cx);
                             self.edit_browser(|browser| browser.activate_tab(id, SystemTime::now()));
-                            self.show_toast(format!("Moved tab to {}", self.browser.space().name), cx);
+                            self.show_tab_move(id, cx);
                         }
                     }
                 }
@@ -2236,6 +2266,8 @@ impl BrowserWindow {
     fn close_sidebar_item(&mut self, id: TabId, remove_pin: bool, cx: &mut Context<Self>) {
         self.finish_tab_rename(true, cx);
         let related = self.browser.related_tabs(id);
+        let title = self.browser.item_title(id);
+        let archived_before = self.browser.archive.len();
         if self.edit_browser(|browser| if remove_pin { browser.remove_pin(id, SystemTime::now()) } else { browser.close_tab(id, SystemTime::now()) }).is_some() {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
@@ -2243,6 +2275,7 @@ impl BrowserWindow {
                 pages.sync(&self.browser, self.page_content_visible());
             }
             self.after_tab_removal(cx);
+            if self.browser.archive.len() > archived_before { self.show_archive_undo(&title, cx); }
             if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>().cloned() { downloads.wake(cx); }
         }
         cx.notify();
@@ -3989,6 +4022,10 @@ impl BrowserWindow {
                     }))
                     .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select(1, cx)))
                     .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select(-1, cx)))
+                    .on_action(cx.listener(|this, _: &ConfirmBackground, _, cx| {
+                        let index = this.command_bar.as_ref().map_or(0, |bar| bar.selected);
+                        this.confirm_with_background(index, true, cx)
+                    }))
                     .on_action(cx.listener(|this, _: &Confirm, _, cx| {
                         let index = this.command_bar.as_ref().map_or(0, |bar| bar.selected);
                         this.confirm(index, cx)
@@ -4216,6 +4253,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(Self::on_edit_current_url))
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))
             .on_action(cx.listener(|this, _: &CopyUrlAsMarkdown, _, cx| this.copy_url(true, cx)))
+            .on_action(cx.listener(|this, _: &CopyUrlAsQuote, _, cx| this.copy_url_as_quote(cx)))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(|this, _: &crate::peek::ExitPeek, _, cx| this.exit_peek(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))

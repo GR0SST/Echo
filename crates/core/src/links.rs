@@ -127,3 +127,27 @@ mod tests {
         );
     }
 }
+
+/// Text fragments keep quote sharing local: the destination browser locates
+/// the selected text; no server-side object or browser account is involved.
+pub fn quote_link(url: &str, text: &str) -> Option<String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) { return None; }
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() || text.len() > 65536 { return None; }
+    let encoded = text.bytes().map(|byte| if byte.is_ascii_alphanumeric() || b"_.~".contains(&byte) { (byte as char).to_string() } else { format!("%{byte:02X}") }).collect::<String>();
+    let clean = clean_url(url);
+    let base = match clean.split_once('#') {
+        Some((address, fragment)) => format!("{address}#{}", fragment.split_once(":~:").map_or(fragment, |(anchor, _)| anchor)),
+        None => format!("{clean}#"),
+    };
+    Some(format!("{base}:~:text={encoded}"))
+}
+
+#[cfg(test)]
+mod quote_tests {
+    #[test]
+    fn quote_links_preserve_anchors_replace_directives_and_escape_grammar() {
+        assert_eq!(super::quote_link("https://example.com/:~:path?utm_source=x#section:~:text=old", " a-b, 雪 ").as_deref(), Some("https://example.com/:~:path#section:~:text=a%2Db%2C%20%E9%9B%AA"));
+        for (url, text) in [("file:///private/file", "text"), ("https://example.com", "  ")] { assert!(super::quote_link(url, text).is_none()); }
+    }
+}

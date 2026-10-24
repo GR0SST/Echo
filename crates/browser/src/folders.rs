@@ -86,6 +86,7 @@ impl BrowserWindow {
                 };
                 if let Some(tab) = tab {
                     self.edit_browser(|browser| browser.move_item_to_folder(tab, folder));
+                    self.show_folder_pin(folder, cx);
                 }
                 if let Some(index) = self
                     .browser
@@ -229,6 +230,14 @@ impl BrowserWindow {
             _ => unreachable!(),
         };
         self.scroll_to_pinned_item(item, cx);
+        match (target, parent) {
+            (Target::MoveToFolder(_), Some(folder)) => self.show_folder_pin(folder, cx),
+            (Target::MoveToFolder(tab), None) => self.show_tab_move(tab, cx),
+            (Target::MoveFolder(_), _) => {
+                if let Some(tab) = moved.first() { self.show_tab_move(*tab, cx); }
+            }
+            _ => {}
+        }
         true
     }
 

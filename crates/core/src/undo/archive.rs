@@ -51,6 +51,7 @@ fn archived_ids(entry: &ArchivedTab) -> Vec<TabId> {
 }
 
 impl ArchiveEdit {
+    pub(super) fn anchors(&self) -> Vec<TabId> { self.items.iter().map(|item| item.anchor).collect() }
     pub(super) fn apply(&self, redo: bool, browser: &mut Browser, now: SystemTime) -> bool {
         let Some(index) = browser.spaces.iter().position(|space| space.id == self.space) else { return false; };
         if browser.spaces[index].user_profile_id != self.user_profile_id { return false; }

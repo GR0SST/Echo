@@ -22,6 +22,7 @@ mod audio_clock;
 mod editing;
 mod boosts;
 mod boost_picker;
+mod quote;
 pub use boosts::SiteBoost;
 mod printing;
 pub use printing::{PrintDispatch, PrintRequest};
@@ -94,6 +95,8 @@ pub enum Event {
     },
     /// The page asked for a new window (target=_blank, window.open, ⌘-click).
     OpenInNewTab { opener: ViewId, url: String },
+    OpenInBackgroundTab { opener: ViewId, url: String },
+    QuoteSelection { view: ViewId, request: u64, text: String, source_url: String },
     OpenPeek { opener: ViewId, url: String },
     /// A browser shortcut pressed while this exact page had focus. Preserve
     /// the callback view through queues; the current active page may change.
@@ -119,6 +122,8 @@ enum RawEvent {
     Loading(bool, bool, bool),
     LoadError(String, i32, String),
     Popup(String),
+    BackgroundPopup(String),
+    Quote(u64, String, String),
     Peek(String),
     Shortcut(Shortcut),
 }
@@ -574,6 +579,9 @@ impl Engine {
         Ok(())
     }
 
+    pub fn request_quote(&mut self, view: ViewId, request: u64) -> bool {
+        self.views.get(&view).filter(|view| view.role == ViewRole::Page).is_some_and(|view| quote::request(&view.browser, request))
+    }
     pub fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { if let Some(view)=self.views.get(&view).filter(|view|view.role==ViewRole::Page) { boost_picker::request(&view.browser,enabled); } }
 
     /// Creates a page over `ui_view` (the toolkit's `NSView*` on macOS),
@@ -1216,6 +1224,8 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
             }
         }
         RawEvent::Popup(url) => Event::OpenInNewTab { opener: view, url },
+        RawEvent::Quote(request, text, source_url) => Event::QuoteSelection { view, request, text, source_url },
+        RawEvent::BackgroundPopup(url) => Event::OpenInBackgroundTab { opener: view, url },
         RawEvent::Peek(url) => Event::OpenPeek { opener: view, url },
     })
 }
@@ -1249,6 +1259,14 @@ wrap_client! {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
             }
             if source_process == ProcessId::RENDERER {
+                if let Some(message) = message.as_ref().filter(|message| CefString::from(&message.name()).to_string() == quote::RESULT) {
+                    if let (Some(frame), Some(args)) = (frame.as_ref(), message.argument_list().filter(|args| args.size() == 2 && args.get_type(0) == ValueType::STRING && args.get_type(1) == ValueType::STRING)) {
+                        let token = CefString::from(&args.string(0)).to_string();
+                        let text = CefString::from(&args.string(1)).to_string();
+                        if let Ok(request) = token.parse::<u64>() { if text.len() <= 65536 { push(&self.events, browser, RawEvent::Quote(request, text, CefString::from(&frame.url()).to_string())); } }
+                    }
+                    return 1;
+                }
                 if let Some(message) = message.as_ref().filter(|message| CefString::from(&message.name()).to_string()==boost_picker::RESULT) {
                     if let Some(args)=message.argument_list().filter(|args|args.size()==1&&args.get_type(0)==ValueType::STRING) {
                         let selector=CefString::from(&args.string(0)).to_string();
@@ -1489,7 +1507,7 @@ wrap_life_span_handler! {
         ) -> ::std::os::raw::c_int {
             let url = target_url.map(CefString::to_string).unwrap_or_default();
             if !url.is_empty() {
-                push(&self.events, browser, if user_gesture != 0 && self.policy.lock().unwrap().shift_click && target_disposition == WindowOpenDisposition::NEW_WINDOW { RawEvent::Peek(url) } else { RawEvent::Popup(url) });
+                push(&self.events, browser, if user_gesture != 0 && self.policy.lock().unwrap().shift_click && target_disposition == WindowOpenDisposition::NEW_WINDOW { RawEvent::Peek(url) } else if target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB { RawEvent::BackgroundPopup(url) } else { RawEvent::Popup(url) });
             }
             1
         }

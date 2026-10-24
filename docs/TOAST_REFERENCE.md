@@ -25,7 +25,7 @@ Observed on the fresh Echo Toasts Oct24 test Space:
   the owned window after notifications clear.
 
 Local inventory from source groups (available actions / missing feature):
-- Undo action shortcut hint (“. ⌘Z to Undo.”): generic action feedback missing.
+- Undo action shortcut hint (“. ⌘Z to Undo.”): generic archive feedback wired.
   Clear Today observed/implemented: “Cleared Tabs! Use ⌘Z to undo.”, 48 px
   high, 4 px inset, with a 28 px-high inline keycap.
 - Copied Current URL / clean URL / item links / clean links / quote URL.
@@ -52,9 +52,9 @@ this in %@Settings%@.” Title/dismiss label are compiled short strings; the
 requested title is “We cleaned up!”. No safe live trigger was found for its
 layout/count/actions, so the banner has not been guessed or marked complete.
 
-Remaining: hover duration, non-copy accessories, generic
-Undo toast, background-created items, drag pinning, folder restore, quote link,
-unsupported feature notifications and sidebar banners. Native web notification
+Remaining: hover duration, native sharing on Windows/Linux, background Space
+creation, archived-folder restore, unsupported feature notifications and sidebar
+banners. Round 3 below records the completed existing-action hooks. Native web notification
 permission/delivery is not listed in section 18 and was not added.
 
 ## Echo validation
@@ -139,3 +139,43 @@ covered the claimed main window (10205). Guard failures and snapshots are in
 `target/parity/toasts/r2/recovery.log` and `recovery-state.json`. No input was
 sent past that guard, no owner Space was changed, and no archive setting or
 education preference was modified.
+
+
+## Round 3 existing-action hooks
+
+No new Arc session was needed: plain and copy-with-accessory geometry reuse the
+approved pairs and recordings above. Exact sources in `arc-binary-strings.txt`:
+
+| Hook | Arc string source | Echo behavior |
+|---|---|---|
+| Close/archive single or multiple items | line 47639, `. ^Z to Undo.` (Command key glyph at runtime) | Inline keycap and clickable Undo capture the exact archive transaction; a newer edit cannot be undone accidentally. Keyboard Undo retires the feedback. |
+| Move by Command Bar, folder/root move or cross-Space drag | line 32879, `Tab moved! Click to go there.` | Click reveals the moved tab in its destination; stale/deleted or different-profile targets are ignored. |
+| Background Command Bar (Cmd+Enter) and CEF background popup | line 47717, `New Tab Created in %@` | Current page remains selected; hidden-sidebar feedback clicks reveal the new tab. |
+| Folder creation around a tab and move/drag into a folder | line 47606, `Pinned to ` | Dynamic folder name follows the exact prefix. Ordinary same-section reordering emits no pin feedback. |
+| Pin/unpin by drag | lines 47602–47604, `Un-Pinned Tab from` / `Pinned Tab to` | Reuses the verified plain layout and Space-name formatting. |
+| Archive restore | lines 47523–47527, `Tab restored to ` / `. Click to view.` | Captured restored tab is revealed on click. |
+| Copy Current URL as Quote | command line 33315; feedback line 47618, `Copied Current URL` | CEF reads the explicit text selection through private renderer IPC, copies a cleaned text-fragment URL, and uses the verified copy/share layout. Navigation, stale replies and iframe selections are rejected. No unverified quote-specific sublabel is added. |
+
+Ordinary **download completion is dropped from the hook list**: the extracted
+Arc toast group contains only `Download renamed!` and `Download name reverted!`
+for Max Tidy Downloads (lines 47511–47514), with no ordinary completion toast.
+Downloads use the downloads indicator/Library; Echo must not invent completion
+copy. Max rename/revert feedback remains for the later Max implementation.
+
+The foreground-only Space creation route does not emit `New Space Created`:
+that inventory entry describes background creation, which Echo does not yet
+expose. Archived folders likewise have no restore model/route yet. Import,
+translation, capture, battery saver and shortcut education await their owning
+features. “We cleaned up!” remains partial with no reference or guessed UI.
+
+Validation: five additional GPUI interaction regressions cover archive Undo
+transaction safety, background opening from the Command Bar and CEF, move
+reveal, and quote/navigation races. Existing real-drag regressions also assert
+folder pin and cross-Space move feedback. Core tests cover text-fragment URL
+encoding. The full workspace run passes 1,222 tests. Native evidence lives in
+`target/parity/toasts/r3/`: `pairs.png` reuses the approved Arc layout crops;
+`echo-quote.png` plus `quote-clipboard.txt` verify native CEF quote copying;
+`echo-archive.png` / `echo-undo.png`, `echo-background.png` /
+`echo-background-reveal.png`, and `echo-move.png` / `echo-move-reveal.png`
+verify native actions. `echo-folder.png` and `echo-drag.png` show creation
+around a tab and a real Today-to-folder drag. Logs show clean CEF shutdown.

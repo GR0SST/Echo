@@ -89,6 +89,9 @@ impl BrowserWindow {
         if !self.accepts_tab_drag(drag) { return; }
         if self.browser.user_profile_id_for_tab(target) != Some(drag.profile) { return; }
         let tab = drag.id;
+        let was_pinned = self.browser.all_tabs().find(|entry| entry.id == tab).is_some_and(|entry| entry.pinned_url.is_some());
+        let old_folder = self.browser.folder_ancestors(tab).last().copied();
+        let old_space = self.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab)).map(|space| space.id);
         if !self.edit_browser(|browser| browser.move_tab_relative(tab, target, after)) {
             return;
         }
@@ -113,6 +116,9 @@ impl BrowserWindow {
         } else {
             self.scroll_to_today_item(tab, cx);
         }
+        if old_space != Some(self.browser.space().id) { self.show_tab_move(tab, cx); }
+        else if let Some(folder) = self.browser.folder_ancestors(tab).last().copied().filter(|folder| Some(*folder) != old_folder) { self.show_folder_pin(folder, cx); }
+        else if was_pinned != self.browser.all_tabs().find(|entry| entry.id == tab).is_some_and(|entry| entry.pinned_url.is_some()) { self.show_toast(format!("{} Tab {} “{}”", if was_pinned { "Un-Pinned" } else { "Pinned" }, if was_pinned { "from" } else { "to" }, self.browser.space().name), cx); }
         cx.notify();
     }
 
@@ -150,6 +156,8 @@ impl BrowserWindow {
         if !self.accepts_tab_drag(drag) { return; }
         if !self.browser.spaces.iter().any(|entry| entry.id == space && entry.user_profile_id == drag.profile) { return; }
         let tab = drag.id;
+        let source = self.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab)).map(|space| space.id);
+        let was_pinned = self.browser.all_tabs().find(|entry| entry.id == tab).is_some_and(|entry| entry.pinned_url.is_some());
         let changed = match section {
             Section::Pinned => self.edit_browser(|browser| browser.move_item_to_pinned_root(tab, space)),
             Section::Today => self.edit_browser(|browser| browser.move_tab(tab, space, section)),
@@ -166,6 +174,8 @@ impl BrowserWindow {
             self.switch_space(index, cx);
         }
         self.activate_dragged_tab(drag);
+        if source != Some(space) { self.show_tab_move(tab, cx); }
+        else if was_pinned != (section == Section::Pinned) { self.show_toast(format!("{} Tab {} “{}”", if section == Section::Pinned { "Pinned" } else { "Un-Pinned" }, if section == Section::Pinned { "to" } else { "from" }, self.browser.space().name), cx); }
         match section {
             Section::Pinned => self.scroll_to_pinned_item(self.browser.pinned_item(tab), cx),
             Section::Today => self.scroll_to_today_start(cx),

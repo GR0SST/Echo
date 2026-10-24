@@ -214,6 +214,20 @@ impl SidebarHistory {
 }
 
 impl Browser {
+    /// Opaque identities for an archive accessory; other edits must never be
+    /// undone accidentally by a still-visible archive notification.
+    pub fn archive_undo_items(&self) -> Option<Vec<TabId>> {
+        match self.sidebar_history.undo.last()? {
+            SidebarEdit::Archive(edit) | SidebarEdit::RemovePin { archive: edit, .. } => Some(edit.anchors()),
+            _ => None,
+        }
+    }
+    pub fn undo_archive_items(&mut self, expected: &[TabId], now: std::time::SystemTime) -> bool {
+        if self.archive_undo_items().as_deref() != Some(expected) { return false; }
+        let mut edit = self.sidebar_history.undo.pop().unwrap();
+        if edit.apply(false, self, now) { self.sidebar_history.redo.push(edit); true }
+        else { self.sidebar_history.undo.push(edit); false }
+    }
     pub fn sidebar_undo_action(&self) -> Option<&'static str> {
         match self.sidebar_history.undo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
     }

@@ -126,6 +126,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::separator(),
                 MenuItem::action("Copy URL", window::CopyUrl),
                 MenuItem::action("Copy URL as Markdown", window::CopyUrlAsMarkdown),
+                MenuItem::action("Copy Current URL as Quote", window::CopyUrlAsQuote),
                 MenuItem::separator(),
                 MenuItem::action("Find…", find::FindPage),
                 MenuItem::action("Find Next", find::NextMatch),

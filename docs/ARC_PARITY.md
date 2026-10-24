@@ -238,7 +238,7 @@ Folder duplication follows the right-click action documented in the
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost opens the floating page editor; New Easel is left out |
 | "Springy" click animation on sidebar items | — | partial | Ordinary tab rows ease 1 px inward per edge over 60 ms, then expand from the current inset on release; nested indentation and drag-card grab points are retained. Native Arc/Echo recordings confirm 212 → 210 → 212 px at the same sidebar width. Other sidebar item types and reorder settling remain unfinished |
 | Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
-| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. No nib/layout was found for the SwiftUI education banner; existing education eligibility is false and was not modified. Local blocker banners remain missing; Arc update-feed and account banners are out of scope |
+| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | partial | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. No nib/layout was found for the SwiftUI education banner; existing education eligibility is false and was not modified. Round 3 leaves the local education banner partial without a reference. Local blocker banners remain missing; Arc update-feed and account banners are out of scope |
 | Media controls in the sidebar | — | missing | See "Media and PiP" |
 
 ## 3. Spaces
@@ -509,19 +509,23 @@ respected. The copy accessory opens the native system share menu with an immutab
 copy-time URL list; changing tabs/Spaces cannot change its payload. Native
 service-menu presentation is outside application/entity/window borrows. The compact native service menu preserves the main window’s keyboard input
 after dismissal; macOS 27 service icons are explicitly visible. Hover timing,
-normal-pointer menu anchoring, other accessory actions and Windows/Linux
+normal-pointer menu anchoring, Windows/Linux
 sharing remain incomplete.
 Reference inventory: [TOAST_REFERENCE.md](TOAST_REFERENCE.md). Native evidence:
 `target/parity/toasts/`.
 Web notification permission/delivery is not part of this section's inventory.
+Ordinary download completion is excluded from the hook list: no Arc completion
+string exists in the extracted toast inventory; downloads use the indicator/Library.
+Max download rename/revert feedback awaits the later Max implementation.
 
 | Toast | Status |
 |---|---|
-| Undo for actions ("“%@”. ⌘Z to Undo.") | partial (Clear Today: “Cleared Tabs! Use ⌘Z to undo.” with inline keycap; generic action messages remain) |
-| Copied Current URL / clean link without trackers / Copied item links / as quote | partial (URL, clean URL and Markdown done; existing item-link handler shares its copied URLs; multi-selection UI and quotes remain) |
-| Pinned Tab to “%@” / Un-Pinned Tab from “%@” | partial (shortcut and Command Bar; only with hidden sidebar as observed in Arc; drag routes remain) |
-| Auto archived %d tabs; Tab/Folder restored to … | partial (automatic archive and existing tab restore; folder restore and click-to-view remain) |
-| New Tab Created in %@ (with the sidebar hidden); New Space Created | missing |
+| Undo for actions ("“%@”. ⌘Z to Undo.") | done (generic single/bulk archive and Clear Today; clickable transaction-scoped Undo and keyboard Undo) |
+| Copied Current URL / clean link without trackers / Copied item links / as quote | partial (URL, clean URL and Markdown done; quote text-fragment copy and immutable share payload done; existing item-link handler shares copied URLs; multi-selection UI remains) |
+| Pinned Tab to “%@” / Un-Pinned Tab from “%@” | partial (shortcut and Command Bar; only with hidden sidebar as observed in Arc; drag pin/unpin and folder pin routes wired) |
+| Auto archived %d tabs; Tab/Folder restored to … | partial (automatic archive and clickable tab restore done; archived-folder model/restore remains) |
+| New Tab Created in %@ (with the sidebar hidden); New Space Created | partial (background Command Bar/CEF opening preserves focus and offers reveal; background Space creation route missing) |
+| Tab moved! Click to go there.; Pinned to folder | done (Command Bar/folder moves, folder creation and drag results; clickable move reveal) |
 | Cannot Add New Pane (Split View) | done |
 | Import: Now importing… / Success / partial / failure | missing |
 | Translation: Translated to %@ / back to %@ / error | missing |

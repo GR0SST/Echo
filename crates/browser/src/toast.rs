@@ -20,7 +20,11 @@ pub(crate) struct Toast {
 }
 
 #[derive(Clone)]
-enum ToastAction { ShareLinks(Vec<String>) }
+enum ToastAction {
+    ShareLinks(Vec<String>),
+    RevealTab(browser_core::TabId, browser_core::UserProfileId),
+    UndoArchive(Vec<browser_core::TabId>, browser_core::UserProfileId),
+}
 
 // Arc 1.170.0, measured from arc-copy.mov (variable-frame-rate PTS):
 // spring ζ=0.694, ω=15.42; dismissal starts 4.986 s after presentation
@@ -55,6 +59,32 @@ impl Toast {
 }
 
 impl BrowserWindow {
+    pub(crate) fn copy_url_as_quote(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.browser.space().active_tab else { return; };
+        let Some(pages) = &self.pages else { return; };
+        let identity = pages.borrow().identity_for_tab(tab);
+        let Some(identity) = identity else { return; };
+        let Some(url) = self.browser.all_tabs().find(|entry| entry.id == tab).map(|entry| entry.url.clone()) else { return; };
+        self.quote_request = self.quote_request.wrapping_add(1);
+        let request = self.quote_request;
+        self.pending_quote = Some((request, identity, url));
+        if !pages.borrow_mut().request_quote(tab, request) { self.pending_quote = None; }
+    }
+
+    pub(crate) fn complete_quote(&mut self, request: u64, identity: Option<crate::pages::PageIdentity>, text: &str, source_url: &str, cx: &mut Context<Self>) {
+        let Some((pending, captured, url)) = self.pending_quote.as_ref() else { return; };
+        if *pending != request || identity != Some(*captured) { return; }
+        let captured = *captured;
+        let same_document = source_url == url;
+        let valid = same_document && self.browser.space().active_tab == Some(captured.tab) && self.browser.all_tabs().any(|tab| tab.id == captured.tab && tab.url == *url);
+        self.pending_quote = None;
+        if !valid { return; }
+        if let Some(link) = browser_core::links::quote_link(source_url, text) {
+            cx.write_to_clipboard(ClipboardItem::new_string(link.clone()));
+            self.show_link_toast("Copied Current URL".into(), vec![link], cx);
+        }
+    }
+
     pub(crate) fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
         let Some(id) = self.browser.space().active_tab else { return; };
         self.copy_tab_url(id, markdown, cx);
@@ -85,9 +115,75 @@ impl BrowserWindow {
         if let Some(toast) = &mut self.toast { toast.action = Some(ToastAction::ShareLinks(urls)); }
     }
 
+    pub(crate) fn show_archive_undo(&mut self, title: &str, cx: &mut Context<Self>) {
+        if self.browser.is_blank() && self.browser.all_tabs().next().is_none() { return; }
+        // Arc ToastController's generic Undo template, ARC_PARITY section 18.
+        self.show_toast(format!("“{title}”. ⌘Z to Undo."), cx);
+        self.attach_archive_undo();
+    }
+
+    pub(crate) fn dismiss_archive_feedback(&mut self, cx: &mut Context<Self>) {
+        if self.toast.as_ref().is_some_and(|toast| matches!(toast.action, Some(ToastAction::UndoArchive(..)))) {
+            self.retire_toast(cx);
+        }
+    }
+
+    fn attach_archive_undo(&mut self) {
+        if let Some(ids) = self.browser.archive_undo_items() {
+            if let Some(toast) = &mut self.toast {
+                toast.action = Some(ToastAction::UndoArchive(ids, self.browser.active_user_profile_id()));
+            }
+        }
+    }
+
+    pub(crate) fn show_reveal_toast(&mut self, message: String, tab: browser_core::TabId, cx: &mut Context<Self>) {
+        let Some(profile) = self.browser.user_profile_id_for_tab(tab) else { return; };
+        self.show_toast(message, cx);
+        if let Some(toast) = &mut self.toast { toast.action = Some(ToastAction::RevealTab(tab, profile)); }
+    }
+
+    pub(crate) fn show_background_tab(&mut self, tab: browser_core::TabId, cx: &mut Context<Self>) {
+        if self.sidebar_visible { return; }
+        if let Some(name) = self.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab)).map(|space| space.name.clone()) {
+            self.show_reveal_toast(format!("New Tab Created in {name}"), tab, cx);
+        }
+    }
+
+    pub(crate) fn show_tab_move(&mut self, tab: browser_core::TabId, cx: &mut Context<Self>) {
+        self.show_reveal_toast("Tab moved! Click to go there.".into(), tab, cx);
+    }
+
+    pub(crate) fn show_folder_pin(&mut self, folder: browser_core::folders::FolderId, cx: &mut Context<Self>) {
+        if let Some(name) = self.browser.folder(folder).map(|folder| folder.name.clone()) {
+            self.show_toast(format!("Pinned to {name}"), cx);
+        }
+    }
+
     fn activate_toast_action(&mut self, generation: u64, cx: &mut Context<Self>) {
         let Some(toast) = self.toast.as_ref().filter(|toast| toast.generation == generation && toast.dismissed.is_none()) else { return; };
-        let Some(ToastAction::ShareLinks(urls)) = toast.action.clone() else { return; };
+        let Some(action) = toast.action.clone() else { return; };
+        let urls = match action {
+            ToastAction::ShareLinks(urls) => urls,
+            ToastAction::RevealTab(tab, profile) => {
+                if profile != self.browser.active_user_profile_id() || self.browser.user_profile_id_for_tab(tab) != Some(profile) { return; }
+                if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab)) {
+                    self.switch_space(index, cx);
+                    self.edit_browser(|browser| browser.activate_sidebar_item(tab, std::time::SystemTime::now()));
+                    self.settle_pager(cx);
+                    self.retire_toast(cx);
+                    cx.notify();
+                }
+                return;
+            }
+            ToastAction::UndoArchive(items, profile) => {
+                if profile == self.browser.active_user_profile_id() && self.edit_browser(|browser| browser.undo_archive_items(&items, std::time::SystemTime::now())) {
+                    self.settle_pager(cx);
+                    self.retire_toast(cx);
+                    cx.notify();
+                }
+                return;
+            }
+        };
         let main = self.main_window;
         // Native menu presentation enters AppKit's event loop. End GPUI
         // application, entity and window borrows before native tracking.
@@ -104,7 +200,7 @@ impl BrowserWindow {
         let generation = self.toast_generation;
         self.toast = Some(Toast {
             copied_link: message.starts_with("Copied"),
-            undo_hint: message == "Cleared Tabs! Use ⌘Z to undo.",
+            undo_hint: message.contains("⌘Z"),
             message,
             overlay: None,
             generation,
@@ -113,6 +209,7 @@ impl BrowserWindow {
             motion: None,
             action: None,
         });
+        if self.toast.as_ref().is_some_and(|toast| toast.undo_hint) { self.attach_archive_undo(); }
         let main = self.main_window;
         let browser = cx.entity().downgrade();
         let parent = self.native_view;
@@ -163,7 +260,7 @@ impl BrowserWindow {
             if let Ok(overlay) = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
-                    if !copied_link { crate::native::set_overlay_passthrough(child); }
+                    if !(copied_link || undo_hint || message.contains("Click to") || message.starts_with("New Tab Created")) { crate::native::set_overlay_passthrough(child); }
                     crate::native::prepare_toast_window(child);
                 }
                 cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast(generation), cx))
@@ -252,8 +349,14 @@ impl BrowserWindow {
         let undo_hint = toast.undo_hint;
         let (scale, opacity, _) = toast.progress(now, crate::native::prefers_reduced_motion());
         if scale < 0.001 { return div().size_full().into_any_element(); }
+        let actionable = toast.action.is_some();
+        let body_owner = owner.clone();
+        let (undo_before, undo_after) = message.split_once("⌘Z").unwrap_or(("", ""));
         let surface = div()
             .id("toast")
+            .when(actionable && !copied_link, |this| this.cursor_pointer().on_click(move |_, _, cx| {
+                let _ = body_owner.update(cx, |this, cx| this.activate_toast_action(generation, cx));
+            }))
             .debug_selector(|| "toast".into())
             .w(px((width - PAD_X * 2.) * scale))
             .h(px(if copied_link || undo_hint { 48. } else { 42. } * scale))
@@ -274,11 +377,11 @@ impl BrowserWindow {
             .text_size(px(14. * scale))
             .line_height(px(18. * scale))
             .when(!undo_hint, |this| this.child(div().flex_1().min_w_0().truncate().child(message.clone())))
-            .when(undo_hint, |this| this.child(div().flex().items_center().gap(px(4. * scale))
-                .child("Cleared Tabs! Use")
+            .when(undo_hint, |this| this.child(div().flex_1().min_w_0().flex().items_center().gap(px(4. * scale))
+                .child(div().flex_1().min_w_0().truncate().child(undo_before.trim_end().to_string()))
                 .child(div().debug_selector(|| "toast-undo-shortcut".into()).px(px(6. * scale)).h(px(28. * scale))
                     .flex().items_center().rounded(px(4. * scale)).bg(hsla(0., 0., 1., 0.1)).child("⌘Z"))
-                .child("to undo.")))
+                .child(undo_after.trim_start().to_string())))
             .when(copied_link, |this| this.child(
                 div().id("toast-share").debug_selector(|| "toast-share".into()).cursor_pointer()
                     .on_click(move |_, _, cx| { let _ = owner.update(cx, |this, cx| this.activate_toast_action(generation, cx)); })
