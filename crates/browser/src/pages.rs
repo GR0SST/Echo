@@ -49,10 +49,13 @@ pub enum PageCreation { Created(ViewId), Pending, Failed }
 /// A prepared request owns native leases, never Pages or the application.
 /// Invoke and drop it outside all application/model/engine borrows.
 pub type NativePrint = Box<dyn FnMut() -> engine::PrintDispatch>;
+pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn prepare_paste_and_match_style(&mut self, _view: ViewId) -> Option<NativePaste> { None }
+    fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
     fn supports_printing(&self) -> bool { false }
     fn prepare_print(&mut self, _view: ViewId) -> Option<NativePrint> { None }
     /// Independent page/event ownership over this engine's regular storage.
@@ -148,6 +151,14 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<NativePaste> {
+        let mut request = self.engine.prepare_paste_and_match_style(view)?;
+        Some(Box::new(move || request.try_dispatch()))
+    }
+    fn prepare_inspector_paste_and_match_style(&mut self, id: engine::InspectorId) -> Option<NativePaste> {
+        let mut request = self.engine.prepare_inspector_paste_and_match_style(id)?;
+        Some(Box::new(move || request.try_dispatch()))
+    }
     fn supports_printing(&self) -> bool { self.engine.supports_printing() }
     fn prepare_print(&mut self, view: ViewId) -> Option<NativePrint> {
         let mut request = self.engine.prepare_print(view)?;
@@ -397,7 +408,7 @@ pub(crate) struct ResizePageFocus {
     target: ResizeFocusTarget,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum ResizeFocusTarget {
     Ui,
     Unavailable,
@@ -1071,6 +1082,25 @@ impl Pages {
                 }).unwrap_or(ResizeFocusTarget::Unavailable)
         };
         ResizePageFocus { store: Rc::downgrade(&self.store), host: self.host, parent: self.parent, target }
+    }
+
+    pub(crate) fn accepts_native_paste_focus(&self, snapshot: &ResizePageFocus) -> bool {
+        if self.resize_focus_suppressed || (!self.page_has_focus && !self.devtools_focused)
+            || !snapshot.has_native_focus() { return false; }
+        let current = self.capture_resize_focus();
+        current.store.ptr_eq(&snapshot.store) && current.host == snapshot.host
+            && current.parent == snapshot.parent && current.target == snapshot.target
+    }
+
+    pub(crate) fn prepare_native_paste(&mut self) -> Option<(ResizePageFocus, NativePaste)> {
+        let snapshot = self.capture_resize_focus();
+        if !self.accepts_native_paste_focus(&snapshot) { return None; }
+        let ResizeFocusTarget::Native { view, frontend, .. } = snapshot.target else { return None; };
+        let mut store = self.store.borrow_mut();
+        let effect = if let Some((id, _)) = frontend {
+            store.engine.prepare_inspector_paste_and_match_style(id)?
+        } else { store.engine.prepare_paste_and_match_style(view)? };
+        Some((snapshot, effect))
     }
 
     /// Restore only the original live native responder. Returns true only when

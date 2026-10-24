@@ -26,6 +26,7 @@ actions!(
         End,
         ShowCharacterPalette,
         Paste,
+        PasteAndMatchStyle,
         Cut,
         Copy,
         Undo,
@@ -59,6 +60,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-left", Home, Some(CONTEXT)),
         KeyBinding::new("cmd-right", End, Some(CONTEXT)),
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-v", PasteAndMatchStyle, Some(CONTEXT)),
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
         KeyBinding::new("cmd-z", Undo, Some(CONTEXT)),
@@ -278,6 +280,16 @@ impl TextInput {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        self.paste_text(window, cx);
+    }
+
+    fn paste_and_match_style(&mut self, _: &PasteAndMatchStyle, window: &mut Window, cx: &mut Context<Self>) {
+        // GPUI inputs own plain text only; both commands share normalization,
+        // selection replacement and the same single undo transaction.
+        self.paste_text(window, cx);
+    }
+
+    fn paste_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.replace_text_in_range(None, &text, window, cx);
         }
@@ -734,6 +746,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::end))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::paste_and_match_style))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             // Even an empty editor owns these actions: bubbling could undo

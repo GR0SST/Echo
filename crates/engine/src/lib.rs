@@ -20,6 +20,8 @@ pub use downloads::{DownloadControl, DownloadDestination, DownloadError, Downloa
 mod editing;
 mod printing;
 pub use printing::{PrintDispatch, PrintRequest};
+mod paste_style;
+pub use paste_style::{PasteDispatch, PasteRequest};
 mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;

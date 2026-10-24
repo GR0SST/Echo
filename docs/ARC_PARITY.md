@@ -92,7 +92,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
 | Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | missing | — |
-| Paste and Match Style | ⇧⌘V | missing | — |
+| Paste and Match Style | ⇧⌘V | partial | Edit menu and shared shortcut; GPUI plain-text selection/undo, exact native page/iframe and separate DevTools routing. Platform/menu-state acceptance remains; see [validation](PASTE_AND_MATCH_STYLE.md) |
 | Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | partial | Find in Page via CEF, live matches/count, next/previous (Enter/Shift+Enter, ⌘G/⇧⌘G), Escape to close. Find and Replace and Jump to Selection remain missing |
 | Spelling, Substitutions, Transformations, Speech, Format (Bold/Italic/Underline) | ⌘: ⌘; ⌘B ⌘I ⌘U | missing | Standard macOS submenus |
 

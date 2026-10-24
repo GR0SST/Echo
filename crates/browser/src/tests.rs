@@ -203,6 +203,8 @@ enum Call {
     StopFinding(u64),
     Reload(u64),
     Print(u64),
+    PasteStyle(u64),
+    InspectorPasteStyle(engine::InspectorId),
     Close(u64),
     Snapshot(u64, u64),
     InspectorOpen(u64, usize, Bounds, engine::InspectorPanel, bool),
@@ -214,6 +216,8 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    paste_busy: usize,
+    paste_hook: Option<Box<dyn FnOnce()>>,
     print_busy: usize,
     print_hook: Option<Box<dyn FnOnce()>>,
     storage: std::collections::HashMap<u64, crate::pages::StorageSelection>,
@@ -268,6 +272,22 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<crate::pages::NativePaste> {
+        let fake = self.clone();
+        Some(Box::new(move || {
+            { let mut state = fake.0.borrow_mut();
+                if state.paste_busy > 0 { state.paste_busy -= 1; return engine::PasteDispatch::Busy; }
+            }
+            let hook = fake.0.borrow_mut().paste_hook.take();
+            if let Some(hook) = hook { hook(); }
+            fake.call(Call::PasteStyle(raw(view)));
+            engine::PasteDispatch::Submitted
+        }))
+    }
+    fn prepare_inspector_paste_and_match_style(&mut self, id: engine::InspectorId) -> Option<crate::pages::NativePaste> {
+        let fake = self.clone();
+        Some(Box::new(move || { fake.call(Call::InspectorPasteStyle(id)); engine::PasteDispatch::Submitted }))
+    }
     fn supports_printing(&self) -> bool { true }
     fn prepare_print(&mut self, view: ViewId) -> Option<crate::pages::NativePrint> {
         let state = self.0.clone();
@@ -7338,3 +7358,5 @@ fn app_download_fixture_status_survives_source_entity_drop_with_retained_canonic
 
 #[path = "printing_tests.rs"]
 mod printing_tests;
+#[path = "paste_style_tests.rs"]
+mod paste_style_tests;

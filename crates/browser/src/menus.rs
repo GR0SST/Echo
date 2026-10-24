@@ -105,6 +105,7 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", text_input::Paste, OsAction::Paste),
+                MenuItem::action("Paste and Match Style", text_input::PasteAndMatchStyle),
                 MenuItem::os_action("Select All", text_input::SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
                 MenuItem::action("Copy URL", window::CopyUrl),

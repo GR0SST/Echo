@@ -161,6 +161,7 @@ macro_rules! window_shortcuts {
 window_shortcuts! {
     "cmd-z" => crate::text_input::Undo,
     "cmd-shift-z" => crate::text_input::Redo,
+    "cmd-shift-v" => crate::text_input::PasteAndMatchStyle,
     "cmd-t" => OpenCommandBar,
     "cmd-y" => crate::history::ViewHistory,
     "cmd-m" => crate::menus::Minimize,
@@ -617,6 +618,7 @@ pub struct BrowserWindow {
     mouse_tracking: Rc<RefCell<MouseTracking>>,
     pub pager: Pager,
     pub(crate) focus_handle: FocusHandle,
+    native_action_focus: FocusHandle,
     print_generation: u64,
     popup_focus_generation: u64,
     popup_focus_pending: usize,
@@ -828,6 +830,7 @@ impl BrowserWindow {
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
             focus_handle: cx.focus_handle(),
+            native_action_focus: cx.focus_handle(),
             print_generation: 0,
             popup_focus_generation: 0,
             popup_focus_pending: 0,
@@ -1018,6 +1021,10 @@ impl BrowserWindow {
                     self.finish_tab_rename(true, cx);
                     let tab = pages.borrow().tab_for(view).filter(|tab| pages.borrow().is_visible(*tab));
                     if let Some(tab) = tab {
+                        // Native content owns the responder. Clear a retained
+                        // GPUI editor's logical action target without calling
+                        // focus_ui or changing the native first responder.
+                        self.native_action_focus.focus(window);
                         // A newer visible native responder supersedes both queued
                         // sidebar focus and an already scheduled popup dismissal.
                         self.invalidate_sidebar_focus();
@@ -1076,6 +1083,7 @@ impl BrowserWindow {
                     let input = pages.borrow_mut().record_inspector_input(&input);
                     match input {
                         Some(crate::devtools::Input::Focus(tab)) => {
+                            self.native_action_focus.focus(window);
                             if self.browser.active_tab().is_some_and(|active| self.browser.related_tabs(active.id).contains(&tab)) {
                                 self.edit_browser(|browser| browser.activate_tab(tab, SystemTime::now()));
                             }
@@ -1947,6 +1955,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
+            .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
@@ -3687,6 +3696,7 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
+            .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
@@ -3775,6 +3785,7 @@ impl Render for BrowserWindow {
                 .relative().flex_none().h_full().w(px(self.sidebar_width() * sidebar_amount)).overflow_hidden()
                 .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(sidebar)))))
             .child(self.render_sidebar_resize_tracking(cx))
+            .child(div().id("native-action-scope").absolute().size_0().track_focus(&self.native_action_focus))
             .child(content)
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
             .when_some(library, |this, library| this.child(library))
@@ -3921,3 +3932,5 @@ mod sidebar_resize_tests;
 
 #[path = "printing.rs"]
 mod printing;
+#[path = "paste_style.rs"]
+mod paste_style;
