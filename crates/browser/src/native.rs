@@ -25,6 +25,20 @@ pub(crate) fn float_utility_window(window: &gpui::Window) {
     let _ = window;
 }
 
+/// Modifier state can change while a borderless child is being attached,
+/// before that child has received its first flags-changed event. The macOS
+/// query is process-independent AppKit state; other backends retain GPUI's
+/// event-derived behavior. No native view exists on the test backend.
+pub(crate) fn physical_control_is_held(window: &gpui::Window) -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    if view_of(window).is_some() {
+        let flags: usize = unsafe { objc2::msg_send![objc2::class!(NSEvent), modifierFlags] };
+        return Some(flags & (1 << 18) != 0);
+    }
+    let _ = window;
+    None
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use std::ffi::c_void;

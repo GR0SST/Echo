@@ -10,6 +10,7 @@ mod toast;
 mod archive;
 mod command_suggestions;
 mod menus;
+mod tab_switcher;
 mod about;
 mod resources;
 mod essential_shortcuts;

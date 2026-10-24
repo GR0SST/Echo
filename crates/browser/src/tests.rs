@@ -32,6 +32,8 @@ mod page_loading_tests;
 mod site_controls_tests;
 #[path = "main_menu_tests.rs"]
 mod main_menu_tests;
+#[path = "tab_switcher_tests.rs"]
+mod tab_switcher_tests;
 
 fn open(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut VisualTestContext) {
     open_with(cx, None)
@@ -1231,7 +1233,7 @@ fn long_titles_do_not_widen_the_page(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn ctrl_tab_cycles_through_tabs(cx: &mut TestAppContext) {
+fn next_and_previous_tab_cycle_in_sidebar_order(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let order: Vec<String> = view.read_with(cx, |w, _| {
         let space = w.browser.space();
@@ -1239,9 +1241,9 @@ fn ctrl_tab_cycles_through_tabs(cx: &mut TestAppContext) {
     });
     let start = order.iter().position(|u| Some(u) == active_url(&view, cx).as_ref()).unwrap();
 
-    cx.simulate_keystrokes("ctrl-tab");
+    cx.simulate_keystrokes("cmd-alt-down");
     assert_eq!(active_url(&view, cx), Some(order[(start + 1) % order.len()].clone()));
-    cx.simulate_keystrokes("ctrl-shift-tab ctrl-shift-tab");
+    cx.simulate_keystrokes("cmd-alt-up cmd-alt-up");
     assert_eq!(active_url(&view, cx), Some(order[(start + order.len() - 1) % order.len()].clone()));
 }
 

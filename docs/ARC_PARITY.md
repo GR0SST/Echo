@@ -166,7 +166,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | New Folder… | ⇧⌘N per nib (?) | partial | GPUI name editor from Spaces menu and Command Bar; the nib's shortcut conflicts with Incognito, so no binding is assigned yet |
 | Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | done | Tab duplication/rename and current-Space folder collapse/expand are available from menus and the Command Bar |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
-| Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Our ⌃Tab steps through tabs in sidebar order. No overlay, no most-recently-used order |
+| Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | ⌃Tab / ⌃⇧Tab | partial | Window-local five-item MRU overlay, frozen forward/backward previews, hover selection, Escape cancellation and Control-release commit retain the live renderer. Three/five-item geometry and grouped history have regression coverage. Native three-item cycle/release and 578 × 190 px geometry checked. Composed Split thumbnails, five-item native acceptance and exact shadow/motion remain; see docs/MAIN_MENU_WIP.md |
 | Cycle Tab Forward/Backward | ⌃⌘→ / ⌃⌘← (hidden) | done | Same grouped sidebar order as Next/Previous Tab; intercepted inside CEF pages |
 | Go to Sidebar Item 1–8 / last item (with or without Favorites) | ⌘1…⌘9 (?) | done | Favorites (optional), Pinned, Today; Split Views count as one item. Include/Exclude Favorites in Ordering is persistent and available in the Command Bar and Tabs menu |
 | Switch to Split View 1–4 / next / previous | (?) | done | Command Bar actions |

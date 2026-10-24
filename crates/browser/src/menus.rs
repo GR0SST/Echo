@@ -261,6 +261,7 @@ pub(crate) enum WindowOperation {
 impl window::BrowserWindow {
     pub(crate) fn open_menu_utility(&mut self, open: fn(&mut App), cx: &mut gpui::Context<Self>) {
         self.suspend_popup_focus_for_utility();
+        self.finish_recent_items(false, crate::window::PopupFocus::OnActivation, cx);
         self.close_command_bar_with_focus(crate::window::PopupFocus::OnActivation, cx);
         cx.defer(open);
     }

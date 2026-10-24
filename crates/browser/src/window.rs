@@ -190,8 +190,8 @@ window_shortcuts! {
     "ctrl-shift--" => CloseSplitPane,
     "cmd-shift-t" => RestoreTab,
     "cmd-shift-k" => ClearToday,
-    "ctrl-tab" => NextTab,
-    "ctrl-shift-tab" => PreviousTab,
+    "ctrl-tab" => crate::tab_switcher::NextRecentItem,
+    "ctrl-shift-tab" => crate::tab_switcher::PreviousRecentItem,
     "cmd-alt-down" => NextTab,
     "cmd-alt-up" => PreviousTab,
     "ctrl-cmd-right" => NextTab,
@@ -514,6 +514,7 @@ pub struct CommandBar {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayKind {
     CommandBar,
+    RecentItems,
     Find,
     Toast(u64),
     LinkStatus,
@@ -573,6 +574,7 @@ impl Render for Overlay {
         self.browser
             .update(cx, |browser, cx| {
                 let content = match kind {
+                    OverlayKind::RecentItems => browser.render_recent_items(cx),
                     OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast(_) => unreachable!("passive toast renders above"),
@@ -711,9 +713,17 @@ pub struct BrowserWindow {
     popup_focus_generation: u64,
     popup_focus_pending: usize,
     popup_focus_on_activation: bool,
+    pub(crate) recent_items: browser_core::recent_items::RecentItems,
+    pub(crate) tab_switcher: Option<crate::tab_switcher::Switcher>,
 }
 
 impl BrowserWindow {
+    pub(crate) fn favicon_image_for(&self, tab: &browser_core::Tab) -> Option<std::sync::Arc<gpui::Image>> {
+        let profile = self.browser.user_profile_id_for_tab(tab.id)?;
+        let png = self.browser.favicon(profile, &tab.url)?;
+        Some(self.favicon_styles.borrow_mut().get(png).image)
+    }
+
     pub(crate) fn window_controls_offset(&self) -> f32 {
         if self.transient.is_some() || !self.page_content_visible() { 0. } else { self.sidebar_width() * (self.sidebar_amount() - 1.) }
     }
@@ -736,6 +746,7 @@ impl BrowserWindow {
     pub(crate) fn receive_profile_projection(&mut self, projection: browser_core::windows::WindowProjection) {
         let selected = self.sidebar_navigation.controller.selected();
         let previous_index = self.sidebar_navigation.controller.pages(&self.browser).iter().position(|page| *page == selected);
+        self.recent_items.record(&projection);
         self.browser = projection;
         self.sidebar_navigation.downloads.dirty = true;
         self.reconcile_sidebar_navigation();
@@ -881,7 +892,10 @@ impl BrowserWindow {
             this.profile.flush(cx);
             this.remove_child_windows(cx);
         }).detach();
+        let mut recent_items = browser_core::recent_items::RecentItems::default();
+        recent_items.record(&browser);
         Self {
+            recent_items, tab_switcher: None,
             pager: Pager {
                 position,
                 ..Default::default()
@@ -1116,6 +1130,7 @@ impl BrowserWindow {
             cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.close_window(cx)); });
         }
         let children = [
+            self.tab_switcher.take().and_then(|state|state.overlay).map(|handle|handle.into()),
             self.boost_editor.take().map(|handle|handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
@@ -1177,7 +1192,7 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::PictureInPictureReturnRequested { .. } => {
@@ -1577,7 +1592,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn suspend_popup_focus_for_utility(&mut self) {
-        self.popup_focus_on_activation |= self.command_bar.is_some() || self.popup_focus_pending > 0;
+        self.popup_focus_on_activation |= self.command_bar.is_some() || self.tab_switcher.is_some() || self.popup_focus_pending > 0;
         self.invalidate_sidebar_focus();
         self.invalidate_navigation_focus();
     }
@@ -1592,7 +1607,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1605,7 +1620,7 @@ impl BrowserWindow {
             // A root with no popup already owns its responder intent (for
             // example History search or docked DevTools). Only replace it when
             // this operation actually takes over a popup's restoration.
-            self.popup_focus_on_activation |= self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
+            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
                 || self.find_bar.is_some() || self.tab_menu.is_some()
                 || self.popup_focus_pending > 0;
             self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
@@ -1615,6 +1630,7 @@ impl BrowserWindow {
         } else {
             PopupFocus::Restore
         };
+        self.finish_recent_items(false, focus, cx);
         self.close_theme_editor_with_focus(focus, cx);
         self.close_transient_picker_with_focus(focus, cx);
         self.close_user_profile_dialog_with_focus(focus, cx);
@@ -1995,8 +2011,7 @@ impl BrowserWindow {
                 if self.browser.is_favorite(id) {
                     self.edit_browser(|browser| browser.activate_tab(id, now));
                 } else if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)) {
-                    self.edit_browser(|browser| browser.switch_space(index));
-                    self.edit_browser(|browser| browser.activate_tab(id, now));
+                    self.edit_browser(|browser| { browser.switch_space(index); browser.activate_tab(id, now); });
                     self.settle_pager(cx);
                 }
             }
@@ -2228,6 +2243,11 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
+            .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                if this.tab_switcher.is_some() && !event.modifiers.control { this.finish_recent_items(true,PopupFocus::Restore,cx); }
+            }))
+            .on_action(cx.listener(|this, _: &crate::tab_switcher::NextRecentItem, window, cx| this.show_recent_items(false,window,cx)))
+            .on_action(cx.listener(|this, _: &crate::tab_switcher::PreviousRecentItem, window, cx| this.show_recent_items(true,window,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
             .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
@@ -2350,6 +2370,7 @@ impl BrowserWindow {
         let title = self.browser.item_title(id);
         let archived_before = self.browser.archive.len();
         if self.edit_browser(|browser| if remove_pin { browser.remove_pin(id, SystemTime::now()) } else { browser.close_tab(id, SystemTime::now()) }).is_some() {
+            self.recent_items.forget(&related);
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 for id in related { pages.discard(id); }
@@ -4333,6 +4354,11 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
+            .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                if this.tab_switcher.is_some() && !event.modifiers.control { this.finish_recent_items(true,PopupFocus::Restore,cx); }
+            }))
+            .on_action(cx.listener(|this, _: &crate::tab_switcher::NextRecentItem, window, cx| this.show_recent_items(false,window,cx)))
+            .on_action(cx.listener(|this, _: &crate::tab_switcher::PreviousRecentItem, window, cx| this.show_recent_items(true,window,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
             .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))

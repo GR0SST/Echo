@@ -61,7 +61,7 @@ send cleanup input after an Arc process-ID change, and never use snapshot
 window differences from a previous process to close windows in a new process.
 
 
-## Recent Items reference (implementation next)
+## Recent Items reference and implementation
 
 `arc-mru-panel/` contains a three-tab forward-cycle/commit reference;
 `arc-mru-motion/` contains six disposable visited tabs and the resulting five-card
@@ -75,5 +75,37 @@ parent. Each item is 182 × 158 px with 12 px padding, a 158 × 105 px preview a
 from the top. The card has a 24 px radius, 16 px outer padding, and a broad lower
 shadow; the selected item has an approximately 8 px radius. Five entries use
 approximately 942 px width. The transparent native overlay expands horizontally
-beyond its parent to accommodate the shadow. Rapid still captures started only
-after roughly 185 ms, so finer opening/closing motion measurement is pending.
+beyond its parent to accommodate the shadow. The local screen recording in `arc-mru-video/` shows full-size entry and exit;
+its variable-rate frames do not resolve an intermediate opacity/scale state.
+Echo does not add an unmeasured presentation tween. Finer motion comparison
+remains pending.
+
+Echo now keeps window-local visits, presents at most five frozen candidates and
+commits on Control release. Forward/backward cycling, Escape cancellation,
+hover selection, quick taps and closing the owner have GPUI coverage. The core
+model also covers Split survivors, explicit Pinned unload and cross-window
+isolation. The existing renderer and navigation state are retained; previewing
+does not navigate or reorder the sidebar. A 250 ms capture-readiness fallback
+keeps the keyboard usable when a renderer capture stalls. Split thumbnails
+currently show the active pane rather than a composed group. Native three-item acceptance is in `echo-mru/`: Control-Tab advances
+without selecting the page, releasing Control selects the highlighted existing
+page, and the owned child disappears. The script exits zero after CEF teardown.
+The pair is `arc-mru-panel/mru.png` ↔ `echo-mru/mru.png`; inspected 2× crops
+are `pairs/arc-mru-zoom.png` and `pairs/echo-mru-zoom.png`. The native macOS
+modifier-state query also handles a flags-changed event missed during child
+attachment. Other backends retain event-driven release. Labels use the existing
+grapheme-aware width renderer; thumbnails are top-cropped and downsampled before
+their rounded image mask. Split composition, five-item native acceptance,
+precise shadow/font matching and finer motion remain partial.
+
+Validation for this group: 1,020 browser, 218 core, 136 engine and 13 AI tests
+passed, plus importer/bundle tests. One existing live-provider test is ignored.
+Eight GPUI switcher tests and six core recent-item tests cover the new behavior;
+a thumbnail test verifies top cropping, BGRA conversion and cache reuse.
+
+
+Recovery safety: do not use window-list differences across Arc restarts as
+proof of ownership. Restored windows can appear after an initially empty
+snapshot. A failed/ambiguous claim must never feed an unrestricted difference
+set into cleanup. Legacy Arc scripts in this evidence directory need explicit
+owned-ID cleanup before reuse; `arc-save-dialog-recovered.sh` is unsafe.

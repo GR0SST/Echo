@@ -156,6 +156,7 @@ impl BrowserWindow {
     pub(crate) fn sidebar_root_may_take_focus(&self) -> bool {
         self.user_profile_dialog.is_none()
             && self.command_bar.is_none()
+            && self.tab_switcher.is_none()
             && self.find_bar.is_none()
             && self.tab_menu.is_none()
             && self.new_menu.is_none()
