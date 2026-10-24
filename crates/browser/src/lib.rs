@@ -20,6 +20,7 @@ mod new_menu;
 mod new_window;
 mod blank_window;
 mod transient;
+mod global_little;
 mod peek;
 mod audio;
 mod split_layout;
@@ -98,6 +99,7 @@ pub fn init(cx: &mut App) {
     menus::init(cx);
     settings::init(cx);
     transient::bind_keys(cx);
+    global_little::init(cx);
     peek::bind_keys(cx);
     history::bind_keys(cx);
     tab_menu::bind_keys(cx);

@@ -9353,3 +9353,33 @@ fn command_bar_material_resize_and_dismissal_retain_the_live_document(cx: &mut T
     assert!(calls.contains(&Call::FocusPage(1)), "{calls:?}");
     view.read_with(cx, |w, _| assert!(w.pages.as_ref().unwrap().borrow().is_visible(active)));
 }
+
+#[gpui::test]
+fn global_little_shortcut_reads_the_live_normal_workspace_preference(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |view, cx| view.retain_normal_source(cx));
+    assert!(cx.cx.update(|cx| crate::global_little::enabled(cx)));
+    view.update(cx, |view, _| view.edit_browser(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::LittleWindowShortcut, false)));
+    assert!(!cx.cx.update(|cx| crate::global_little::enabled(cx)));
+    view.update(cx, |view, _| view.edit_browser(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::LittleWindowShortcut, true)));
+    assert!(cx.cx.update(|cx| crate::global_little::enabled(cx)));
+}
+
+
+#[gpui::test]
+fn global_little_entry_uses_the_focused_window_space_over_another_windows_last_edit(cx: &mut TestAppContext) {
+    let (owner, cx, _) = open_pages(cx);
+    let expected = owner.read_with(cx, |view, _| view.browser.space().id);
+    let (other, mut second) = another_live_profile_window(&owner, cx);
+    other.update(&mut second, |view, _| view.edit_browser(|browser| browser.switch_space(1)));
+    cx.run_until_parked(); second.run_until_parked();
+    owner.read_with(cx, |view, _| {
+        assert_eq!(view.browser.space().id, expected);
+        assert_ne!(view.profile.handle.read_settings(|browser| browser.space().id), expected);
+    });
+    cx.update(|window, _| window.activate_window());
+    cx.cx.update(crate::global_little::open); cx.run_until_parked();
+    let (little, compact) = little_root(cx);
+    little.read_with(&compact, |view, _| assert_eq!(view.transient.as_ref().unwrap().space, expected));
+
+}

@@ -368,11 +368,11 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Small window for quick lookups | ⌥⌘N | partial | Independent lookup tabs and website storage, 1000×760 reference frame, flush 46 px toolbar, hostname editing/copy, inherited Space theme and contrast. Initial global prompt, saved placement and opening motion remain unverified |
-| Global shortcut "Open Little Arc when I press … in any app" | configurable | missing | — |
+| Small window for quick lookups | ⌥⌘N | partial | Independent lookup tabs and website storage, 1000×760 reference frame, flush 46 px toolbar, hostname editing/copy, inherited Space theme and contrast. The global entry opens a full Little window with the regular Command Bar; Arc instead begins with a 490×329 prompt. That prompt, saved placement and opening motion remain unfinished |
+| Global shortcut "Open Little Arc when I press … in any app" | configurable | partial | OS registration for the default command/option N follows the existing Settings toggle, suppresses held-key repeats and unregisters on quit. Busy bindings retry. Background entry is verified on macOS with an extra Ctrl modifier while Arc owns the default. Custom key recording, Wayland support and Windows/X11 native verification remain |
 | Links from other apps open in Little Arc | — | partial | HTTP/HTTPS application URL events create an independent Little window; macOS bundle registers both schemes. Air Traffic Control and other platform launch integrations remain unfinished |
 | ⌥⌘-click on a link opens it in Little Arc | — | missing | — |
-| Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | ⌘O | partial | Cmd+O and Open in promote directly; the 244 px Space list has 46 px rows, search, keyboard selection and dismissal. Copy URL preserves the complete URL while the resting address shows the hostname. Promotion reloads instead of transferring live history; profile switching, Extensions and downloads remain missing |
+| Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | ⌘O | partial | Cmd+O and Open in promote directly; the 244 px Space list has 46 px rows, search, keyboard selection and dismissal. Copy URL preserves the complete URL while the resting address shows the hostname. Same-profile promotion transfers the live document and history; profile switching, Extensions and downloads remain missing |
 | Show/Close all Little Arc windows | — | missing | — |
 | Tip for new users "Links Open in Little Arc" | — | missing | — |
 
