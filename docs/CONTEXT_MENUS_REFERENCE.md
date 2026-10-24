@@ -43,8 +43,10 @@ cover selection, copying, folder/Space moves, split creation and atomic Undo.
 
 Unfinished selection cases: Favorites/folder-header selection, cross-profile
 moves, combining already-grouped splits, exact inline folder-creation UI,
-Option-alternate archive commands, dynamic Edit labels, all-muted menu wording
-and native selection dismissal timing.
+Option-alternate archive commands and native selection dismissal timing.
+The follow-up matches the observed plural Edit labels Copy URLs / Copy URLs as
+Markdown, omits Archive Tabs Below for mixed/Pinned selections, and offers
+Unmute when every selected item is muted.
 Ordinary Today/Pinned/Favorite/folder menu layout from the sidebar-states work
 is preserved.
 
@@ -86,3 +88,47 @@ confirms that selecting a profile opens the confirmation directly.
 existing copy shortcuts on the same selection. Plain copy joins clean URLs in
 sidebar order; Markdown uses one `- [title](url)` bullet per selected page, with
 no trailing newline. Both keep the active page unchanged.
+
+
+## Space action follow-up
+
+Set Profile uses the captured sorted submenu, checked current profile and
+New Profile… entry. Named profile selection opens the existing confirmation
+directly, with its captured Space identity retained across inactive-Space
+invocation. Cancelling changes nothing. Manage Spaces uses the existing Library
+host. Cloud Share Space is omitted. Live Folders contains only the observed
+GitHub entry; its integration and Live Folder context menu remain missing.
+
+Delete uses the observed 450×274 confirmation, text, keyboard hints and button
+ordering, with Echo's own icon. The last Space is preserved pending a reference
+for its replacement flow. Delete records a Space-specific archive transaction;
+Undo/Redo never replace the whole session or revert unrelated data.
+
+Export's source/destination semantics are inferred from installed bundle
+`TurnSpaceIntoFolderOptions` fields sourceSpaceID/destinationSpaceID,
+`turnSpaceIntoFolder` / `undoTurnSpaceIntoFolder` reducers and the “Turn into
+Folder” Undo label. The inspected picker lists all Spaces and disables its
+source. The model moves source contents into a named folder, preserves tab,
+folder and split identities, and restores the removed Space on Undo. Later
+navigation and unrelated destination tabs survive. Changed container structure
+invalidates Undo atomically. Cross-profile exports adopt destination storage;
+the UI immediately retires old documents, including on Undo, before processing
+late engine events. Cookies and native documents never transfer between profiles.
+
+No live Delete or Export execution was attempted, as AGENTS.md prohibits live
+Space removal. Destructive behavior/focus and export feedback remain unverified;
+no toast has been invented. Six core regressions and six GPUI regressions cover
+these transactions, cancellation, inactive targets, storage replacement and
+stale-event rejection. The existing profile confirmation presentation remains
+partial. Native Echo inspection exercises menus and Delete cancellation only.
+
+Space follow-up validation: full suite 957 browser, 201 core, 12 AI and 128
+engine tests passed (one AI test ignored). `space-native-run.euTmgm/drive.log`
+records CEF initialization and clean exit after profile/Delete cancellation.
+Reviewed crops: `pair-space-menu-3x.png`, `pair-space-profile-3x.png`,
+`pair-space-export-3x.png`, `pair-space-delete-confirm-3x.png`. Menu row metrics
+and the 246 px root match the inspected Echo Test case; cloud Share omission
+shortens it one row. Fixture Space/profile names and custom icons differ from
+the owner's content. Shared material/font rendering, profile-sheet presentation
+and confirmation keycap details remain partial. No live Space was removed or
+profile assignment applied.

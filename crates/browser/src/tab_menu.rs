@@ -34,7 +34,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
+pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), SpaceDelete(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
 
 pub(crate) struct TabMenu {
     pub target: MenuTarget,
@@ -50,7 +50,7 @@ pub(crate) struct TabMenu {
     pane: bool,
     backdrop: [Rc<Cell<bool>>; 2],
     position: Point<Pixels>,
-    focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
     pub overlay: Option<WindowHandle<Overlay>>,
     /// Where the top level was painted, to place its submenu.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -60,7 +60,7 @@ pub(crate) struct TabMenu {
 pub(crate) enum Command { ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow,
-    SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile,
+    SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
@@ -70,6 +70,7 @@ impl Command {
             Self::ToggleToolbar => "toggle-toolbar",
             Self::Download(action) => action.selector(),
             Self::CustomizePage => "customize-page",
+            Self::SpaceSetProfile(_) => "space-set-profile", Self::SpaceNewProfile => "space-new-profile", Self::SpaceManage => "manage-spaces", Self::SpaceDelete => "delete-space", Self::SpaceExport(_) => "space-export",
             Self::SpaceTheme => "edit-theme-color",
             Self::SpaceProfile => "set-profile", Self::SpaceRename => "space-rename", Self::SpaceIcon => "space-icon", Self::SpaceNewFolder => "space-new-folder",
             Self::FolderDuplicate => "folder-duplicate",
@@ -102,6 +103,7 @@ pub(crate) struct Item {
     pub enabled: bool,
     /// A tab whose favicon leads the row.
     pub icon: Option<TabId>,
+    pub space_icon: Option<SpaceId>,
     /// The split pane the command acts on, instead of the menu's target.
     pub pane: Option<TabId>,
     pub submenu: Vec<Entry>,
@@ -109,7 +111,7 @@ pub(crate) struct Item {
 }
 
 pub(crate) fn item(label: impl Into<SharedString>, command: Command) -> Item {
-    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, pane: None, submenu: Vec::new(), submenu_width: None }
+    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, pane: None, submenu: Vec::new(), submenu_width: None }
 }
 
 /// A row the reference has whose action is not built yet.
@@ -122,11 +124,14 @@ impl Item {
     pub(crate) fn checked(mut self, checked: bool) -> Self { self.checked = checked; self }
     pub(crate) fn enabled(mut self, enabled: bool) -> Self { self.enabled = enabled; self }
     pub(crate) fn icon(mut self, tab: TabId) -> Self { self.icon = Some(tab); self }
+    pub(crate) fn space_icon(mut self, space: SpaceId) -> Self { self.space_icon = Some(space); self }
     pub(crate) fn pane(mut self, tab: TabId) -> Self { self.pane = Some(tab); self }
     pub(crate) fn submenu(mut self, entries: Vec<Entry>) -> Self { self.submenu = entries; self }
     fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
     fn selector(&self) -> String {
         match (self.command, self.submenu.is_empty()) {
+            (Some(Command::SpaceSetProfile(id)), true) => format!("tab-menu-space-profile-{id:?}"),
+            (Some(Command::SpaceExport(id)), true) => format!("tab-menu-space-export-{id:?}"),
             (Some(Command::SelectionMove(id)), true) => format!("tab-menu-selection-move-{id:?}"),
             (Some(command), true) => format!("tab-menu-{}", command.selector()),
             _ => format!("tab-menu-{}", slug(&self.label)),
@@ -195,6 +200,7 @@ impl BrowserWindow {
             MenuTarget::Tab(tab) => self.browser.active_user_profile().favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
             MenuTarget::Selection(id) => self.browser.space().id == id && self.sidebar_selection_items().len() > 1,
+            MenuTarget::SpaceDelete(id) => !self.browser.is_private() && self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Address => self.browser.active_tab().is_some(),
             MenuTarget::Download(id, owner) => self.download_menu_record(id,owner).is_some(),
@@ -269,6 +275,7 @@ impl BrowserWindow {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
         tidy(match menu.target {
             MenuTarget::Selection(_) => self.selection_menu_commands(),
+            MenuTarget::SpaceDelete(_) => vec![],
             MenuTarget::Space(id) => self.space_menu_commands(id),
             MenuTarget::Download(id, owner) => self.download_menu_commands(id,owner),
             MenuTarget::Folder(id) => self.folder_menu_commands(id),
@@ -445,6 +452,7 @@ impl BrowserWindow {
                 return;
             }
             MenuTarget::Selection(_) => { self.confirm_selection_menu(command, window, cx); return; }
+            MenuTarget::SpaceDelete(_) => return,
             MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
             MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }
             MenuTarget::Address => {
@@ -511,6 +519,7 @@ impl BrowserWindow {
 
 
     pub(crate) fn render_tab_menu(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(MenuTarget::SpaceDelete(id)) = self.tab_menu.as_ref().map(|menu| menu.target) { return self.render_space_delete(id, cx); }
         let Some(menu) = &self.tab_menu else { return div().into_any_element(); };
         let entries = self.menu_entries();
         let top = self.render_menu_level(&entries, menu.selected, menu.submenu, false, window, cx)
@@ -559,6 +568,7 @@ impl BrowserWindow {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
                 MenuTarget::Selection(_) => Some(224.),
+                MenuTarget::Space(_) => Some(246.),
                 MenuTarget::Download(..) => Some(120.),
                 MenuTarget::Address => Some(204.),
                 _ => None,
@@ -569,13 +579,14 @@ impl BrowserWindow {
         let text_width = |label: &str| f32::from(window.text_system().shape_line(label.to_owned().into(), px(13.),
             &[gpui::TextRun { len: label.len(), font: gpui::font(".SystemUIFont"), color: gpui::white(),
                 background_color: None, underline: None, strikethrough: None }], None).width);
+        let space_menu = !nested && self.tab_menu.as_ref().is_some_and(|menu| matches!(menu.target, MenuTarget::Space(_)));
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
         px(entries.iter().filter_map(|entry| match entry {
             Entry::Item(item) => Some(inset + 17. + text_width(&item.label)
-                + if item.icon.is_some() { 22. } else { 0. }
+                + if item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
                 + if pane_controls { 22. } else { 0. }
                 + item.shortcut.map_or(0., |shortcut| 30. + text_width(shortcut))
-                + if item.submenu.is_empty() { 0. } else { 38. }),
+                + if item.submenu.is_empty() { 0. } else if space_menu { 31. } else { 38. }),
             Entry::Header(label) => Some(inset + 17. + text_width(label)),
             Entry::Separator => None,
         }).fold(minimum, f32::max).ceil())
@@ -583,6 +594,7 @@ impl BrowserWindow {
 
     /// One menu panel: rows, separators and headers; `nested` is a submenu.
     fn render_menu_level(&self, entries: &[Entry], selected: Option<usize>, open: Option<usize>, nested: bool, window: &Window, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let space_menu = !nested && self.tab_menu.as_ref().is_some_and(|menu| matches!(menu.target, MenuTarget::Space(_)));
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
         let horizontal = self.browser.active_split().is_some_and(|split| split.axis == Axis::Horizontal);
         let checks = entries.iter().any(|entry| matches!(entry, Entry::Item(item) if item.checked));
@@ -629,10 +641,11 @@ impl BrowserWindow {
                     .when(pane_controls, |row| row.child(pane_control_icon(item.command, horizontal)))
                     .when_some(item.icon.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id)), |row, tab| row.child(div().size(px(16.)).flex_none().flex().items_center().justify_center()
                         .child(self.render_favicon(tab, self.accent()))))
+                    .when_some(item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).and_then(|space| space.custom_icon.as_deref()), |row, icon| row.child(crate::icons::glyph(icon)))
                     .child(div().debug_selector(move || selector.clone()).flex_1().whitespace_nowrap().child(item.label.clone()))
                     .when_some(item.shortcut, |row, shortcut| row.child(div().ml(px(24.)).whitespace_nowrap()
                         .text_color(if highlighted && enabled { hsla(0., 0., 1., 0.85) } else { hsla(0., 0., 1., 0.4) }).child(shortcut)))
-                    .when(has_submenu, |row| row.child(div().ml(px(24.)).child(submenu_chevron())))
+                    .when(has_submenu, |row| row.child(div().ml(px(if space_menu { 17. } else { 24. })).child(submenu_chevron())))
                     .relative()
                     .into_any_element()
             }

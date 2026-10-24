@@ -76,11 +76,10 @@ fn inactive_space_context_routes_captured_identity_without_selecting_it(cx: &mut
     }));
     visual.update(|window, cx| view.update(cx, |view, cx| view.open_space_menu(source, gpui::point(gpui::px(40.), gpui::px(180.)), window, cx)));
     visual.run_until_parked();
-    click(&mut tab_menu(&view, visual), "tab-menu-set-profile");
+    let mut menu = tab_menu(&view, visual);
+    click(&mut menu, "tab-menu-set-profile");
+    click(&mut menu, test_selector(format!("tab-menu-space-profile-{named:?}")));
     let mut child = sheet(&view, visual);
-    click(&mut child, "profile-dropdown");
-    click(&mut child, "profile-choice-1");
-    click(&mut child, "profile-accept");
     view.read_with(visual, |view, _| {
         assert_ne!(view.browser.spaces.iter().find(|space| space.id == source).unwrap().user_profile_id, named);
         assert!(view.user_profile_dialog.is_some());

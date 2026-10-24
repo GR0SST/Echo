@@ -240,6 +240,14 @@ impl UserProfileDialog {
         )
     }
 
+    pub(crate) fn switching_to(browser: &Browser, space: SpaceId, to: UserProfileId, cx: &mut Context<Self>) -> Result<Self, DialogError> {
+        browser.user_profile(to).ok_or(UserProfileError::UnknownProfile)?;
+        let mut dialog = Self::switching(browser, space, cx)?;
+        dialog.selected_profile = Some(to);
+        dialog.step = Step::ConfirmSwitch;
+        Ok(dialog)
+    }
+
     fn new(
         browser: &Browser,
         source: CreationSource,

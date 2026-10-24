@@ -28,7 +28,7 @@ pub(crate) struct ProfileDialogHost {
 }
 
 #[derive(Clone, Copy)]
-enum Route { Create(CreationSource), Switch(SpaceId) }
+enum Route { Create(CreationSource), Switch(SpaceId), SwitchTo(SpaceId, browser_core::UserProfileId) }
 
 impl BrowserWindow {
     pub(crate) fn open_user_profile_creation(&mut self, source: CreationSource, cx: &mut Context<Self>) {
@@ -39,11 +39,15 @@ impl BrowserWindow {
         self.open_user_profile_sheet(Route::Switch(space), cx);
     }
 
+    pub(crate) fn open_user_profile_switch_to(&mut self, space: SpaceId, to: browser_core::UserProfileId, cx: &mut Context<Self>) {
+        self.open_user_profile_sheet(Route::SwitchTo(space, to), cx);
+    }
+
     fn open_user_profile_sheet(&mut self, route: Route, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() { return; }
         self.refresh_profile_projection();
         if self.browser.is_private() || self.browser.is_blank() { return; }
-        let source = match route { Route::Create(CreationSource::File(space)) | Route::Switch(space) => Some(space), Route::Create(CreationSource::Settings) => None };
+        let source = match route { Route::Create(CreationSource::File(space)) | Route::Switch(space) | Route::SwitchTo(space, _) => Some(space), Route::Create(CreationSource::Settings) => None };
         if source.is_some_and(|id| !self.browser.spaces.iter().any(|space| space.id == id)) { return; }
         self.finish_tab_rename(true, cx);
         // The replacement slot is filled before any deferred peer restoration.
@@ -60,6 +64,7 @@ impl BrowserWindow {
         let dialog = cx.new(|cx| match route {
             Route::Create(source) => UserProfileDialog::creation(&self.browser, source, cx),
             Route::Switch(space) => UserProfileDialog::switching(&self.browser, space, cx),
+            Route::SwitchTo(space, to) => UserProfileDialog::switching_to(&self.browser, space, to, cx),
         }.expect("validated normal profile sheet source"));
         let events = cx.subscribe(&dialog, |_, sender, event: &DialogEvent, cx| {
             let sender = sender.clone();

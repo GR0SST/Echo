@@ -69,18 +69,18 @@ pub(crate) fn init(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct SidebarUndoLabels(Option<&'static str>, Option<&'static str>);
+struct SidebarUndoLabels(Option<&'static str>, Option<&'static str>, bool);
 impl gpui::Global for SidebarUndoLabels {}
 
-pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>, cx: &mut App) {
-    let labels = SidebarUndoLabels(undo, redo);
+pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>, multiple: bool, cx: &mut App) {
+    let labels = SidebarUndoLabels(undo, redo, multiple);
     if cx.try_global::<SidebarUndoLabels>() == Some(&labels) { return; }
     cx.set_global(labels);
-    cx.set_menus(build_with_sidebar_undo(undo, redo));
+    cx.set_menus(build_with_sidebar_undo(undo, redo, multiple));
 }
 
-pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None) }
-fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>) -> Vec<Menu> {
+pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None, false) }
+fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>, multiple: bool) -> Vec<Menu> {
     let mut app = vec![MenuItem::action("Settings…", Settings),
         MenuItem::action("Set as Default Browser", SetDefaultBrowser), MenuItem::separator(),
         MenuItem::action("Import from Another Browser…", ImportFromBrowser), MenuItem::separator()];
@@ -128,8 +128,8 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("Paste and Match Style", text_input::PasteAndMatchStyle),
                 MenuItem::os_action("Select All", text_input::SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
-                MenuItem::action("Copy URL", window::CopyUrl),
-                MenuItem::action("Copy URL as Markdown", window::CopyUrlAsMarkdown),
+                MenuItem::action(if multiple { "Copy URLs" } else { "Copy URL" }, window::CopyUrl),
+                MenuItem::action(if multiple { "Copy URLs as Markdown" } else { "Copy URL as Markdown" }, window::CopyUrlAsMarkdown),
                 MenuItem::action("Copy Current URL as Quote", window::CopyUrlAsQuote),
                 MenuItem::separator(),
                 MenuItem::action("Find…", find::FindPage),

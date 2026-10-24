@@ -1348,6 +1348,7 @@ impl BrowserWindow {
         if !editable && self.peek_owner.is_some() { self.edit_peek_history(redo, window, cx); return; }
         if !editable && if redo { self.edit_browser(|browser| browser.redo_sidebar(SystemTime::now())) } else { self.edit_browser(|browser| browser.undo_sidebar(SystemTime::now())) } {
             if !redo { self.dismiss_archive_feedback(cx); }
+            if let Some(pages) = &self.pages { pages.borrow_mut().reconcile_inventory(&self.browser); }
             self.settle_pager(cx);
             if self.browser.all_tabs().count() < before { self.after_tab_removal(cx); }
             cx.notify();
@@ -4194,7 +4195,7 @@ impl Render for BrowserWindow {
             let labels = if let Some(owner) = self.peek_owner.as_ref().and_then(|state| state.owner.upgrade()) {
                 let owner = owner.read(cx); (owner.browser.sidebar_undo_action(), owner.browser.sidebar_redo_action())
             } else { (self.browser.sidebar_undo_action(), self.browser.sidebar_redo_action()) };
-            crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, cx);
+            crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, self.sidebar_selection_items().len() > 1, cx);
         }
         if crate::quit::is_quitting() {
             return div().size_full().p_8().bg(gpui::rgb(0x202126)).text_color(gpui::rgb(0xf2f2f2))

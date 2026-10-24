@@ -14,6 +14,8 @@ use crate::{demo_browser, init};
 
 #[path = "toolbar_tests.rs"]
 mod toolbar_tests;
+#[path = "space_context_tests.rs"]
+mod space_context_tests;
 #[path = "site_controls_tests.rs"]
 mod site_controls_tests;
 
@@ -6705,19 +6707,18 @@ fn sidebar_context_menus_follow_the_reference_layout(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |w, _| w.tab_menu.as_ref().map(|menu| menu.target)), Some(crate::tab_menu::MenuTarget::Space(view.read_with(cx, |w, _| w.browser.space().id))));
     let mut menu = tab_menu(&view, cx);
-    for row in ["tab-menu-space-icon", "tab-menu-space-rename", "tab-menu-edit-theme-color", "tab-menu-set-profile", "tab-menu-space-new-folder", "tab-menu-live-folders", "tab-menu-share-space", "tab-menu-manage-spaces", "tab-menu-delete-space"] {
+    for row in ["tab-menu-space-icon", "tab-menu-space-rename", "tab-menu-edit-theme-color", "tab-menu-set-profile", "tab-menu-space-new-folder", "tab-menu-live-folders", "tab-menu-manage-spaces", "tab-menu-delete-space"] {
         assert!(menu.debug_bounds(row).is_some(), "{row}");
     }
-    // Set Profile now opens the reference sheet for this stable Space ID;
-    // it is no longer a placeholder submenu containing only Default.
+    // Arc exposes profiles as a submenu, with creation at the bottom.
     assert!(menu.debug_bounds("tab-context-submenu").is_none());
     click(&mut menu, "tab-menu-set-profile");
-    assert!(view.read_with(cx, |w, _| w.tab_menu.is_none()));
+    assert!(view.read_with(cx, |w, _| w.user_profile_dialog.is_none()));
+    click(&mut menu, "tab-menu-space-new-profile");
     let overlay = view.read_with(cx, |w, _| w.user_profile_dialog.as_ref().unwrap().overlay.unwrap());
     let mut sheet = VisualTestContext::from_window(overlay.into(), &cx.cx);
     sheet.run_until_parked();
-    assert!(sheet.debug_bounds("user-profile-sheet").is_some());
-    assert!(sheet.debug_bounds("profile-dropdown").is_some());
+    assert!(sheet.debug_bounds("profile-name").is_some());
     sheet.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.user_profile_dialog.is_none()));

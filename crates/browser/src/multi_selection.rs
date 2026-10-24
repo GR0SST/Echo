@@ -55,11 +55,12 @@ impl BrowserWindow {
     pub(crate) fn selection_menu_commands(&self) -> Vec<Entry> {
         let ids = self.sidebar_selection_items();
         if ids.len() < 2 { return vec![]; }
-        vec![
+        let muted = ids.iter().flat_map(|id| self.browser.related_tabs(*id)).all(|id| self.browser.all_tabs().find(|tab| tab.id == id).is_some_and(|tab| tab.muted));
+        let mut rows = vec![
             item("Copy Links", Command::Copy).into(),
             Entry::Separator,
             item("Change Icon…", Command::Icon).enabled(false).into(),
-            item("Mute", Command::Mute).enabled(ids.iter().any(|id| self.browser.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| self.show_tab_audio(tab)))).into(),
+            item(if muted { "Unmute" } else { "Mute" }, Command::Mute).enabled(ids.iter().any(|id| self.browser.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| self.show_tab_audio(tab)))).into(),
             Entry::Separator,
             item("Open in Split View", Command::SelectionSplit).enabled(ids.len() <= browser_core::splits::MAX_SPLIT_PANES && ids.iter().all(|id| self.browser.split_for(*id).is_none())).into(),
             item("Duplicate", Command::Duplicate).shortcut("⌥D").into(),
@@ -67,12 +68,15 @@ impl BrowserWindow {
             item(format!("New Folder with {} Items", ids.len()), Command::NewFolderWithTab).enabled(!self.browser.is_blank()).into(),
             Entry::Separator,
             item("Archive Tabs", Command::Close).into(),
-            item("Archive Tabs Below", Command::SelectionArchiveBelow).enabled(!self.selection_tabs_below().is_empty()).into(),
-        ]
+        ];
+        if ids.iter().all(|id| self.browser.space().today.iter().any(|tab| tab.id == *id)) {
+            rows.push(item("Archive Tabs Below", Command::SelectionArchiveBelow).enabled(!self.selection_tabs_below().is_empty()).into());
+        }
+        rows
     }
     fn selection_move_entries(&self) -> Vec<Entry> {
         let mut entries: Vec<_> = self.browser.spaces.iter().filter(|space| space.user_profile_id == self.browser.active_user_profile_id())
-            .map(|space| tab_menu::item(space.name.clone(), Command::SelectionMove(space.id)).checked(space.id == self.browser.space().id).into()).collect();
+            .map(|space| tab_menu::item(space.name.clone(), Command::SelectionMove(space.id)).space_icon(space.id).checked(space.id == self.browser.space().id).into()).collect();
         entries.push(Entry::Separator);
         entries.push(tab_menu::item("New Space…", Command::SelectionNewSpace).enabled(!self.browser.is_blank() && !self.browser.is_private()).into());
         entries
