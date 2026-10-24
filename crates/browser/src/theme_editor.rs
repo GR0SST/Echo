@@ -597,12 +597,8 @@ impl BrowserWindow {
                 PALETTES[e.page]
                     .iter()
                     .enumerate()
-                    .map(|(index, components)| {
-                        let c = ThemeColor {
-                            red: components[0],
-                            green: components[1],
-                            blue: components[2],
-                        };
+                    .map(|(index, _)| {
+                        let c = preset_color(e.page, index);
                         div()
                             .id(("theme-preset", index))
                             .debug_selector(move || format!("theme-preset-{index}"))
@@ -825,7 +821,16 @@ impl BrowserWindow {
     }
 }
 
-// Measured Display P3 preset components from the installed reference catalog.
+// The installed catalogs use sRGB for Brand 1–4, linear sRGB for Brand 5,
+// and Display P3 for the remaining colors. Store only converted sRGB.
+fn preset_color(page: usize, index: usize) -> ThemeColor {
+    let c = PALETTES[page][index];
+    match (page, index) {
+        (0, 0..=3) => ThemeColor { red: c[0], green: c[1], blue: c[2] },
+        (0, 4) => ThemeColor::from_linear_srgb(c),
+        _ => ThemeColor::from_display_p3(c),
+    }
+}
 const PALETTES: [[[f32; 3]; 9]; 4] = [
     [
         [0.950, 0.918, 0.894],

@@ -7845,6 +7845,11 @@ fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: 
     let bounds=editor.debug_bounds("theme-editor").unwrap();
     assert_eq!(bounds.size,gpui::size(gpui::px(354.),gpui::px(508.)));
     click(&mut editor,"theme-preset-4");
+    view.read_with(cx, |w, _| {
+        let orange = w.theme_editor.as_ref().unwrap().draft.colors[0];
+        assert!((orange.green * 255. - 133.).abs() < 1.);
+        assert!((orange.blue * 255. - 88.).abs() < 1.);
+    });
     click(&mut editor,"theme-add-color");click(&mut editor,"theme-add-color");click(&mut editor,"theme-add-color");
     view.read_with(cx,|w,_|assert_eq!(w.theme_editor.as_ref().unwrap().draft.colors.len(),3));
     click(&mut editor,"theme-remove-color");

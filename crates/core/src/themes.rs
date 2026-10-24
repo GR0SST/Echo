@@ -38,6 +38,23 @@ pub struct ThemeColor {
     pub blue: f32,
 }
 impl ThemeColor {
+    /// Convert linear-light sRGB catalog components to stored sRGB.
+    pub fn from_linear_srgb(rgb: [f32; 3]) -> Self {
+        fn encode(value: f32) -> f32 {
+            let value = value.clamp(0., 1.);
+            if value <= 0.0031308 { value * 12.92 } else { 1.055 * value.powf(1. / 2.4) - 0.055 }
+        }
+        Self { red: encode(rgb[0]), green: encode(rgb[1]), blue: encode(rgb[2]) }
+    }
+    /// Convert Display P3 (D65) to sRGB, clipping outside the output gamut.
+    pub fn from_display_p3(rgb: [f32; 3]) -> Self {
+        let [r, g, b] = rgb.map(|v| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) });
+        Self::from_linear_srgb([
+            1.224745 * r - 0.224904 * g,
+            -0.042058 * r + 1.042081 * g,
+            -0.019642 * r - 0.078655 * g + 1.098537 * b,
+        ])
+    }
     pub fn valid(self) -> bool {
         [self.red, self.green, self.blue]
             .into_iter()
@@ -141,6 +158,28 @@ mod tests {
     use super::*;
     use crate::session;
     use std::time::SystemTime;
+    #[test]
+    fn catalog_colors_decode_transfer_functions_and_clip_p3_to_srgb() {
+        let cases = [
+            (ThemeColor::from_linear_srgb([1., 0.235, 0.097]), [255., 133., 88.]),
+            (ThemeColor::from_display_p3([0.950, 0.840, 0.428]), [248., 213., 88.]),
+            (ThemeColor::from_display_p3([0.451, 0.897, 0.612]), [52., 232., 149.]),
+            (ThemeColor::from_display_p3([0.496, 0.721, 0.838]), [108., 186., 217.]),
+        ];
+        for (color, expected) in cases {
+            assert!(color.valid());
+            for (actual, expected) in [color.red, color.green, color.blue].into_iter().zip(expected) {
+                assert!((actual * 255. - expected).abs() < 1.);
+            }
+        }
+        let neutral = ThemeColor::from_display_p3([0.5; 3]);
+        assert!((neutral.red - 0.5).abs() < 0.001);
+        assert!((neutral.green - 0.5).abs() < 0.001);
+        assert!((neutral.blue - 0.5).abs() < 0.001);
+        let red = ThemeColor::from_display_p3([1., 0., 0.]);
+        assert!((red.red - 1.).abs() < 0.000001);
+        assert_eq!((red.green, red.blue), (0., 0.));
+    }
     #[test]
     fn theme_roundtrip_and_legacy_hue_migration() {
         let mut browser = Browser::new();
