@@ -201,6 +201,7 @@ enum Call {
     ForceReload(u64),
     StopLoading(u64),
     Mute(u64, bool),
+    ColorScheme(u64, Option<bool>),
     Zoom(u64, i32),
     Find(u64, String, bool, bool),
     StopFinding(u64),
@@ -277,6 +278,9 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn set_color_scheme(&mut self, view: ViewId, dark: Option<bool>) -> bool {
+        self.call(Call::ColorScheme(raw(view), dark)); true
+    }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.0.borrow_mut().peek_policies.insert(raw(view), policy); }
     fn set_site_boosts(&mut self, storage: &crate::pages::StorageSelection, boosts: Vec<engine::SiteBoost>) { self.0.borrow_mut().boosts.insert(storage.clone(), boosts); }
     fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<crate::pages::NativePaste> {
@@ -8811,4 +8815,60 @@ fn dark_appearance_uses_dark_ink_for_bright_pigments_and_light_ink_for_black(cx:
     cx.run_until_parked();
     view.read_with(cx, |w, _| assert!(w.theme_colors().foreground.l > 0.9));
 
+}
+
+#[gpui::test]
+fn theme_appearance_previews_page_media_and_undo_restores_automatic_without_navigation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    fake.take_calls();
+    click(&mut editor, "theme-light");
+    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(false))]);
+    click(&mut editor, "theme-dark");
+    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(true))]);
+    click(&mut editor, "theme-automatic");
+    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, None)]);
+    click(&mut editor, "theme-light"); fake.take_calls();
+    editor.simulate_keystrokes("escape"); cx.run_until_parked(); fake.take_calls();
+    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::ColorScheme(1, None)));
+    assert!(view.read_with(cx, |w, _| w.browser.space().theme.is_none()));
+}
+
+#[gpui::test]
+fn inactive_space_theme_preview_updates_its_retained_page_and_preserves_the_active_space(cx: &mut TestAppContext) {
+    use browser_core::themes::{SpaceTheme, ThemeAppearance};
+    let (view, cx, fake) = open_pages(cx);
+    let first = view.read_with(cx, |w, _| w.browser.space().id);
+    view.update(cx, |w, cx| {
+        w.edit_browser(|browser| {
+            browser.switch_space(1);
+            browser.new_tab("https://other.example", std::time::SystemTime::now());
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let active = view.read_with(cx, |w, _| w.browser.space().id);
+    fake.take_calls();
+    view.update(cx, |w, cx| {
+        let mut theme = SpaceTheme::from_hue(280.);
+        theme.appearance = ThemeAppearance::Dark;
+        w.edit_browser(|browser| { browser.update_space_theme(first, theme); });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(true))]);
+    cx.update(|window, cx| view.update(cx, |w, cx| w.open_space_menu(first, gpui::point(gpui::px(100.), gpui::px(200.)), window, cx)));
+    click(&mut tab_menu(&view, cx), "tab-menu-edit-theme-color");
+    let mut editor = space_theme_editor(&view, cx);
+    fake.take_calls();
+    click(&mut editor, "theme-light");
+    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(false))]);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), active);
+    editor.simulate_keystrokes("escape"); cx.run_until_parked(); fake.take_calls();
+    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::ColorScheme(1, Some(true))));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), active);
 }

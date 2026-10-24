@@ -117,6 +117,7 @@ pub trait WebEngine {
     fn stop_loading(&mut self, view: ViewId);
     fn set_audio_muted(&mut self, view: ViewId, muted: bool);
     fn audio_muted(&self, view: ViewId) -> Option<bool>;
+    fn set_color_scheme(&mut self, _view: ViewId, _dark: Option<bool>) -> bool { true }
     fn zoom(&mut self, view: ViewId, direction: i32);
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool);
     fn stop_finding(&mut self, view: ViewId);
@@ -292,6 +293,7 @@ impl WebEngine for Chromium {
     fn force_reload(&mut self, view: ViewId) { self.engine.force_reload(view) }
     fn stop_loading(&mut self, view: ViewId) { self.engine.stop_loading(view) }
     fn set_audio_muted(&mut self, view: ViewId, muted: bool) { self.engine.set_audio_muted(view, muted) }
+    fn set_color_scheme(&mut self, view: ViewId, dark: Option<bool>) -> bool { self.engine.set_color_scheme(view, dark) }
     fn audio_muted(&self, view: ViewId) -> Option<bool> { self.engine.audio_muted(view) }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.engine.zoom(view, direction) }
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.engine.find(view, text, forward, next) }
@@ -328,6 +330,7 @@ struct Page {
     url: String,
     state: PageState,
     muted: bool,
+    color_scheme: Option<bool>,
     snapshot: Option<(u64, Arc<Vec<u8>>)>,
     snapshot_pending: Option<u64>,
     snapshot_origin: Option<(u64, Bounds)>,
@@ -852,6 +855,28 @@ impl Pages {
         for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
+    /// Theme drafts preview in retained pages without changing page ownership,
+    /// creating tabs, navigating, or leaking an override to another host.
+    pub(crate) fn sync_color_schemes(&mut self, browser: &Browser,
+        preview: Option<(browser_core::SpaceId, browser_core::themes::ThemeAppearance)>) {
+        use browser_core::themes::ThemeAppearance;
+        let mut store = self.store.borrow_mut();
+        let updates: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host)
+            .filter_map(|(tab, page)| {
+                let source = browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|t| t.id == *tab))
+                    .or_else(|| browser.spaces.iter().find(|space| space.id == page.source_space))?;
+                let appearance = preview.filter(|(space, _)| *space == source.id).map(|(_, appearance)| appearance)
+                    .unwrap_or_else(|| source.theme.as_ref().map(|theme| theme.appearance).unwrap_or_default());
+                let scheme = match appearance { ThemeAppearance::Automatic => None, ThemeAppearance::Light => Some(false), ThemeAppearance::Dark => Some(true) };
+                (scheme != page.color_scheme).then_some((*tab, page.view, scheme))
+            }).collect();
+        for (tab, view, scheme) in updates {
+            if store.engine.set_color_scheme(view, scheme) {
+                store.pages.get_mut(&tab).unwrap().color_scheme = scheme;
+            }
+        }
+    }
+
     /// Applies mute intent even when an occluded window is not rendering.
     pub fn sync_audio(&mut self, browser: &Browser) {
         let mut store = self.store.borrow_mut();
@@ -1009,7 +1034,7 @@ impl Pages {
                     };
                     created = true;
                     if muted { engine.set_audio_muted(view, true); }
-                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
+                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
             engine.set_top_corners_rounded(pages[&tab].view, !self.split && !self.square_top);

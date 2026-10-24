@@ -895,6 +895,20 @@ impl Engine {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) { host.set_audio_muted(muted.into()); }
     }
 
+    /// Per-document CSS preference. None restores the platform preference;
+    /// storage contexts and other pages keep their own appearance.
+    pub fn set_color_scheme(&mut self, id: ViewId, dark: Option<bool>) -> bool {
+        let Some(view) = self.views.get(&id).filter(|view| matches!(view.role, ViewRole::Page)) else { return false; };
+        let Some(host) = view.browser.host() else { return false; };
+        let Some(message_id) = self.message_ids.next() else { return false; };
+        let features: Vec<_> = dark.into_iter().map(|dark| serde_json::json!({
+            "name": "prefers-color-scheme", "value": if dark { "dark" } else { "light" }
+        })).collect();
+        let message = serde_json::json!({ "id": message_id,
+            "method": "Emulation.setEmulatedMedia", "params": { "features": features } });
+        host.send_dev_tools_message(Some(message.to_string().as_bytes())) != 0
+    }
+
     pub fn audio_muted(&self, id: ViewId) -> Option<bool> {
         self.views.get(&id).and_then(|view| view.browser.host()).map(|host| host.is_audio_muted() != 0)
     }
