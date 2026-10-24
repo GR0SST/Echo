@@ -9540,3 +9540,63 @@ fn closing_the_owner_during_peek_exit_cannot_add_a_late_undo_document(cx: &mut T
     assert!(owner.read_with(cx, |view, _| view.browser.peek_history_token(false).is_none()));
     assert!(engine.take_calls().iter().any(|call| matches!(call, Call::Close(1))));
 }
+
+fn little_profile_menu(little: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
+    let handle = little.read_with(cx, |view, _| view.transient.as_ref().unwrap().picker.as_ref().unwrap().overlay.unwrap());
+    let menu = VisualTestContext::from_window(handle.into(), &cx.cx);
+    menu.run_until_parked();
+    menu
+}
+
+#[gpui::test]
+fn little_profile_picker_replaces_only_the_lookup_in_the_selected_storage(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    let other = owner.update(cx, |view, _| view.edit_browser(|browser| browser.create_user_profile("Work").unwrap()));
+    let before = owner.read_with(cx, |view, _| (view.browser.all_tabs().count(), view.browser.space().id, view.browser.active_user_profile_id()));
+    cx.simulate_keystrokes("cmd-alt-n"); cx.run_until_parked();
+    let (little, mut compact) = little_root(cx);
+    bar(&little, &mut compact).simulate_input("https://little.example/retained-url");
+    bar(&little, &mut compact).simulate_keystrokes("enter"); compact.run_until_parked();
+    let original = little.read_with(&compact, |view, _| view.main_window.window_id());
+    let old_engine = fake.0.borrow().forks.last().unwrap().clone(); old_engine.take_calls();
+    click(&mut compact, "little-profile");
+    let mut menu = little_profile_menu(&little, &mut compact);
+    assert_eq!(menu.debug_bounds("little-profile-menu").unwrap().size.width, gpui::px(96.));
+    assert_eq!(menu.debug_bounds("little-profile-0").unwrap().size.height, gpui::px(24.));
+    menu.simulate_keystrokes("down enter"); menu.run_until_parked(); cx.run_until_parked();
+    let (replacement, replacement_cx) = little_root(cx);
+    assert_ne!(replacement.read_with(&replacement_cx, |view, _| view.main_window.window_id()), original);
+    replacement.read_with(&replacement_cx, |view, _| {
+        assert_eq!(view.browser.active_user_profile_id(), other);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://little.example/retained-url");
+        assert_eq!(view.transient.as_ref().unwrap().space, before.1);
+    });
+    assert_eq!(fake.0.borrow().fork_storage.last(), Some(&crate::pages::StorageSelection::for_profile(other)));
+    let new_engine = fake.0.borrow().forks.last().unwrap().clone();
+    assert!(new_engine.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://little.example/retained-url")));
+    assert!(old_engine.take_calls().contains(&Call::Close(1)));
+    assert_eq!(owner.read_with(cx, |view, _| (view.browser.all_tabs().count(), view.browser.space().id, view.browser.active_user_profile_id())), before);
+}
+
+#[gpui::test]
+fn cancelling_or_selecting_the_current_little_profile_preserves_its_live_document(cx: &mut TestAppContext) {
+    let (_, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-alt-n"); cx.run_until_parked();
+    let (little, mut compact) = little_root(cx);
+    bar(&little, &mut compact).simulate_input("https://little.example/state");
+    bar(&little, &mut compact).simulate_keystrokes("enter"); compact.run_until_parked();
+    let original = little.read_with(&compact, |view, _| view.main_window.window_id());
+    let engine = fake.0.borrow().forks.last().unwrap().clone(); engine.take_calls();
+    click(&mut compact, "little-profile");
+    let mut menu = little_profile_menu(&little, &mut compact);
+    menu.simulate_keystrokes("escape"); menu.run_until_parked(); compact.run_until_parked();
+    assert!(little.read_with(&compact, |view, _| view.transient.as_ref().unwrap().picker.is_none()));
+    click(&mut compact, "little-profile");
+    let mut menu = little_profile_menu(&little, &mut compact); click(&mut menu, "little-profile-0");
+    menu.run_until_parked(); compact.run_until_parked();
+    assert!(little.read_with(&compact, |view, _| view.transient.as_ref().unwrap().picker.is_none()));
+    assert_eq!(little.read_with(&compact, |view, _| view.main_window.window_id()), original);
+    let calls = engine.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..) | Call::Transfer(..))), "{calls:?}");
+    assert!(calls.contains(&Call::FocusPage(1)), "{calls:?}");
+}

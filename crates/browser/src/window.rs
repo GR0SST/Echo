@@ -576,7 +576,7 @@ impl Render for Overlay {
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
-                    OverlayKind::TransientPicker => browser.render_transient_picker(cx),
+                    OverlayKind::TransientPicker => browser.render_transient_picker(window, cx),
                 };
                 browser.render_overlay_shell(content, cx)
             })

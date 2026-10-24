@@ -15,7 +15,12 @@ pub(crate) struct Transient {
     pub space: SpaceId,
     pub picker: Option<Picker>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickerKind { Spaces, Profiles }
 pub(crate) struct Picker {
+    kind: PickerKind,
+    at: gpui::Point<gpui::Pixels>,
+    menu_material: std::rc::Rc<std::cell::Cell<bool>>,
     input: Entity<crate::text_input::TextInput>,
     selected: usize,
     _changed: Subscription,
@@ -61,8 +66,8 @@ pub(crate) fn open(url: Option<String>, cx: &mut App) {
     open_with(source, space, profile, url, cx);
 }
 
-fn open_with(source: NormalProfile, space: SpaceId, profile: UserProfileId, url: Option<String>, cx: &mut App) {
-    if crate::quit::is_quitting() { return; }
+fn open_with(source: NormalProfile, space: SpaceId, profile: UserProfileId, url: Option<String>, cx: &mut App) -> Option<WindowHandle<BrowserWindow>> {
+    if crate::quit::is_quitting() { return None; }
     let bounds = Bounds::centered(None, size(px(1000.), px(760.)), cx);
     let empty = url.is_none();
     let handle = cx.open_window(WindowOptions {
@@ -98,14 +103,15 @@ fn open_with(source: NormalProfile, space: SpaceId, profile: UserProfileId, url:
         })
     });
     cx.activate(true);
-    if let Ok(handle) = handle {
+    handle.ok().map(|handle| {
         cx.spawn(async move |cx| {
             let _ = handle.update(cx, |view, window, cx| {
                 window.activate_window();
                 if empty { view.open_command_bar(Target::NewTab, "", window, cx); }
             });
         }).detach();
-    }
+        handle
+    })
 }
 
 impl BrowserWindow {
@@ -118,7 +124,7 @@ impl BrowserWindow {
             (NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() },
                 self.browser.space().id, self.browser.active_user_profile_id())
         } else { cx.defer(|cx| open(None, cx)); return; };
-        cx.defer(move |cx| open_with(source, space, profile, None, cx));
+        cx.defer(move |cx| { open_with(source, space, profile, None, cx); });
     }
 
     pub(crate) fn render_transient_content(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -134,7 +140,12 @@ impl BrowserWindow {
                 .child(div().w(px(75.)).h_full().flex_none().child(self.render_traffic_lights(cx)))
                 .child(div().relative().flex_1().min_w_0().h(px(32.)).rounded(px(6.))
                     .bg(gpui::hsla(0., 0., 1., 0.13)).flex().items_center().px(px(8.))
-                    .child(div().text_size(px(11.)).flex_none().child(self.browser.active_user_profile().name().to_owned()))
+                    .child(div().id("little-profile").debug_selector(|| "little-profile".into()).flex_none()
+                        .h(px(20.)).px(px(5.)).rounded_full().flex().items_center().gap(px(4.))
+                        .bg(gpui::hsla(0., 0., 1., 0.07)).hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.15)))
+                        .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(profile_avatar()).child(self.browser.active_user_profile().name().to_owned())
+                        .on_click(cx.listener(|this, _, window, cx| this.toggle_lookup_picker(PickerKind::Profiles, window, cx))))
                     .child(div().id("little-address").debug_selector(|| "little-address".into()).flex_1().min_w_0()
                         .text_size(px(13.)).text_center().truncate().child(title)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -215,7 +226,13 @@ impl BrowserWindow {
     }
 
     fn toggle_transient_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.transient.as_ref().is_some_and(|state| state.picker.is_some()) { self.close_transient_picker(cx); return; }
+        self.toggle_lookup_picker(PickerKind::Spaces, window, cx);
+    }
+
+    fn toggle_lookup_picker(&mut self, kind: PickerKind, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.transient.as_ref().and_then(|state| state.picker.as_ref()).map(|picker| picker.kind);
+        if current.is_some() { self.close_transient_picker(cx); }
+        if current == Some(kind) { return; }
         self.close_command_bar(cx);
         if let Some(pages) = &self.pages { pages.borrow_mut().request_ui_focus(); }
         let input = cx.new(|cx| crate::text_input::TextInput::new("Search Spaces…", cx));
@@ -223,7 +240,11 @@ impl BrowserWindow {
             if let Some(picker) = this.transient.as_mut().and_then(|state| state.picker.as_mut()) { picker.selected = 0; }
             cx.notify();
         });
-        self.transient.as_mut().unwrap().picker = Some(Picker { input: input.clone(), selected: 0, _changed: changed, overlay: None });
+        let selected = if kind == PickerKind::Profiles {
+            self.lookup_profiles().iter().position(|(id, _)| *id == self.browser.active_user_profile_id()).unwrap_or(0)
+        } else { 0 };
+        let at = window.mouse_position() - point(px(0.), px(4.));
+        self.transient.as_mut().unwrap().picker = Some(Picker { kind, at, menu_material: Default::default(), input: input.clone(), selected, _changed: changed, overlay: None });
         let bounds = window.bounds();
         let parent = self.native_view;
         let browser = cx.weak_entity();
@@ -246,6 +267,67 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    fn lookup_profiles(&self) -> Vec<(UserProfileId, String)> {
+        self.transient.as_ref().map(|state| state.source.profile.read_settings(|browser|
+            browser.user_profiles().map(|profile| (profile.id(), profile.name().to_owned())).collect())).unwrap_or_default()
+    }
+
+    fn change_lookup_profile(&mut self, id: UserProfileId, cx: &mut Context<Self>) {
+        let Some(state) = &self.transient else { return; };
+        if id == self.browser.active_user_profile_id() { self.close_transient_picker(cx); return; }
+        let source = state.source.clone();
+        let space = state.space;
+        let url = self.browser.active_tab().map(|tab| tab.url.clone());
+        self.close_transient_picker_with_focus(PopupFocus::OnActivation, cx);
+        let old = cx.weak_entity();
+        cx.defer(move |cx| {
+            if !source.profile.read_settings(|browser| browser.user_profile(id).is_some()) { return; }
+            if open_with(source, space, id, url, cx).is_some() {
+                let _ = old.update(cx, |view, cx| view.close_window(cx));
+            }
+        });
+    }
+
+    fn render_lookup_profiles(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let picker = self.transient.as_ref().and_then(|state| state.picker.as_ref()).unwrap();
+        let profiles = self.lookup_profiles();
+        let width = profiles.iter().map(|(_, name)| window.text_system().shape_line(name.clone().into(), px(13.),
+            &[gpui::TextRun { len: name.len(), font: gpui::font(".SystemUIFont"), color: gpui::white(),
+                background_color: None, underline: None, strikethrough: None }], None).width + px(40.))
+            .fold(px(96.), |width, item| width.max(item)).min(px(320.)).ceil();
+        let height = px(8. + profiles.len() as f32 * 24.);
+        let at = point(picker.at.x.clamp(px(4.), (window.viewport_size().width - width - px(4.)).max(px(4.))),
+            picker.at.y.clamp(px(4.), (window.viewport_size().height - height - px(4.)).max(px(4.))));
+        let active = self.browser.active_user_profile_id();
+        let focus = picker.input.read(cx).focus_handle(cx);
+        div().size_full().key_context("TransientPicker").track_focus(&focus)
+            .on_action(cx.listener(|this, _: &DismissPicker, _, cx| this.close_transient_picker(cx)))
+            .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.select_transient_space(1, cx)))
+            .on_action(cx.listener(|this, _: &PreviousSpace, _, cx| this.select_transient_space(-1, cx)))
+            .on_action(cx.listener(|this, _: &ConfirmSpace, _, cx| {
+                let selected = this.transient.as_ref().and_then(|state| state.picker.as_ref()).map_or(0, |picker| picker.selected);
+                if let Some((id, _)) = this.lookup_profiles().get(selected) { this.change_lookup_profile(*id, cx); }
+            }))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| this.close_transient_picker(cx)))
+            .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, _, _, cx| this.close_transient_picker(cx)))
+            .child(crate::panel::menu_shell("little-profile-menu", "little-profile-menu", self.accent(), picker.menu_material.clone())
+                .debug_selector(|| "little-profile-menu".into()).absolute().left(at.x).top(at.y).w(width).p(px(4.)).flex().flex_col()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .children(profiles.into_iter().enumerate().map(|(index, (id, name))| {
+                    div().id(("little-profile-row", index)).debug_selector(move || format!("little-profile-{index}"))
+                        .h(px(24.)).flex_none().flex().items_center().px(px(6.)).gap(px(6.)).rounded(px(6.))
+                        .bg(if picker.selected == index { gpui::rgb(0x3478f6).into() } else { gpui::hsla(0., 0., 0., 0.) })
+                        .text_color(gpui::white()).text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM)
+                        .on_hover(cx.listener(move |this, hovered, _, cx| {
+                            if *hovered { if let Some(picker) = this.transient.as_mut().and_then(|state| state.picker.as_mut()) { picker.selected = index; } cx.notify(); }
+                        }))
+                        .child(div().size(px(12.)).flex_none().when(id == active, |check| check.child(icons::control_sized(Icon::Check, 12.))))
+                        .child(div().min_w_0().truncate().child(name))
+                        .on_click(cx.listener(move |this, _, _, cx| this.change_lookup_profile(id, cx)))
+                })))
+            .into_any_element()
+    }
+
     fn transient_spaces(&self, cx: &App) -> Vec<(SpaceId, String, String, f32)> {
         let Some(state) = &self.transient else { return Vec::new(); };
         let Some(picker) = &state.picker else { return Vec::new(); };
@@ -257,16 +339,18 @@ impl BrowserWindow {
     }
 
     fn select_transient_space(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.transient_spaces(cx).len();
+        let profiles = self.transient.as_ref().and_then(|state| state.picker.as_ref()).is_some_and(|picker| picker.kind == PickerKind::Profiles);
+        let count = if profiles { self.lookup_profiles().len() } else { self.transient_spaces(cx).len() };
         if let Some(picker) = self.transient.as_mut().and_then(|state| state.picker.as_mut()) {
             if count > 0 { picker.selected = (picker.selected as isize + delta).rem_euclid(count as isize) as usize; }
         }
         cx.notify();
     }
 
-    pub(crate) fn render_transient_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_transient_picker(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(state) = &self.transient else { return div().into_any_element(); };
         let Some(picker) = &state.picker else { return div().into_any_element(); };
+        if picker.kind == PickerKind::Profiles { return self.render_lookup_profiles(window, cx); }
         let rows = self.transient_spaces(cx);
         let focus = picker.input.read(cx).focus_handle(cx);
         div().id("transient-picker-backdrop").size_full().key_context("TransientPicker").track_focus(&focus)
@@ -315,4 +399,18 @@ pub(crate) fn transfer_lookup_document(source: Option<&std::rc::Rc<std::cell::Re
     let Some(source) = source.filter(|source| source.borrow().has_page(tab)) else { return true; };
     let Some(target) = target else { return false; };
     source.borrow_mut().transfer_page(tab, &mut target.borrow_mut(), destination, browser)
+}
+
+fn profile_avatar() -> AnyElement {
+    gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
+        let color = window.text_style().color;
+        window.paint_quad(gpui::fill(bounds, color.opacity(0.12)).corner_radii(px(7.)));
+        for x in [4.5, 8.5] {
+            window.paint_quad(gpui::fill(Bounds::new(bounds.origin + point(px(x), px(3.5)), size(px(1.), px(2.5))), color).corner_radii(px(0.5)));
+        }
+        let mut smile = gpui::PathBuilder::stroke(px(1.));
+        smile.move_to(bounds.origin + point(px(4.), px(8.5)));
+        smile.curve_to(bounds.origin + point(px(10.), px(8.5)), bounds.origin + point(px(7.), px(12.)));
+        if let Ok(path) = smile.build() { window.paint_path(path, color); }
+    }).size(px(14.)).flex_none().into_any_element()
 }
