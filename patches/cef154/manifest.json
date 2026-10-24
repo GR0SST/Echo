@@ -39,7 +39,7 @@
     },
     {
       "path": "cef.patch",
-      "sha256": "1e1112eb2db7527c43a59a1450d1af3e4174210ff8c135c9e09bbb215555f2ce"
+      "sha256": "4635256cc3b51f543dd75b4f50bba8e56accdda383e99721d30f88357dac7ef5"
     }
   ],
   "standard_patch_files": [
@@ -2766,13 +2766,13 @@
     {
       "path": "cef/libcef/browser/frame_host_impl.cc",
       "base_sha256": "cddcb3eae46d0fb4519a97c4a8b2fa4e991300c5c44d6ea70b4925621b81d43b",
-      "result_sha256": "3685d206c55c406ea0050d9f04cfd89ebc7b4162d85cd2f0d7a953cc5d5c943f",
+      "result_sha256": "ab3839921540a7ce967119671f3077c97f50f8acc7799bfd3d4b32e230a11a1c",
       "mode": "100644"
     },
     {
       "path": "cef/libcef/common/mojom/cef.mojom",
       "base_sha256": "a1633567c792625379e54952c1e6a6d75378cfba45e508edc2728965e0f0b11f",
-      "result_sha256": "2e222ed34135246310ed2275ed622532e0f1808e5b3b09e5c88cdf2d4d712d92",
+      "result_sha256": "9a636200f7c54c3535f7be5bde1a446bb83f145abe325439486c14c0a887d9a8",
       "mode": "100644"
     },
     {
@@ -2790,13 +2790,13 @@
     {
       "path": "cef/libcef/renderer/frame_impl.cc",
       "base_sha256": "2de57e0baa3fb3971ec41f5b8ec3d1ea078c893943a6edb39a8aad37586956d9",
-      "result_sha256": "6da3dcded5b3638c4ce6f0e561df900f3c9e611e20523da55e87f409c38aee0c",
+      "result_sha256": "c2053f0ec597ddd9eea05e8ae82ec600f0473a5330002c77b089a5e3c2024b6c",
       "mode": "100644"
     },
     {
       "path": "cef/libcef/renderer/frame_impl.h",
       "base_sha256": "b5984e68cdb12bc8b023b941c27027028cc43a9437158c4a1bc582cdd59c96c5",
-      "result_sha256": "353d417594770a773aa5316f1e436d34e7a80cdbab712424b3237f1ab595bc47",
+      "result_sha256": "233b107fc15d40ad34912052dc417265fa481c0922c43260fb9676c19e3dd543",
       "mode": "100644"
     },
     {
@@ -2814,7 +2814,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "6733f8848cf541fde9b4a834c46bfda5446d84cd881d3d40dd98e1c5ea31ad35",
+      "result_sha256": "b3bc950a07d97603c906069c809af0a31775e246738a2197d4f47712457a38d2",
       "mode": "100644"
     },
     {

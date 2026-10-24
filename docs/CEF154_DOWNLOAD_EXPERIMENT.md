@@ -113,7 +113,7 @@ ditto "$out/ceftests.app" "$owned/ceftests.app"
   > "$owned/native-tests.log" 2>&1
 ```
 
-Require a successful process exit and all 31 cases with no skips or failures.
+Require a successful process exit and all 33 cases with no skips or failures.
 The BFCache flag selects the legacy request-replacement path covered by these
 tests; it is not an Echo application default. Retain the owned log/XML and check
 that its helper processes have exited. A failed copy is evidence of that attempt;
@@ -151,6 +151,20 @@ destination origin as initiator. Frame LoadRequest now uses the current document
 security origin instead. Chromium's validation remains unchanged. All 31 tests,
 including their receipt, parent-document and POST assertions, were unchanged for
 the passing run.
+
+Two source-close cases keep a genuine renderer sync XHR held after a GET/POST
+frame command has reserved its receipt. Unregister must remain Pending. The
+source browser closes before the held response is canceled. Each original token
+then produces exactly one Shutdown outcome, with no item association, target
+browse/load or target resource request. This verifies source-browser destruction;
+isolated frame loss and renderer-only endpoint disconnect remain separate gates.
+
+The first source-close run aborted in Mojo's pending-responder DCHECK during
+CEF frame detach. LoadRequest now reports forwarding over an independent one-way
+result pipe, so CEF can retain its intentional-detach reason without a pending
+frame RPC responder. Losing the result pipe abandons only its original weak
+command handle. No Mojo assertion was removed; all 33 native tests were unchanged
+for the passing run.
 
 The 131 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged

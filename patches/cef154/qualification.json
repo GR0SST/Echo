@@ -144,7 +144,7 @@
     "state_binary_sha256": "35bbadc8cf7fd0aa8313942c1afbd39bf61d321732c5a1479bb8ae9eebfc899d"
   },
   "native": {
-    "count": 31,
+    "count": 33,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -170,6 +170,8 @@
       "EchoDownloadBridge.DelayedSameUrlSiblingAssociatesAfterClosingAndCompletes",
       "EchoDownloadBridge.PreClosingLoadRequestGetSurvivesRendererDelay",
       "EchoDownloadBridge.PreClosingLoadRequestPostSurvivesRendererDelay",
+      "EchoDownloadBridge.SourceCloseDrainsOriginalGetBeforeRendererCommandReturns",
+      "EchoDownloadBridge.SourceCloseDrainsOriginalPostBeforeRendererCommandReturns",
       "EchoDownloadBridge.SameDocumentLoadRequestSettlesWithoutReplacingDocument",
       "EchoDownloadBridge.BeforeUnloadCancelSettlesOriginalFrameCommand",
       "EchoDownloadBridge.SubframeGetKeepsParentAndOriginalAdmissionAfterClosing",
@@ -179,7 +181,7 @@
       "EchoDownloadBridge.CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "6733f8848cf541fde9b4a834c46bfda5446d84cd881d3d40dd98e1c5ea31ad35",
+    "test_source_sha256": "b3bc950a07d97603c906069c809af0a31775e246738a2197d4f47712457a38d2",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -213,7 +215,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "31e78bf7316b72730f2b716ca22ba8ead07145c37bce9b36526517d70f959d62",
+  "native_xml_sha256": "e862fcd7fc3c5dab5bca7871502600a7fff18f1bb12fc2649c5dd7d096f4365d",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -250,6 +252,9 @@
     "postdata_observation": "actual IO resource request, copied facts asserted on UI",
     "navigation_handle_metadata_has_postdata": false,
     "requestor_origin": "frame LoadRequest uses the current document security origin; Chromium initiator validation unchanged",
-    "prior_failed_native_run": "29/31: both cross-origin cases rejected with INVALID_INITIATOR_ORIGIN; all 31 tests unchanged for passing run"
+    "prior_failed_native_run": "29/31: both cross-origin cases rejected with INVALID_INITIATOR_ORIGIN; all 31 tests unchanged for passing run",
+    "source_close": "GET/POST admitted while genuine renderer sync XHR is held; browser closes before response release; exactly one original-token Shutdown, no association or target request",
+    "command_acknowledgement": "independent one-way result pipe; intentional frame detach and Mojo DCHECK remain unchanged",
+    "prior_source_close_failure": "R8 native run aborted in ResetWithReason with a pending LoadRequest RPC responder; all 33 tests unchanged for passing run"
   }
 }

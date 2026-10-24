@@ -4656,11 +4656,34 @@ diff --git a/libcef/browser/frame_host_impl.cc b/libcef/browser/frame_host_impl.
  #include "cef/libcef/browser/browser_host_base.h"
 +#include "cef/libcef/browser/download_bridge.h"
 +#include "content/public/browser/download_request_utils.h"
-+#include "mojo/public/cpp/bindings/callback_helpers.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
  #include "cef/libcef/browser/net_service/browser_urlrequest_impl.h"
  #include "cef/libcef/common/frame_util.h"
  #include "cef/libcef/common/net/url_util.h"
-@@ -345,22 +348,43 @@
+@@ -25,6 +28,22 @@
+ #include "services/service_manager/public/cpp/interface_provider.h"
+ 
+ namespace {
++
++class FrameCommandResult final : public cef::mojom::FrameCommandResult {
++ public:
++  explicit FrameCommandResult(
++      std::unique_ptr<content::NavigationCommandReceipt> command)
++      : command_(std::move(command)) {}
++  ~FrameCommandResult() override {
++    if (command_) command_->Abandon();
++  }
++  void Completed(bool forwarded) override {
++    if (!forwarded && command_) command_->Abandon();
++    command_.reset();
++  }
++ private:
++  std::unique_ptr<content::NavigationCommandReceipt> command_;
++};
+ 
+ void StringVisitCallback(CefRefPtr<CefStringVisitor> visitor,
+                          base::ReadOnlySharedMemoryRegion response) {
+@@ -345,22 +364,42 @@
  }
  
  void CefFrameHostImpl::LoadRequest(cef::mojom::RequestParamsPtr params) {
@@ -4708,12 +4731,11 @@ diff --git a/libcef/browser/frame_host_impl.cc b/libcef/browser/frame_host_impl.
 +          if (!command->token().is_empty())
 +            queued_params->browser_command_nonce = command->token();
 +        }
-+        render_frame->LoadRequest(std::move(queued_params),
-+            mojo::WrapCallbackWithDefaultInvokeIfNotRun(base::BindOnce(
-+                [](std::unique_ptr<content::NavigationCommandReceipt> owned,
-+                   bool forwarded) {
-+                  if (!forwarded && owned) owned->Abandon();
-+                }, std::move(command)), false));
++        mojo::PendingRemote<cef::mojom::FrameCommandResult> result;
++        mojo::MakeSelfOwnedReceiver<cef::mojom::FrameCommandResult>(
++            std::make_unique<FrameCommandResult>(std::move(command)),
++            result.InitWithNewPipeAndPassReceiver());
++        render_frame->LoadRequest(std::move(queued_params), std::move(result));
 +      }, frame_token_, std::move(command), std::move(params)));
 +  if (browser) browser->OnSetFocus(FOCUS_SOURCE_NAVIGATION);
  }
@@ -4730,20 +4752,26 @@ diff --git a/libcef/common/mojom/cef.mojom b/libcef/common/mojom/cef.mojom
  import "services/network/public/mojom/site_for_cookies.mojom";
  import "services/network/public/mojom/url_request.mojom";
  import "third_party/blink/public/mojom/loader/referrer.mojom";
-@@ -46,6 +47,7 @@
+@@ -46,6 +47,13 @@
  
    // Upload data (may be empty).
    network.mojom.URLRequestBody? upload_data;
 +  mojo_base.mojom.UnguessableToken? browser_command_nonce;
++};
++
++// One-way acknowledgement on an independent pipe. Closing the frame endpoint
++// with its intentional-detach reason must not have a pending RPC responder.
++interface FrameCommandResult {
++  Completed(bool forwarded);
  };
  
  // Interface for communicating with a frame in the renderer process.
-@@ -74,7 +76,7 @@
+@@ -74,7 +82,7 @@
                   int32 startLine);
  
    // Load a request.
 -  LoadRequest(RequestParams params);
-+  LoadRequest(RequestParams params) => (bool forwarded);
++  LoadRequest(RequestParams params, pending_remote<FrameCommandResult> result);
  
    // Loading has stopped.
    DidStopLoading();
@@ -4859,7 +4887,7 @@ diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
  
  CefFrameImpl::CefFrameImpl(CefBrowserImpl* browser, blink::WebLocalFrame* frame)
      : browser_(browser),
-@@ -886,15 +939,29 @@
+@@ -886,15 +939,36 @@
  }
  
  void CefFrameImpl::LoadRequest(cef::mojom::RequestParamsPtr params) {
@@ -4872,13 +4900,20 @@ diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
 -            blink_glue::StartNavigation(frame, request);
 -          },
 -          std::move(params)));
-+  LoadRequest(std::move(params), base::DoNothing());
++  LoadRequest(std::move(params), mojo::NullRemote());
 +}
 +void CefFrameImpl::LoadRequest(cef::mojom::RequestParamsPtr params,
-+                              LoadRequestCallback response) {
++    mojo::PendingRemote<cef::mojom::FrameCommandResult> acknowledgement) {
++  auto response = base::BindOnce(
++      [](mojo::PendingRemote<cef::mojom::FrameCommandResult> endpoint,
++         bool forwarded) {
++        if (!endpoint.is_valid()) return;
++        mojo::Remote<cef::mojom::FrameCommandResult> result(std::move(endpoint));
++        result->Completed(forwarded);
++      }, std::move(acknowledgement));
 +  auto result = mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(response), false);
 +  ExecuteOnLocalFrame(__FUNCTION__, base::BindOnce(
-+      [](cef::mojom::RequestParamsPtr params, LoadRequestCallback result,
++      [](cef::mojom::RequestParamsPtr params, base::OnceCallback<void(bool)> result,
 +         blink::WebLocalFrame* frame) {
 +        blink::WebURLRequest request;
 +        CefRequestImpl::Get(params, request);
@@ -4915,13 +4950,14 @@ diff --git a/libcef/renderer/frame_impl.h b/libcef/renderer/frame_impl.h
  
  class CefBrowserImpl;
  
-@@ -160,7 +164,8 @@
+@@ -160,7 +164,9 @@
    void SendJavaScript(const std::u16string& jsCode,
                        const std::string& scriptUrl,
                        int32_t startLine) override;
 -  void LoadRequest(cef::mojom::RequestParamsPtr params) override;
 +  void LoadRequest(cef::mojom::RequestParamsPtr params);
-+  void LoadRequest(cef::mojom::RequestParamsPtr params, LoadRequestCallback response) override;
++  void LoadRequest(cef::mojom::RequestParamsPtr params,
++                   mojo::PendingRemote<cef::mojom::FrameCommandResult> result) override;
    void DidStopLoading() override;
    void MoveOrResizeStarted() override;
  
@@ -4954,7 +4990,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,2740 @@
+@@ -0,0 +1,2786 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -6980,7 +7016,8 @@ new file mode 100644
 +};
 +class DelayedFrameCommandHandler : public TestHandler {
 + public:
-+  explicit DelayedFrameCommandHandler(bool post) : post_(post) {}
++  explicit DelayedFrameCommandHandler(bool post, bool close_source = false)
++      : post_(post), close_source_(close_source) {}
 +  ~DelayedFrameCommandHandler() override {
 +    if (probe_->registration) {
 +      static auto* retained = new std::vector<std::shared_ptr<Probe>>;
@@ -7016,6 +7053,7 @@ new file mode 100644
 +  }
 +  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
 +      CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request) override {
++    if (request->GetURL() == kRelayTarget) ++target_requests_;
 +    if (request->GetURL() == kRelayHold)
 +      return new RendererDelayResource(base::BindOnce(
 +          &DelayedFrameCommandHandler::OnRendererBlocked, this));
@@ -7091,6 +7129,14 @@ new file mode 100644
 +    const auto before = probe_->reserves;
 +    GetBrowser()->GetMainFrame()->LoadRequest(request);
 +    EXPECT_EQ(before, probe_->reserves);
++    if (close_source_ && !failed_) {
++      // Keep the real sync XHR blocked through native browser destruction. The
++      // queued frame command must settle from source loss, never a target load.
++      source_close_requested_ = true;
++      GetBrowser()->GetHost()->CloseBrowser(true);
++      DestroyTest();
++      return;
++    }
 +    held_->Continue();  // Release the real XHR response, never fabricate a navigation.
 +    held_ = nullptr;
 +    if (failed_)
@@ -7133,6 +7179,13 @@ new file mode 100644
 +  }
 +  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
 +    TestHandler::OnBeforeClose(browser);
++    if (close_source_ && source_close_requested_ && !failed_) {
++      source_closed_ = true;
++      EXPECT_FALSE(GetBrowser());
++      if (held_) { held_->Cancel(); held_ = nullptr; }
++      CefPostTask(TID_UI, base::BindOnce(&DelayedFrameCommandHandler::PollAfterClose, this));
++      return;
++    }
 +    if (finished_ && probe_->registration)
 +      CefPostTask(TID_UI, base::BindOnce(&DelayedFrameCommandHandler::PollAfterClose, this));
 +  }
@@ -7144,6 +7197,21 @@ new file mode 100644
 +    }
 +    if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
 +    else ADD_FAILURE() << "failed frame command cleanup did not drain " << status;
++    if (close_source_ && source_closed_ && !failed_) {
++      EXPECT_TRUE(source_close_requested_);
++      EXPECT_TRUE(pending_seen_);
++      EXPECT_FALSE(GetBrowser());
++      EXPECT_FALSE(target_browse_seen_);
++      EXPECT_FALSE(target_loaded_);
++      EXPECT_EQ(0, target_requests_.load());
++      EXPECT_EQ(1, probe_->reserves);
++      EXPECT_EQ(1, probe_->authorizations);
++      EXPECT_EQ(0, probe_->associated);
++      EXPECT_EQ(1u, probe_->navigation_tokens.size());
++      EXPECT_EQ(probe_->navigation_tokens, probe_->no_item_tokens);
++      EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_SHUTDOWN}, probe_->no_item);
++      finished_ = true;
++    }
 +    SignalExtraOnce();
 +  }
 +  void SignalExtraOnce() {
@@ -7160,6 +7228,9 @@ new file mode 100644
 +  }
 + private:
 +  const bool post_;
++  const bool close_source_;
++  std::atomic<int> target_requests_{0};
++  bool source_close_requested_ = false, source_closed_ = false;
 +  const std::shared_ptr<Probe> probe_ = std::make_shared<Probe>();
 +  CefRefPtr<CefCallback> held_;
 +  int browser_id_ = 0, polls_ = 0, cleanup_polls_ = 0;
@@ -7175,6 +7246,17 @@ new file mode 100644
 +}
 +TEST(EchoDownloadBridge, PreClosingLoadRequestPostSurvivesRendererDelay) {
 +  CefRefPtr<DelayedFrameCommandHandler> handler = new DelayedFrameCommandHandler(true);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, SourceCloseDrainsOriginalGetBeforeRendererCommandReturns) {
++  CefRefPtr<DelayedFrameCommandHandler> handler = new DelayedFrameCommandHandler(false, true);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, SourceCloseDrainsOriginalPostBeforeRendererCommandReturns) {
++  CefRefPtr<DelayedFrameCommandHandler> handler = new DelayedFrameCommandHandler(true, true);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
 +}
