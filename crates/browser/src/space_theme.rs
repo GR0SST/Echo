@@ -234,12 +234,11 @@ impl BrowserWindow {
     pub(crate) fn theme_is_dark(&self) -> bool {
         self.theme_is_dark_for(self.browser.space().id)
     }
-    pub(crate) fn theme_is_dark_for(&self, space: browser_core::SpaceId) -> bool {
-        let appearance = self.theme_editor.as_ref().filter(|e| e.space == space)
-            .map(|e| e.draft.appearance)
-            .or_else(|| self.browser.spaces.iter().find(|s| s.id == space).map(|s| s.theme().appearance))
-            .unwrap_or(ThemeAppearance::Automatic);
-        self.browser.is_private() || match appearance {
+    pub(crate) fn theme_appearance(&self) -> ThemeAppearance {
+        if self.browser.is_private() { ThemeAppearance::Dark } else { self.browser.settings.theme_appearance }
+    }
+    pub(crate) fn theme_is_dark_for(&self, _space: browser_core::SpaceId) -> bool {
+        match self.theme_appearance() {
             ThemeAppearance::Light => false,
             ThemeAppearance::Dark => true,
             ThemeAppearance::Automatic => self.theme_system_dark,

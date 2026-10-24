@@ -4037,7 +4037,7 @@ impl Render for BrowserWindow {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
                     pages.sync(&self.browser, self.page_content_visible());
-                    pages.sync_color_schemes(&self.browser, self.theme_editor.as_ref().map(|editor| (editor.space, editor.draft.appearance)));
+                    pages.sync_color_schemes(self.theme_appearance());
                 },
                 // Re-entered from engine work; sync on the next frame.
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),

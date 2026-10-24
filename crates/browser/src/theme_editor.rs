@@ -305,14 +305,7 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn theme_editor_is_dark(&self) -> bool {
-        self.theme_editor.as_ref().map_or_else(
-            || self.theme_is_dark(),
-            |editor| match editor.draft.appearance {
-                ThemeAppearance::Automatic => self.theme_system_dark,
-                ThemeAppearance::Light => false,
-                ThemeAppearance::Dark => true,
-            },
-        )
+        self.theme_is_dark()
     }
     pub(crate) fn sync_theme_editor_backdrop(&mut self, window: &Window) {
         use crate::material::*;
@@ -472,16 +465,14 @@ impl BrowserWindow {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_color(hsla(0., 0., if dark { 1. } else { 0. }, if e.draft.appearance == mode { 0.7 } else { 0.5 }))
-                                .when(e.draft.appearance == mode, |this| {
+                                .text_color(hsla(0., 0., if dark { 1. } else { 0. }, if self.theme_appearance() == mode { 0.7 } else { 0.5 }))
+                                .when(self.theme_appearance() == mode, |this| {
                                     this.bg(hsla(0., 0., if dark { 1. } else { 0. }, 0.10))
                                 })
                                 .hover(move |s| s.bg(hsla(0., 0., if dark { 1. } else { 0. }, 0.12)))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(e) = &mut this.theme_editor {
-                                        e.draft.appearance = mode;
-                                    }
+                                    this.edit_profile(|browser| browser.settings.theme_appearance = mode);
                                     cx.notify();
                                 }))
                                 .child(mode_icon(mode))

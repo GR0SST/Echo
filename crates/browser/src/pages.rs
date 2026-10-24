@@ -930,21 +930,14 @@ impl Pages {
         for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
-    /// Theme drafts preview in retained pages without changing page ownership,
-    /// creating tabs, navigating, or leaking an override to another host.
-    pub(crate) fn sync_color_schemes(&mut self, browser: &Browser,
-        preview: Option<(browser_core::SpaceId, browser_core::themes::ThemeAppearance)>) {
+    /// Browser appearance applies to every retained page owned by this host.
+    /// Changing it neither navigates pages nor transfers their ownership.
+    pub(crate) fn sync_color_schemes(&mut self, appearance: browser_core::themes::ThemeAppearance) {
         use browser_core::themes::ThemeAppearance;
+        let scheme = match appearance { ThemeAppearance::Automatic => None, ThemeAppearance::Light => Some(false), ThemeAppearance::Dark => Some(true) };
         let mut store = self.store.borrow_mut();
         let updates: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host)
-            .filter_map(|(tab, page)| {
-                let source = browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|t| t.id == *tab))
-                    .or_else(|| browser.spaces.iter().find(|space| space.id == page.source_space))?;
-                let appearance = preview.filter(|(space, _)| *space == source.id).map(|(_, appearance)| appearance)
-                    .unwrap_or_else(|| source.theme.as_ref().map(|theme| theme.appearance).unwrap_or_default());
-                let scheme = match appearance { ThemeAppearance::Automatic => None, ThemeAppearance::Light => Some(false), ThemeAppearance::Dark => Some(true) };
-                (scheme != page.color_scheme).then_some((*tab, page.view, scheme))
-            }).collect();
+            .filter_map(|(tab, page)| (scheme != page.color_scheme).then_some((*tab, page.view, scheme))).collect();
         for (tab, view, scheme) in updates {
             if store.engine.set_color_scheme(view, scheme) {
                 store.pages.get_mut(&tab).unwrap().color_scheme = scheme;

@@ -44,6 +44,8 @@ impl Toggle {
 pub struct Settings {
     toggles: BTreeMap<Toggle, bool>,
     pub little_window_archive: LittleWindowArchive,
+    /// Browser appearance is shared across Spaces and normal windows.
+    pub theme_appearance: crate::themes::ThemeAppearance,
 }
 impl Settings {
     pub fn enabled(&self, toggle: Toggle) -> bool {
@@ -162,4 +164,17 @@ mod tests {
         assert!(old.settings.enabled(Toggle::WarnBeforeQuitting));
         assert!(old.active_user_profile().settings.search.suggestions);
     }
+    #[test]
+    fn browser_appearance_round_trips_independently_of_space_themes() {
+        use crate::themes::ThemeAppearance;
+        let mut browser = Browser::new();
+        browser.settings.theme_appearance = ThemeAppearance::Light;
+        let loaded = session::from_json(&session::to_json(&browser)).unwrap();
+        assert_eq!(loaded.settings.theme_appearance, ThemeAppearance::Light);
+        assert!(loaded.spaces.iter().all(|space| space.theme.is_none()));
+        let blank = loaded.new_blank_for_user_profile(loaded.active_user_profile_id()).unwrap();
+        assert_eq!(blank.settings.theme_appearance, ThemeAppearance::Light);
+        assert_eq!(serde_json::from_str::<super::Settings>("{}").unwrap().theme_appearance, ThemeAppearance::Automatic);
+    }
+
 }

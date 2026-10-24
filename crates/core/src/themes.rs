@@ -104,6 +104,7 @@ pub struct SpaceTheme {
     pub intensity: f32,
     pub noise: f32,
     pub texture: NoiseTexture,
+    /// Legacy session field; browser appearance now lives in Settings.
     pub appearance: ThemeAppearance,
 }
 impl SpaceTheme {

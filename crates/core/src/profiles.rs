@@ -226,6 +226,7 @@ impl Browser {
             .user_profile(id)
             .ok_or(UserProfileError::UnknownProfile)?;
         let mut blank = Self::new_blank();
+        blank.settings.theme_appearance = self.settings.theme_appearance;
         blank.profiles.insert(
             id,
             UserProfile::empty(id, source.name.clone(), source.archive_after),

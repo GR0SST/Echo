@@ -8185,7 +8185,7 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
             let id=w.browser.space().id;
             let mut other_theme=theme.clone();
             other_theme.appearance=if appearance==ThemeAppearance::Light {ThemeAppearance::Dark} else {ThemeAppearance::Light};
-            w.edit_profile(|b|{b.update_space_theme(id,theme);b.update_space_theme(other,other_theme);});cx.notify();
+            w.edit_profile(|b|{b.settings.theme_appearance=appearance;b.update_space_theme(id,theme);b.update_space_theme(other,other_theme);});cx.notify();
         });
         cx.run_until_parked();
         view.read_with(cx,|w,cx|{
@@ -8194,7 +8194,7 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
             assert_eq!(input.selected,1);
             assert!(w.theme_tab_selection_for(w.browser.space().id).a<1.);
             assert_eq!(w.theme_tab_selection_for(w.browser.space().id).l,1.);
-            assert_ne!(w.theme_is_dark(),w.theme_is_dark_for(other));
+            assert_eq!(w.theme_is_dark(),w.theme_is_dark_for(other));
             assert_eq!(w.theme_foreground_for(w.browser.space().id),w.theme_foreground_for(other));
             assert!(w.command_bar_selection().a<1.);
             assert!((w.command_bar_selection().h - w.accent()).abs() < 0.001);
@@ -8517,7 +8517,7 @@ fn little_window_shortcut_isolates_tabs_and_uses_compact_chrome(cx: &mut TestApp
     let (source, visual) = open(cx);
     let mut theme = browser_core::themes::SpaceTheme::from_hue(80.);
     theme.appearance = browser_core::themes::ThemeAppearance::Dark;
-    source.update(visual, |view, _| view.edit_browser(|browser| browser.spaces[browser.active_space].theme = Some(theme.clone())));
+    source.update(visual, |view, _| view.edit_browser(|browser| { browser.settings.theme_appearance = browser_core::themes::ThemeAppearance::Dark; browser.spaces[browser.active_space].theme = Some(theme.clone()); }));
     let before = source.read_with(visual, |view, _| view.browser.all_tabs().count());
     visual.simulate_keystrokes("cmd-alt-n");
     visual.run_until_parked();
@@ -8812,7 +8812,7 @@ fn dark_appearance_uses_dark_ink_for_bright_pigments_and_light_ink_for_black(cx:
         let mut theme = SpaceTheme::from_hue(280.);
         theme.appearance = ThemeAppearance::Dark;
         theme.colors = vec![ThemeColor { red: 0.651, green: 0.447, blue: 0.616 }];
-        w.edit_profile(|b| { b.update_space_theme(id, theme); });
+        w.edit_profile(|b| { b.settings.theme_appearance = ThemeAppearance::Dark; b.update_space_theme(id, theme); });
         cx.notify();
     });
     cx.run_until_parked();
@@ -8834,61 +8834,65 @@ fn dark_appearance_uses_dark_ink_for_bright_pigments_and_light_ink_for_black(cx:
 }
 
 #[gpui::test]
-fn theme_appearance_previews_page_media_and_undo_restores_automatic_without_navigation(cx: &mut TestAppContext) {
+fn browser_appearance_updates_retained_pages_without_navigation_or_theme_undo(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
     let (view, cx, fake) = open_pages(cx);
+    view.update(cx, |w, cx| {
+        w.edit_browser(|b| { b.switch_space(1); b.new_tab("https://other.example", std::time::SystemTime::now()); });
+        cx.notify();
+    });
+    cx.run_until_parked();
     fake.take_calls();
     dispatch_menu(cx, "Spaces", "Edit Theme…");
     let mut editor = space_theme_editor(&view, cx);
     fake.take_calls();
+    for (selector, scheme) in [("theme-light", Some(false)), ("theme-dark", Some(true)), ("theme-automatic", None)] {
+        click(&mut editor, selector);
+        let mut calls = fake.take_calls();
+        calls.sort_by_key(|call| match call { Call::ColorScheme(id, _) => *id, _ => 0 });
+        assert_eq!(calls, vec![Call::ColorScheme(1, scheme), Call::ColorScheme(2, scheme)]);
+    }
     click(&mut editor, "theme-light");
-    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(false))]);
-    click(&mut editor, "theme-dark");
-    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(true))]);
-    click(&mut editor, "theme-automatic");
-    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, None)]);
-    click(&mut editor, "theme-light"); fake.take_calls();
+    click(&mut editor, "theme-preset-2");
     editor.simulate_keystrokes("escape"); cx.run_until_parked(); fake.take_calls();
     cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
-    assert!(fake.take_calls().contains(&Call::ColorScheme(1, None)));
-    assert!(view.read_with(cx, |w, _| w.browser.space().theme.is_none()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ColorScheme(..))));
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.settings.theme_appearance, ThemeAppearance::Light);
+        assert!(w.browser.space().theme.is_none());
+    });
 }
 
 #[gpui::test]
-fn inactive_space_theme_preview_updates_its_retained_page_and_preserves_the_active_space(cx: &mut TestAppContext) {
-    use browser_core::themes::{SpaceTheme, ThemeAppearance};
-    let (view, cx, fake) = open_pages(cx);
+fn browser_appearance_carries_between_existing_spaces_and_fresh_windows(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, cx) = open(cx);
     let first = view.read_with(cx, |w, _| w.browser.space().id);
-    view.update(cx, |w, cx| {
-        w.edit_browser(|browser| {
-            browser.switch_space(1);
-            browser.new_tab("https://other.example", std::time::SystemTime::now());
-        });
-        cx.notify();
-    });
-    cx.run_until_parked();
-    let active = view.read_with(cx, |w, _| w.browser.space().id);
-    fake.take_calls();
-    view.update(cx, |w, cx| {
-        let mut theme = SpaceTheme::from_hue(280.);
-        theme.appearance = ThemeAppearance::Dark;
-        w.edit_browser(|browser| { browser.update_space_theme(first, theme); });
-        cx.notify();
-    });
-    cx.run_until_parked();
-    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(true))]);
-    cx.update(|window, cx| view.update(cx, |w, cx| w.open_space_menu(first, gpui::point(gpui::px(100.), gpui::px(200.)), window, cx)));
-    click(&mut tab_menu(&view, cx), "tab-menu-edit-theme-color");
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
     let mut editor = space_theme_editor(&view, cx);
-    fake.take_calls();
     click(&mut editor, "theme-light");
-    assert_eq!(fake.take_calls(), vec![Call::ColorScheme(1, Some(false))]);
-    assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), active);
-    editor.simulate_keystrokes("escape"); cx.run_until_parked(); fake.take_calls();
-    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
-    assert!(fake.take_calls().contains(&Call::ColorScheme(1, Some(true))));
-    assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), active);
+    editor.simulate_keystrokes("escape"); cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-2"); cx.run_until_parked();
+    assert_ne!(view.read_with(cx, |w, _| w.browser.space().id), first);
+    assert!(!view.read_with(cx, |w, _| w.theme_is_dark()));
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-dark");
+    editor.simulate_keystrokes("escape"); cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-1"); cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().id), first);
+    assert!(view.read_with(cx, |w, _| w.theme_is_dark()));
+    let (second, mut other) = another_profile_window(&view, cx);
+    assert!(second.read_with(&other, |w, _| w.theme_is_dark()));
+    dispatch_menu(&mut other, "Spaces", "Edit Theme…");
+    click(&mut space_theme_editor(&second, &mut other), "theme-light");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(!w.theme_is_dark());
+        assert_eq!(w.browser.settings.theme_appearance, ThemeAppearance::Light);
+        assert!(w.browser.spaces.iter().all(|space| space.theme.is_none()));
+    });
 }
-
 
 #[gpui::test]
 fn peek_exit_scales_a_fresh_document_snapshot_and_hides_native_content(cx: &mut TestAppContext) {
