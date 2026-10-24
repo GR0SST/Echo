@@ -1333,3 +1333,31 @@ right; vertical overflow extends above the window, with the last pane ending
 at y=750. Echo now matches those layout constraints without resizing its root.
 The earlier auto-expansion claim and commit ba71a47 were based on an incorrect
 interpretation of cropped captures and are superseded by this measurement.
+
+### Empty sidebar affordances — 2026-10-24
+
+The default Dark reference (`arc_default_sidebar_Dark.png`) shows a magnifier
+and “Search or Enter URL…” in the empty address field, followed by the Space
+header and New Tab without a separator. Retained native captures in
+`parity/sidebar-states/` distinguish the section rule: `arc-pinned-final.png`
+has Pinned items and no Today items, with no separator; `arc-real-pinned.png`
+has both sections and a separator; `arc-pinned-hover.png` has Today without
+Pinned, with the separator and Clear action. The separator follows Today
+content, rather than the presence of Pinned items.
+
+Echo's three default Spaces were present in the dark fixture; their dock
+marks used dark ink and became nearly invisible. Both stationary marks and
+the traveling active dot now use theme-dependent monochrome ink. Native
+Light/Dark captures show the three marks, empty address affordance, and
+pinned-only/Today transitions at 1000×760. Evidence is retained under
+`target/parity/space-themes/round3/`; Arc images there are reused captures,
+not fresh observations. Two guarded Arc attempts failed responsiveness or
+created no window, so no shared test Space/profile content was changed.
+
+The empty Favorites card is retained. The owner-supplied October 23 reference
+above establishes its geometry and dismissal. Independently, the installed
+Arc binary contains “Drag to add Favorites” and “Favorites keep your most
+used sites and apps close”, labeled as the Top Apps tray empty-state title
+and subtitle beside `ARC_AppTray.bundle`. The shared profile's existing
+Favorites were not removed to reproduce that state. Exact theme contrast
+of a fresh live Arc empty tray remains unverified.

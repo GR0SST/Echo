@@ -412,6 +412,10 @@ impl BrowserWindow {
             },
         )
     }
+    pub(crate) fn theme_space_dot_fill(&self, active: bool) -> gpui::Hsla {
+        let ink = if self.theme_uses_light_ink_for(self.browser.space().id) { 1. } else { 0. };
+        gpui::hsla(0., 0., ink, if active { 0.55 } else { 0.25 })
+    }
     pub(crate) fn theme_address_fill(&self) -> Option<gpui::Hsla> {
         self.theme_surface_for(self.browser.space()).default_style.then(||
             gpui::hsla(0., 0., if self.theme_is_dark() { 1. } else { 0. },

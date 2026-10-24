@@ -3032,9 +3032,10 @@ impl BrowserWindow {
             .browser
             .active_tab()
             .map(|t| if t.url == crate::split::EMPTY_PANE_URL || self.has_frozen_active_page() { "Search or Enter URL…".into() } else { address_host(&t.url) })
-            .unwrap_or_else(|| if self.browser.is_private() { "Search or Enter URL…".into() } else { String::new() });
+            .unwrap_or_else(|| "Search or Enter URL…".into());
         let url = self.peek_child.and_then(|child| child.read(cx).ok().and_then(|view|
             view.browser.active_tab().map(|tab| crate::transient::lookup_host(&tab.url)))).unwrap_or(url);
+        let address_placeholder = url == "Search or Enter URL…";
         let private = self.browser.is_private();
         let dark = self.theme_uses_light_ink_for(self.browser.space().id);
         let blank = self.browser.is_blank();
@@ -3114,7 +3115,13 @@ impl BrowserWindow {
                             cx.stop_propagation();
                             this.open_sidebar_menu(crate::tab_menu::MenuTarget::Address, event.position, window, cx);
                         }))
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(url))
+                        .when(address_placeholder, |this| this.pl(px(4.)).gap(px(12.))
+                            .child(div().debug_selector(|| self.sidebar_debug_name((|| "address-search-icon".into())()))
+                                .flex_none().child(crate::icons::control_sized(crate::icons::Icon::Search, 16.))))
+                        .child(div().flex_1().min_w_0().overflow_hidden()
+                            .when(address_placeholder, |this| this.debug_selector(|| self.sidebar_debug_name((|| "address-placeholder".into())())))
+                            .when(!address_placeholder, |this| this.debug_selector(|| self.sidebar_debug_name((|| "address-host".into())())))
+                            .child(url))
                         // Page actions appear only while the pointer is over the sidebar.
                         .when(self.browser.active_tab().is_some(), |this| this.child(hover_fade(div().flex().items_center().gap(px(4.))
                             // No tooltip: the page view would cover it.
@@ -3360,7 +3367,8 @@ impl BrowserWindow {
             .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
         let pinned_height = pinned.len() as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
         let header_group = SharedString::from(format!("space-header-{index}"));
-        let today_actions = !space.today.is_empty() && self.sidebar_hovered;
+        let has_today = !space.today.is_empty();
+        let today_actions = has_today && self.sidebar_hovered;
         let line_end = TODAY_ACTIONS_WIDTH + 11.;
         let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
         let icon_picker_open = self.command_bar.as_ref().is_some_and(|bar| bar.target == Target::Icon(crate::icons::IconTarget::Space(space_id)));
@@ -3434,14 +3442,14 @@ impl BrowserWindow {
             // The divider doubles as the Today drop target. Tidy and Clear show on
             // sidebar hover, and the line shortens to make room for them.
             .child(div().id(("today-header", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "today-header".into())())))
-                .relative().flex_none().h(px(22.)).rounded_md()
+                .relative().flex_none().h(px(if has_today { 22. } else { 0. })).rounded_md()
                 .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                 .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
-                .child(div().absolute().left(px(10.)).top(px(11.)).h(px(1.)).bg(hsla(0., 0., ink, 0.12))
+                .when(has_today, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((move || format!("today-divider-{index}"))())).absolute().left(px(10.)).top(px(11.)).h(px(1.)).bg(hsla(0., 0., ink, 0.12))
                     .with_animation(SharedString::from(format!("today-line-{index}-{today_actions}")), hover_animation(), move |line, delta| {
                         let shown = if today_actions { delta } else { 1. - delta };
                         line.right(px(10. + line_end * shown))
-                    }))
+                    })))
                 .when(!space.today.is_empty(), |this| this.child(hover_fade(div().absolute().right(px(10.)).top_0().h_full().w(px(TODAY_ACTIONS_WIDTH))
                     .flex().items_center().justify_end()
                     .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0., 0., ink, 0.35))
@@ -3501,6 +3509,7 @@ impl BrowserWindow {
         let dot_centers = Rc::new(RefCell::new(Vec::new()));
         let paint_centers = dot_centers.clone();
         let pager_position = self.pager.position;
+        let active_dot_fill = self.theme_space_dot_fill(true);
         let drag_moves_active = self.sidebar_page_interactive;
         let new_menu_anchor = if self.sidebar_debug_namespace.is_none() { self.new_menu_anchor.clone() } else { Default::default() };
         let normal = !self.browser.is_blank() && !self.browser.is_private();
@@ -3539,7 +3548,7 @@ impl BrowserWindow {
                     let center = *left + (*right - *left) * fraction;
                     window.paint_quad(gpui::fill(
                         Bounds::new(center - point(px(4.), px(4.)), size(px(8.), px(8.))),
-                        hsla(0., 0., 0.1, 0.8),
+                        active_dot_fill,
                     ).corner_radii(px(4.)));
                 }
             }).absolute().inset_0()))
@@ -3555,7 +3564,7 @@ impl BrowserWindow {
                 let default_icon = space.custom_icon.is_none();
                 let drag = crate::space_drag::SpaceDrag { id: space_id, workspace: self.profile.handle.clone(), name: space.name.clone(), icon: space.custom_icon.clone(), hue: space.hue };
                 // Space marks are monochrome; only user emoji keep their colors.
-                let mark = hsla(0., 0., 0.1, if active { 0.8 } else { 0.3 });
+                let mark = self.theme_space_dot_fill(active);
                 let real_mark = div()
                     .id(("space", index))
                     .debug_selector(|| self.sidebar_debug_name((move || format!("space-{index}"))()))
@@ -3567,8 +3576,8 @@ impl BrowserWindow {
                         .size(px(if active && (!traveling_dot || pager_position.fract() == 0.) { 8. } else { 4. })).rounded_full()
                         .bg(if active && !traveling_dot { mark } else if active && pager_position.fract() == 0. {
                             gpui::transparent_black()
-                        } else { hsla(0., 0., 0.1, 0.3) })
-                        .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., 0.1, if active { 0.8 } else { 0.5 })))))
+                        } else { self.theme_space_dot_fill(false) })
+                        .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., ink, if active { 0.8 } else { 0.5 })))))
                     .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
                         .opacity(if active { 1. } else { 0.5 })
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-icon-{index}"))())).child(crate::icons::glyph(&icon))))
@@ -3603,7 +3612,7 @@ impl BrowserWindow {
                 if self.sidebar_navigation.controller.draft().is_some_and(|draft| draft.origin == space_id) {
                     marks.push(div().id("space-creation-mark").debug_selector(|| "space-creation-mark".into())
                         .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
-                        .text_color(hsla(0., 0., 0.1, 0.6))
+                        .text_color(hsla(0., 0., ink, 0.6))
                         .when(selected == crate::sidebar_pages::SidebarPage::CreateSpace, |mark| mark.bg(hsla(0., 0., 1., 0.3)))
                         .on_click(cx.listener(move |this, _, _, cx| this.begin_space_creation(space_id, cx)))
                         .child(crate::icons::control_sized(crate::icons::Icon::NewSpace, 16.)).into_any_element());

@@ -9936,3 +9936,76 @@ fn mini_media_ignores_unknown_sources_and_disabled_track_commands(cx:&mut TestAp
     fake.send(cx,Event::MediaStateChanged{view:page(1),state:ended});
     assert!(view.read_with(cx,|view,_|view.mini_player_source().is_none()));
 }
+
+#[gpui::test]
+fn empty_address_search_affordance_opens_the_bar_and_returns_after_archiving(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("ctrl-2");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("address-placeholder").is_some());
+    assert_eq!(cx.debug_bounds("address-search-icon").unwrap().size, gpui::size(gpui::px(16.), gpui::px(16.)));
+    click(cx, "address");
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_some()));
+    bar(&view, cx).simulate_input("https://example.com/empty-address");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/empty-address"));
+    assert!(!view.read_with(cx, |w, _| w.has_frozen_active_page()));
+    // GPUI retains removed debug selectors, so verify the current host and
+    // target through the rendered address control rather than stale absence.
+    assert!(cx.debug_bounds("address-host").is_some());
+    click(cx, "address");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("https://example.com/empty-address"));
+    bar(&view, cx).simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("address-placeholder").is_some());
+    assert!(cx.debug_bounds("address-search-icon").is_some());
+    click(cx, "address");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+}
+
+#[gpui::test]
+fn today_divider_tracks_today_content_in_empty_and_pinned_spaces(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-2");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("today-header").unwrap().size.height, gpui::px(0.));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://example.com/pin");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("today-header").unwrap().size.height, gpui::px(22.));
+    cx.simulate_keystrokes("cmd-d");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("today-header").unwrap().size.height, gpui::px(0.));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://example.com/today");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("today-header").unwrap().size.height, gpui::px(22.));
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("today-header").unwrap().size.height, gpui::px(0.));
+    view.read_with(cx, |w, _| assert_eq!(w.browser.space().pinned.len(), 1));
+}
+
+#[gpui::test]
+fn default_space_dots_follow_appearance_and_remain_visible_for_every_space(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, cx) = open(cx);
+    for (appearance, ink) in [(ThemeAppearance::Dark, 1.), (ThemeAppearance::Light, 0.)] {
+        view.update(cx, |w, cx| { w.edit_profile(|b| b.settings.theme_appearance = appearance); cx.notify(); });
+        cx.run_until_parked();
+        for index in 0..3 {
+            assert!(cx.debug_bounds(test_selector(format!("space-dot-{index}"))).is_some());
+        }
+        view.read_with(cx, |w, _| {
+            assert_eq!(w.browser.spaces.len(), 3);
+            assert_eq!(w.theme_space_dot_fill(true).l, ink);
+            assert_eq!(w.theme_space_dot_fill(false).l, ink);
+            assert!(w.theme_space_dot_fill(true).a > w.theme_space_dot_fill(false).a);
+        });
+    }
+}
