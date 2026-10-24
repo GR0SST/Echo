@@ -185,6 +185,13 @@ impl ProfileHandle {
         Ok(id)
     }
 
+    pub(crate) fn hide_completed_download(&self, id: browser_core::downloads::CompletedDownloadId) -> bool {
+        if !self.data.borrow_mut().hide_completed_download(id) { return false; }
+        self.revision.set(self.revision.get().wrapping_add(1));
+        self.notify();
+        true
+    }
+
     /// Actual local profile names/IDs and completed records, independent of the
     /// selected Space or the existence of any source BrowserWindow.
     pub(crate) fn download_inventory(&self) -> Option<(Vec<(UserProfileId, String)>, Vec<browser_core::downloads::CompletedDownload>)> {

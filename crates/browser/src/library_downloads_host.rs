@@ -13,7 +13,7 @@ use browser_core::{
     UserProfileId,
 };
 use gpui::{App, AppContext, Entity, EntityId, FocusHandle, Window};
-use std::{cell::Cell, rc::Rc};
+use std::{cell::{Cell, RefCell}, rc::Rc};
 
 /// Parent supplies observed chronology/headings/subtitles. SearchEmpty is always
 /// chosen by the existing router; the formatter receives only matching records.
@@ -32,6 +32,7 @@ pub(crate) struct LibraryDownloadsHost {
     normal: ProfileHandle,
     view: Entity<DownloadsView<CompletedDownloadId>>,
     format: CompletedPresentation,
+    artwork: Rc<RefCell<crate::download_files::FileArtwork>>,
     query: String,
     // Native single-chip on/off is observed. Other live-chip combinations stay gated.
     // A removed selection stays a tombstone, never silently broadens to All.
@@ -71,11 +72,19 @@ impl LibraryDownloadsHost {
             preview(window, cx)
         });
         let view = cx.new(|cx| DownloadsView::new(projection, colors, guarded_preview, cx));
-        view.update(cx, |view, cx| view.observe_control_focus(window, cx));
+        let artwork = Rc::new(RefCell::new(crate::download_files::FileArtwork::default()));
+        artwork.borrow_mut().update(normal.download_inventory()?.1);
+        let render_artwork = artwork.clone();
+        view.update(cx, |view, cx| {
+            view.observe_control_focus(window, cx);
+            view.set_row_selection_enabled(true, cx);
+            view.set_row_artwork(Rc::new(move |row, _, cx| render_artwork.borrow_mut().render(row.token, cx)), cx);
+        });
         Some(Self {
             normal,
             view,
             format,
+            artwork,
             query: String::new(),
             selected: None,
             generation: 0,
@@ -156,6 +165,7 @@ impl LibraryDownloadsHost {
         let Some(projection) = self.projection() else {
             return false;
         };
+        if let Some((_, records)) = self.normal.download_inventory() { self.artwork.borrow_mut().update(records); }
         self.view.update(cx, |view, cx| {
             view.set_colors(colors, cx);
             view.set_projection(projection, window, cx);
@@ -202,11 +212,18 @@ impl LibraryDownloadsHost {
                 };
             }
             DownloadsIntent::FilterVisibilityChanged(_) => (),
-            // Unobserved row/file actions stay disabled even if an accidental
-            // caller enables the presenter's opt-in interaction flag.
-            DownloadsIntent::RowPressed { .. } => return false,
+            // File requests do not mutate query/filter state. The route resolves
+            // their captured lease and canonical record before any effect.
+            DownloadsIntent::RowPressed { .. } | DownloadsIntent::RowOpened { .. } | DownloadsIntent::RowMenuRequested { .. } => return false,
         }
         self.refresh(normal, colors, window, cx)
+    }
+
+    pub(crate) fn record_for_intent(&self, owner: DownloadsOwner,
+        sender: &Entity<DownloadsView<CompletedDownloadId>>, normal: &ProfileHandle,
+        token: CompletedDownloadId, profile: UserProfileId) -> Option<CompletedDownload> {
+        if !self.accepts(owner, sender, normal) || token.profile() != profile { return None; }
+        normal.download_inventory()?.1.into_iter().find(|record| record.id() == token)
     }
 
     /// Parent first validates its overlay continuation. Never fall back to the

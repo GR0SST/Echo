@@ -72,18 +72,17 @@ pub(crate) struct DownloadsProjection<Token> {
     pub list: DownloadsList<Token>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DownloadsIntent<Token> {
     SearchChanged(String),
     FilterVisibilityChanged(bool),
     /// Host applies its policy, then replaces the projection. Native
     /// multi-selection/persistence semantics remain unverified.
     ToggleProfile(UserProfileId),
-    /// Disabled by default: row selection/preview behavior is unverified.
-    RowPressed {
-        token: Token,
-        profile: UserProfileId,
-    },
+    /// Select a completed row without opening its system application.
+    RowPressed { token: Token, profile: UserProfileId },
+    RowOpened { token: Token, profile: UserProfileId },
+    RowMenuRequested { token: Token, profile: UserProfileId, position: gpui::Point<gpui::Pixels> },
 }
 
 /// Host responder intent for the list controls only; never the right preview.
@@ -134,6 +133,9 @@ pub(crate) struct DownloadsView<Token: Clone + Eq + 'static> {
     row_keys: Vec<(Token, UserProfileId, usize)>,
     next_item_key: usize,
     row_selection_enabled: bool,
+    selected_row: Option<(Token, UserProfileId)>,
+    hovered_row: Option<(Token, UserProfileId)>,
+    menu_row: Option<(Token, UserProfileId)>,
     _input_changes: Subscription,
 }
 
@@ -186,6 +188,9 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             input,
             filter_visible: false,
             row_selection_enabled: false,
+            selected_row: None,
+            hovered_row: None,
+            menu_row: None,
             _input_changes: input_changes,
         };
         view.reconcile_item_keys();
@@ -324,10 +329,14 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
     }
 
     /// Opt in only when the host intentionally supplies row/preview behavior.
-    /// No open/reveal/delete/pause/context-menu affordances are added here.
+    /// Host-owned effects are emitted with the exact opaque row identity.
     pub(crate) fn set_row_selection_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.row_selection_enabled = enabled;
         cx.notify();
+    }
+
+    pub(crate) fn set_menu_row(&mut self, row: Option<(Token,UserProfileId)>, cx: &mut Context<Self>) {
+        if self.menu_row != row { self.menu_row = row; cx.notify(); }
     }
 
     fn set_filter_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -499,7 +508,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             .flex()
             .items_center()
             .gap(px(6.))
-            .p(px(12.))
+            .px(px(8.)).py(px(10.))
             .child(
                 div()
                     .id("downloads-search")
@@ -578,73 +587,61 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
     ) -> AnyElement {
         let token = row.token.clone();
         let profile = row.profile;
-        let artwork = self
-            .artwork
-            .as_ref()
-            .map_or_else(file_icon, |render| render(row, window, cx));
-        div()
-            .id((
-                "downloads-row",
-                self.row_keys
-                    .iter()
-                    .find(|(token, profile, _)| token == &row.token && *profile == row.profile)
-                    .expect("completed row must have an identity key")
-                    .2,
-            ))
+        let key = self.row_keys.iter().find(|(token, owner, _)| token == &row.token && *owner == profile)
+            .expect("completed row must have an identity key").2;
+        let group_name = gpui::SharedString::from(format!("download-row-{key}"));
+        let menu_token = token.clone();
+        let right_token = token.clone();
+        let hover_token = token.clone();
+        let menu_open = self.menu_row.as_ref().is_some_and(|(token,owner)| token == &row.token && *owner == profile);
+        let hovered = self.row_selection_enabled && (menu_open || self.hovered_row.as_ref().is_some_and(|(token,owner)| token == &row.token && *owner == profile));
+        let artwork = self.artwork.as_ref().map_or_else(file_icon, |render| render(row, window, cx));
+        div().id(("downloads-row", key))
             .debug_selector(move || format!("downloads-row-{group}-{index}"))
-            .flex_none()
-            .h(px(56.))
-            .w_full()
-            .min_w_0()
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
+            .group(group_name.clone()).relative().flex_none().h(px(56.))
+            .w(px(DOWNLOADS_COLUMN_WIDTH - 16.)).mx(px(8.)).px(px(4.))
+            .rounded(px(12.)).flex().items_center().gap(px(4.))
+            .hover(|style| style.bg(self.colors.hover))
+            .when(menu_open, |el| el.bg(self.colors.selected))
+            .when(self.selected_row.as_ref().is_some_and(|(token, owner)| token == &row.token && *owner == profile), |el| el.bg(self.colors.selected))
             .when(self.row_selection_enabled, |el| {
-                el.cursor_pointer()
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.emit(DownloadsIntent::RowPressed {
-                            token: token.clone(),
-                            profile,
-                        });
-                    }))
+                el.on_hover(cx.listener(move |this, active: &bool, _, cx| {
+                    let target = (hover_token.clone(),profile);
+                    let next = if *active { Some(target.clone()) } else if this.hovered_row.as_ref() == Some(&target) { None } else { this.hovered_row.clone() };
+                    if this.hovered_row != next { this.hovered_row = next; cx.notify(); }
+                })).on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.selected_row = Some((token.clone(),profile));
+                    if event.click_count() == 2 {
+                        cx.emit(DownloadsIntent::RowOpened { token: token.clone(), profile });
+                    } else {
+                        cx.emit(DownloadsIntent::RowPressed { token: token.clone(), profile });
+                    }
+                    cx.notify();
+                })).on_mouse_down(gpui::MouseButton::Right, cx.listener(move |_, event: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(DownloadsIntent::RowMenuRequested { token: right_token.clone(), profile, position: event.position });
+                }))
             })
-            .child(
-                div()
-                    .debug_selector(move || format!("downloads-artwork-{group}-{index}"))
-                    .flex_none()
-                    .size(px(36.))
-                    .overflow_hidden()
-                    .child(artwork),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .debug_selector(move || format!("downloads-title-{group}-{index}"))
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_size(px(14.))
-                            .line_height(px(18.))
-                            .child(SidebarTitle::new(row.title.clone())),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(move || format!("downloads-subtitle-{group}-{index}"))
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_size(px(12.))
-                            .line_height(px(16.))
-                            .text_color(self.colors.muted)
-                            .child(SidebarTitle::new(row.subtitle.clone())),
-                    ),
-            )
+            .child(div().debug_selector(move || format!("downloads-artwork-{group}-{index}"))
+                .flex_none().size(px(36.)).overflow_hidden().child(artwork))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).pr(px(if hovered {60.} else {24.}))
+                .child(div().debug_selector(move || format!("downloads-title-{group}-{index}"))
+                    .min_w_0().overflow_hidden().text_size(px(14.)).line_height(px(18.))
+                    .child(SidebarTitle::new(row.title.clone())))
+                .child(div().debug_selector(move || format!("downloads-subtitle-{group}-{index}"))
+                    .min_w_0().overflow_hidden().text_size(px(12.)).line_height(px(16.))
+                    .text_color(self.colors.muted).child(SidebarTitle::new(row.subtitle.clone()))))
+            .when(self.row_selection_enabled, |el| el.child(div()
+                .id(("download-overflow",key)).debug_selector(move || format!("downloads-overflow-{group}-{index}"))
+                .absolute().right(px(12.)).top(px(12.)).size(px(32.)).rounded(px(8.))
+                .invisible().group_hover(group_name, |s| s.visible())
+                .when(menu_open, |el| el.visible().bg(self.colors.selected))
+                .flex().items_center().justify_center().hover(|s| s.bg(self.colors.selected))
+                .on_click(cx.listener(move |_, event: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(DownloadsIntent::RowMenuRequested { token: menu_token.clone(), profile, position: event.position() });
+                })).child(crate::icons::more())))
             .into_any_element()
     }
 }
@@ -743,11 +740,11 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
                                     .debug_selector(move || {
                                         format!("downloads-group-{group_index}")
                                     })
-                                    .h(px(28.))
-                                    .px(px(12.))
+                                    .h(px(26.))
+                                    .px(px(12.)).pt(px(4.))
                                     .flex()
                                     .items_center()
-                                    .text_size(px(12.))
+                                    .text_size(px(12.)).font_weight(gpui::FontWeight::BOLD)
                                     .text_color(self.colors.muted)
                                     .line_height(px(16.))
                                     .child(SidebarTitle::new(group.heading.clone())),

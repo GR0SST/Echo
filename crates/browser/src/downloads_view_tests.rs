@@ -278,13 +278,13 @@ fn long_completed_names_and_wrapping_chips_preserve_small_window_geometry(cx: &m
     let title = visual.debug_bounds("downloads-title-0-0").unwrap();
     let subtitle = visual.debug_bounds("downloads-subtitle-0-0").unwrap();
     let artwork = visual.debug_bounds("downloads-artwork-0-0").unwrap();
-    assert_eq!(row.size, gpui::size(px(305.), px(56.)));
+    assert_eq!(row.size, gpui::size(px(289.), px(56.)));
     assert_eq!(artwork.size, gpui::size(px(36.), px(36.)));
     assert_eq!(title.size.height, px(18.));
     assert_eq!(subtitle.size.height, px(16.));
-    assert!(title.right() <= row.right() - px(12.));
-    assert!(subtitle.right() <= row.right() - px(12.));
-    assert!(title.origin.x >= artwork.right() + px(10.));
+    assert!(title.right() <= row.right() - px(4.));
+    assert!(subtitle.right() <= row.right() - px(4.));
+    assert!(title.origin.x >= artwork.right() + px(4.));
     click(visual, "downloads-filter");
     let chips = visual.debug_bounds("downloads-profile-chips").unwrap();
     let first = visual.debug_bounds("downloads-profile-0").unwrap();
@@ -492,7 +492,7 @@ fn completed_labels_paint_fresh_full_runs_at_final_row_width(cx: &mut TestAppCon
                     .rev()
                     .find(|record| &record.original == original)
                     .expect("the real completed row label must reach paint");
-                assert_eq!(painted.width, px(235.));
+                assert_eq!(painted.width, px(217.));
                 assert_eq!(painted.len, painted.text.len());
                 assert!(painted.shaped_width <= painted.width);
                 if index == 0 {
@@ -898,4 +898,53 @@ fn held_row_press_cannot_capture_reordered_or_replaced_token_profile(cx: &mut Te
         }
         assert_eq!(*log.borrow(), expected);
     }
+}
+
+#[gpui::test]
+fn row_overflow_emits_the_captured_identity_without_opening_or_selecting(cx: &mut TestAppContext) {
+    let projection = fixture();
+    let DownloadsList::Completed(groups) = &projection.list else { panic!() };
+    let profile = groups[0].rows[0].profile;
+    let (view, visual, log, _subscription) = open(cx,projection);
+    view.update(visual,|view,cx| view.set_row_selection_enabled(true,cx));
+    visual.run_until_parked();
+    let row = visual.debug_bounds("downloads-row-0-0").unwrap();
+    visual.simulate_mouse_move(row.center(),None,Modifiers::none());
+    visual.run_until_parked();
+    click(visual,"downloads-overflow-0-0");
+    assert_eq!(log.borrow().len(),1);
+    assert!(matches!(log.borrow()[0],DownloadsIntent::RowMenuRequested {token:101,profile:owner,..} if owner==profile));
+    assert!(view.read_with(visual,|view,_| view.selected_row.is_none()));
+}
+
+#[gpui::test]
+fn populated_rows_match_reference_offsets_and_reserve_hover_action_width(cx: &mut TestAppContext) {
+    let (view,visual,_,_subscription) = open(cx,fixture());
+    let search = visual.debug_bounds("downloads-search").unwrap();
+    let row = visual.debug_bounds("downloads-row-0-0").unwrap();
+    let title = visual.debug_bounds("downloads-title-0-0").unwrap();
+    assert_eq!(search.origin,gpui::point(px(120.),px(10.)));
+    assert_eq!(row.origin,gpui::point(px(120.),px(82.)));
+    assert_eq!(title.origin.x,px(164.));
+    assert_eq!(title.size.width,px(217.));
+    view.update(visual,|view,cx|view.set_row_selection_enabled(true,cx));
+    visual.run_until_parked();
+    visual.simulate_mouse_move(row.center(),None,Modifiers::none());visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("downloads-row-0-0").unwrap(),row);
+    assert_eq!(visual.debug_bounds("downloads-title-0-0").unwrap().size.width,px(181.));
+}
+
+#[gpui::test]
+fn open_file_menu_retains_row_layout_after_pointer_enters_overlay(cx: &mut TestAppContext) {
+    let projection = fixture();
+    let DownloadsList::Completed(groups) = &projection.list else { panic!() };
+    let profile = groups[0].rows[0].profile;
+    let (view,visual,log,_subscription) = open(cx,projection);
+    view.update(visual,|view,cx| { view.set_row_selection_enabled(true,cx); view.set_menu_row(Some((101,profile)),cx); });
+    visual.run_until_parked();
+    visual.simulate_mouse_move(gpui::point(px(700.),px(200.)),None,Modifiers::none());visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("downloads-title-0-0").unwrap().size.width,px(181.));
+    view.update(visual,|view,cx|view.set_menu_row(None,cx));visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("downloads-title-0-0").unwrap().size.width,px(217.));
+    assert!(log.borrow().is_empty());
 }

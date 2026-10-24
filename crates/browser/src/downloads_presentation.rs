@@ -20,13 +20,13 @@ pub(crate) fn completed(
     filtered: bool,
 ) -> DownloadsList<CompletedDownloadId> {
     let now = Utc::now();
-    // File-type/source presentation remains separate from chronology. Do not
-    // invent an extension table from the single observed .bin fixture.
+    // Native references show a file kind plus an optional source host; date
+    // belongs to the calendar heading rather than each completed subtitle.
     present(
         records,
         filtered,
         |date| date_heading(date, now),
-        |_| String::new(),
+        crate::download_files::subtitle,
     )
 }
 

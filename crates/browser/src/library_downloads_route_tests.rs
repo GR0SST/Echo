@@ -250,3 +250,40 @@ fn downloads_route_retirement_invalidates_old_tickets_even_without_an_intervenin
     cx.run_until_parked();
     assert_downloads(&view, cx);
 }
+
+#[gpui::test]
+fn completed_download_menu_hides_metadata_without_deleting_the_file(cx: &mut TestAppContext) {
+    let (view,cx,_) = open_pages(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Library menu fixture.bin");
+    std::fs::write(&path,b"retained file").unwrap();
+    let normal = view.read_with(cx,|view,_| view.profile.handle.clone());
+    let id = normal.record_completed_download(normal.default_user_profile_id(),DownloadCompletion {
+        final_path:path.clone(),source_url:"https://fixture.test/file".into(),original_url:"https://fixture.test/file".into(),
+        mime_type:"application/octet-stream".into(),finished_at:DownloadTime::Unknown,
+    }).unwrap();
+    cx.simulate_keystrokes("cmd-shift-j");cx.run_until_parked();
+    let row = cx.debug_bounds("downloads-row-0-0").unwrap();
+    cx.simulate_mouse_move(row.center(),None,Modifiers::none());cx.run_until_parked();
+    click(cx,"downloads-overflow-0-0");
+    assert_eq!(view.read_with(cx,|view,_|view.tab_menu.as_ref().unwrap().selected),Some(0));
+    let mut menu = tab_menu(&view,cx);
+    click(&mut menu,"tab-menu-download-hide");
+    cx.run_until_parked();
+    assert!(normal.download_inventory().unwrap().1.iter().all(|record|record.id()!=id));
+    assert_eq!(std::fs::read(&path).unwrap(),b"retained file");
+    assert!(view.read_with(cx,|view,_|view.tab_menu.is_none()));
+}
+
+#[gpui::test]
+fn stale_download_menu_cannot_mutate_inventory_after_leaving_its_section(cx: &mut TestAppContext) {
+    let (view,cx,_) = open_pages(cx);
+    seed(&view,cx,"stale-download-menu.bin");
+    cx.simulate_keystrokes("cmd-shift-j");cx.run_until_parked();
+    let (id,owner) = view.read_with(cx,|view,_| (
+        view.profile.handle.download_inventory().unwrap().1[0].id(),
+        view.sidebar_navigation.downloads.host.as_ref().unwrap().owner()));
+    click(cx,"library-nav-media");
+    cx.update(|window,cx| view.update(cx,|view,cx| view.confirm_download_menu(id,owner,crate::download_files::FileAction::Hide,window,cx)));
+    assert!(view.read_with(cx,|view,_|view.profile.handle.download_inventory().unwrap().1.iter().any(|record|record.id()==id)));
+}

@@ -46,6 +46,8 @@ mod space_creation_view;
 mod sidebar_navigation;
 mod library;
 mod downloads_view;
+mod download_files;
+mod download_actions;
 mod downloads;
 mod downloads_publication;
 mod download_acceptance;

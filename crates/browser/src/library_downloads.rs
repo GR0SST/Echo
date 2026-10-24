@@ -46,7 +46,7 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    fn downloads_route_active(&self) -> bool {
+    pub(crate) fn downloads_route_active(&self) -> bool {
         !self.browser.is_private()
             && !self.browser.is_blank()
             && self.sidebar_navigation.controller.selected() == SidebarPage::Library
@@ -124,6 +124,13 @@ impl BrowserWindow {
                 return;
             }
         }
+        if let Some(host) = &self.sidebar_navigation.downloads.host {
+            let row = active.then(|| self.tab_menu.as_ref().and_then(|menu| match menu.target {
+                crate::tab_menu::MenuTarget::Download(id,owner) if owner == host.owner() => Some((id,id.profile())),
+                _ => None,
+            })).flatten();
+            host.view().update(cx,|view,cx|view.set_menu_row(row,cx));
+        }
         if !active || !self.sidebar_navigation.downloads.subscriptions.is_empty() {
             return;
         }
@@ -138,6 +145,23 @@ impl BrowserWindow {
             move |this, sender, event: &DownloadsIntent<CompletedDownloadId>, window, cx| {
                 if !this.downloads_route_active() {
                     return;
+                }
+                match event {
+                    DownloadsIntent::RowMenuRequested { token, profile, position } => {
+                        let record = this.sidebar_navigation.downloads.host.as_ref().and_then(|host|
+                            host.record_for_intent(owner,sender,&this.profile.handle,*token,*profile));
+                        if record.is_some() {
+                            this.open_sidebar_menu(crate::tab_menu::MenuTarget::Download(*token,owner),*position,window,cx);
+                        }
+                        return;
+                    }
+                    DownloadsIntent::RowOpened { token, profile } => {
+                        let record = this.sidebar_navigation.downloads.host.as_ref().and_then(|host|
+                            host.record_for_intent(owner,sender,&this.profile.handle,*token,*profile));
+                        if record.is_some() { this.confirm_download_menu(*token,owner,crate::download_files::FileAction::Open,window,cx); }
+                        return;
+                    }
+                    _ => {}
                 }
                 let colors = this.downloads_colors();
                 if let Some(host) = &mut this.sidebar_navigation.downloads.host {
