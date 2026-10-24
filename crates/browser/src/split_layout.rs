@@ -2,10 +2,11 @@
 use browser_core::splits::Axis;
 use engine::Bounds;
 
-pub(crate) const GAP: f64 = 8.;
+pub(crate) const GAP: f64 = 10.;
 /// Keep pane controls below the window's draggable titlebar region.
 pub(crate) const TITLE_HEIGHT: f64 = 0.;
 pub(crate) const HEADER_HEIGHT: f64 = 32.;
+pub(crate) const BORDER: f64 = 1.;
 
 /// Arc's expanded split leaves the other panes visible as 220 px strips.
 /// Small windows fall back to equal shares rather than collapsing a page.
@@ -45,11 +46,18 @@ pub(crate) fn layout(card: Bounds, axis: Axis, weights: &[f32], split: bool) -> 
         let frame = if horizontal { Bounds { x: card.x + offset, y: card.y, width: length, height: card.height.max(0.) } }
             else { Bounds { x: card.x, y: card.y + offset, width: card.width.max(0.), height: length } };
         offset += length + gap;
-        let header_height = if split { HEADER_HEIGHT.min(frame.height) } else { 0. };
+        // The native surface must leave the GPUI focus contour uncovered.
+        // Reserving the same border for every pane prevents a focus change
+        // from resizing (and reflowing) the web document.
+        let inset_x = if split { BORDER.min(frame.width / 2.) } else { 0. };
+        let inset_y = if split { BORDER.min(frame.height / 2.) } else { 0. };
+        let inner = Bounds { x: frame.x + inset_x, y: frame.y + inset_y,
+            width: (frame.width - 2. * inset_x).max(0.), height: (frame.height - 2. * inset_y).max(0.) };
+        let header_height = if split { HEADER_HEIGHT.min(inner.height) } else { 0. };
         PaneBounds {
             frame,
-            header: Bounds { height: header_height, ..frame },
-            page: Bounds { y: frame.y + header_height, height: (frame.height - header_height).max(0.), ..frame },
+            header: Bounds { height: header_height, ..inner },
+            page: Bounds { y: inner.y + header_height, height: (inner.height - header_height).max(0.), ..inner },
         }
     }).collect()
 }
@@ -62,10 +70,10 @@ mod tests {
     fn horizontal_panes_reserve_their_headers_and_fill_the_card_with_exact_gaps() {
         let card = Bounds { x: 248., y: 8., width: 944., height: 784. };
         let panes = layout(card, Axis::Horizontal, &[0.25, 0.75], true);
-        assert_eq!(panes[0].frame.width, 234.);
-        assert_eq!(panes[1].frame.x, 490.);
-        assert_eq!(panes[0].page.y, 40.);
-        assert_eq!(panes[0].page.height, 752.);
+        assert_eq!(panes[0].frame.width, 233.5);
+        assert_eq!(panes[1].frame.x, 491.5);
+        assert_eq!(panes[0].page.y, 41.);
+        assert_eq!(panes[0].page.height, 750.);
         assert_eq!(panes[1].frame.x + panes[1].frame.width, card.x + card.width);
         assert_eq!(layout(card, Axis::Horizontal, &[1.], false)[0].page, card);
     }

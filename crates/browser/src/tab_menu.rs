@@ -286,14 +286,19 @@ impl BrowserWindow {
             let Some(split) = split else { return Vec::new(); };
             let horizontal = split.axis == Axis::Horizontal;
             let index = split.panes.iter().position(|id| *id == tab.id).unwrap();
-            let mut rows: Vec<Entry> = vec![item("Separate from Split View", Command::SeparatePane).into(), orientation.into(), Entry::Separator];
-            if index > 0 { rows.push(item(if horizontal { "Move Left" } else { "Move Up" }, Command::Move(-1)).into()); }
-            if index + 1 < split.panes.len() { rows.push(item(if horizontal { "Move Right" } else { "Move Down" }, Command::Move(1)).into()); }
-            rows.extend([Entry::Separator, item("Add Left Split…", Command::Add(Placement::Left)).into(), item("Add Right Split…", Command::Add(Placement::Right)).into(),
-                item("Add Top Split…", Command::Add(Placement::Above)).into(), item("Add Bottom Split…", Command::Add(Placement::Below)).into(), Entry::Separator]);
-            if !internal { rows.push(item(if tab.muted { "Unmute Tab" } else { "Mute Tab" }, Command::Mute).into()); }
-            rows.extend([item("Copy Link", Command::Copy).shortcut("⇧⌘C").into(), item("Copy Link as Markdown", Command::CopyMarkdown).into(), Entry::Separator, item("Close Pane", Command::ClosePane).into()]);
-            return rows;
+            let can_add = split.panes.len() < browser_core::splits::MAX_SPLIT_PANES;
+            return vec![
+                item(if horizontal { "Move Left" } else { "Move Up" }, Command::Move(-1)).enabled(index > 0).into(),
+                item(if horizontal { "Move Right" } else { "Move Down" }, Command::Move(1)).enabled(index + 1 < split.panes.len()).into(),
+                Entry::Separator,
+                item(if horizontal { "Add Right Split" } else { "Add Top Split" }, Command::Add(if horizontal { Placement::Right } else { Placement::Above })).enabled(can_add).into(),
+                item(if horizontal { "Add Left Split" } else { "Add Bottom Split" }, Command::Add(if horizontal { Placement::Left } else { Placement::Below })).enabled(can_add).into(),
+                Entry::Separator,
+                item("Separate Tab from Split", Command::SeparatePane).into(),
+                orientation.into(),
+                Entry::Separator,
+                pending("Share Split View…").into(),
+            ];
         }
         if let Some(split) = split {
             let mut rows: Vec<Entry> = vec![pending("Share Split View…").into(), Entry::Separator,
@@ -509,6 +514,8 @@ impl BrowserWindow {
 
     /// One menu panel: rows, separators and headers; `nested` is a submenu.
     fn render_menu_level(&self, entries: &[Entry], selected: Option<usize>, open: Option<usize>, nested: bool, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
+        let horizontal = self.browser.active_split().is_some_and(|split| split.axis == Axis::Horizontal);
         let checks = entries.iter().any(|entry| matches!(entry, Entry::Item(item) if item.checked));
         let inset = if checks { CHECK_INSET } else { TEXT_INSET };
         let rows = entries.iter().enumerate().map(|(index, entry)| match entry {
@@ -550,6 +557,7 @@ impl BrowserWindow {
                     }))
                     .when(checks, |row| row.child(div().absolute().left(px(PADDING + 4.)).top(px(3.))
                         .when(item.checked, |slot| slot.child(crate::icons::check(0., 0.8)))))
+                    .when(pane_controls, |row| row.child(pane_control_icon(item.command, horizontal)))
                     .when_some(item.icon.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id)), |row, tab| row.child(div().size(px(16.)).flex_none().flex().items_center().justify_center()
                         .child(self.render_favicon(tab, self.accent()))))
                     .child(div().debug_selector(move || selector.clone()).flex_1().whitespace_nowrap().child(item.label.clone()))
@@ -577,4 +585,55 @@ fn submenu_chevron() -> AnyElement {
         path.line_to(at(2.5, 10.));
         if let Ok(path) = path.build() { window.paint_path(path, color); }
     }).w(px(9.)).h(px(12.)).flex_none().into_any_element()
+}
+
+/// Pane controls use the reference's small pane-and-arrow diagrams, rather
+/// than font glyphs or the unrelated sidebar action icons.
+fn pane_control_icon(command: Option<Command>, horizontal: bool) -> AnyElement {
+    canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let foreground = window.text_style().color;
+        let frame = hsla(0., 0., 1., 0.32);
+        let draw = |points: &[(f32, f32)], color, rotate: bool, window: &mut Window| {
+            let mut path = gpui::PathBuilder::stroke(px(1.3));
+            for (index, &(x, y)) in points.iter().enumerate() {
+                let (x, y) = if rotate { (y, x) } else { (x, y) };
+                let point = bounds.origin + point(px(x), px(y));
+                if index == 0 { path.move_to(point); } else { path.line_to(point); }
+            }
+            if let Ok(path) = path.build() { window.paint_path(path, color); }
+        };
+        match command {
+            Some(Command::Move(delta)) => {
+                let mirrored = delta > 0;
+                let map = |points: &[(f32, f32)]| points.iter().map(|&(x, y)| (if mirrored { 16. - x } else { x }, y)).collect::<Vec<_>>();
+                draw(&map(&[(8., 5.), (8., 2.), (14., 2.), (14., 14.), (8., 14.), (8., 11.)]), frame, !horizontal, window);
+                draw(&map(&[(11., 8.), (3., 8.), (6.5, 4.5)]), foreground, !horizontal, window);
+                draw(&map(&[(3., 8.), (6.5, 11.5)]), foreground, !horizontal, window);
+            }
+            Some(Command::Add(placement)) => {
+                let mirrored = matches!(placement, Placement::Left | Placement::Above);
+                let rotate = matches!(placement, Placement::Above | Placement::Below);
+                let map = |points: &[(f32, f32)]| points.iter().map(|&(x, y)| (if mirrored { 16. - x } else { x }, y)).collect::<Vec<_>>();
+                draw(&map(&[(14., 4.), (14., 2.), (2., 2.), (2., 14.), (14., 14.), (14., 12.)]), frame, rotate, window);
+                draw(&map(&[(8., 2.), (8., 14.)]), frame, rotate, window);
+                draw(&map(&[(11., 8.), (17., 8.)]), foreground, rotate, window);
+                draw(&map(&[(14., 5.), (14., 11.)]), foreground, rotate, window);
+            }
+            Some(Command::SeparatePane) => {
+                draw(&[(2., 4.), (2., 2.), (14., 2.), (14., 14.), (2., 14.), (2., 12.)], frame, false, window);
+                draw(&[(8., 2.), (8., 14.)], frame, false, window);
+                draw(&[(7., 5.), (2., 10.), (2., 5.)], hsla(210. / 360., 0.55, 0.65, 1.), false, window);
+                draw(&[(2., 10.), (7., 10.)], hsla(210. / 360., 0.55, 0.65, 1.), false, window);
+            }
+            Some(Command::Axis(axis)) => {
+                draw(&[(1., 2.), (15., 2.), (15., 14.), (1., 14.), (1., 2.)], frame, false, window);
+                draw(&[(1., 8.), (15., 8.)], frame, axis == Axis::Horizontal, window);
+            }
+            _ => {
+                draw(&[(2., 6.), (2., 15.), (14., 15.), (14., 6.)], frame, false, window);
+                draw(&[(8., 12.), (8., 1.), (4.5, 4.5)], foreground, false, window);
+                draw(&[(8., 1.), (11.5, 4.5)], foreground, false, window);
+            }
+        }
+    }).size(px(16.)).flex_none().into_any_element()
 }

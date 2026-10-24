@@ -4,6 +4,20 @@ use browser_core::{Browser, omnibox, splits::{Axis, Placement, MAX_SPLIT_PANES},
 use gpui::{div, hsla, prelude::*, px, AnyElement, Context};
 use std::time::SystemTime;
 
+#[derive(Clone)]
+struct DividerDrag {
+    split: browser_core::splits::SplitId,
+    axis: Axis,
+    panes: Vec<TabId>,
+    weights: Vec<f32>,
+    index: usize,
+    offset: std::rc::Rc<std::cell::Cell<f32>>,
+}
+
+impl gpui::Render for DividerDrag {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement { div().size_0() }
+}
+
 pub(crate) const EMPTY_PANE_URL: &str = "browser://newtab";
 
 #[derive(Clone)]
@@ -235,10 +249,15 @@ impl BrowserWindow {
                 let active = self.browser.space().active_tab == Some(id);
                 let mut pane = div().id(("pane", key)).debug_selector(|| self.sidebar_debug_name((move || format!("split-pane-{key}"))()))
                     .min_w_0().min_h_0().flex_basis(px(0.)).flex().flex_col()
+                    .relative()
                     .rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).overflow_hidden().shadow_sm();
                 pane.style().flex_grow = Some(*weight);
                 Some(pane
+                    .child(div().absolute().inset_0().rounded(px(crate::pages::CONTENT_CORNER_RADIUS))
+                        .border(px(crate::split_layout::BORDER as f32))
+                        .border_color(hsla(self.accent(), 0.75, 0.4, if active { 1. } else { 0. })))
                     .child(div().id(("pane-header", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-header-{key}"))()))
+                        .mx(px(crate::split_layout::BORDER as f32)).mt(px(crate::split_layout::BORDER as f32))
                         .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
                         .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
                         .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
@@ -275,8 +294,45 @@ impl BrowserWindow {
                         .child(div().id(("pane-close", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-close-{key}"))())).px_1().rounded_sm()
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if this.split_draft.as_ref().is_some_and(|draft| draft.pane == id) { this.close_command_bar(cx); } else { this.close_split_pane(id, cx); } })).child(crate::icons::control(crate::icons::Icon::Close))))
-                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("pane-body-{key}"))())).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
+                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("pane-body-{key}"))())).mx(px(crate::split_layout::BORDER as f32)).mb(px(crate::split_layout::BORDER as f32)).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
             }));
-        div().size_full().flex().flex_col().child(panes).into_any_element()
+        let dividers = (0..split.panes.len().saturating_sub(1)).map(|index| {
+            let fraction: f32 = split.weights[..=index].iter().sum();
+            let correction = crate::split_layout::GAP as f32 * (index as f32 - fraction * (split.panes.len() - 1) as f32);
+            let drag = DividerDrag { split: split.id, axis: split.axis, panes: split.panes.clone(), weights: split.weights.clone(), index, offset: Default::default() };
+            div().id(("split-divider", index)).debug_selector(move || format!("split-divider-{index}"))
+                .absolute().flex().items_center().justify_center()
+                .when(horizontal, |this| this.left(gpui::relative(fraction)).ml(px(correction)).top_0().bottom_0().w(px(crate::split_layout::GAP as f32)).cursor(gpui::CursorStyle::ResizeLeftRight))
+                .when(!horizontal, |this| this.top(gpui::relative(fraction)).mt(px(correction)).left_0().right_0().h(px(crate::split_layout::GAP as f32)).cursor(gpui::CursorStyle::ResizeUpDown))
+                .group("split-divider")
+                .child(div().rounded_full().bg(hsla(0., 0., 1., 0.45)).invisible()
+                    .group_hover("split-divider", |style| style.visible())
+                    .when(horizontal, |this| this.w(px(2.)).h(px(24.)))
+                    .when(!horizontal, |this| this.w(px(64.)).h(px(2.))))
+                .on_drag(drag, move |drag, offset, _, cx| {
+                    drag.offset.set(f32::from(if horizontal { offset.x } else { offset.y }));
+                    cx.new(|_| drag.clone())
+                })
+        });
+        div().size_full().relative().flex().flex_col().child(panes).children(dividers)
+            .on_drag_move::<DividerDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<DividerDrag>, _, cx| {
+                let drag = event.drag(cx).clone();
+                let Some(split) = this.browser.active_split().filter(|split| split.id == drag.split && split.axis == drag.axis && split.panes == drag.panes) else { return; };
+                let horizontal = drag.axis == Axis::Horizontal;
+                let extent = f32::from(if horizontal { event.bounds.size.width } else { event.bounds.size.height });
+                let pointer = f32::from(if horizontal { event.event.position.x - event.bounds.origin.x } else { event.event.position.y - event.bounds.origin.y });
+                let available = extent - crate::split_layout::GAP as f32 * (drag.weights.len() - 1) as f32;
+                if available <= 0. { return; }
+                let before: f32 = drag.weights[..drag.index].iter().sum();
+                let pair = available * (drag.weights[drag.index] + drag.weights[drag.index + 1]);
+                let minimum = 220_f32.min(pair / 2.);
+                let left = (pointer - drag.offset.get() - before * available - crate::split_layout::GAP as f32 * drag.index as f32).clamp(minimum, pair - minimum);
+                let anchor = split.anchor;
+                let mut weights = drag.weights.clone();
+                weights[drag.index] = left / available;
+                weights[drag.index + 1] = (pair - left) / available;
+                this.edit_browser(|browser| browser.set_split_weights(anchor, &weights));
+                cx.notify();
+            })).into_any_element()
     }
 }

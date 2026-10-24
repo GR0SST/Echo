@@ -3418,7 +3418,7 @@ fn expanding_a_split_from_the_menu_and_command_bar_keeps_panes_loaded(cx: &mut T
         for (_, bounds) in surfaces.iter().filter(|(id, _)| id.get() != 2) {
             let (large, small) = if vertical { (active.height, bounds.height) } else { (active.width, bounds.width) };
             assert!(large >= small, "active pane should expand: {surfaces:?}");
-            assert!((small - if vertical { 220. - crate::split_layout::HEADER_HEIGHT } else { 220. }).abs() < 1.);
+            assert!((small - if vertical { 220. - crate::split_layout::HEADER_HEIGHT - 2. * crate::split_layout::BORDER } else { 220. - 2. * crate::split_layout::BORDER }).abs() < 1.);
         }
         view.read_with(cx, |w, _| {
             let split = w.browser.active_split().unwrap();
@@ -3528,30 +3528,24 @@ fn pane_menu_targets_an_inactive_pane_and_moves_it_without_changing_focus(cx: &m
 }
 
 #[gpui::test]
-fn pane_menu_and_sidebar_tab_options_mute_or_close_only_their_pane(cx: &mut TestAppContext) {
+fn sidebar_tab_options_mute_only_their_pane_and_header_close_preserves_other_pages(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 3);
-    click(cx, "pane-menu-2");
-    click(&mut tab_menu(&view, cx), "tab-menu-mute");
-    view.read_with(cx, |w, _| {
-        assert!(w.browser.all_tabs().find(|tab| tab.id.get() == 2).unwrap().muted);
-        assert_eq!(w.browser.all_tabs().filter(|tab| tab.muted).count(), 1);
-    });
-    // The sidebar row's Tab Options submenu acts on one pane.
-    right_click(cx, "tab-2");
-    let mut menu = tab_menu(&view, cx);
-    let pane = view.read_with(cx, |w, _| *w.browser.active_split().unwrap().panes.iter().find(|id| id.get() != 2).unwrap());
-    let title = view.read_with(cx, |w, _| crate::tab_menu::short_title(&w.browser.all_tabs().find(|tab| tab.id == pane).unwrap().title));
-    let selector = format!("tab-menu-{}", title.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>());
-    let selector = selector.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
-    let row = menu.debug_bounds(test_selector(selector)).unwrap();
-    menu.simulate_mouse_move(row.center(), None, Modifiers::none());
-    menu.run_until_parked();
-    click(&mut menu, "tab-menu-mute");
+    let panes = view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.clone());
+    for pane in panes.iter().take(2) {
+        right_click(cx, "tab-2");
+        let mut menu = tab_menu(&view, cx);
+        let title = view.read_with(cx, |w, _| crate::tab_menu::short_title(&w.browser.all_tabs().find(|tab| tab.id == *pane).unwrap().title));
+        let selector = format!("tab-menu-{}", title.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>());
+        let selector = selector.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+        let row = menu.debug_bounds(test_selector(selector)).unwrap();
+        menu.simulate_mouse_move(row.center(), None, Modifiers::none());
+        menu.run_until_parked();
+        click(&mut menu, "tab-menu-mute");
+        assert!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id == *pane).unwrap().muted));
+    }
     assert_eq!(view.read_with(cx, |w, _| w.browser.all_tabs().filter(|tab| tab.muted).count()), 2);
-    assert!(view.read_with(cx, |w, _| w.browser.all_tabs().find(|tab| tab.id == pane).unwrap().muted));
     let active = active_url(&view, cx);
-    click(cx, "pane-menu-2");
-    click(&mut tab_menu(&view, cx), "tab-menu-close-pane");
+    click(cx, "pane-close-2");
     assert_eq!(active_url(&view, cx), active);
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.active_split().unwrap().panes.len(), 2);
@@ -5830,11 +5824,11 @@ fn split_headers_and_pages_share_one_outer_corner_contour_without_recreating_vie
         let frame = cx.debug_bounds(test_selector(format!("split-pane-{}", pane.get()))).unwrap();
         let header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
         let body = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
-        assert_eq!(frame.origin, header.origin);
+        assert_eq!(frame.origin + gpui::point(gpui::px(1.), gpui::px(1.)), header.origin);
         assert_eq!(header.bottom(), body.origin.y);
-        assert_eq!(frame.bottom(), body.bottom());
-        assert_eq!(frame.size.width, header.size.width);
-        assert_eq!(frame.size.width, body.size.width);
+        assert_eq!(frame.bottom() - gpui::px(1.), body.bottom());
+        assert_eq!(frame.size.width - gpui::px(2.), header.size.width);
+        assert_eq!(frame.size.width - gpui::px(2.), body.size.width);
     }
     run_named_command(&view, cx, "convert to vertical split");
     assert!(fake.0.borrow().rounded_top.values().all(|rounded| !rounded));
@@ -7499,3 +7493,119 @@ fn plain_space_heading_has_no_invented_dot_or_reserved_icon_slot(cx: &mut TestAp
 }
 #[path = "empty_canvas_tests.rs"]
 mod empty_canvas_tests;
+
+#[gpui::test]
+fn split_pane_menu_matches_arc_order_and_keeps_unavailable_moves_visible(cx: &mut TestAppContext) {
+    use crate::tab_menu::Entry;
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    click(cx, "pane-menu-2");
+    let entries = view.read_with(cx, |w, _| w.menu_entries());
+    let labels: Vec<_> = entries.iter().map(|entry| match entry {
+        Entry::Item(item) => item.label.as_ref(), Entry::Separator => "---", Entry::Header(label) => label,
+    }).collect();
+    assert_eq!(labels, ["Move Left", "Move Right", "---", "Add Right Split", "Add Left Split", "---",
+        "Separate Tab from Split", "Convert to Vertical Split View", "---", "Share Split View…"]);
+    assert!(matches!(&entries[0], Entry::Item(item) if !item.enabled));
+    assert!(matches!(&entries[1], Entry::Item(item) if item.enabled));
+    click(&mut tab_menu(&view, cx), "tab-menu-move-backward");
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_some()));
+    assert_eq!(active_url(&view, cx), active);
+    tab_menu(&view, cx).simulate_keystrokes("escape");
+    click(cx, "pane-menu-3");
+    assert!(view.read_with(cx, |w, _| matches!(&w.menu_entries()[1], Entry::Item(item) if !item.enabled)));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn vertical_split_pane_menu_uses_axis_specific_additions_and_disables_them_at_four(cx: &mut TestAppContext) {
+    use crate::tab_menu::Entry;
+    let (view, cx, fake) = open_split_pages(cx, 4);
+    run_named_command(&view, cx, "convert to vertical split");
+    fake.take_calls();
+    click(cx, "pane-menu-2");
+    view.read_with(cx, |w, _| {
+        let rows: Vec<_> = w.menu_entries().into_iter().filter_map(|entry| if let Entry::Item(item) = entry { Some(item) } else { None }).collect();
+        assert_eq!(rows.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+            ["Move Up", "Move Down", "Add Top Split", "Add Bottom Split", "Separate Tab from Split", "Convert to Horizontal Split View", "Share Split View…"]);
+        assert!(!rows[0].enabled);
+        assert!(!rows[2].enabled && !rows[3].enabled);
+    });
+    click(&mut tab_menu(&view, cx), "tab-menu-add-bottom");
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_some() && w.split_draft.is_none() && w.browser.active_split().unwrap().panes.len() == 4));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+fn assert_split_divider_resize(cx: &mut TestAppContext, count: usize, vertical: bool) {
+    let (view, cx, fake) = open_split_pages(cx, count);
+    view.update(cx, |w, cx| {
+        let anchor = w.browser.active_split().unwrap().anchor;
+        w.edit_browser(|browser| browser.set_split_weights(anchor, &vec![1.; count]));
+        cx.notify();
+    });
+    cx.simulate_resize(gpui::size(gpui::px(1800.), gpui::px(1400.)));
+    cx.run_until_parked();
+    if vertical { run_named_command(&view, cx, "convert to vertical split"); }
+    let before = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
+    let active = active_url(&view, cx);
+    let selector = test_selector(format!("split-divider-{}", count - 2));
+    let bounds = cx.debug_bounds(selector).unwrap();
+    let start = bounds.center();
+    let original_pane = cx.debug_bounds(test_selector(format!("split-pane-{}", before.panes[count - 2].get()))).unwrap();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    let motion = if vertical { gpui::point(gpui::px(0.), gpui::px(-20.)) } else { gpui::point(gpui::px(-20.), gpui::px(0.)) };
+    cx.simulate_mouse_move(start + motion, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    fake.take_calls();
+    let end = if vertical { gpui::point(start.x, original_pane.top() + gpui::px(10.)) }
+        else { gpui::point(original_pane.left() + gpui::px(10.), start.y) };
+    finish_sidebar_drag(cx, end);
+    view.read_with(cx, |w, _| {
+        let split = w.browser.active_split().unwrap();
+        assert_eq!(split.panes, before.panes);
+        assert_eq!(split.active, before.active);
+        for index in 0..count - 2 { assert!((split.weights[index] - before.weights[index]).abs() < 0.001); }
+        let pair_before = before.weights[count - 2] + before.weights[count - 1];
+        assert!((split.weights[count - 2] + split.weights[count - 1] - pair_before).abs() < 0.001);
+    });
+    let pane = cx.debug_bounds(test_selector(format!("split-pane-{}", before.panes[count - 2].get()))).unwrap();
+    let extent = f32::from(if vertical { pane.size.height } else { pane.size.width });
+    assert!((extent - 220.).abs() < 1., "minimum pane extent: {extent}");
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+    // A completed gesture cannot keep changing the split on ordinary movement.
+    let weights = view.read_with(cx, |w, _| w.browser.active_split().unwrap().weights.clone());
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().weights.clone()), weights);
+}
+
+#[gpui::test]
+fn two_pane_divider_resizes_without_reloading_or_changing_focus(cx: &mut TestAppContext) { assert_split_divider_resize(cx, 2, false); }
+
+#[gpui::test]
+fn three_pane_divider_preserves_the_unrelated_pane(cx: &mut TestAppContext) { assert_split_divider_resize(cx, 3, false); }
+
+#[gpui::test]
+fn four_pane_divider_preserves_the_unrelated_panes(cx: &mut TestAppContext) { assert_split_divider_resize(cx, 4, false); }
+
+#[gpui::test]
+fn vertical_divider_resizes_without_reloading_or_changing_focus(cx: &mut TestAppContext) { assert_split_divider_resize(cx, 3, true); }
+
+#[gpui::test]
+fn split_focus_contour_stays_outside_native_pages_and_focusing_does_not_reflow_them(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
+    let before = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+    for (id, page) in &before {
+        let pane = cx.debug_bounds(test_selector(format!("split-pane-{}", id.get()))).unwrap();
+        assert!((page.x - f64::from(f32::from(pane.left())) - 1.).abs() < 0.6);
+        assert!((f64::from(f32::from(pane.right())) - page.x - page.width - 1.).abs() < 0.6);
+        assert!((f64::from(f32::from(pane.bottom())) - page.y - page.height - 1.).abs() < 0.6);
+    }
+    fake.take_calls();
+    click(cx, "pane-header-2");
+    assert_eq!(view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout()), before);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
+}

@@ -1201,3 +1201,58 @@ observations do not establish toggle/back or file-preview behavior.
 The owned window was closed, no Space was deleted/reassigned and no private
 window was touched. Detailed fixture hashes and safe observations are recorded
 in `/tmp/echo-download-destination-search-native-20261024.md`.
+
+## Split View controls and divider — 2026-10-24
+
+Inspected the installed Arc in a dedicated `Echo Split Reference` test Space,
+with a fixed window frame `{100,100,1000,760}`. Only pages opened for this
+inspection were split. Reference captures are in `/tmp/parity/split-view/`.
+The installed shortcut is customized to Shift+Command+E (the View menu's
+AX command character is `E`, modifiers `1`); Control+Shift+= did not invoke it.
+
+- Two side-by-side pane frames occupy x=228…604 and x=614…990 in the window:
+  the inter-pane gap is 10 px. Pane headers are 32 px high.
+- Hovering the divider reveals a centered 2×24 px vertical thumb. In the
+  stacked layout the thumb is 64×2 px. Hover must settle before pressing;
+  clicking before the thumb appears can focus a page instead of resizing.
+- Dragging the horizontal divider to the left clamps the first pane at
+  220 px (x=228…448). The neighboring pane consumes the remaining extent.
+- The focused pane has a thin colored outline; the other pane does not.
+- The pane control menu has Move Left, Move Right, separator, Add Right Split,
+  Add Left Split, separator, Separate Tab from Split, Convert to Vertical
+  Split View, separator, Share Split View…. Move Right remains visible but
+  disabled for the last pane. Mute, Copy and Close Pane are absent here;
+  the header close button and sidebar pane submenu provide those actions.
+- Pane-menu icons are small vector diagrams: a pane and directional arrow,
+  split and plus, separation arrow, target orientation and share arrow.
+
+Echo now uses this menu order, disables unavailable moves/additions, and
+reserves a stable 1 px border outside native page surfaces for focus. Its
+split dividers resize adjacent weights and preserve selection/page identities.
+Exact corner contours, material/colors, drop previews and transitions are
+still visual acceptance work; these observations do not establish full parity.
+
+Additional captures: `arc-vertical-menu.png` confirms stacked menu order
+Move Up, Move Down, Add Top Split, Add Bottom Split (with the same separator,
+Separate/Convert/Share grouping). Adding a fourth stacked pane expands Arc's
+window beyond the requested 760 px height to retain 220 px pane frames; Echo's
+constrained-window fallback does not yet reproduce that window behavior.
+`arc-drop-preview.png` shows an outlined theme-filled half-pane and clipping
+of the existing page; `arc-drop-result.png` shows the committed split.
+
+The add and Cmd+W recordings (`arc-add.mov`, `arc-remove.mov`) were sampled
+locally at 60 fps. No intermediate pane-layout positions were observed:
+the first divider changes from y≈330 to y≈225 between the 1.017 and 1.033 s
+samples during addition; the divider disappears at 1.300 s during removal.
+This records the sampled behavior, not a universal animation duration under
+all system loads. Both recordings retain the survivor's page.
+
+Native Echo verification used the freshly compiled executable with the
+unchanged CEF framework/helper from the base bundle, in an isolated profile.
+`echo-empty.png`, `echo-two.png`, `echo-divider.png`, `echo-resized.png`,
+`echo-pane-menu.png` and `echo-after-cmd-w.png` cover draft search, pane
+geometry, divider hover/drag, menu targeting and closing only the focused
+page. Both loaded pages survive resizing; Cmd+W archives one and retains the
+other live page. Arc/Echo comparison crops are `pair-*-crop.png`; they were
+viewed directly. Header materials/controls, Command Bar width/placement and
+menu positioning still visibly differ and are not claimed as full parity.
