@@ -2,7 +2,7 @@
 use crate::window::{BrowserWindow, Overlay, OverlayKind};
 use gpui::{
     div, hsla, point, prelude::*, px, size, AnyElement, Bounds, ClipboardItem, Context,
-    AnimationExt, FontWeight, TextRun, linear_gradient, linear_color_stop, rgb,
+    FontWeight, TextRun, linear_gradient, linear_color_stop, rgb,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use std::time::{Duration, Instant};
@@ -12,7 +12,42 @@ pub(crate) struct Toast {
     pub overlay: Option<WindowHandle<Overlay>>,
     pub(crate) copied_link: bool,
     undo_hint: bool,
+    generation: u64,
     started: Instant,
+    dismissed: Option<(Instant, f32)>,
+    motion: Option<gpui::Task<()>>,
+}
+
+// Arc 1.170.0, measured from arc-copy.mov (variable-frame-rate PTS):
+// spring ζ=0.694, ω=15.42; dismissal starts 4.986 s after presentation
+// and shrinks/fades about the top center over 200 ms.
+pub(crate) const TOAST_LIFETIME: Duration = Duration::from_secs(5);
+const ENTER_SETTLED: Duration = Duration::from_millis(650);
+const EXIT: Duration = Duration::from_millis(200);
+const FRAME: Duration = Duration::from_millis(16);
+const PAD_X: f32 = 12.;
+const PAD_Y: f32 = 8.;
+
+impl Toast {
+    fn progress(&self, now: Instant, reduced: bool) -> (f32, f32, bool) {
+        let elapsed = now.saturating_duration_since(self.started);
+        let exit = self.dismissed.map(|(at, from)| (now.saturating_duration_since(at), from))
+            .or_else(|| (elapsed >= TOAST_LIFETIME).then(|| (elapsed - TOAST_LIFETIME, 1.)));
+        if let Some((elapsed, from)) = exit {
+            if reduced || elapsed >= EXIT { return (0., 0., true); }
+            let t = (elapsed.as_secs_f32() / EXIT.as_secs_f32()).clamp(0., 1.);
+            let remaining = 1. - t * t * (3. - 2. * t);
+            return (from * remaining, remaining, false);
+        }
+        if reduced || elapsed >= ENTER_SETTLED { return (1., 1., false); }
+        let t = elapsed.as_secs_f32();
+        let damping: f32 = 0.694;
+        let frequency: f32 = 15.42;
+        let damped = (1. - damping * damping).sqrt();
+        let scale = 1. - (-damping * frequency * t).exp()
+            * ((frequency * damped * t).cos() + damping / damped * (frequency * damped * t).sin());
+        (scale.max(0.), scale.clamp(0., 1.), false)
+    }
 }
 
 impl BrowserWindow {
@@ -41,7 +76,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn show_toast(&mut self, message: String, cx: &mut Context<Self>) {
-        self.close_toast(cx);
+        self.retire_toast(cx);
         self.toast_generation += 1;
         let generation = self.toast_generation;
         self.toast = Some(Toast {
@@ -49,7 +84,10 @@ impl BrowserWindow {
             undo_hint: message == "Cleared Tabs! Use ⌘Z to undo.",
             message,
             overlay: None,
-            started: Instant::now(),
+            generation,
+            started: cx.background_executor().now(),
+            dismissed: None,
+            motion: None,
         });
         let main = self.main_window;
         let browser = cx.entity().downgrade();
@@ -82,10 +120,10 @@ impl BrowserWindow {
             let width = (text_width.ceil() + px(if copied_link { 68. } else if undo_hint { 41. } else { 24. })).min(main.size.width - px(32.));
             let bounds = Bounds::new(
                 point(
-                    main.origin.x + main.size.width - width - px(if copied_link { 16. } else { 4. }),
-                    main.origin.y + px(if copied_link { 19. } else { 4. }),
+                    main.origin.x + main.size.width - width - px(if copied_link { 16. } else { 4. }) - px(PAD_X),
+                    main.origin.y + px(if copied_link { 19. } else { 4. }) - px(PAD_Y),
                 ),
-                size(width, px(if copied_link || undo_hint { 48. } else { 42. })),
+                size(width + px(PAD_X * 2.), px(if copied_link || undo_hint { 48. } else { 42. }) + px(PAD_Y * 2.)),
             );
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -104,7 +142,7 @@ impl BrowserWindow {
                     crate::native::set_overlay_passthrough(child);
                     crate::native::set_overlay_shadow(child);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast(generation), cx))
             }) {
                 let retained = browser.update(cx, |this, _| {
                     if this.toast_generation != generation { return false; }
@@ -119,42 +157,81 @@ impl BrowserWindow {
                 }
             }
         });
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(3)).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.toast_generation == generation {
-                    this.close_toast(cx);
-                }
-            });
-        })
-        .detach();
+        self.drive_toast(generation, cx);
         cx.notify();
     }
 
-    fn close_toast(&mut self, cx: &mut Context<Self>) {
-        if let Some(toast) = self.toast.take() {
-            if let Some(overlay) = toast.overlay {
-                cx.defer(move |cx| {
-                    let _ = overlay.update(cx, |_, window, _| window.remove_window());
-                });
+    fn toast_by_generation(&self, generation: u64) -> Option<&Toast> {
+        self.toast.as_ref().filter(|toast| toast.generation == generation)
+            .or_else(|| self.retiring_toasts.iter().find(|toast| toast.generation == generation))
+    }
+
+    fn drive_toast(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let task = cx.spawn(async move |this, cx| loop {
+            let now = cx.background_executor().now();
+            let next = this.update(cx, |this, cx| {
+                let toast = this.toast_by_generation(generation)?;
+                let reduced = crate::native::prefers_reduced_motion();
+                let elapsed = now.saturating_duration_since(toast.started);
+                if toast.progress(now, reduced).2 {
+                    this.remove_toast(generation, cx);
+                    return None;
+                }
+                let next = if toast.dismissed.is_some() || elapsed < ENTER_SETTLED || elapsed >= TOAST_LIFETIME {
+                    FRAME
+                } else { TOAST_LIFETIME - elapsed };
+                Some((next, toast.overlay))
+            }).ok().flatten();
+            let Some((next, overlay)) = next else { break; };
+            if let Some(overlay) = overlay {
+                let _ = overlay.update(cx, |_, _, cx| cx.notify());
             }
-            cx.notify();
+            cx.background_executor().timer(next).await;
+        });
+        if let Some(toast) = self.toast.as_mut().filter(|toast| toast.generation == generation) {
+            toast.motion = Some(task);
+        } else if let Some(toast) = self.retiring_toasts.iter_mut().find(|toast| toast.generation == generation) {
+            toast.motion = Some(task);
         }
     }
 
-    pub(crate) fn render_toast(&self) -> AnyElement {
-        let Some(toast) = &self.toast else {
+    fn retire_toast(&mut self, cx: &mut Context<Self>) {
+        let Some(mut toast) = self.toast.take() else { return; };
+        let now = cx.background_executor().now();
+        let from = toast.progress(now, crate::native::prefers_reduced_motion()).0;
+        toast.motion.take();
+        toast.dismissed = Some((now, from));
+        let generation = toast.generation;
+        self.retiring_toasts.push(toast);
+        self.drive_toast(generation, cx);
+    }
+
+    fn remove_toast(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let toast = if self.toast.as_ref().is_some_and(|toast| toast.generation == generation) {
+            self.toast.take()
+        } else {
+            self.retiring_toasts.iter().position(|toast| toast.generation == generation)
+                .map(|index| self.retiring_toasts.remove(index))
+        };
+        if let Some(overlay) = toast.and_then(|toast| toast.overlay) {
+            cx.defer(move |cx| { let _ = overlay.update(cx, |_, window, _| window.remove_window()); });
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn render_toast(&self, generation: u64, width: f32, now: Instant) -> AnyElement {
+        let Some(toast) = self.toast_by_generation(generation) else {
             return div().into_any_element();
         };
         let message = toast.message.clone();
         let copied_link = toast.copied_link;
         let undo_hint = toast.undo_hint;
-        let elapsed = toast.started.elapsed();
-        let duration = Duration::from_millis(200);
-        let surface = move |scale: f32| div()
+        let (scale, opacity, _) = toast.progress(now, crate::native::prefers_reduced_motion());
+        if scale < 0.001 { return div().size_full().into_any_element(); }
+        let surface = div()
             .id("toast")
             .debug_selector(|| "toast".into())
-            .w(gpui::relative(scale))
+            .w(px((width - PAD_X * 2.) * scale))
             .h(px(if copied_link || undo_hint { 48. } else { 42. } * scale))
             .flex()
             .items_center()
@@ -182,16 +259,8 @@ impl BrowserWindow {
                 div().w(px(32. * scale)).h(px(28. * scale)).flex_none().rounded(px(6. * scale))
                     .bg(hsla(0., 0., 1., 0.2)).flex().items_center().justify_center()
                     .child(crate::icons::control_sized(crate::icons::Icon::Share, 18. * scale))));
-        let root = div().size_full().flex().items_center().justify_center();
-        if crate::native::prefers_reduced_motion() || elapsed >= duration {
-            return root.child(surface(1.)).into_any_element();
-        }
-        let started = toast.started;
-        root.with_animation(gpui::SharedString::from(format!("toast-enter-{}", self.toast_generation)), gpui::Animation::new(duration - elapsed), move |root, delta| {
-            let t = if delta >= 1. { 1. } else { (started.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.) };
-            let t = 1. - (1. - t).powi(3);
-            root.opacity(t).child(surface(0.75 + 0.25 * t))
-        }).into_any_element()
+        div().size_full().flex().items_start().justify_center().pt(px(PAD_Y))
+            .opacity(opacity).child(surface).into_any_element()
     }
 
     /// Arc confirms pinning only while its destination is hidden.

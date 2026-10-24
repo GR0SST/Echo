@@ -371,7 +371,12 @@ mod mac {
     pub fn set_overlay_shadow(view: *mut c_void) {
         let overlay = window(view);
         if !overlay.is_null() {
-            unsafe { let _: () = msg_send![overlay, setHasShadow: Bool::YES]; }
+            unsafe {
+                // GPUI creates titled NSWindows even without a titlebar. A
+                // padded transient surface must not expose AppKit's frame rim.
+                let _: () = msg_send![overlay, setStyleMask: 0usize];
+                let _: () = msg_send![overlay, setHasShadow: Bool::YES];
+            }
         }
     }
 

@@ -1926,7 +1926,7 @@ fn repeated_toasts_replace_each_other_and_expire_without_stealing_focus(cx: &mut
     cx.executor().advance_clock(Duration::from_secs(2));
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Copied URL as Markdown"));
-    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.executor().advance_clock(Duration::from_secs(4));
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.toast.is_none()));
 }
@@ -1936,21 +1936,73 @@ fn copy_toast_is_content_sized_at_the_top_right_and_does_not_take_focus(cx: &mut
     let (view, cx, fake) = open_pages(cx);
     fake.take_calls();
     cx.simulate_keystrokes("cmd-shift-c");
+    cx.executor().advance_clock(Duration::from_millis(650));
     cx.run_until_parked();
     let overlay = view.read_with(cx, |w, _| w.toast.as_ref().unwrap().overlay.unwrap());
     let (main_bounds, toast_bounds) = cx.update(|window, cx| {
         let toast = overlay.update(cx, |_, window, _| window.bounds()).unwrap();
         (window.bounds(), toast)
     });
-    assert_eq!(main_bounds.right() - toast_bounds.right(), gpui::px(16.));
-    assert_eq!(toast_bounds.origin.y - main_bounds.origin.y, gpui::px(19.));
-    assert_eq!(toast_bounds.size.height, gpui::px(48.));
-    assert!(toast_bounds.size.width < gpui::px(360.));
+    let mut toast_visual = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    toast_visual.run_until_parked();
+    let body = toast_visual.debug_bounds("toast").unwrap();
+    assert_eq!(main_bounds.right() - (toast_bounds.origin.x + body.right()), gpui::px(16.));
+    assert_eq!(toast_bounds.origin.y + body.origin.y - main_bounds.origin.y, gpui::px(19.));
+    assert_eq!(body.size.height, gpui::px(48.));
+    assert!(body.size.width < gpui::px(360.));
     assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Copied Current URL");
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusUi)));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("keyboard still works");
     assert_eq!(bar_text(&view, cx).as_deref(), Some("keyboard still works"));
+}
+
+#[gpui::test]
+fn toast_exits_after_five_seconds_and_replacement_keeps_its_own_text(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-shift-c");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    let first = view.read_with(cx, |w, _| w.toast.as_ref().unwrap().overlay.unwrap());
+    cx.simulate_keystrokes("cmd-alt-shift-c");
+    assert_eq!(view.read_with(cx, |w, _| w.retiring_toasts[0].message.clone()), "Copied Current URL");
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Copied URL as Markdown");
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    let mut outgoing = VisualTestContext::from_window(first.into(), &cx.cx);
+    outgoing.run_until_parked();
+    assert!(outgoing.debug_bounds("toast").unwrap().size.height < gpui::px(48.));
+    cx.executor().advance_clock(Duration::from_millis(120));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.retiring_toasts.is_empty()));
+    cx.executor().advance_clock(Duration::from_millis(4780));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.toast.is_some()));
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.toast.as_ref().unwrap().overlay.unwrap());
+    let mut exiting = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    exiting.run_until_parked();
+    let body = exiting.debug_bounds("toast").unwrap();
+    assert!(body.size.height > gpui::px(1.) && body.size.height < gpui::px(48.));
+    assert_eq!(body.origin.y, gpui::px(8.));
+    cx.executor().advance_clock(Duration::from_millis(120));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.toast.is_none() && w.retiring_toasts.is_empty()));
+}
+
+#[gpui::test]
+fn closing_a_browser_removes_both_incoming_and_retiring_toast_windows(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-shift-c");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-alt-shift-c");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.retiring_toasts.len()), 1);
+    cx.simulate_keystrokes("cmd-shift-w");
+    cx.run_until_parked();
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), 0);
 }
 
 #[gpui::test]
@@ -1992,7 +2044,7 @@ fn automatic_archive_notifications_do_not_replay_on_new_windows_or_unrelated_edi
     assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Auto archived 1 tabs"));
     let (second, mut second_cx) = another_profile_window(&view, cx);
     assert!(second.read_with(&second_cx, |w, _| w.toast.is_none()));
-    cx.executor().advance_clock(Duration::from_secs(4));
+    cx.executor().advance_clock(Duration::from_secs(6));
     cx.run_until_parked();
     view.update(cx, |w, _| w.edit_browser(|browser| browser.set_title(browser.space().active_tab.unwrap(), "Changed")));
     cx.run_until_parked();

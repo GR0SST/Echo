@@ -507,7 +507,7 @@ pub struct CommandBar {
 pub enum OverlayKind {
     CommandBar,
     Find,
-    Toast,
+    Toast(u64),
     LinkStatus,
     SplitDrop,
     /// The hidden sidebar, shown floating over the page.
@@ -552,12 +552,20 @@ impl Overlay {
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = self.kind;
+        // Passive animation reads its snapshot without updating the shared
+        // browser entity during another window's render pass.
+        if let OverlayKind::Toast(generation) = kind {
+            let now = cx.background_executor().now();
+            let width = f32::from(window.viewport_size().width);
+            return self.browser.read_with(cx, |browser, _| browser.render_toast(generation, width, now))
+                .unwrap_or_else(|_| div().into_any_element());
+        }
         self.browser
             .update(cx, |browser, cx| {
                 let content = match kind {
                     OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
-                    OverlayKind::Toast => browser.render_toast(),
+                    OverlayKind::Toast(_) => unreachable!("passive toast renders above"),
                     OverlayKind::LinkStatus => browser.render_link_status(window),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
@@ -642,6 +650,7 @@ pub struct BrowserWindow {
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
+    pub(crate) retiring_toasts: Vec<crate::toast::Toast>,
     pub(crate) link_status: Option<crate::link_status::LinkStatus>,
     pub(crate) link_status_generation: u64,
     pub(crate) history_page: crate::history::HistoryPage,
@@ -894,6 +903,7 @@ impl BrowserWindow {
             find_bar: None,
             toast: None,
             toast_generation: 0,
+            retiring_toasts: Vec::new(),
             link_status: None,
             link_status_generation: 0,
             history_page: crate::history::HistoryPage::new(cx),
@@ -1072,7 +1082,9 @@ impl BrowserWindow {
             self.split_drop.take().and_then(|preview| preview.overlay).map(|handle| handle.into()),
             self.floating_sidebar.take().and_then(|sidebar| sidebar.overlay).map(|handle| handle.into()),
         ];
-        for child in children.into_iter().flatten() {
+        let outgoing_toasts = std::mem::take(&mut self.retiring_toasts).into_iter()
+            .filter_map(|toast| toast.overlay.map(|handle| handle.into()));
+        for child in children.into_iter().flatten().chain(outgoing_toasts) {
             let child: AnyWindowHandle = child;
             cx.defer(move |cx| { let _ = child.update(cx, |_, window, _| window.remove_window()); });
         }

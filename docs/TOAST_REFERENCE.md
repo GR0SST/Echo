@@ -12,9 +12,14 @@ Observed on the fresh Echo Toasts Oct24 test Space:
 - Pin through Command Bar: no toast with visible sidebar. Hidden sidebar:
   “Pinned Tab to “Echo Toasts Oct24”” / “Un-Pinned Tab from “Echo Toasts Oct24””.
   Text-only, 42 px high, 4 px top/right inset. No leading checkmark.
-- Copy entry grows around its center and fades in; the captured sequence
-  starts at roughly 75% scale and reaches full size. Copy disappears within
-  the captured ~5 second sequence. Existing three-second lifetime is retained.
+- Copy entry uses an underdamped spring (measured ζ=0.694, ω=15.42 rad/s),
+  overshooting about 4.8% and settling by 650 ms. Dismissal begins 4.986 s
+  after onset, then shrinks/fades toward the top center over about 200 ms.
+  Echo uses a five-second lifetime plus the measured exit. Reduced motion
+  presents/dismisses immediately. Replacement overlaps the same corner; it
+  does not form a vertical stack. Each outgoing toast retains its own text.
+- The copy accessory opens the native macOS share menu (AirDrop, Notes,
+  Freeform, Journal, Shortcuts observed); no destination was selected.
 - The guard sees plain toast windows as front Arc windows. Every next input
   waits for the owned main window to become front again. Cleanup closes only
   the owned window after notifications clear.
@@ -47,7 +52,7 @@ this in %@Settings%@.” Title/dismiss label are compiled short strings; the
 requested title is “We cleaned up!”. No safe live trigger was found for its
 layout/count/actions, so the banner has not been guessed or marked complete.
 
-Remaining: exact exit/stacking/hover behavior, actionable accessories, generic
+Remaining: hover duration, actionable accessories, generic
 Undo toast, background-created items, drag pinning, folder restore, quote link,
 unsupported feature notifications and sidebar banners. Native web notification
 permission/delivery is not listed in section 18 and was not added.
@@ -70,3 +75,22 @@ Evidence: `target/parity/toasts/pair-copy.png`, `pair-pin.png`,
 `echo-auto-archive.png`. The pairs are zoomed 2× and visually inspected; native
 window shadows are enabled through the isolated platform interface. Exact font
 metrics/material/animation fidelity remains partial, as stated in section 18.
+
+## Round 2 lifecycle evidence
+
+Bounded native `screencapture -v -V 8` recordings (12-second hard kill):
+`target/parity/toasts/r2/arc-copy.mov` and `arc-stack.mov`. Frame PTS and
+purple-surface bounds are saved in `copy-motion.json`; `motion-fit.json`
+records the fitted spring and exit. `pair-lifecycle.png` compares 2× Arc/Echo
+entry, settled, and exit crops; `echo-copy.mov` preserves the native Echo check.
+`exit-timeline.png` shows zoomed exit
+crops. `arc-accessory.png` records the native share menu.
+
+Two additional GPUI regressions cover five-second lifetime, intermediate exit
+geometry, overlapping replacement content, and closing all incoming/outgoing
+child windows when the browser closes. The full workspace run passes 1,196
+tests. Native toast windows are borderless so overshoot padding exposes no
+AppKit frame rim. Toast frames redraw only their own
+window through a read-only browser snapshot, preserving main-window feedback
+expiry and avoiding CEF/main-window frame churn. Sidebar banner layout remains
+unverified; no banner or count/action layout was invented.
