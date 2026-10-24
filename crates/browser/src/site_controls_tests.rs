@@ -73,6 +73,16 @@ fn site_permission_toggle_uses_the_profile_origin_and_updates_the_live_engine(
 ) {
     let (view, cx, fake) = open_pages(cx);
     let origin = install_site_info(&view, cx, &fake, true);
+    fake.0
+        .borrow_mut()
+        .site_infos
+        .get_mut(&1)
+        .unwrap()
+        .permissions
+        .iter_mut()
+        .find(|setting| setting.kind == engine::PermissionKind::Camera)
+        .unwrap()
+        .value = engine::PermissionValue::Block;
     view.update(cx, |view, cx| {
         view.edit_browser(|model| {
             model
@@ -168,4 +178,289 @@ fn stale_site_controls_do_not_apply_a_clear_to_a_new_document_origin(cx: &mut Te
     });
     controls.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+}
+
+fn permission_request(
+    view: &Entity<BrowserWindow>,
+    cx: &mut VisualTestContext,
+    id: u64,
+    kind: engine::PermissionKind,
+) -> engine::PermissionRequest {
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let origin =
+        browser_core::site_settings::SiteSettings::origin(&active_url(view, cx).unwrap()).unwrap();
+    engine::PermissionRequest {
+        id: engine::PermissionRequestId::from_raw(id),
+        origin: origin.clone(),
+        top_origin: origin,
+        permissions: vec![kind],
+    }
+}
+
+#[gpui::test]
+fn site_permission_prompt_resolves_explicit_choices_and_escape_leaves_it_open(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, fake) = open_pages(cx);
+    for (id, kind, button, decision) in [
+        (
+            10,
+            engine::PermissionKind::Camera,
+            "site-permission-not-now",
+            engine::PermissionDecision::Block,
+        ),
+        (
+            11,
+            engine::PermissionKind::Microphone,
+            "site-permission-allow",
+            engine::PermissionDecision::Allow,
+        ),
+    ] {
+        let request = permission_request(&view, cx, id, kind);
+        fake.send(
+            cx,
+            Event::PermissionRequested {
+                view: page(1),
+                request: request.clone(),
+            },
+        );
+        let mut prompt = panel(&view, cx);
+        assert_eq!(
+            f32::from(
+                prompt
+                    .debug_bounds("site-permission-prompt")
+                    .unwrap()
+                    .size
+                    .width
+            ),
+            236.
+        );
+        fake.take_calls();
+        click(&mut prompt, button);
+        cx.run_until_parked();
+        assert_eq!(
+            fake.take_calls()
+                .iter()
+                .filter(|call| matches!(call, Call::PermissionResponse(..)))
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![Call::PermissionResponse(1, request.id, decision)]
+        );
+        assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+    }
+    let request = permission_request(&view, cx, 12, engine::PermissionKind::Location);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: request.clone(),
+        },
+    );
+    let mut prompt = panel(&view, cx);
+    fake.take_calls();
+    prompt.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!fake
+        .take_calls()
+        .iter()
+        .any(|call| matches!(call, Call::PermissionResponse(..))));
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_some()));
+    click(&mut prompt, "site-permission-not-now");
+    cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::PermissionResponse(
+        1,
+        request.id,
+        engine::PermissionDecision::Block
+    )));
+}
+
+#[gpui::test]
+fn permission_prompts_reject_stale_origin_and_cannot_survive_engine_cancellation(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, fake) = open_pages(cx);
+    let mut stale = permission_request(&view, cx, 20, engine::PermissionKind::Camera);
+    stale.top_origin = "https://other.example".into();
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: stale.clone(),
+        },
+    );
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+    assert!(fake.take_calls().contains(&Call::PermissionResponse(
+        1,
+        stale.id,
+        engine::PermissionDecision::Dismiss
+    )));
+    let request = permission_request(&view, cx, 21, engine::PermissionKind::Notifications);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: request.clone(),
+        },
+    );
+    let _prompt = panel(&view, cx);
+    fake.take_calls();
+    fake.send(
+        cx,
+        Event::PermissionDismissed {
+            view: page(1),
+            request: request.id,
+        },
+    );
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+    assert!(!fake
+        .take_calls()
+        .iter()
+        .any(|call| matches!(call, Call::PermissionResponse(..))));
+}
+
+#[gpui::test]
+fn permission_prompt_navigation_and_command_bar_shortcuts_cannot_allow_the_old_page(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, fake) = open_pages(cx);
+    let request = permission_request(&view, cx, 30, engine::PermissionKind::Camera);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: request.clone(),
+        },
+    );
+    let mut prompt = panel(&view, cx);
+    fake.take_calls();
+    prompt.simulate_keystrokes("cmd-l");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.command_bar.is_some()));
+    assert!(fake.take_calls().contains(&Call::PermissionResponse(
+        1,
+        request.id,
+        engine::PermissionDecision::Dismiss
+    )));
+    view.update(cx, |view, cx| view.close_command_bar(cx));
+    cx.run_until_parked();
+    let request = permission_request(&view, cx, 31, engine::PermissionKind::Camera);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: request.clone(),
+        },
+    );
+    let _prompt = panel(&view, cx);
+    fake.take_calls();
+    fake.send(
+        cx,
+        Event::UrlChanged {
+            view: page(1),
+            url: "https://other.example/new".into(),
+        },
+    );
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+    assert!(!fake.take_calls().contains(&Call::PermissionResponse(
+        1,
+        request.id,
+        engine::PermissionDecision::Allow
+    )));
+}
+
+#[gpui::test]
+fn a_background_window_cannot_steal_focus_with_a_permission_prompt(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let request = permission_request(&view, cx, 50, engine::PermissionKind::Camera);
+    cx.deactivate_window();
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: request.clone(),
+        },
+    );
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+    assert!(fake.take_calls().contains(&Call::PermissionResponse(
+        1,
+        request.id,
+        engine::PermissionDecision::Dismiss
+    )));
+}
+
+#[gpui::test]
+fn an_old_permission_button_cannot_allow_a_replacement_or_changed_origin(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let old = permission_request(&view, cx, 60, engine::PermissionKind::Camera);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: old.clone(),
+        },
+    );
+    let _old_panel = panel(&view, cx);
+    fake.send(
+        cx,
+        Event::PermissionDismissed {
+            view: page(1),
+            request: old.id,
+        },
+    );
+    let current = permission_request(&view, cx, 61, engine::PermissionKind::Microphone);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: current.clone(),
+        },
+    );
+    let _current_panel = panel(&view, cx);
+    fake.take_calls();
+    // A queued click from the retired child carries its original request ID.
+    view.update(cx, |view, cx| {
+        view.resolve_site_permission(old.id, engine::PermissionDecision::Allow, cx)
+    });
+    cx.run_until_parked();
+    assert!(fake.take_calls().is_empty());
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_some()));
+    // A navigation may update the model before the child's next render.
+    view.update(cx, |view, cx| {
+        view.edit_browser(|model| {
+            model.set_url(model.active_tab().unwrap().id, "https://other.example")
+        });
+        view.resolve_site_permission(current.id, engine::PermissionDecision::Allow, cx);
+    });
+    cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::PermissionResponse(
+        1,
+        current.id,
+        engine::PermissionDecision::Dismiss
+    )));
+}
+
+#[gpui::test]
+fn an_unanswered_permission_is_not_misreported_as_a_stored_block(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    install_site_info(&view, cx, &fake, true);
+    let request = permission_request(&view, cx, 70, engine::PermissionKind::Camera);
+    fake.send(
+        cx,
+        Event::PermissionRequested {
+            view: page(1),
+            request: request.clone(),
+        },
+    );
+    let _prompt = panel(&view, cx);
+    fake.send(
+        cx,
+        Event::PermissionDismissed {
+            view: page(1),
+            request: request.id,
+        },
+    );
+    click(cx, "address-site-controls");
+    let mut controls = panel(&view, cx);
+    assert!(controls.debug_bounds("site-permission-Camera").is_none());
 }

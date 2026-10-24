@@ -578,7 +578,7 @@ impl Render for Overlay {
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
-                    OverlayKind::SiteControls => browser.render_site_controls(cx),
+                    OverlayKind::SiteControls => browser.render_site_controls(window, cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
@@ -1226,6 +1226,12 @@ impl BrowserWindow {
                         cx.defer(move |cx| { let _=editor.update(cx,|editor,_,cx|editor.receive_zap(source,identity.profile,identity.tab,selector,cx)); });
                     }
                 }
+                Event::PermissionRequested { request, .. } => {
+                    if let Some(identity) = identity {
+                        self.show_site_permission_request(identity.tab, identity.profile, request, window, cx);
+                    }
+                }
+                Event::PermissionDismissed { request, .. } => self.site_permission_dismissed(request, cx),
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
                 Event::EditFocusChanged { .. } => {},
                 Event::OpenPeek { url, .. } => {
@@ -3077,7 +3083,7 @@ impl BrowserWindow {
         let controls_open = self.site_controls.is_some();
         let anchor = if self.sidebar_debug_namespace.is_none() { self.site_controls_anchor.clone() } else { Default::default() };
         let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
-            .group(id).relative().flex_none().size(px(24.)).flex().items_center().justify_center()
+            .group(id).relative().flex_none().size(px(26.)).flex().items_center().justify_center()
             .child(self.render_press_highlight(id, hsla(0., 0., 0., 0.08), active));
         let address_actions_shown = controls_open || self.sidebar_hovered;
         let favorites: Vec<_> = self.browser.active_user_profile().favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).collect();
@@ -3124,7 +3130,7 @@ impl BrowserWindow {
                         .debug_selector(|| self.sidebar_debug_name((|| "address".into())()))
                         .h(px(36.0))
                         .pl(px(13.))
-                        .pr(px(5.))
+                        .pr(px(6.))
                         .flex()
                         .items_center()
                         .gap(px(4.))

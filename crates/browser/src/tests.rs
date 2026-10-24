@@ -192,6 +192,7 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    PermissionResponse(u64,engine::PermissionRequestId,engine::PermissionDecision),
     Quote(u64, u64),
     SitePermission(u64,String,engine::PermissionKind,engine::PermissionValue),
     ClearSiteData(u64,String,engine::ClearSiteData),
@@ -265,6 +266,7 @@ struct FakeState {
     identity_attempts: Vec<(crate::pages::PageIdentity, browser_core::SpaceId, crate::pages::StorageSelection, String)>,
     snapshots: Vec<engine::PageSnapshot>,
     site_infos: std::collections::HashMap<u64,engine::SiteInfo>,
+    permission_requests: std::collections::HashSet<(u64,engine::PermissionRequestId)>,
 }
 
 #[derive(Clone, Default)]
@@ -279,6 +281,11 @@ impl FakeEngine {
     }
 
     fn send(&self, cx: &mut VisualTestContext, event: Event) {
+        match &event {
+            Event::PermissionRequested {view,request}=>{self.0.borrow_mut().permission_requests.insert((raw(*view),request.id));},
+            Event::PermissionDismissed {view,request}=>{self.0.borrow_mut().permission_requests.remove(&(raw(*view),*request));},
+            _=>{}
+        }
         if let Event::Focused { view } = &event { self.0.borrow_mut().focused_page = Some(*view); }
         self.0.borrow_mut().events.push(event);
         cx.executor().advance_clock(Duration::from_millis(50));
@@ -291,6 +298,11 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn permission_pending(&self,view:ViewId,request:engine::PermissionRequestId)->bool {self.0.borrow().permission_requests.contains(&(raw(view),request))}
+    fn respond_permission(&mut self,view:ViewId,request:engine::PermissionRequestId,decision:engine::PermissionDecision)->bool {
+        let removed=self.0.borrow_mut().permission_requests.remove(&(raw(view),request));
+        if removed {self.call(Call::PermissionResponse(raw(view),request,decision));} removed
+    }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.call(Call::Quote(raw(view), request)); true }
     fn site_info(&self, view:ViewId)->Option<engine::SiteInfo>{self.0.borrow().site_infos.get(&raw(view)).cloned()}
     fn set_site_permission(&mut self,view:ViewId,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool{

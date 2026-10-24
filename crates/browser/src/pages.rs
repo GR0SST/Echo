@@ -41,7 +41,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
-        Event::Shortcut { view, .. } => Some(*view),
+        Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
 }
@@ -66,6 +66,8 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn permission_pending(&self, _view: ViewId, _request: engine::PermissionRequestId) -> bool { false }
+    fn respond_permission(&mut self, _view: ViewId, _request: engine::PermissionRequestId, _decision: engine::PermissionDecision) -> bool { false }
     fn request_quote(&mut self, _view: ViewId, _request: u64) -> bool { false }
     fn site_info(&self, _view: ViewId) -> Option<engine::SiteInfo> { None }
     fn set_site_permission(&mut self, _view: ViewId, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
@@ -179,6 +181,8 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn permission_pending(&self, view: ViewId, request: engine::PermissionRequestId) -> bool { self.engine.permission_pending(view, request) }
+    fn respond_permission(&mut self, view: ViewId, request: engine::PermissionRequestId, decision: engine::PermissionDecision) -> bool { self.engine.respond_permission(view, request, decision) }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_quote(view, request) }
     fn site_info(&self, view: ViewId) -> Option<engine::SiteInfo> { self.engine.site_info(view) }
     fn set_site_permission(&mut self, view: ViewId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool { self.engine.set_site_permission(view, origin, kind, value) }
@@ -858,6 +862,17 @@ impl Pages {
         let Some(view) = store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page| page.view) else { return false; };
         store.engine.clear_site_data(view, origin, kind)
     }
+    pub fn permission_pending(&self, tab: TabId, request: engine::PermissionRequestId) -> bool {
+        let store=self.store.borrow();
+        store.pages.get(&tab).filter(|page|page.owner==self.host).is_some_and(|page|store.engine.permission_pending(page.view,request))
+    }
+
+    pub fn respond_permission(&mut self, tab: TabId, request: engine::PermissionRequestId, decision: engine::PermissionDecision) -> bool {
+        let mut store = self.store.borrow_mut();
+        let Some(view) = store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page|page.view) else { return false; };
+        store.engine.respond_permission(view, request, decision)
+    }
+
     pub fn zoom_percent(&self, tab: TabId) -> u16 {
         let store = self.store.borrow();
         store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page| store.engine.zoom_percent(page.view)).unwrap_or(100)
@@ -1728,7 +1743,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }

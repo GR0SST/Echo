@@ -472,6 +472,7 @@ pub(crate) fn pump_once() {
         }
     }
     let _guard = Guard(&lifecycle.pumping);
+    crate::permissions::pump();
     do_message_loop_work();
     lifecycle.after_closed(crate::downloads::poll_runtime);
     lifecycle.collect();

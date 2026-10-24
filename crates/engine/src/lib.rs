@@ -24,6 +24,8 @@ pub use media::{MediaState, MediaAction};
 mod editing;
 mod boosts;
 mod site_info;
+mod permissions;
+pub use permissions::{PermissionRequestId, PermissionRequest, PermissionDecision};
 mod site_data;
 pub use site_data::ClearSiteData;
 pub use site_info::{SiteInfo, SiteCertificate, SitePermission, PermissionKind, PermissionValue};
@@ -82,6 +84,8 @@ pub struct Shortcut {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    PermissionRequested { view: ViewId, request: PermissionRequest },
+    PermissionDismissed { view: ViewId, request: PermissionRequestId },
     LoadingProgress { view: ViewId, progress: u16 },
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
@@ -116,6 +120,8 @@ pub enum Event {
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
 #[derive(Debug)]
 enum RawEvent {
+    PermissionRequested(PermissionRequest),
+    PermissionDismissed(PermissionRequestId),
     Progress(u16),
     BoostZap(String),
     Audio(bool),
@@ -560,6 +566,7 @@ impl Engine {
         let raw = self.events.take();
         raw.into_iter()
             .filter_map(|(browser_id, event)| {
+                if let RawEvent::PermissionRequested(request) = &event { if !permissions::pending(browser_id, request.id) { return None; } }
                 let view = *self.by_browser_id.get(&browser_id)?;
                 if ordered_input {
                     if let Some(input) = browser_input(view, self.views.get(&view)?.role, &event) { return Some(input); }
@@ -863,6 +870,7 @@ impl Engine {
         if !self.move_view(id, parent, frame) { return None; }
         self.snapshots.close(id);
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         let view = self.views.remove(&id)?;
         let browser = view.browser.identifier();
         view.callback_events.redirect(browser, &self.events, &target.events, transferable_metadata);
@@ -928,6 +936,7 @@ impl Engine {
 
     pub fn navigate(&mut self, id: ViewId, url: &str) {
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(frame) = self.views.get(&id).and_then(|view| view.browser.main_frame()) {
             frame.load_url(Some(&CefString::from(url)));
         }
@@ -935,6 +944,7 @@ impl Engine {
 
     pub fn go_back(&mut self, id: ViewId) {
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) {
             view.browser.go_back();
         }
@@ -951,6 +961,7 @@ impl Engine {
 
     pub fn go_forward(&mut self, id: ViewId) {
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) {
             view.browser.go_forward();
         }
@@ -958,6 +969,7 @@ impl Engine {
 
     pub fn reload(&mut self, id: ViewId) {
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) {
             view.browser.reload();
         }
@@ -966,11 +978,13 @@ impl Engine {
     /// Reloads from the network, bypassing the HTTP cache.
     pub fn force_reload(&mut self, id: ViewId) {
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) { view.browser.reload_ignore_cache(); }
     }
 
     pub fn stop_loading(&mut self, id: ViewId) {
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) { view.browser.stop_load(); }
     }
 
@@ -1032,6 +1046,17 @@ impl Engine {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
             host.stop_finding(1);
         }
+    }
+
+    pub fn permission_pending(&self, view: ViewId, request: PermissionRequestId) -> bool {
+        self.views.get(&view).filter(|page|page.role==ViewRole::Page)
+            .is_some_and(|page|permissions::pending(page.browser.identifier(),request))
+    }
+
+    /// Queue a decision for the exact request/view; continuation runs at pump time.
+    pub fn respond_permission(&mut self, view: ViewId, request: PermissionRequestId, decision: PermissionDecision) -> bool {
+        self.views.get(&view).filter(|page| page.role == ViewRole::Page)
+            .is_some_and(|page| permissions::answer(page.browser.identifier(), request, decision))
     }
 
     pub fn clear_site_data(&mut self, id: ViewId, origin: &str, kind: ClearSiteData) -> bool {
@@ -1201,6 +1226,7 @@ impl Engine {
         for inspector in inspectors { self.close_inspector(inspector); }
         self.snapshots.close(id);
         self.site_data.close(id);
+        if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
             if let Some(audio) = &self._runtime.audio { audio.close(view.browser.identifier()); }
@@ -1256,6 +1282,8 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     }
     Some(match event {
         RawEvent::Shortcut(_) => unreachable!(),
+        RawEvent::PermissionRequested(request) => Event::PermissionRequested { view, request },
+        RawEvent::PermissionDismissed(request) => Event::PermissionDismissed { view, request },
         RawEvent::LoadError(_, _, _) => return None,
         RawEvent::Media(state) => Event::MediaStateChanged { view, state },
         RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
@@ -1303,6 +1331,9 @@ wrap_client! {
     }
 
     impl Client {
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            self.inspector.is_none().then(|| permissions::Handler::new(self.events.clone()))
+        }
         fn audio_handler(&self) -> Option<AudioHandler> {
             if self.inspector.is_some() { return None; }
             self.audio.clone().map(|capture| audio::Handler::new(capture, self.events.clone()))
@@ -1389,11 +1420,15 @@ wrap_request_handler! {
         }
         fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, gesture: i32, redirect: i32) -> i32 {
             if let Some(browser)=browser.as_deref() { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
-            let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return 0; };
+            let Some(frame) = frame else { return 0; };
+            if frame.is_main() == 0 {
+                if let Some(browser) = browser.as_deref() { permissions::navigated(browser.identifier(), frame); }
+                return 0;
+            }
             let Some(request) = request else { return 0; };
             let target = CefString::from(&request.url()).to_string();
             if CefString::from(&request.method()).to_string() != "GET" || !peek_cross_domain(&CefString::from(&frame.url()).to_string(), &target, self.policy.lock().unwrap().pinned, gesture != 0, redirect != 0) {
-                if let Some(browser) = browser.as_deref() { site_data::navigated(browser.identifier()); }
+                if let Some(browser) = browser.as_deref() { site_data::navigated(browser.identifier()); permissions::navigated(browser.identifier(), frame); }
                 return 0;
             }
             push(&self.events, browser, RawEvent::Peek(target));
@@ -1597,6 +1632,7 @@ wrap_life_span_handler! {
             if let Some(browser) = browser {
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
                 site_data::destroyed(browser.identifier());
+                permissions::destroyed(browser.identifier());
             }
         }
 

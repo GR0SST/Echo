@@ -58,6 +58,16 @@ fn install_icon(app: &Path) {
         .status()
         .expect("cannot run plutil");
     assert!(status.success(), "cannot set the bundle icon");
+    for (key, description) in [
+        ("NSCameraUsageDescription", "Websites may use your camera for features on their site."),
+        ("NSMicrophoneUsageDescription", "Websites may use your microphone for features on their site."),
+        ("NSLocationUsageDescription", "Websites may use your location for features on their site."),
+        ("NSLocationWhenInUseUsageDescription", "Websites may use your location for features on their site."),
+    ] {
+        let status = std::process::Command::new("plutil").args(["-replace",key,"-string",description])
+            .arg(&plist).status().expect("cannot set site permission description");
+        assert!(status.success(), "cannot set site permission description");
+    }
     let status = std::process::Command::new("plutil")
         .args(["-insert", "CFBundleURLTypes", "-json",
             r#"[{"CFBundleURLName":"Web URLs","CFBundleTypeRole":"Viewer","CFBundleURLSchemes":["http","https"]}]"#])

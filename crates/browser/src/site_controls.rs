@@ -11,7 +11,9 @@ use gpui::{
 use std::{cell::Cell, rc::Rc};
 
 const CONTEXT: &str = "SiteControls";
+const PERMISSION_CONTEXT: &str = "SitePermissionPrompt";
 const PADDING: f32 = 9.0;
+const SITE_RADIUS: f32 = 20.0;
 const TILE_WIDTH: f32 = 48.0;
 const TILE_HEIGHT: f32 = 32.0;
 const TILE_GAP: f32 = 8.0;
@@ -23,6 +25,7 @@ actions!(site_controls, [Dismiss, Next, Previous, Confirm]);
 
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some(PERMISSION_CONTEXT)),
         KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
         KeyBinding::new("down", Next, Some(CONTEXT)),
         KeyBinding::new("up", Previous, Some(CONTEXT)),
@@ -47,6 +50,7 @@ enum SiteAction {
 
 pub(crate) struct SiteControls {
     scope: SiteScope,
+    permission_request: Option<engine::PermissionRequest>,
     material_alive: Rc<Cell<bool>>,
     material_installed: Rc<Cell<bool>>,
     info: Option<engine::SiteInfo>,
@@ -94,6 +98,7 @@ impl BrowserWindow {
         );
         self.site_controls = Some(SiteControls {
             scope,
+            permission_request: None,
             material_alive: Rc::new(Cell::new(true)),
             material_installed: Rc::new(Cell::new(false)),
             info,
@@ -181,6 +186,15 @@ impl BrowserWindow {
         let Some(panel) = self.site_controls.take() else {
             return;
         };
+        if let Some(request) = panel.permission_request {
+            if let Some(pages) = &self.pages {
+                pages.borrow_mut().respond_permission(
+                    panel.scope.tab,
+                    request.id,
+                    engine::PermissionDecision::Dismiss,
+                );
+            }
+        }
         self.close_popup_overlay(panel.overlay, focus, false, cx);
         cx.notify();
     }
@@ -335,7 +349,323 @@ impl BrowserWindow {
         });
     }
 
-    pub(crate) fn render_site_controls(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn show_site_permission_request(
+        &mut self,
+        tab: browser_core::TabId,
+        profile: browser_core::UserProfileId,
+        request: engine::PermissionRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.browser.active_tab().is_some_and(|active| {
+            active.id == tab
+                && browser_core::site_settings::SiteSettings::origin(&active.url).as_deref()
+                    == Some(request.top_origin.as_str())
+        }) && self.browser.active_user_profile_id() == profile
+            && self.command_bar.is_none()
+            && window.is_window_active()
+            && permission_purpose(&request.permissions).is_some()
+            && !self
+                .site_controls
+                .as_ref()
+                .is_some_and(|panel| panel.permission_request.is_some());
+        if !current {
+            if let Some(pages) = &self.pages {
+                pages.borrow_mut().respond_permission(
+                    tab,
+                    request.id,
+                    engine::PermissionDecision::Dismiss,
+                );
+            }
+            return;
+        }
+        self.edit_profile(|model| {
+            if let Some(profile) = model.user_profile_mut(profile) {
+                for kind in &request.permissions {
+                    profile
+                        .site_settings
+                        .record_permission(&request.top_origin, core_permission(*kind));
+                }
+            }
+        });
+        self.close_site_controls(cx);
+        self.toggle_site_controls(window, cx);
+        if let Some(panel) = &mut self.site_controls {
+            panel.permission_request = Some(request);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn site_permission_dismissed(
+        &mut self,
+        request: engine::PermissionRequestId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.site_controls.as_ref().is_some_and(|panel| {
+            panel
+                .permission_request
+                .as_ref()
+                .is_some_and(|r| r.id == request)
+        }) {
+            self.site_controls.as_mut().unwrap().permission_request = None;
+            self.close_site_controls(cx);
+        }
+    }
+
+    pub(crate) fn resolve_site_permission(
+        &mut self,
+        expected: engine::PermissionRequestId,
+        decision: engine::PermissionDecision,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self
+            .site_controls
+            .as_ref()
+            .filter(|panel| {
+                panel
+                    .permission_request
+                    .as_ref()
+                    .is_some_and(|request| request.id == expected)
+            })
+            .map(|panel| self.site_scope_is_current(&panel.scope));
+        let Some(current) = current else {
+            return;
+        };
+        let decision = if current {
+            decision
+        } else {
+            engine::PermissionDecision::Dismiss
+        };
+        let panel = self.site_controls.as_mut().unwrap();
+        let Some(request) = panel.permission_request.take() else {
+            return;
+        };
+        let tab = panel.scope.tab;
+        if let Some(pages) = &self.pages {
+            pages
+                .borrow_mut()
+                .respond_permission(tab, request.id, decision);
+        }
+        self.close_site_controls(cx);
+    }
+
+    fn render_site_permission_prompt(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let panel = self.site_controls.as_ref().unwrap();
+        let request = panel.permission_request.as_ref().unwrap();
+        let request_id = request.id;
+        let kind = request
+            .permissions
+            .first()
+            .copied()
+            .unwrap_or(engine::PermissionKind::Camera);
+        let Some(purpose) = permission_purpose(&request.permissions) else {
+            return div().into_any_element();
+        };
+        // GPUI treats '-' as part of a word. Match the reference's CoreText
+        // URL breaks with explicit, measured lines rather than splitting a host.
+        let title = format!("Allow {} to {}?", request.origin, purpose);
+        let mut font = gpui::font(".SystemUIFont");
+        font.weight = gpui::FontWeight::SEMIBOLD;
+        let title = wrap_permission_title(&title, WIDTH - 2. * PADDING - 2. - 32. - 8., |text| {
+            let run = gpui::TextRun {
+                len: text.len(),
+                font: font.clone(),
+                color: hsla(0., 0., 1., 0.75),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            f32::from(
+                window
+                    .text_system()
+                    .shape_line(text.to_owned().into(), px(14.), &[run], None)
+                    .width,
+            )
+        });
+        let arrow_x = self
+            .site_controls_anchor
+            .get()
+            .map(|b| b.center().x)
+            .unwrap_or(panel.position.x + px(WIDTH / 2.));
+        let button = |id: &'static str| {
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .h(px(32.))
+                .flex_1()
+                .rounded(px(8.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(14.))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(hsla(0., 0., 1., 0.75))
+        };
+        div()
+            .id("site-permission-backdrop")
+            .size_full()
+            .key_context(PERMISSION_CONTEXT)
+            .track_focus(&panel.focus)
+            .on_action(
+                cx.listener(|this, _: &crate::window::OpenCommandBar, _, cx| {
+                    this.site_command_bar(false, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::window::EditCurrentUrl, _, cx| {
+                    this.site_command_bar(true, cx)
+                }),
+            )
+            // The reference requires a choice; Escape does not dismiss this question.
+            .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.stop_propagation()))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.close_site_controls(cx)),
+            )
+            .child(
+                self.site_panel_shell(panel, "site-permission-prompt")
+                    .absolute()
+                    .left(panel.position.x)
+                    .top(panel.position.y)
+                    .w(px(WIDTH))
+                    .p(px(PADDING))
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .size(px(32.))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(hsla(0., 0., 1., 0.08))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_color(hsla(0., 0., 1., 0.65))
+                                    .child(crate::icons::ionicon(permission_icon(kind), 18., 1.)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(14.))
+                                    .line_height(px(17.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(hsla(0., 0., 1., 0.75))
+                                    .whitespace_nowrap()
+                                    .child(title),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(
+                                button("site-permission-not-now")
+                                    .bg(hsla(0., 0., 1., 0.07))
+                                    .hover(|s| s.bg(hsla(0., 0., 1., 0.13)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.resolve_site_permission(
+                                            request_id,
+                                            engine::PermissionDecision::Block,
+                                            cx,
+                                        )
+                                    }))
+                                    .child("Not Now"),
+                            )
+                            .child(
+                                button("site-permission-allow")
+                                    .border_1()
+                                    .border_color(hsla(0., 0., 0., 0.4))
+                                    .bg(gpui::linear_gradient(
+                                        180.,
+                                        gpui::linear_color_stop(gpui::rgb(0x919192), 0.),
+                                        gpui::linear_color_stop(gpui::rgb(0x747475), 1.),
+                                    ))
+                                    .hover(|s| s.bg(gpui::rgb(0x919192)))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.resolve_site_permission(
+                                            request_id,
+                                            engine::PermissionDecision::Allow,
+                                            cx,
+                                        )
+                                    }))
+                                    .child("Allow"),
+                            ),
+                    ),
+            )
+            .child(site_arrow(point(
+                arrow_x - px(9.),
+                panel.position.y - px(8.),
+            )))
+            .into_any_element()
+    }
+
+    fn site_panel_shell(
+        &self,
+        panel: &SiteControls,
+        id: &'static str,
+    ) -> gpui::Stateful<gpui::Div> {
+        let material_alive = panel.material_alive.clone();
+        let material_installed = panel.material_installed.clone();
+        let parent = self.native_view.map(|view| view as usize);
+        div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .relative()
+            .rounded(px(SITE_RADIUS))
+            .bg(if material_installed.get() {
+                hsla(0., 0., 0.36, 0.38)
+            } else {
+                hsla(240. / 360., 0.04, 0.13, 1.)
+            })
+            .border_1()
+            .border_color(hsla(0., 0., 1., 0.12))
+            .shadow_lg()
+            .text_color(hsla(0., 0., 1., 0.8))
+            .font_family(".SystemUIFont")
+            .child(
+                gpui::canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, cx| {
+                        if !material_alive.get() {
+                            return;
+                        }
+                        let installed = parent.is_some_and(|view| {
+                            crate::native::set_content_backdrop(
+                                view as *mut std::ffi::c_void,
+                                "site-controls-page",
+                                Some([
+                                    f32::from(bounds.origin.x) as f64,
+                                    f32::from(bounds.origin.y) as f64,
+                                    f32::from(bounds.size.width) as f64,
+                                    f32::from(bounds.size.height) as f64,
+                                ]),
+                                SITE_RADIUS as f64,
+                                site_backdrop_config(),
+                            ) == crate::material::BackdropInstallation::Installed
+                        });
+                        if material_installed.replace(installed) != installed {
+                            window.defer(cx, |window, _| window.refresh());
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
+    }
+
+    pub(crate) fn render_site_controls(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if self
             .site_controls
             .as_ref()
@@ -359,9 +689,19 @@ impl BrowserWindow {
         let Some(panel) = &self.site_controls else {
             return div().into_any_element();
         };
-        let material_alive = panel.material_alive.clone();
-        let material_installed = panel.material_installed.clone();
-        let parent = self.native_view.map(|view| view as usize);
+        if let Some(request) = &panel.permission_request {
+            let current = self.pages.as_ref().is_some_and(|pages| {
+                pages.try_borrow().map_or(true, |pages| {
+                    pages.permission_pending(panel.scope.tab, request.id)
+                })
+            });
+            if !current {
+                self.site_controls.as_mut().unwrap().permission_request = None;
+                self.close_site_controls(cx);
+                return div().into_any_element();
+            }
+            return self.render_site_permission_prompt(window, cx);
+        }
         let boosts = self.site_boosts();
         let profile = self.browser.active_user_profile_id();
         let secure = panel.info.as_ref().is_some_and(|info| info.secure);
@@ -400,6 +740,12 @@ impl BrowserWindow {
                     .find(|setting| core_permission(setting.kind) == permission)
                     .cloned()
             })
+            .filter(|setting| {
+                matches!(
+                    setting.value,
+                    engine::PermissionValue::Allow | engine::PermissionValue::Block
+                )
+            })
             .collect();
         let tile = |id: &'static str| {
             div()
@@ -434,9 +780,10 @@ impl BrowserWindow {
         };
         let heading = |text: &'static str| {
             div()
-                .pt(px(8.))
+                .pt(px(if text == "Extensions" { 8. } else { 13. }))
                 .pb(px(8.))
-                .text_size(px(13.))
+                .text_size(px(14.))
+                .line_height(px(21.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(text)
         };
@@ -492,56 +839,13 @@ impl BrowserWindow {
                 cx.listener(|this, _, _, cx| this.close_site_controls(cx)),
             )
             .child(
-                div()
-                    .id("site-controls")
-                    .debug_selector(|| "site-controls".into())
-                    .relative()
-                    .rounded(px(crate::panel::RADIUS))
-                    .bg(if material_installed.get() {
-                        hsla(0., 0., 0.36, 0.38)
-                    } else {
-                        hsla(240. / 360., 0.04, 0.13, 1.)
-                    })
-                    .border_1()
-                    .border_color(hsla(0., 0., 1., 0.12))
-                    .shadow_lg()
-                    .text_color(hsla(0., 0., 1., 0.92))
-                    .font_family(".SystemUIFont")
-                    .child(
-                        gpui::canvas(
-                            |_, _, _| (),
-                            move |bounds, _, window, cx| {
-                                if !material_alive.get() {
-                                    return;
-                                }
-                                let installed = parent.is_some_and(|view| {
-                                    crate::native::set_content_backdrop(
-                                        view as *mut std::ffi::c_void,
-                                        "site-controls-page",
-                                        Some([
-                                            f32::from(bounds.origin.x) as f64,
-                                            f32::from(bounds.origin.y) as f64,
-                                            f32::from(bounds.size.width) as f64,
-                                            f32::from(bounds.size.height) as f64,
-                                        ]),
-                                        crate::panel::RADIUS as f64,
-                                        site_backdrop_config(),
-                                    ) == crate::material::BackdropInstallation::Installed
-                                });
-                                if material_installed.replace(installed) != installed {
-                                    window.defer(cx, |window, _| window.refresh());
-                                }
-                            },
-                        )
-                        .absolute()
-                        .inset_0(),
-                    )
+                self.site_panel_shell(panel, "site-controls")
                     .absolute()
                     .left(panel.position.x)
                     .top(panel.position.y)
                     .w(px(WIDTH))
                     .p(px(PADDING))
-                    .pt(px(10.))
+                    .pt(px(9.))
                     .flex()
                     .flex_col()
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -560,7 +864,7 @@ impl BrowserWindow {
                             .child(
                                 top_tile("site-boost")
                                     .on_click(cx.listener(|this, _, _, cx| this.customize_page(cx)))
-                                    .child(crate::icons::control_sized(Icon::Boost, 22.)),
+                                    .child(crate::icons::ionicon("brush", 22., 1.)),
                             )
                             .child(
                                 top_tile("site-capture")
@@ -583,7 +887,7 @@ impl BrowserWindow {
                     .when(!boosts.is_empty(), |panel| {
                         panel
                             .child(heading("Boosts"))
-                            .children(boosts.into_iter().map(|boost| {
+                            .children(boosts.into_iter().enumerate().map(|(index, boost)| {
                                 let id = boost.id;
                                 let enabled = boost.enabled;
                                 div()
@@ -591,7 +895,8 @@ impl BrowserWindow {
                                     .debug_selector(|| "site-boost-toggle".into())
                                     .flex()
                                     .items_center()
-                                    .h(px(40.))
+                                    .h(px(33.))
+                                    .mt(px(if index == 0 { 0. } else { 10. }))
                                     .gap(px(8.))
                                     .cursor_pointer()
                                     .rounded(px(6.))
@@ -604,9 +909,9 @@ impl BrowserWindow {
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .bg(hsla(0., 0., 1., 0.9))
+                                            .bg(gpui::rgb(0xecedfe))
                                             .text_color(hsla(0., 0., 0.2, 1.))
-                                            .child(crate::icons::control_sized(Icon::Boost, 22.)),
+                                            .child(crate::icons::ionicon("brush", 22., 1.)),
                                     )
                                     .child(
                                         div()
@@ -614,7 +919,8 @@ impl BrowserWindow {
                                             .flex_col()
                                             .flex_1()
                                             .min_w_0()
-                                            .text_size(px(13.))
+                                            .text_size(px(14.))
+                                            .line_height(px(17.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child(boost.name)
                                             .child(
@@ -627,8 +933,9 @@ impl BrowserWindow {
                                                         }
                                                     })
                                                     .text_size(px(12.))
+                                                    .line_height(px(14.))
                                                     .font_weight(gpui::FontWeight::NORMAL)
-                                                    .text_color(hsla(0., 0., 1., 0.55))
+                                                    .text_color(hsla(0., 0., 1., 0.45))
                                                     .child(if enabled {
                                                         "Enabled"
                                                     } else {
@@ -650,110 +957,115 @@ impl BrowserWindow {
                             }))
                     })
                     .when(!permissions.is_empty(), |panel| {
-                        panel
-                            .child(heading("Settings"))
-                            .children(permissions.into_iter().map(|permission| {
-                                let kind = permission.kind;
-                                let enabled = permission.value == engine::PermissionValue::Allow;
-                                let scope = scope.clone();
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "site-permission-{kind:?}"
-                                    )))
-                                    .debug_selector(move || format!("site-permission-{kind:?}"))
-                                    .h(px(44.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .rounded(px(6.))
-                                    .cursor_pointer()
-                                    .hover(|el| el.bg(hsla(0., 0., 1., 0.08)))
-                                    .child(
-                                        div()
-                                            .size(px(32.))
-                                            .flex_none()
-                                            .rounded_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .bg(if enabled {
-                                                gpui::rgb(0xeeecff).into()
-                                            } else {
-                                                hsla(0., 0., 1., 0.28)
-                                            })
-                                            .text_color(hsla(0., 0., 0.2, 1.))
-                                            .child(crate::icons::ionicon(
-                                                permission_icon(kind),
-                                                18.,
-                                                1.,
-                                            )),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .flex_col()
-                                            .text_size(px(13.))
-                                            .line_height(px(17.))
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(permission_label(kind))
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .font_weight(gpui::FontWeight::NORMAL)
-                                                    .text_color(hsla(0., 0., 1., 0.55))
-                                                    .child(if enabled {
-                                                        "Allowed"
-                                                    } else {
-                                                        "Blocked"
-                                                    }),
-                                            ),
-                                    )
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if !this.site_scope_is_current(&scope) {
-                                            return;
-                                        }
-                                        let Some(origin) = scope.origin.as_ref() else {
-                                            return;
-                                        };
-                                        let value = if enabled {
-                                            engine::PermissionValue::Block
-                                        } else {
-                                            engine::PermissionValue::Allow
-                                        };
-                                        if !this.pages.as_ref().is_some_and(|pages| {
-                                            pages
-                                                .borrow_mut()
-                                                .set_site_permission(scope.tab, origin, kind, value)
-                                        }) {
-                                            return;
-                                        }
-                                        this.edit_profile(|model| {
-                                            if let Some(profile) =
-                                                model.user_profile_mut(scope.profile)
-                                            {
-                                                profile.site_settings.record_permission(
-                                                    origin,
-                                                    core_permission(kind),
-                                                );
+                        panel.child(heading("Settings")).children(
+                            permissions
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, permission)| {
+                                    let kind = permission.kind;
+                                    let enabled =
+                                        permission.value == engine::PermissionValue::Allow;
+                                    let scope = scope.clone();
+                                    div()
+                                        .id(gpui::SharedString::from(format!(
+                                            "site-permission-{kind:?}"
+                                        )))
+                                        .debug_selector(move || format!("site-permission-{kind:?}"))
+                                        .h(px(33.))
+                                        .mt(px(if index == 0 { 0. } else { 10. }))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .rounded(px(6.))
+                                        .cursor_pointer()
+                                        .hover(|el| el.bg(hsla(0., 0., 1., 0.08)))
+                                        .child(
+                                            div()
+                                                .size(px(32.))
+                                                .flex_none()
+                                                .rounded_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(if enabled {
+                                                    gpui::rgb(0xecedfe).into()
+                                                } else {
+                                                    hsla(0., 0., 1., 0.3)
+                                                })
+                                                .text_color(hsla(0., 0., 0.2, 1.))
+                                                .child(crate::icons::ionicon(
+                                                    "settings-sharp",
+                                                    18.,
+                                                    1.,
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .flex()
+                                                .flex_col()
+                                                .text_size(px(14.))
+                                                .line_height(px(17.))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(permission_label(kind))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .line_height(px(14.))
+                                                        .font_weight(gpui::FontWeight::NORMAL)
+                                                        .text_color(hsla(0., 0., 1., 0.45))
+                                                        .child(if enabled {
+                                                            "Allowed"
+                                                        } else {
+                                                            "Blocked"
+                                                        }),
+                                                ),
+                                        )
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if !this.site_scope_is_current(&scope) {
+                                                return;
                                             }
-                                        });
-                                        let info = this
-                                            .pages
-                                            .as_ref()
-                                            .and_then(|pages| pages.borrow().site_info(scope.tab));
-                                        if let Some(panel) = &mut this.site_controls {
-                                            panel.info = info;
-                                        }
-                                        cx.notify();
-                                    }))
-                            }))
+                                            let Some(origin) = scope.origin.as_ref() else {
+                                                return;
+                                            };
+                                            let value = if enabled {
+                                                engine::PermissionValue::Block
+                                            } else {
+                                                engine::PermissionValue::Allow
+                                            };
+                                            if !this.pages.as_ref().is_some_and(|pages| {
+                                                pages.borrow_mut().set_site_permission(
+                                                    scope.tab, origin, kind, value,
+                                                )
+                                            }) {
+                                                return;
+                                            }
+                                            this.edit_profile(|model| {
+                                                if let Some(profile) =
+                                                    model.user_profile_mut(scope.profile)
+                                                {
+                                                    profile.site_settings.record_permission(
+                                                        origin,
+                                                        core_permission(kind),
+                                                    );
+                                                }
+                                            });
+                                            let info = this.pages.as_ref().and_then(|pages| {
+                                                pages.borrow().site_info(scope.tab)
+                                            });
+                                            if let Some(panel) = &mut this.site_controls {
+                                                panel.info = info;
+                                            }
+                                            cx.notify();
+                                        }))
+                                }),
+                        )
                     })
                     .child(
                         div()
-                            .mt(px(12.))
-                            .pt(px(8.))
+                            .mt(px(15.))
+                            .pt(px(10.))
                             .border_t_1()
                             .border_color(hsla(0., 0., 1., 0.2))
                             .flex()
@@ -770,7 +1082,7 @@ impl BrowserWindow {
                                     .items_center()
                                     .gap(px(5.))
                                     .bg(hsla(0., 0., 1., 0.1))
-                                    .text_size(px(13.))
+                                    .text_size(px(14.))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(if secure {
                                         hsla(0., 0., 1., 0.85)
@@ -825,28 +1137,7 @@ impl BrowserWindow {
                             ),
                     ),
             )
-            .child(
-                gpui::canvas(
-                    |_, _, _| (),
-                    |bounds, _, window, _| {
-                        let at = |x, y| bounds.origin + point(px(x), px(y));
-                        let mut path = gpui::PathBuilder::fill();
-                        path.move_to(at(0., 10.));
-                        path.line_to(at(7.5, 1.5));
-                        path.curve_to(at(10.5, 1.5), at(9., 0.));
-                        path.line_to(at(18., 10.));
-                        path.close();
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, hsla(0., 0., 0.36, 0.38));
-                        }
-                    },
-                )
-                .absolute()
-                .left(arrow_at.x)
-                .top(arrow_at.y)
-                .w(px(18.))
-                .h(px(10.)),
-            )
+            .child(site_arrow(arrow_at))
             .when(more, |root| {
                 root.child(div().absolute().inset_0().on_mouse_down(
                     gpui::MouseButton::Left,
@@ -1012,5 +1303,114 @@ pub(crate) fn permission_icon(kind: engine::PermissionKind) -> &'static str {
         engine::PermissionKind::Clipboard => "clipboard",
         engine::PermissionKind::AutomaticDownloads => "download",
         engine::PermissionKind::Sound => "volume-high",
+    }
+}
+
+fn site_arrow(position: Point<Pixels>) -> AnyElement {
+    gpui::canvas(
+        |_, _, _| (),
+        |bounds, _, window, _| {
+            let at = |x, y| bounds.origin + point(px(x), px(y));
+            let mut path = gpui::PathBuilder::fill();
+            path.move_to(at(0., 10.));
+            path.line_to(at(7.5, 1.5));
+            path.curve_to(at(10.5, 1.5), at(9., 0.));
+            path.line_to(at(18., 10.));
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, hsla(0., 0., 0.36, 0.38));
+            }
+        },
+    )
+    .absolute()
+    .left(position.x)
+    .top(position.y)
+    .w(px(18.))
+    .h(px(10.))
+    .into_any_element()
+}
+
+fn permission_purpose(kinds: &[engine::PermissionKind]) -> Option<&'static str> {
+    Some(match kinds {
+        [engine::PermissionKind::Camera, engine::PermissionKind::Microphone] => {
+            "access your camera and microphone"
+        }
+        [engine::PermissionKind::Camera] => "access your camera",
+        [engine::PermissionKind::Microphone] => "access your microphone",
+        [engine::PermissionKind::Location] => "access your location",
+        [engine::PermissionKind::Notifications] => "send you notifications",
+        _ => return None,
+    })
+}
+
+fn wrap_permission_title(title: &str, width: f32, mut measure: impl FnMut(&str) -> f32) -> String {
+    let mut opportunities: Vec<_> = title
+        .char_indices()
+        .filter_map(|(at, ch)| (ch == ' ' || ch == '-').then_some(at + ch.len_utf8()))
+        .collect();
+    opportunities.push(title.len());
+    let mut start = 0;
+    let mut lines = Vec::new();
+    while start < title.len() {
+        while title[start..].starts_with(' ') {
+            start += 1;
+        }
+        if start == title.len() {
+            break;
+        }
+        let mut fit = start;
+        for end in opportunities.iter().copied().filter(|end| *end > start) {
+            if measure(title[start..end].trim_end()) > width {
+                break;
+            }
+            fit = end;
+        }
+        if fit == start {
+            for (at, ch) in title[start..].char_indices() {
+                let end = start + at + ch.len_utf8();
+                if measure(&title[start..end]) > width && fit > start {
+                    break;
+                }
+                fit = end;
+            }
+        }
+        lines.push(title[start..fit].trim_end());
+        start = fit;
+    }
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod permission_title_tests {
+    use super::wrap_permission_title;
+    #[test]
+    fn url_wrapping_keeps_scheme_and_hyphens_and_does_not_lose_utf8_text() {
+        let title = "Allow http://echo-site-controls-oct24.localhost:48763 to access your camera?";
+        let wrapped = wrap_permission_title(title, 30., |text| text.chars().count() as f32);
+        assert!(wrapped.contains("http://"));
+        assert!(wrapped.lines().any(|line| line.ends_with('-')));
+        assert_eq!(
+            wrapped
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>(),
+            title
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>()
+        );
+        let unicode = "Allow https://bücher.example to access your camera?";
+        let wrapped = wrap_permission_title(unicode, 8., |text| text.chars().count() as f32);
+        assert!(wrapped.lines().all(|line| line.chars().count() <= 8));
+        assert_eq!(
+            wrapped
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>(),
+            unicode
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect::<String>()
+        );
     }
 }

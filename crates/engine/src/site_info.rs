@@ -24,7 +24,7 @@ impl PermissionKind {
         Self::AutomaticDownloads,
         Self::Sound,
     ];
-    fn cef_type(self) -> ContentSettingTypes {
+    pub(crate) fn cef_type(self) -> ContentSettingTypes {
         match self {
             Self::Camera => ContentSettingTypes::MEDIASTREAM_CAMERA,
             Self::Microphone => ContentSettingTypes::MEDIASTREAM_MIC,
