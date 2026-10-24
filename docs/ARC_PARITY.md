@@ -73,7 +73,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Check for Updates… | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Privacy Policy | — | missing | — |
 | Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
-| Quit | ⌘Q | done | No "Warn before quitting" confirmation |
+| Quit | ⌘Q | done | No "Warn before quitting" confirmation. Native captured-private-page and closed-private-tab cases assert actual zero-status process exit after the complete CEF barrier with `scripts/check-private-quit.sh`; the driver strict mode rejects timeouts and signals |
 
 ### File
 
