@@ -16,6 +16,8 @@ use crate::{demo_browser, init};
 mod max_downloads_tests;
 #[path = "toolbar_tests.rs"]
 mod toolbar_tests;
+#[path = "page_context_tests.rs"]
+mod page_context_tests;
 #[path = "space_context_tests.rs"]
 mod space_context_tests;
 #[path = "page_zoom_tests.rs"]
@@ -238,6 +240,7 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    context_images: Vec<(u64,u64,String,String)>,
     peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
     boosts: std::collections::HashMap<crate::pages::StorageSelection, Vec<engine::SiteBoost>>,
     paste_busy: usize,
@@ -304,6 +307,7 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.0.borrow_mut().context_images.push((raw(view),request,page_url.into(),url.into()));true}
     fn permission_pending(&self,view:ViewId,request:engine::PermissionRequestId)->bool {self.0.borrow().permission_requests.contains(&(raw(view),request))}
     fn respond_permission(&mut self,view:ViewId,request:engine::PermissionRequestId,decision:engine::PermissionDecision)->bool {
         let removed=self.0.borrow_mut().permission_requests.remove(&(raw(view),request));
@@ -8021,7 +8025,7 @@ fn split_pane_menu_matches_arc_order_and_keeps_unavailable_moves_visible(cx: &mu
         Entry::Item(item) => item.label.as_ref(), Entry::Separator => "---", Entry::Header(label) => label,
     }).collect();
     assert_eq!(labels, ["Move Left", "Move Right", "---", "Add Right Split", "Add Left Split", "---",
-        "Separate Tab from Split", "Convert to Vertical Split View", "---", "Share Split View…"]);
+        "Separate Tab from Split", "Convert to Vertical Split View"]);
     assert!(matches!(&entries[0], Entry::Item(item) if !item.enabled));
     assert!(matches!(&entries[1], Entry::Item(item) if item.enabled));
     click(&mut tab_menu(&view, cx), "tab-menu-move-backward");
@@ -8043,7 +8047,7 @@ fn vertical_split_pane_menu_uses_axis_specific_additions_and_disables_them_at_fo
     view.read_with(cx, |w, _| {
         let rows: Vec<_> = w.menu_entries().into_iter().filter_map(|entry| if let Entry::Item(item) = entry { Some(item) } else { None }).collect();
         assert_eq!(rows.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
-            ["Move Up", "Move Down", "Add Top Split", "Add Bottom Split", "Separate Tab from Split", "Convert to Horizontal Split View", "Share Split View…"]);
+            ["Move Up", "Move Down", "Add Top Split", "Add Bottom Split", "Separate Tab from Split", "Convert to Horizontal Split View"]);
         assert!(!rows[0].enabled);
         assert!(!rows[2].enabled && !rows[3].enabled);
     });

@@ -84,6 +84,8 @@ pub struct Shortcut {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    ContextImage { view: ViewId, request: u64, page_url: String, png: Vec<u8> },
+    PageContext { view: ViewId, request: page_context::Request },
     PermissionRequested { view: ViewId, request: PermissionRequest },
     PermissionDismissed { view: ViewId, request: PermissionRequestId },
     LoadingProgress { view: ViewId, progress: u16 },
@@ -120,6 +122,8 @@ pub enum Event {
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
 #[derive(Debug)]
 enum RawEvent {
+    Context(page_context::Request),
+    ContextImage(u64, String, Vec<u8>),
     PermissionRequested(PermissionRequest),
     PermissionDismissed(PermissionRequestId),
     Progress(u16),
@@ -142,6 +146,7 @@ enum RawEvent {
     Shortcut(Shortcut),
 }
 
+pub mod page_context;
 mod routed_events;
 type EventQueue = routed_events::RoutedEvents<RawEvent>;
 type Shortcuts = Arc<Vec<Shortcut>>;
@@ -868,6 +873,7 @@ impl Engine {
             || self.inspectors.sessions.values().any(|session| session.status.inspected == id) { return None; }
         let next = target.next_id.checked_add(1)?;
         if !self.move_view(id, parent, frame) { return None; }
+        if let Some(view)=self.views.get(&id) {page_context::cancel(view.browser.identifier());}
         self.snapshots.close(id);
         self.site_data.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
@@ -886,6 +892,13 @@ impl Engine {
     }
 
     /// Per-document link intent; only Peek pages capture unmodified Escape.
+    pub fn copy_context_image(&mut self, id:ViewId, request:u64, page_url:&str, url:&str)->bool {
+        self.views.get(&id).is_some_and(|view| page_context::copy_image(self.events.clone(),view,request,page_url,url))
+    }
+    pub fn set_page_context_policy(&mut self, id: ViewId, policy: page_context::Policy) {
+        if let Some(view) = self.views.get(&id).filter(|view| view.role == ViewRole::Page) { page_context::set_policy(view.browser.identifier(), policy); }
+    }
+
     pub fn set_peek_policy(&mut self, id: ViewId, policy: PeekPolicy) {
         if let Some(view) = self.views.get(&id) { *view.link_policy.lock().unwrap() = policy; }
     }
@@ -1228,6 +1241,7 @@ impl Engine {
         self.site_data.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.remove(&id) {
+            page_context::forget(view.browser.identifier());
             self.by_browser_id.remove(&view.browser.identifier());
             if let Some(audio) = &self._runtime.audio { audio.close(view.browser.identifier()); }
             // Runtime owns the exact context and child host until OnBeforeClose.
@@ -1254,6 +1268,7 @@ fn browser_input(view: ViewId, role: ViewRole, event: &RawEvent) -> Option<Event
     match role {
         ViewRole::Inspector(inspector) => inspector_input(inspector, event).map(Event::InspectorInput),
         ViewRole::Page => match event {
+            RawEvent::Context(request) => Some(Event::PageContext { view, request: request.clone() }),
             RawEvent::Focused => Some(Event::Focused { view }),
             RawEvent::Shortcut(shortcut) => Some(Event::Shortcut { view, shortcut: shortcut.clone() }),
             _ => None,
@@ -1281,6 +1296,8 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         return Some(Event::Shortcut { view, shortcut });
     }
     Some(match event {
+        RawEvent::ContextImage(request, page_url, png) => Event::ContextImage { view, request, page_url, png },
+        RawEvent::Context(request) => Event::PageContext { view, request },
         RawEvent::Shortcut(_) => unreachable!(),
         RawEvent::PermissionRequested(request) => Event::PermissionRequested { view, request },
         RawEvent::PermissionDismissed(request) => Event::PermissionDismissed { view, request },
@@ -1333,6 +1350,10 @@ wrap_client! {
     impl Client {
         fn permission_handler(&self) -> Option<PermissionHandler> {
             self.inspector.is_none().then(|| permissions::Handler::new(self.events.clone()))
+        }
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            if self.inspector.is_some() { return None; }
+            Some(page_context::Handler::new(self.events.clone()))
         }
         fn audio_handler(&self) -> Option<AudioHandler> {
             if self.inspector.is_some() { return None; }
@@ -1769,6 +1790,7 @@ mod tests {
         let target = EventQueue::default();
         original.push((7, RawEvent::Audio(true)));
         original.push((7, RawEvent::Focused));
+        original.push((7, RawEvent::Context(page_context::Request { page_url: "https://source.example/".into(), action: page_context::Action::Copy("must not follow a transfer".into()) })));
         original.redirect(7, &original, &target, transferable_metadata);
         assert!(original.take().is_empty());
         let events = target.take();

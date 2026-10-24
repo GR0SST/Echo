@@ -62,6 +62,7 @@ impl Toast {
 
 impl BrowserWindow {
     pub(crate) fn copy_url_as_quote(&mut self, cx: &mut Context<Self>) {
+        self.pending_context_image=None;
         let Some(tab) = self.browser.space().active_tab else { return; };
         let Some(pages) = &self.pages else { return; };
         let identity = pages.borrow().identity_for_tab(tab);
@@ -88,12 +89,14 @@ impl BrowserWindow {
     }
 
     pub(crate) fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
+        self.pending_context_image=None;
         if self.copy_sidebar_selection(markdown, cx) { return; }
         let Some(id) = self.browser.space().active_tab else { return; };
         self.copy_tab_url(id, markdown, cx);
     }
 
     pub(crate) fn copy_tab_url(&mut self, id: browser_core::TabId, markdown: bool, cx: &mut Context<Self>) {
+        self.pending_context_image=None;
         let Some(tab) = self.browser.all_tabs().find(|tab| tab.id == id) else { return; };
         let clean = browser_core::links::clean_url(&tab.url);
         let message = if markdown {

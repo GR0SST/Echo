@@ -38,7 +38,7 @@ fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) 
 pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     match event {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
-        Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
+        Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
@@ -126,6 +126,8 @@ pub trait WebEngine {
     fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
+    fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
+    fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
     fn set_peek_policy(&mut self, _view: ViewId, _policy: engine::PeekPolicy) {}
     fn set_corner_radius(&mut self, _view: ViewId, _radius: f64) {}
     fn set_visible(&mut self, view: ViewId, visible: bool);
@@ -199,6 +201,8 @@ impl WebEngine for Chromium {
         self.engine.transfer_view(view, &mut target.engine, parent, bounds)
     }
     fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
+    fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.engine.copy_context_image(view,request,page_url,url)}
+    fn set_page_context_policy(&mut self, view: ViewId, policy: engine::page_context::Policy) { self.engine.set_page_context_policy(view, policy); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
         if let Ok(context) = self.resolve_storage(storage) {
@@ -729,6 +733,11 @@ impl Pages {
         self.store.borrow().pages.values().find(|page| page.view == view).map(|page| page.source_space)
     }
 
+    pub(crate) fn copy_context_image(&mut self, tab:TabId, request:u64, page_url:&str, url:&str)->bool {
+        let mut store=self.store.borrow_mut();
+        let Some(view)=store.pages.get(&tab).filter(|page| page.owner==self.host && page.visible).map(|page|page.view) else{return false;};
+        store.engine.copy_context_image(view,request,page_url,url)
+    }
     pub(crate) fn capture_event(&self, event: Event) -> Option<PageEvent> {
         let mut store = self.store.borrow_mut();
         let event = store.capture_event(event)?;
@@ -1000,6 +1009,12 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         let policies: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(id, page)|
             (page.view, !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::PeekPinned) && (browser.is_favorite(*id) || browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == *id))))).collect();
+        let contexts: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(id, page)| (page.view, engine::page_context::Policy {
+            search_name: browser.user_profile(page.identity.profile).map_or("Google", |profile| profile.settings.search.engine.label()).into(),
+            can_split: browser.related_tabs(*id).len() < browser_core::splits::MAX_SPLIT_PANES,
+            allow_little: !browser.is_private(), can_print: store.engine.supports_printing(),
+        })).collect();
+        for (view, policy) in contexts { store.engine.set_page_context_policy(view, policy); }
         for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
@@ -1743,7 +1758,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }
@@ -1774,7 +1789,7 @@ impl PageStore {
             _ => None,
         })?;
         let page = self.pages.values().find(|page| page.view == view)?;
-        let input_origin = matches!(&event, Event::Shortcut { .. } | Event::InspectorInput(_)).then_some(InputOrigin {
+        let input_origin = matches!(&event, Event::PageContext { .. } | Event::Shortcut { .. } | Event::InspectorInput(_)).then_some(InputOrigin {
             identity: page.identity, host: page.owner, attachment: page.input_attachment,
             inspector: match &event { Event::InspectorInput(input) => self.inspector_input_owner(input).map(|dock| dock.id), _ => None },
         });

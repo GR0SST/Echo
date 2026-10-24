@@ -666,6 +666,7 @@ pub struct BrowserWindow {
     pub(crate) toast: Option<crate::toast::Toast>,
     pub(crate) toast_generation: u64,
     pub(crate) quote_request: u64,
+    pub(crate) pending_context_image: Option<(u64, crate::pages::PageIdentity, String, std::time::Instant)>,
     pub(crate) pending_quote: Option<(u64, crate::pages::PageIdentity, String)>,
     pub(crate) retiring_toasts: Vec<crate::toast::Toast>,
     pub(crate) share_picker: Option<crate::native::sharing::SharePicker>,
@@ -931,6 +932,7 @@ impl BrowserWindow {
             toast: None,
             toast_generation: 0,
             quote_request: 0,
+            pending_context_image: None,
             pending_quote: None,
             retiring_toasts: Vec::new(),
             share_picker: None,
@@ -1228,6 +1230,8 @@ impl BrowserWindow {
                         if let Some(title) = title { self.edit_profile(|browser| browser.update_history_title(page_profile.expect("page provenance"), &url, &title)); }
                     }
                 }
+                Event::ContextImage { request, page_url, png, .. } => { if let Some(identity)=identity { self.complete_context_image(identity,request,&page_url,png,cx); } }
+                Event::PageContext { request, .. } => { if let Some(identity) = identity { self.confirm_page_context(identity, request, window, cx); } }
                 Event::QuoteSelection { request, text, source_url, .. } => {
                     self.complete_quote(request, identity, &text, &source_url, cx);
                 }
@@ -2262,7 +2266,7 @@ impl BrowserWindow {
             .then(|| format!("view-source:{url}"))
     }
 
-    fn view_source(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn view_source(&mut self, cx: &mut Context<Self>) {
         let Some(url) = self.current_source_url() else { return; };
         self.close_command_bar(cx);
         self.close_find(cx);

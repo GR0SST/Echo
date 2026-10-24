@@ -12,6 +12,7 @@ mod command_suggestions;
 mod menus;
 mod history;
 mod tab_menu;
+mod page_context;
 mod site_controls;
 mod boosts;
 mod boost_library;
@@ -237,7 +238,11 @@ fn open_browser_window(cx: &mut App) {
     new_window::open(false, cx);
 }
 
-fn open_incognito_window(cx: &mut App) {
+fn open_incognito_window(cx: &mut App) { open_incognito_with(None, cx); }
+
+fn open_incognito_url(url: String, cx: &mut App) { open_incognito_with(Some(url), cx); }
+
+fn open_incognito_with(url: Option<String>, cx: &mut App) {
     if quit::is_quitting() { return; }
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     let handle = cx.open_window(
@@ -250,15 +255,20 @@ fn open_incognito_window(cx: &mut App) {
             }),
             ..Default::default()
         },
-        |window, cx| {
+        { let url = url.clone(); move |window, cx| {
             let profile = profile_dir();
             let engine = start_engine(window, &profile.join("Chromium"), true);
             let view = cx.new(|cx| {
-                BrowserWindow::new(Browser::new_private(), engine, window, cx)
+                let mut browser = Browser::new_private();
+                if let Some(url) = url {
+                    let id = browser.new_tab(&url, std::time::SystemTime::now());
+                    browser.set_title(id, window::display_url(&url));
+                }
+                BrowserWindow::new(browser, engine, window, cx)
             });
             view.read(cx).focus(window);
             view
-        },
+        } },
     )
     .unwrap();
     cx.activate(true);
@@ -267,7 +277,7 @@ fn open_incognito_window(cx: &mut App) {
     cx.spawn(async move |cx| {
         let _ = handle.update(cx, |view, window, cx| {
             window.activate_window();
-            view.open_private_command_bar(window, cx);
+            if url.is_none() {view.open_private_command_bar(window, cx);} else {view.focus(window);cx.notify();}
         });
     }).detach();
 }

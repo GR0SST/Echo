@@ -132,3 +132,73 @@ shortens it one row. Fixture Space/profile names and custom icons differ from
 the owner's content. Shared material/font rendering, profile-sheet presentation
 and confirmation keycap details remain partial. No live Space was removed or
 profile assignment applied.
+
+
+## Native page context adapter
+
+`arc-page-link.png`, `arc-page-image.png`, `arc-page-blank.png` supply the item
+wording/section order. `arc-page-input-context.png` additionally records the
+editable-field menu, including native Look Up, Password, Language and Writing
+Direction actions. This extended editing menu is not implemented: existing CEF
+editing/spelling commands are preserved and Inspect appended. Media menus,
+Speech and long-selection presentation remain incomplete. macOS adds Summarize,
+Writing Tools and Services automatically through the native CEF host. Their
+complete interaction states remain unverified.
+No owner extension row is copied.
+
+CEF's MenuModel owns native tracking/material; its handler sends browser actions
+without retaining ContextMenuParams or borrowing the GPUI application. Native
+commands are invalidated by the existing document epoch (including same-URL
+reloads), dismissal and view retirement/transfer. Queued context input is not
+retargeted as metadata. The browser validates the active owned page, profile,
+generation and captured document URL before acting. New-window links inherit
+the captured profile without changing the source window's selection. Split
+links use the existing draft path, keeping original Pinned/Favorite items.
+Little and Incognito use their existing isolated window models.
+
+Copy Link/Image Address preserves the exact target URL. Copy Image retrieves
+through the source CEF request context and returns a bounded PNG. A weak native
+view lifetime, document epoch, UI request identity, timeout, active document and
+later browser-copy cancellation guard delayed replies; no toast is invented.
+Save Link/Image/Page remain disabled pending their feature backends (ordinary
+download admission is still gated); Capture Image, Cast, Translate and Copy Link
+to Highlight also remain unavailable. Inspect opens the existing authenticated
+Elements picker; revealing the original clicked node across dock reflow and
+cross-origin frames is not implemented.
+
+Eight GPUI regressions cover exact copying, stale documents/generations,
+background focus, pin-preserving split creation, profile-preserving windows,
+Little/Incognito routing and asynchronous image-copy cancellation. An engine
+regression covers native menu invalidation on reload/retirement; existing
+callback-transfer coverage now includes context input.
+
+The remaining cloud Share Split View placeholders are removed from both pane
+and sidebar menus using the previously inspected Split View references. Local
+pane sharing still requires completing the nested system-service menu.
+The follow-up four-pane Arc session stopped at claim with “expected one new
+Arc window, got 0”; no input followed that failure and no window was claimed.
+The earlier two-pane session completed and closed its owned window/tabs.
+
+
+Native page validation: `page-native-run.Ph7wlq/drive.log` records exact link
+copying, background opening, native image/blank/editable menus, a two-pane split
+and clean CEF shutdown. `echo-page-image-clipboard.txt` confirms PNG clipboard
+data from the 80×80 bitmap fixture. The earlier SVG fixture did not produce a
+clipboard image; SVG copy remains incomplete. Initial keyboard-selection and
+SVG retries are diagnostic failures, not successful evidence. The successful
+harness uses observed menu-row positions and a known clipboard sentinel.
+
+Reviewed Arc-left / Echo-right crops: `pair-page-link-3x.png`,
+`pair-page-image-3x.png`, `pair-page-blank-3x.png`, `pair-page-editable-3x.png`.
+Native blank-menu metrics/material/font match; Save/Cast/Translate are visibly
+disabled while their backends are unavailable. Arc's proxy-extension row is
+omitted, shortening the link/image panels. The missing Speech submenu also
+shortens the link panel. Editable menus visibly differ and remain partial.
+`MainMenu.nib` in Arc's Base.lproj contains Speech, Start Speaking, Stop Speaking
+and their AppKit selectors; this supplies exact copy for a later native speech
+adapter without needing an owner-window interaction.
+
+Full validation before the two additional window-routing tests: 987 browser,
+208 core, 12 AI, 136 engine, 2 bundle and 4 importer tests passed; one AI test
+was ignored. All eight page-context GPUI tests and the new engine regression
+also passed together in `page-tests-5.log`.

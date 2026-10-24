@@ -325,13 +325,10 @@ impl BrowserWindow {
                 Entry::Separator,
                 item("Separate Tab from Split", Command::SeparatePane).into(),
                 orientation.into(),
-                Entry::Separator,
-                pending("Share Split View…").into(),
             ];
         }
         if let Some(split) = split {
-            let mut rows: Vec<Entry> = vec![pending("Share Split View…").into(), Entry::Separator,
-                item("Separate All Tabs", Command::SeparateAll).into(), item("Add Tab…", Command::Add(Placement::Right)).into(), orientation.into(),
+            let mut rows: Vec<Entry> = vec![item("Separate All Tabs", Command::SeparateAll).into(), item("Add Tab…", Command::Add(Placement::Right)).into(), orientation.into(),
                 Entry::Separator, Entry::Header("Tab Options")];
             for pane in split.panes.iter().filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == *id)) {
                 let pane_internal = browser_core::omnibox::is_internal_url(&pane.url);

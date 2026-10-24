@@ -129,6 +129,7 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn copy_sidebar_selection(&mut self, markdown: bool, cx: &mut Context<Self>) -> bool {
+        self.pending_context_image=None;
         let ids = self.sidebar_selection_items();
         if ids.len() < 2 { return false; }
         let tabs: Vec<_> = ids.iter().flat_map(|id| self.browser.related_tabs(*id)).filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == id)).collect();
