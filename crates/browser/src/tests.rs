@@ -9899,6 +9899,16 @@ fn mini_media_hover_delays_collapse_and_volume_drag_keeps_the_active_tab(cx:&mut
     cx.simulate_mouse_move(center,None,Modifiers::none());cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
     assert_eq!(cx.debug_bounds("mini-player").unwrap().size.height,gpui::px(66.));
+    cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
+    let tooltip=cx.debug_bounds("media-tooltip").expect("media transport tooltip");
+    assert_eq!(tooltip.size.height,gpui::px(28.));
+    assert!((f32::from(tooltip.left()-center.x)-6.).abs()<0.1,"tooltip={tooltip:?}; pointer={center:?}");
+    assert!((f32::from(tooltip.top()-center.y)-6.).abs()<0.1,"tooltip={tooltip:?}; pointer={center:?}");
+    assert_eq!(active_url(&view,cx),foreground);
+    let mut paused=playing_media();paused.playing=false;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:paused});
+    assert!(cx.debug_bounds("media-tooltip").is_none(),"playback changes dismiss the previous action tooltip");
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:playing_media()});
     click(cx,"media-volume");
     cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
     assert_eq!(cx.debug_bounds("mini-player").unwrap().size.height,gpui::px(99.));

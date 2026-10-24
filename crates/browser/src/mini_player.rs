@@ -5,6 +5,7 @@ use browser_core::TabId;
 use gpui::{canvas, div, prelude::*, px, AnyElement, Bounds, Context, Pixels, Render, Task};
 use std::{cell::Cell, collections::HashSet, rc::Rc, time::{Duration, SystemTime}};
 
+// Reference screenshots are Display P3; authored GPUI colors below use sRGB.
 const ROW: f32 = 33.;
 #[derive(Default)]
 pub(crate) struct MiniPlayer {
@@ -41,8 +42,11 @@ impl MiniPlayer {
 struct MediaTooltip(&'static str);
 impl Render for MediaTooltip {
     fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().rounded(px(14.)).px(px(10.)).py(px(6.)).bg(gpui::rgb(0x191d66))
-            .text_color(gpui::rgb(0xd0cef5)).text_size(px(12.)).font_weight(gpui::FontWeight::BOLD).child(self.0)
+        div().pl(px(5.)).pt(px(5.)).child(div().id("media-tooltip").debug_selector(||"media-tooltip".into())
+            .rounded(px(14.)).rounded_tl(px(2.)).border_1().border_color(gpui::rgb(0x1f224d))
+            .px(px(9.)).py(px(6.)).bg(gpui::rgb(0x090d4e)).font_family(".SystemUIFont")
+            .text_color(gpui::rgb(0xd0d2f5)).text_size(px(12.)).line_height(px(14.))
+            .font_weight(gpui::FontWeight::BOLD).child(self.0))
     }
 }
 impl BrowserWindow {
@@ -173,12 +177,14 @@ impl BrowserWindow {
         let tab=self.browser.all_tabs().find(|tab|tab.id==id)?;
         let identity=self.pages.as_ref()?.borrow().media_identity(id)?;
         let volume=self.pages.as_ref()?.borrow().media_volume(id);
-        let ink=gpui::Hsla::from(gpui::rgb(0xaaaab4));
+        let ink=gpui::Hsla::from(gpui::rgb(0xaaaab5));
         let button=|name:&'static str,label:&'static str,enabled:bool,icon:AnyElement| {
             div().flex_1().h(px(ROW)).flex().items_center().justify_center()
-                .child(div().id(name).debug_selector(move||name.into()).size(px(24.)).rounded(px(4.))
+                // A playback transition discards the old tooltip rather than
+                // leaving “Pause” visible over the newly paused control.
+                .child(div().id((name,usize::from(name=="media-toggle" && state.playing))).debug_selector(move||name.into()).size(px(24.)).rounded(px(4.))
                     .flex().items_center().justify_center().text_color(ink.opacity(if enabled{1.}else{0.32}))
-                    .when(enabled,|this|this.hover(|style|style.bg(gpui::hsla(0.,0.,1.,0.075)).text_color(gpui::rgb(0xafb0b9))))
+                    .when(enabled,|this|this.hover(|style|style.bg(gpui::hsla(0.,0.,1.,0.075)).text_color(gpui::rgb(0xafb0ba))))
                     .tooltip(move|_,cx|cx.new(|_|MediaTooltip(label)).into())
                     .on_click(cx.listener(move|this,_,_,cx|{
                         cx.stop_propagation();
@@ -213,28 +219,28 @@ impl BrowserWindow {
             }))
             .child(canvas(move|bounds,_,_|{paint_bounds.set(Some(bounds));},move|bounds,_,window,_|{
                 let x=bounds.left()+px(10.)+px((f32::from(bounds.size.width)-20.).max(0.)*volume);
-                let y=bounds.center().y;
-                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(bounds.size.width,px(6.))),gpui::rgb(0x20203c)).corner_radii(px(3.)));
-                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(x-bounds.left(),px(6.))),gpui::rgb(0xedeefe)).corner_radii(px(3.)));
+                let y=px(f32::from(bounds.center().y).round());
+                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(bounds.size.width,px(6.))),gpui::rgb(0x20203e)).corner_radii(px(3.)));
+                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(x-bounds.left(),px(6.))),gpui::rgb(0xedeeff)).corner_radii(px(3.)));
                 window.paint_quad(gpui::fill(Bounds::new(gpui::point(x-px(10.),y-px(8.)),gpui::size(px(20.),px(16.))),gpui::rgb(0xdadade)).corner_radii(px(8.)));
             }).size_full());
         let profile=self.browser.user_profile_id_for_tab(id).unwrap_or(self.browser.active_user_profile_id());
         let card_bounds=self.mini_player.bounds.clone();
         let card=div().id("mini-player").debug_selector(||"mini-player".into()).absolute().bottom_0().left_0().right_0()
             .h(px(ROW*(1.+self.mini_player.header+self.mini_player.volume))).rounded(px(8.))
-            .bg(gpui::rgb(0x050625)).flex().flex_col().overflow_hidden()
+            .bg(gpui::rgb(0x050627)).flex().flex_col().overflow_hidden()
             .child(canvas(move|bounds,_,_|{card_bounds.set(Some(bounds));},|_,_,_,_|{}).absolute().size_full())
             .on_hover(cx.listener(|this,hovered:&bool,_,cx|this.hover_mini_player(*hovered,cx)))
             .child(div().relative().h(px(ROW*self.mini_player.header)).flex_none().overflow_hidden()
                 .child(div().absolute().bottom_0().left_0().right_0().h(px(ROW)).flex().items_center().pl(px(14.)).pr(px(10.)).gap(px(8.))
-                    .child(div().id("media-title").debug_selector(||"media-title".into()).flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(gpui::rgb(0xcdcdd3)).child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
+                    .child(div().id("media-title").debug_selector(||"media-title".into()).flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(gpui::rgb(0xcdcdd4)).child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
                     .child(div().id("media-dismiss").debug_selector(||"media-dismiss".into()).size(px(24.)).flex().items_center().justify_center().rounded(px(4.)).text_color(ink)
-                        .hover(|style|style.bg(gpui::hsla(0.,0.,1.,0.075)).text_color(gpui::rgb(0xafb0b9)))
+                        .hover(|style|style.bg(gpui::hsla(0.,0.,1.,0.075)).text_color(gpui::rgb(0xafb0ba)))
                         .on_click(cx.listener(move|this,_,_,cx|{cx.stop_propagation();if !this.pages.as_ref().is_some_and(|pages|pages.borrow().media_identity(id)==Some(identity)){return;}
                             this.mini_player.dismissed.insert(id);this.mini_player.hovered=false;this.mini_player.drag=None;
                             this.mini_player.header=0.;this.mini_player.volume=0.;this.mini_player.volume_open=false;
                             this.mini_player.animation=None;this.mini_player.collapse=None;cx.notify();}))
-                        .child(crate::icons::control_sized(crate::icons::Icon::Close,20.)))))
+                        .child(crate::icons::control_sized(crate::icons::Icon::Close,22.)))))
             .child(div().flex().h(px(ROW)).flex_none()
                 .child(button("media-return","Back to Tab",true,self.render_media_favicon(tab,profile)))
                 .child(button("media-previous","Previous Track",state.previous,crate::icons::media_transport("previous")))

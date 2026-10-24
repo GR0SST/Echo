@@ -1543,6 +1543,15 @@ wrap_load_handler! {
     }
 }
 
+fn popup_event(url: String, disposition: WindowOpenDisposition, gesture: bool, shift: bool) -> Option<RawEvent> {
+    // Document PiP is a video/document surface, not a navigation. Until a GPUI
+    // host is prepared, reject it without turning its about:blank into a tab.
+    if url.is_empty() || disposition == WindowOpenDisposition::NEW_PICTURE_IN_PICTURE { return None; }
+    Some(if gesture && shift && disposition == WindowOpenDisposition::NEW_WINDOW { RawEvent::Peek(url) }
+        else if disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB { RawEvent::BackgroundPopup(url) }
+        else { RawEvent::Popup(url) })
+}
+
 wrap_life_span_handler! {
     struct EngineLifeSpanHandler {
         events: EventQueue,
@@ -1570,8 +1579,9 @@ wrap_life_span_handler! {
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let url = target_url.map(CefString::to_string).unwrap_or_default();
-            if !url.is_empty() {
-                push(&self.events, browser, if user_gesture != 0 && self.policy.lock().unwrap().shift_click && target_disposition == WindowOpenDisposition::NEW_WINDOW { RawEvent::Peek(url) } else if target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB { RawEvent::BackgroundPopup(url) } else { RawEvent::Popup(url) });
+            let shift = self.policy.lock().unwrap().shift_click;
+            if let Some(event) = popup_event(url, target_disposition, user_gesture != 0, shift) {
+                push(&self.events, browser, event);
             }
             1
         }
@@ -1923,5 +1933,26 @@ mod peek_tests {
         let event = KeyEvent { windows_key_code: 0x1b, unmodified_character: 0x1b, ..Default::default() };
         assert_eq!(shortcut_for(&event).key,"escape");
         assert!(intercepted_shortcut(&event,&[]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod popup_policy_tests {
+    use super::*;
+    #[test]
+    fn document_pip_never_navigates_or_opens_a_tab() {
+        for url in ["", "about:blank", "https://video.example/"] {
+            for gesture in [false,true] { for shift in [false,true] {
+                assert!(popup_event(url.into(),WindowOpenDisposition::NEW_PICTURE_IN_PICTURE,gesture,shift).is_none());
+            }}
+        }
+    }
+    #[test]
+    fn normal_popups_keep_background_and_peek_dispositions() {
+        let url="https://video.example/";
+        assert!(matches!(popup_event(url.into(),WindowOpenDisposition::NEW_BACKGROUND_TAB,true,true),Some(RawEvent::BackgroundPopup(value)) if value==url));
+        assert!(matches!(popup_event(url.into(),WindowOpenDisposition::NEW_WINDOW,true,true),Some(RawEvent::Peek(value)) if value==url));
+        assert!(matches!(popup_event(url.into(),WindowOpenDisposition::NEW_WINDOW,false,true),Some(RawEvent::Popup(value)) if value==url));
+        assert!(popup_event(String::new(),WindowOpenDisposition::NEW_FOREGROUND_TAB,true,false).is_none());
     }
 }

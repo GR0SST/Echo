@@ -40,7 +40,7 @@
   update();
   return (action, volume) => {
     current = choose();
-    const name = action === 'toggle' ? (current?.paused ? 'play' : 'pause') : action;
+    const name = action === 'toggle' ? ((current ? current.paused : session?.playbackState !== 'playing') ? 'play' : 'pause') : action;
     const handler = handlers.get(name);
     if (handler) handler({ action: name });
     else if (current) {

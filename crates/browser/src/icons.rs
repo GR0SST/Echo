@@ -148,14 +148,15 @@ pub(crate) fn media_transport(action: &str) -> AnyElement {
         let color=window.text_style().color;
         let at=|x:f32,y:f32|bounds.origin+gpui::point(px(x),px(y));
         if action=="pause" {
-            for x in [5.5,11.] {
+            for x in [5.75,11.25] {
                 window.paint_quad(gpui::fill(gpui::Bounds::new(at(x,4.),gpui::size(px(3.5),px(12.))),color).corner_radii(px(1.)));
             }
         }else{
             let skip=action!="play";
             let back=action=="previous";
-            let transform=|x:f32,y:f32|at(if back{20.-x}else{x},y);
-            let (left,right)=if skip{(3.5,14.)}else{(6.,15.)};
+            let offset=if skip{if back{1.}else{-1.}}else{0.};
+            let transform=|x:f32,y:f32|at((if back{20.-x}else{x})+offset,if skip{4.+(y-4.)*11./12.}else{y});
+            let (left,right)=if skip{(3.5,14.)}else{(6.,16.)};
             let mut path=gpui::PathBuilder::fill();
             path.move_to(transform(left,4.8));
             path.curve_to(transform(left+1.4,4.1),transform(left,3.4));
@@ -167,7 +168,7 @@ pub(crate) fn media_transport(action: &str) -> AnyElement {
             if let Ok(path)=path.build(){window.paint_path(path,color);}
             if skip {
                 let x=if back{3.}else{14.};
-                window.paint_quad(gpui::fill(gpui::Bounds::new(at(x,4.),gpui::size(px(3.),px(12.))),color).corner_radii(px(1.)));
+                window.paint_quad(gpui::fill(gpui::Bounds::new(at(x+offset,4.),gpui::size(px(3.),px(11.))),color).corner_radii(px(1.)));
             }
         }
     }).size(px(20.)).flex_none().into_any_element()
@@ -177,23 +178,25 @@ pub(crate) fn media_transport(action: &str) -> AnyElement {
 pub(crate) fn media_speaker(volume: f32, muted: bool) -> AnyElement {
     gpui::canvas(|_,_,_|(),move|bounds,_,window,_|{
         let color=window.text_style().color;
+        let waves=if muted||volume==0.{0}else{(volume*3.).ceil().clamp(1.,3.) as usize};
+        let offset=if waves==3{-1.5}else{0.};
+        let at=|x,y|bounds.origin+gpui::point(px(x+offset),px(y));
         let mut body=gpui::PathBuilder::fill();
-        for (index,(x,y)) in [(1.,7.),(4.,7.),(8.,3.5),(8.,16.5),(4.,13.),(1.,13.)].into_iter().enumerate(){
-            let p=bounds.origin+gpui::point(px(x),px(y));
+        for (index,(x,y)) in [(0.5,7.),(4.,7.),(9.,3.5),(9.,16.5),(4.,13.),(0.5,13.)].into_iter().enumerate(){
+            let p=at(x,y);
             if index==0{body.move_to(p);}else{body.line_to(p);}
         }
         body.close();if let Ok(path)=body.build(){window.paint_path(path,color);}
-        let waves=if muted||volume==0.{0}else{(volume*3.).ceil().clamp(1.,3.) as usize};
-        for radius in [4.5,7.,9.5].into_iter().take(waves){
-            let points=arc(8.,10.,radius,-0.72,0.72);
+        for (radius,angle) in [(4.5,0.72),(8.,0.67),(11.5,0.6)].into_iter().take(waves){
+            let points=arc(8.,10.,radius,-angle,angle);
             let mut path=gpui::PathBuilder::stroke(px(1.35));
             for (index,(x,y)) in points.iter().copied().enumerate(){
-                let p=bounds.origin+gpui::point(px(x),px(y));
+                let p=at(x,y);
                 if index==0{path.move_to(p);}else{path.line_to(p);}
             }
             if let Ok(path)=path.build(){window.paint_path(path,color);}
             for (x,y) in [points[0],*points.last().unwrap()]{
-                window.paint_quad(gpui::fill(gpui::Bounds::new(bounds.origin+gpui::point(px(x-0.675),px(y-0.675)),gpui::size(px(1.35),px(1.35))),color).corner_radii(px(0.675)));
+                window.paint_quad(gpui::fill(gpui::Bounds::new(at(x-0.675,y-0.675),gpui::size(px(1.35),px(1.35))),color).corner_radii(px(0.675)));
             }
         }
         if muted||volume==0.{
