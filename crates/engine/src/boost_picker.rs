@@ -5,13 +5,18 @@ pub(crate) const IPC: &str = "Echo.BoostPicker.v1";
 pub(crate) const RESULT: &str = "Echo.BoostZap.v1";
 thread_local! { static PICKERS: RefCell<HashMap<(i32,String),(V8Context,V8Value)>> = RefCell::new(HashMap::new()); }
 pub(crate) fn request(browser: &Browser, enabled: bool) {
+    let page = browser
+        .main_frame()
+        .map(|frame| CefString::from(&frame.url()).to_string())
+        .unwrap_or_default();
     let mut ids = CefStringList::new();
     browser.frame_identifiers(Some(&mut ids));
     for id in ids {
         if let Some(frame) = browser.frame_by_identifier(Some(&CefString::from(id.as_str()))) {
             if let Some(mut message) = process_message_create(Some(&CefString::from(IPC))) {
                 if let Some(args) = message.argument_list() {
-                    args.set_bool(0, i32::from(enabled));
+                    let url = CefString::from(&frame.url()).to_string();
+                    args.set_bool(0, i32::from(enabled && same_site(&page, &url)));
                     frame.send_process_message(ProcessId::RENDERER, Some(&mut message));
                 }
             }
@@ -99,4 +104,33 @@ pub(crate) fn receive(
     }
     context.exit();
     true
+}
+
+fn same_site(page: &str, frame: &str) -> bool {
+    fn host(value: &str) -> Option<String> {
+        let url = url::Url::parse(value).ok()?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return None;
+        }
+        url.host_str().map(str::to_owned)
+    }
+    host(page).is_some_and(|page| host(frame).as_deref() == Some(page.as_str()))
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn picker_does_not_return_selectors_from_an_unrelated_frame() {
+        assert!(super::same_site(
+            "https://example.com",
+            "http://example.com:8443/frame"
+        ));
+        for frame in [
+            "https://ads.example.net",
+            "https://sub.example.com",
+            "https://example.com.evil.test",
+            "about:blank",
+        ] {
+            assert!(!super::same_site("https://example.com", frame));
+        }
+    }
 }

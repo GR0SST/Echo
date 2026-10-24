@@ -200,6 +200,8 @@ mod tests {
         boost.css = "body { color: red; }".into();
         boost.javascript = "window.example = true".into();
         boost.zap_selectors.push(".advert".into());
+        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80)};
+        let appearance=boost.appearance.clone();
         let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
         assert_eq!(
             restored
@@ -211,6 +213,7 @@ mod tests {
             0
         );
         let boosts = &mut restored.active_user_profile_mut().boosts;
+        assert_eq!(boosts.iter().next().unwrap().appearance,appearance);
         assert!(boosts
             .iter()
             .next()

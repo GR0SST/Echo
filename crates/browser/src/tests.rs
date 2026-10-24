@@ -9132,17 +9132,17 @@ fn boost_picker_events_are_scoped_to_the_editor_page_and_undo_uses_zap_history(c
     assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().zap_selectors.is_empty()));
 }
 #[gpui::test]
-fn site_boost_toggle_removes_indicator_without_touching_another_profile(cx:&mut TestAppContext) {
+fn site_boost_toggle_updates_its_enabled_badge(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
     let mut panel=boost_panel(&view,cx);panel.simulate_keystrokes("escape");cx.run_until_parked();
-    assert!(cx.debug_bounds("boost-indicator").is_some());
     click(cx,"address-site-controls");
     let overlay=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(overlay.into(),&cx.cx);controls.run_until_parked();
-    click(&mut controls,"site-boost-toggle");cx.run_until_parked();
+    assert_eq!(controls.debug_bounds("site-boost-indicator").unwrap().size.width,gpui::px(32.));
+    click(&mut controls,"site-boost-toggle");controls.run_until_parked();cx.run_until_parked();
+    assert!(controls.debug_bounds("site-boost-disabled").is_some());
     assert!(!view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().enabled));
     controls.simulate_keystrokes("escape");cx.cx.refresh().unwrap();cx.executor().advance_clock(Duration::from_millis(100));cx.run_until_parked();
-    let states=view.read_with(cx,|view,_|view.site_boosts().iter().map(|boost|(boost.name.clone(),boost.enabled)).collect::<Vec<_>>());
-    assert_eq!(cx.debug_bounds("boost-indicator").unwrap().size.width,gpui::px(0.),"site states: {states:?}");
+
 }
 
 
@@ -9294,4 +9294,37 @@ fn zap_done_bar_stops_picker_and_closes_its_native_child(cx:&mut TestAppContext)
     let mut bar=VisualTestContext::from_window(done.into(),&cx.cx);bar.run_until_parked();click(&mut bar,"boost-picker-done");cx.run_until_parked();
     assert!(!editor.read_with(cx,|editor,_|editor.picking).unwrap());
     assert!(editor.read_with(cx,|editor,_|editor.picker_bar.is_none()).unwrap());
+}
+
+#[gpui::test]
+fn boost_code_hammer_opens_developer_tools_for_its_page(cx:&mut TestAppContext){
+    let (view,cx,fake)=open_pages(cx);enable_recording_inspector(&view,cx,&fake);
+    view.update(cx,|view,cx|view.new_boost(cx));let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
+    fake.take_calls();click(&mut panel,"boost-code-devtools");cx.run_until_parked();
+    assert!(fake.take_calls().iter().any(|call|matches!(call,Call::InspectorOpen(..))));
+}
+
+#[gpui::test]
+fn dock_native_menu_and_site_controls_use_local_boost_creation(cx:&mut TestAppContext){
+    let (view,cx)=open(cx);
+    dispatch_menu(cx,"Spaces","New Boost");let mut panel=boost_panel(&view,cx);panel.simulate_keystrokes("escape");cx.run_until_parked();
+    click(cx,"new-space");cx.run_until_parked();
+    let menu=view.read_with(cx,|view,_|view.new_menu.as_ref().unwrap().overlay.unwrap());let mut menu=VisualTestContext::from_window(menu.into(),&cx.cx);menu.run_until_parked();click(&mut menu,"new-menu-boost");
+    let mut panel=boost_panel(&view,cx);panel.simulate_keystrokes("escape");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),2);
+    click(cx,"address-site-controls");let controls=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(controls.into(),&cx.cx);controls.run_until_parked();click(&mut controls,"site-boost");
+    let mut panel=boost_panel(&view,cx);assert!(panel.debug_bounds("boost-editor").is_some());
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),2);
+}
+#[gpui::test]
+fn new_boost_without_a_website_defers_creation_and_can_cancel(cx:&mut TestAppContext){
+    let (view,cx)=open(cx);
+    view.update(cx,|view,cx|{view.edit_browser(|browser|{let id=browser.space().active_tab.unwrap();browser.set_url(id,"echo://history");});cx.notify();});
+    dispatch_menu(cx,"Spaces","New Boost");cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.boost_creation_pending));assert_eq!(bar_text(&view,cx).as_deref(),Some(""));
+    bar(&view,cx).simulate_keystrokes("escape");cx.run_until_parked();assert!(!view.read_with(cx,|view,_|view.boost_creation_pending));
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),0);
+    dispatch_menu(cx,"Spaces","New Boost");cx.run_until_parked();bar(&view,cx).simulate_input("https://fresh.example");bar(&view,cx).simulate_keystrokes("enter");
+    let mut panel=boost_panel(&view,cx);assert!(panel.debug_bounds("boost-editor").is_some());
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().domain().to_owned()),"fresh.example");
 }

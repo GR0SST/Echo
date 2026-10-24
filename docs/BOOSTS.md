@@ -26,11 +26,13 @@ controls. Customize Page opens an existing site Boost when available. The
 floating GPUI panel retains the reference's 184 x 590 frame; Code expands to
 480 x 590 while keeping the right edge fixed. CSS and JS use a multiline GPUI
 text buffer with IME, clipboard, selection and local undo. Refresh to Run
-reloads the captured page. Simple controls persist tint, font, size, case,
+reloads the captured page. The hammer footer opens that page’s Developer Tools,
+as verified in the installed Arc tooltip. Simple controls persist tint, font, size, case,
 inversion, contrast, brightness and saturation independently of custom code.
 
 The engine picker has a native capability scoped to a renderer context. Trusted
 pointer events highlight an element and a trusted click reports a selector.
+Cross-site frames cannot return selectors for the top-level site.
 Browser events retain page/profile ownership before modifying a Boost; Undo
 removes the last Zap selector. The native request handler sends the current
 profile configuration again before navigation and when a render view is ready.
@@ -46,8 +48,10 @@ survive closing the preview. The preview does not allocate a regular tab.
 
 ## Remaining work
 
-Library rename/delete, related-element Zap selector editing
-and full color remapping fidelity remain unfinished. Constructed stylesheets do
+Library rename/delete and related-element Zap selector editing remain unfinished.
+The simple wheel currently selects one tint; independent foreground/background
+handle dragging and the complete page palette transform remain unfinished.
+Exact editor transition motion and remaining icon details still need comparison. Constructed stylesheets do
 not support CSS `@import` rules. Renderer replacement synchronization has native
 hooks but still needs dedicated crash/recovery acceptance coverage.
 

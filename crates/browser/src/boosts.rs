@@ -511,14 +511,17 @@ impl BoostEditor {
         cx.notify();
     }
     fn control(id: &'static str) -> gpui::Stateful<gpui::Div> {
+        Self::control_hover(id, 0xdedee1)
+    }
+    fn control_hover(id: &'static str, hover: u32) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
             .debug_selector(move || id.into())
             .rounded(px(8.))
             .text_size(px(13.))
-            .font_weight(gpui::FontWeight::MEDIUM)
+            .font_weight(gpui::FontWeight::SEMIBOLD)
             .bg(rgb(0xebebed))
-            .hover(|style| style.bg(rgb(0xdedee1)))
+            .hover(move |style| style.bg(rgb(hover)))
             .cursor_pointer()
             .flex()
             .items_center()
@@ -589,6 +592,16 @@ impl BoostEditor {
                 measured.set(Some(bounds));
             },
             move |bounds, _, window, _| {
+                window.paint_shadows(
+                    bounds,
+                    px(17.).into(),
+                    &[gpui::BoxShadow {
+                        color: gpui::hsla(0., 0., 0., 0.18),
+                        offset: point(px(0.), px(3.)),
+                        blur_radius: px(6.),
+                        spread_radius: px(0.),
+                    }],
+                );
                 let mut outer = gpui::fill(
                     bounds,
                     gpui::linear_gradient(
@@ -599,31 +612,86 @@ impl BoostEditor {
                 );
                 outer.corner_radii = px(17.).into();
                 window.paint_quad(outer);
+                // The neutral frame brightens down the left edge and remains
+                // darker on the right; a single diagonal gradient loses that shape.
+                for row in 1..147 {
+                    let y = row as f32 + 0.5;
+                    let corner = if y < 17. {
+                        17. - y
+                    } else if y > 131. {
+                        y - 131.
+                    } else {
+                        0.
+                    };
+                    let inset = (17. - (17_f32.powi(2) - corner.powi(2)).max(0.).sqrt())
+                        .ceil()
+                        .max(1.);
+                    let shade = |x: f32| {
+                        let t = y / 148.;
+                        let left = 40. + 190. * (t * 1.6).min(1.);
+                        let right = 92. + 60. * t + 20. * (-y / 12.).exp();
+                        let mix = (x / 148.).powf(1. + t);
+                        let value = (left
+                            + (right - left) * mix
+                            + 20. * (1. - (2. * x / 148. - 1.).powi(2)) * t.powi(4))
+                        .clamp(0., 255.) as u32;
+                        rgb(value * 0x010101)
+                    };
+                    window.paint_quad(gpui::fill(
+                        Bounds::new(
+                            bounds.origin + point(px(inset), px(row as f32)),
+                            size(px(148. - 2. * inset), px(1.)),
+                        ),
+                        gpui::linear_gradient(
+                            90.,
+                            gpui::linear_color_stop(shade(inset), 0.),
+                            gpui::linear_color_stop(shade(148. - inset), 1.),
+                        ),
+                    ));
+                }
                 let mut inner = gpui::fill(
                     Bounds::new(
                         bounds.origin + point(px(7.), px(7.)),
                         bounds.size - size(px(14.), px(14.)),
                     ),
-                    tint.map(|hue| gpui::hsla(hue as f32 / 360., 0.3, 0.96, 1.))
-                        .unwrap_or_else(|| rgb(0xfafafa).into()),
+                    tint.map(|hue| {
+                        gpui::solid_background(gpui::hsla(hue as f32 / 360., 0.3, 0.96, 1.))
+                    })
+                    .unwrap_or_else(|| {
+                        gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(rgb(0xf5f5f5), 0.),
+                            gpui::linear_color_stop(rgb(0xffffff), 1.),
+                        )
+                    }),
                 );
                 inner.corner_radii = px(12.).into();
                 window.paint_quad(inner);
-                for y in (14..138).step_by(5) {
-                    for x in (14..138).step_by(5) {
+                for y in (11..138).step_by(4) {
+                    for x in (11..138).step_by(4) {
                         window.paint_quad(gpui::fill(
                             Bounds::new(
                                 bounds.origin + point(px(x as f32), px(y as f32)),
-                                size(px(0.6), px(0.6)),
+                                size(px(0.8), px(0.8)),
                             ),
                             gpui::hsla(0., 0., 0., 0.12),
                         ));
                     }
                 }
-                for (x, y, r, color) in [(114., 74., 17., 0x6b6b6b), (102., 103., 11., 0x353535)] {
+                for (x, y, r, color) in [(113., 73., 17., 0x6f6f6f), (101., 102., 11., 0x343434)] {
                     let at = bounds.origin + point(px(x - r), px(y - r));
-                    let mut edge =
-                        gpui::fill(Bounds::new(at, size(px(r * 2.), px(r * 2.))), rgb(0xffffff));
+                    let circle = Bounds::new(at, size(px(r * 2.), px(r * 2.)));
+                    window.paint_shadows(
+                        circle,
+                        px(r).into(),
+                        &[gpui::BoxShadow {
+                            color: gpui::hsla(0., 0., 0., 0.35),
+                            offset: point(px(0.), px(1.)),
+                            blur_radius: px(3.),
+                            spread_radius: px(0.),
+                        }],
+                    );
+                    let mut edge = gpui::fill(circle, rgb(0xffffff));
                     edge.corner_radii = px(r).into();
                     window.paint_quad(edge);
                     let mut dot = gpui::fill(
@@ -661,7 +729,7 @@ impl Render for BoostEditor {
             .border_1()
             .border_color(rgb(0xa7a7a7))
             .overflow_hidden()
-            .bg(rgb(0xfafafa))
+            .bg(rgb(0xfdfdff))
             .text_color(rgb(0x333333))
             .text_size(px(12.))
             .font_family(".SystemUIFont")
@@ -680,24 +748,35 @@ impl Render for BoostEditor {
                     [(false, "CSS"), (true, "JS")]
                         .into_iter()
                         .map(|(js, label)| {
-                            Self::control(if js { "boost-tab-js" } else { "boost-tab-css" })
-                                .w(px(50.))
-                                .h_full()
-                                .rounded(px(5.))
-                                .when(self.javascript == js, |el| el.bg(rgb(0xc9c9c9)))
-                                .child(label)
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                            Self::control_hover(
+                                if js { "boost-tab-js" } else { "boost-tab-css" },
+                                if self.javascript == js {
+                                    0xc9c9c9
+                                } else {
+                                    0xdedee1
+                                },
+                            )
+                            .w(px(50.))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .h_full()
+                            .rounded(px(5.))
+                            .when(self.javascript == js, |el| el.bg(rgb(0xc9c9c9)))
+                            .child(label)
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
                                     this.javascript = js;
                                     let input = if js { &this.js } else { &this.css };
                                     input.read(cx).focus_handle(cx).focus(window);
                                     cx.notify();
-                                }))
+                                },
+                            ))
                         }),
                 );
             root = root
                 .child(
                     div()
                         .h(px(40.))
+                        .bg(rgb(0xf7f7f8))
                         .flex_none()
                         .relative()
                         .flex()
@@ -708,6 +787,7 @@ impl Render for BoostEditor {
                         .child(
                             div()
                                 .id("boost-code-back")
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .debug_selector(|| "boost-code-back".into())
                                 .flex()
                                 .items_center()
@@ -724,6 +804,7 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .id("boost-code-scroll")
+                        .bg(rgb(0xf8f9fa))
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
@@ -740,6 +821,7 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .h(px(68.))
+                        .bg(rgb(0xffffff))
                         .flex_none()
                         .px(px(14.))
                         .border_t_1()
@@ -762,10 +844,17 @@ impl Render for BoostEditor {
                                         })),
                                 )
                                 .child(
-                                    Self::control("boost-code-undo")
+                                    Self::control("boost-code-devtools")
                                         .size(px(38.))
                                         .child(icons::ionicon("hammer-outline", 18., 1.))
-                                        .on_click(cx.listener(|this, _, _, cx| this.undo_zap(cx))),
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let _ = this.page_browser.update(cx, |page, cx| {
+                                                page.run_devtools(
+                                                    crate::devtools::Command::Toggle,
+                                                    cx,
+                                                )
+                                            });
+                                        })),
                                 ),
                         )
                         .when(self.javascript, |el| {
@@ -789,6 +878,7 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .h(px(40.))
+                        .bg(rgb(0xf6f6f8))
                         .flex_none()
                         .px(px(10.))
                         .flex()
@@ -844,7 +934,9 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .p(px(17.))
-                        .pt(px(17.))
+                        .pl(px(18.))
+                        .pr(px(16.))
+                        .pt(px(18.))
                         .flex()
                         .flex_col()
                         .child(
@@ -884,26 +976,34 @@ impl Render for BoostEditor {
                                 ]
                                 .into_iter()
                                 .map(|(index, id)| {
-                                    Self::control(id)
-                                        .w(px(44.))
-                                        .h(px(38.))
-                                        .when(index == 1 && self.advanced.is_some(), |el| {
-                                            el.bg(rgb(0x333333)).text_color(rgb(0xffffff))
-                                        })
-                                        .child(if index == 2 {
-                                            Self::prohibition()
+                                    Self::control_hover(
+                                        id,
+                                        if index == 1 && self.advanced.is_some() {
+                                            0x333333
                                         } else {
-                                            icons::ionicon(
-                                                if index == 0 {
-                                                    "bulb-outline"
-                                                } else {
-                                                    "options-outline"
-                                                },
-                                                18.,
-                                                1.,
-                                            )
-                                        })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            0xdedee1
+                                        },
+                                    )
+                                    .w(px(44.))
+                                    .h(px(38.))
+                                    .when(index == 1 && self.advanced.is_some(), |el| {
+                                        el.bg(rgb(0x333333)).text_color(rgb(0xffffff))
+                                    })
+                                    .child(if index == 2 {
+                                        Self::prohibition()
+                                    } else {
+                                        icons::ionicon(
+                                            if index == 0 {
+                                                "bulb-outline"
+                                            } else {
+                                                "options-outline"
+                                            },
+                                            18.,
+                                            1.,
+                                        )
+                                    })
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
                                             if index == 1 {
                                                 this.toggle_advanced(window, cx);
                                                 return;
@@ -916,7 +1016,8 @@ impl Render for BoostEditor {
                                                     boost.appearance.tint = None;
                                                 }
                                             })
-                                        }))
+                                        },
+                                    ))
                                 }),
                             ),
                         ),
@@ -926,8 +1027,8 @@ impl Render for BoostEditor {
             // Body positions are absolute so the small panel retains Arc's measured pitch.
             let mut grid = div()
                 .absolute()
-                .left(px(17.))
-                .top(px(271.))
+                .left(px(18.))
+                .top(px(273.))
                 .w(px(148.))
                 .h(px(122.))
                 .p(px(6.))
@@ -987,72 +1088,89 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .absolute()
-                        .left(px(17.))
-                        .top(px(407.))
+                        .left(px(18.))
+                        .top(px(408.))
                         .flex()
                         .gap(px(8.))
                         .child(
-                            Self::control("boost-size")
-                                .when(appearance.size != 0, |el| {
-                                    el.bg(rgb(0xffa029)).text_color(rgb(0xffffff))
-                                })
-                                .w(px(70.))
-                                .h(px(38.))
-                                .child(if appearance.size == 0 {
-                                    "Size".into()
+                            Self::control_hover(
+                                "boost-size",
+                                if appearance.size != 0 {
+                                    0xffa029
                                 } else {
-                                    format!("{}%", 100 + i16::from(appearance.size) * 10)
+                                    0xdedee1
+                                },
+                            )
+                            .when(appearance.size != 0, |el| {
+                                el.bg(rgb(0xffa029)).text_color(rgb(0xffffff))
+                            })
+                            .w(px(70.))
+                            .h(px(38.))
+                            .child(if appearance.size == 0 {
+                                "Size".into()
+                            } else {
+                                format!("{}%", 100 + i16::from(appearance.size) * 10)
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.edit(cx, |boost| {
+                                    boost.appearance.size = if boost.appearance.size >= 5 {
+                                        -2
+                                    } else {
+                                        boost.appearance.size + 1
+                                    }
                                 })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.edit(cx, |boost| {
-                                        boost.appearance.size = if boost.appearance.size >= 5 {
-                                            -2
-                                        } else {
-                                            boost.appearance.size + 1
-                                        }
-                                    })
-                                })),
+                            })),
                         )
                         .child(
-                            Self::control("boost-case")
-                                .when(appearance.case != 0, |el| {
-                                    el.bg(rgb(0xffa029)).text_color(rgb(0xffffff))
+                            Self::control_hover(
+                                "boost-case",
+                                if appearance.case != 0 {
+                                    0xffa029
+                                } else {
+                                    0xdedee1
+                                },
+                            )
+                            .when(appearance.case != 0, |el| {
+                                el.bg(rgb(0xffa029)).text_color(rgb(0xffffff))
+                            })
+                            .w(px(70.))
+                            .h(px(38.))
+                            .child("Case")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.edit(cx, |boost| {
+                                    boost.appearance.case = (boost.appearance.case + 1) % 4
                                 })
-                                .w(px(70.))
-                                .h(px(38.))
-                                .child("Case")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.edit(cx, |boost| {
-                                        boost.appearance.case = (boost.appearance.case + 1) % 4
-                                    })
-                                })),
+                            })),
                         ),
                 )
                 .child(
-                    Self::control("boost-zap")
-                        .absolute()
-                        .left(px(17.))
-                        .top(px(460.))
-                        .w(px(148.))
-                        .h(px(38.))
-                        .px(px(12.))
-                        .justify_between()
-                        .when(self.picking, |el| {
-                            el.bg(rgb(0x333333)).text_color(rgb(0xffffff))
-                        })
-                        .child("Zap")
-                        .child(icons::ionicon("flash", 18., 1.))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.picking = !this.picking;
-                            this.picker_engine(this.picking, cx);
-                            cx.notify();
-                        })),
+                    Self::control_hover(
+                        "boost-zap",
+                        if self.picking { 0x333333 } else { 0xdedee1 },
+                    )
+                    .absolute()
+                    .left(px(18.))
+                    .top(px(461.))
+                    .w(px(148.))
+                    .h(px(38.))
+                    .px(px(12.))
+                    .justify_between()
+                    .when(self.picking, |el| {
+                        el.bg(rgb(0x333333)).text_color(rgb(0xffffff))
+                    })
+                    .child("Zap")
+                    .child(icons::ionicon("flash", 18., 1.))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.picking = !this.picking;
+                        this.picker_engine(this.picking, cx);
+                        cx.notify();
+                    })),
                 )
                 .child(
                     Self::control("boost-code")
                         .absolute()
-                        .left(px(17.))
-                        .top(px(513.))
+                        .left(px(18.))
+                        .top(px(514.))
                         .w(px(148.))
                         .h(px(38.))
                         .px(px(12.))

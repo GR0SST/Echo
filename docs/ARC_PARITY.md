@@ -454,11 +454,11 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 
 | Feature | Status |
 |---|---|
-| Editor: color (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), font, text size and case | partial — floating GPUI simple editor, tint, 20 font specimens, size/case, inversion and advanced sliders; visual comparison retained under target/parity/boosts/round2 |
+| Editor: color (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), font, text size and case | partial — floating GPUI simple editor, tint, 20 font specimens, size/case, inversion and advanced sliders; measured offsets, neutral wheel shading and shadows refined against zoomed crops; visual comparison retained under target/parity/boosts/round2 |
 | Local per-domain Boost model, enabled state, CSS/JS and Zap selectors persisted per profile | done |
 | Zap: pick an element to hide (Pick Selector, "Zap all related elements") | partial — trusted hover/click element picker, persisted selectors, Zap undo and the native page-bottom Done bar; related-element selector controls remain |
-| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | done — floating CSS/JS editor, multiline input with clipboard/IME/local undo, live CSS and Refresh to Run JavaScript; local only |
-| Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | done — site controls expose the Boost name and enabled status; editor opens from dock, native menu, Command Bar, site controls and tab context menu |
+| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | done — floating CSS/JS editor, multiline input with clipboard/IME/local undo, live CSS, Refresh to Run JavaScript and the observed Developer Tools footer action; local only |
+| Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | done — site controls expose the reference’s round Boost indicator, name and enabled status; editor opens from dock, native menu, Command Bar, site controls and tab context menu |
 | Share Space/Folder/Easel via arc.net; publish Easels/Boosts to the gallery | out of scope |
 | Sharing and installing someone else's Boost ("Add this Boost to Arc?"), Boost Gallery | out of scope (Arc service/account dependency; no UI) |
 

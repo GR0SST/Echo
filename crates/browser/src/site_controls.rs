@@ -115,8 +115,8 @@ impl BrowserWindow {
                 .when(!boosts.is_empty(),|panel|panel.child(heading("Boosts")).children(boosts.into_iter().map(|boost| {
                     let id=boost.id;let enabled=boost.enabled;
                     div().id(gpui::SharedString::from(format!("site-boost-{id:?}"))).debug_selector(||"site-boost-toggle".into()).flex().items_center().h(px(40.)).gap(px(8.)).cursor_pointer().rounded(px(6.)).hover(|el|el.bg(hsla(0.,0.,1.,0.08)))
-                        .child(div().size(px(32.)).rounded_full().flex().items_center().justify_center().bg(hsla(0.,0.,1.,0.9)).text_color(hsla(0.,0.,0.2,1.)).child(crate::icons::control_sized(Icon::Boost,22.)))
-                        .child(div().flex().flex_col().flex_1().min_w_0().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(boost.name).child(div().text_size(px(12.)).font_weight(gpui::FontWeight::NORMAL).text_color(hsla(0.,0.,1.,0.55)).child(if enabled {"Enabled"}else{"Disabled"})))
+                        .child(div().debug_selector(||"site-boost-indicator".into()).size(px(32.)).rounded_full().flex().items_center().justify_center().bg(hsla(0.,0.,1.,0.9)).text_color(hsla(0.,0.,0.2,1.)).child(crate::icons::control_sized(Icon::Boost,22.)))
+                        .child(div().flex().flex_col().flex_1().min_w_0().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(boost.name).child(div().debug_selector(move||if enabled{"site-boost-enabled".into()}else{"site-boost-disabled".into()}).text_size(px(12.)).font_weight(gpui::FontWeight::NORMAL).text_color(hsla(0.,0.,1.,0.55)).child(if enabled {"Enabled"}else{"Disabled"})))
                         .on_click(cx.listener(move|this,_,_,cx|{this.edit_browser(|model|{if let Some(boost)=model.user_profile_mut(profile).and_then(|profile|profile.boosts.get_mut(id)){boost.enabled=!boost.enabled;}});this.sync_boosts(cx);}))
                 })))
                 .child(div().mt(px(14.)).flex().items_center().justify_between()

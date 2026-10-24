@@ -2949,7 +2949,6 @@ impl BrowserWindow {
         let control = |id: &'static str| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())())).flex_none().size(px(28.)).rounded_md()
             .flex().items_center().justify_center().text_color(hsla(0., 0., if dark { 1. } else { 0. }, 0.6)).hover(|style| style.bg(hsla(0., 0., 1., 0.25)));
         let controls_open = self.site_controls.is_some();
-        let has_site_boost=self.site_boosts().iter().any(|boost|boost.enabled);
         let anchor = if self.sidebar_debug_namespace.is_none() { self.site_controls_anchor.clone() } else { Default::default() };
         let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .group(id).relative().flex_none().size(px(24.)).flex().items_center().justify_center()
@@ -3017,7 +3016,6 @@ impl BrowserWindow {
                             cx.stop_propagation();
                             this.open_sidebar_menu(crate::tab_menu::MenuTarget::Address, event.position, window, cx);
                         }))
-                        .child(div().id("boost-indicator").debug_selector(||"boost-indicator".into()).flex_none().overflow_hidden().when(has_site_boost,|el|el.size(px(18.))).when(!has_site_boost,|el|el.absolute().size_0()).cursor_pointer().child(crate::icons::control_sized(crate::icons::Icon::Boost,14.)).on_click(cx.listener(|this,_,_,cx|{cx.stop_propagation();this.customize_page(cx);})))
                         .child(div().flex_1().min_w_0().overflow_hidden().child(url))
                         // Page actions appear only while the pointer is over the sidebar.
                         .when(self.browser.active_tab().is_some(), |this| this.child(hover_fade(div().flex().items_center().gap(px(4.))
