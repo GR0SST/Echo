@@ -112,7 +112,7 @@ impl BrowserWindow {
     pub(crate) fn new_little_window(&mut self, cx: &mut Context<Self>) {
         self.retain_normal_source(cx);
         self.close_command_bar(cx);
-        let (source, space, profile) = if let Some(transient) = &self.transient {
+        let (source, space, profile) = if let Some(transient) = self.transient.as_ref().filter(|state| state.source.profile.read_settings(|browser| !browser.is_private() && !browser.is_blank())) {
             (transient.source.clone(), transient.space, self.browser.active_user_profile_id())
         } else if !self.browser.is_private() && !self.browser.is_blank() {
             (NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() },

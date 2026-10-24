@@ -920,10 +920,10 @@ impl BrowserWindow {
 
     /// Closing a window keeps its tabs in the session, unlike Archive Tab.
     pub(crate) fn close_window(&mut self, cx: &mut Context<Self>) {
-        self.detach_peek(cx);
         self.close_theme_editor_with_focus(PopupFocus::OnActivation, cx);
         if crate::quit::is_quitting() || crate::quit::last_window_close(cx) { return; }
         if !window_close::claim(self.main_window, cx) { return; }
+        self.detach_peek(cx);
         self.cancel_split_draft();
         // Parent remains alive. release_host only queues retirement; the
         // engine's native handoff must run in the task, outside this update.
@@ -1026,8 +1026,11 @@ impl BrowserWindow {
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
         let profile_child = self.take_user_profile_child(cx);
         let theme_child = self.take_theme_editor();
+        if let Some(child) = self.peek_child.take() {
+            // Peek owns native pages, so it needs its own retirement boundary.
+            cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.close_window(cx)); });
+        }
         let children = [
-            self.peek_child.take().map(|handle| handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),

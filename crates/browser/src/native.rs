@@ -45,6 +45,23 @@ mod mac {
         }
     }
 
+    /// CEF consumes page input before GPUI's cached pointer can be updated.
+    pub fn pointer_in_view(view: *mut c_void) -> Option<(f32, f32)> {
+        use objc2_foundation::{NSPoint, NSRect};
+        unsafe {
+            let owner = window(view);
+            if owner.is_null() { return None; }
+            let position: NSPoint = msg_send![owner, mouseLocationOutsideOfEventStream];
+            let mut local: NSPoint = msg_send![view as *mut AnyObject, convertPoint: position fromView: std::ptr::null_mut::<AnyObject>()];
+            let flipped: Bool = msg_send![view as *mut AnyObject, isFlipped];
+            if !flipped.as_bool() {
+                let bounds: NSRect = msg_send![view as *mut AnyObject, bounds];
+                local.y = bounds.size.height - local.y;
+            }
+            (local.x.is_finite() && local.y.is_finite()).then_some((local.x as f32, local.y as f32))
+        }
+    }
+
     pub fn set_traffic_lights_hidden(view: *mut c_void, hidden: bool) {
         let window = window(view);
         if window.is_null() {
@@ -632,4 +649,13 @@ mod backdrop_lifecycle_tests {
         assert!(host.installed);
         assert_eq!((host.creates, host.removes, host.applied.len()), (1, 0, 1));
     }
+}
+
+/// Current native page pointer, in GPUI view coordinates. Headless and other
+/// platforms use the toolkit's pointer until their native bridge supplies one.
+pub(crate) fn pointer_in_view(view: *mut c_void) -> Option<(f32, f32)> {
+    #[cfg(all(target_os = "macos", not(test)))]
+    { mac::pointer_in_view(view) }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { let _ = view; None }
 }

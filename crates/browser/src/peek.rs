@@ -13,6 +13,7 @@ pub(crate) struct PeekOwner {
     opened: Instant,
     origin: gpui::Point<gpui::Pixels>,
     closing: Option<Instant>,
+    detached: bool,
 }
 
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -34,7 +35,8 @@ impl BrowserWindow {
         let share_history = !private && !self.browser.is_blank();
         let storage = if private { StorageSelection::Current } else { StorageSelection::for_profile(website_profile) };
         let bounds = window.bounds();
-        let origin = window.mouse_position();
+        let origin = self.native_view.and_then(native::pointer_in_view)
+            .map(|(x,y)| point(px(x),px(y))).unwrap_or_else(|| window.mouse_position());
         let sidebar = self.sidebar_width() * self.sidebar_amount();
         let parent = self.native_view;
         let owner = cx.weak_entity();
@@ -60,7 +62,7 @@ impl BrowserWindow {
                     if let Some(pages) = &view.pages { pages.borrow_mut().peek_mode = true; }
                     view.sidebar_visible = false;
                     view.transient = Some(Transient { source, space, picker: None });
-                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), sidebar, origin, opened: cx.background_executor().now(), closing: None });
+                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false });
                     view.focus(window);
                     view
                 })
@@ -88,10 +90,13 @@ impl BrowserWindow {
     }
 
     pub(crate) fn detach_peek(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.peek_owner.take() else { return; };
+        let Some(state) = self.peek_owner.as_mut() else { return; };
+        if state.detached { return; }
+        state.detached = true;
+        let owner = state.owner.clone();
         let handle = self.main_window;
         cx.defer(move |cx| {
-            let _ = state.owner.update(cx, |view, cx| {
+            let _ = owner.update(cx, |view, cx| {
                 if view.peek_child.is_some_and(|child| child.window_id() == handle.window_id()) {
                     view.peek_child = None;
                     if let Some(pages) = &view.pages { pages.borrow_mut().request_page_focus(); }
@@ -134,7 +139,8 @@ impl BrowserWindow {
             let t = (elapsed / 0.34).min(1.);
             if t >= 1. { 1. } else { 1. - (-8. * t).exp() * ((12. * t).cos() + (8. / 12.) * (12. * t).sin()) }
         };
-        let amount = closing.map_or(progress, |t| 1. - t.clamp(0., 1.).powi(2));
+        // Arc overshoots the settled 618 px card by approximately one pixel.
+        let amount = closing.map_or(progress.min(1.009), |t| 1. - t.clamp(0., 1.).powi(2));
         if elapsed < 0.34 || closing.is_some() { cx.on_next_frame(window, |_, _, cx| cx.notify()); }
         let sidebar = state.sidebar;
         let extent = window.viewport_size();

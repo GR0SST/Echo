@@ -2,7 +2,7 @@
 
 ## Little Echo
 
-Standalone lookup windows use an independent Blank model and page store in the source website storage context. Cmd+Option+N is handled by the menu, window and native page shortcut paths. External HTTP/HTTPS app events also create lookups. They inherit the source Space theme and use the shared chrome/material APIs. Closing a lookup does not modify regular Pinned/Favorites/Today selections.
+Standalone lookup windows use an independent Blank model and page store in the source website storage context. Cmd+Option+N is handled by the menu, window and native page shortcut paths. External HTTP/HTTPS app events also create lookups. They inherit the source Space theme and use the shared chrome/material APIs. Closing a lookup does not modify regular Pinned/Favorites/Today selections. Launching a Little window from Incognito/Blank Peek uses the retained normal workspace, never the ephemeral Peek profile; the regression covers both origins.
 
 The resting toolbar shows the hostname. Editing and copying retain the full URL. Cmd+O promotes directly; the arrow opens a searchable Space picker with current Space first. Promotion currently creates a regular page from the URL, so the live document and navigation history are not transferred. Global shortcut registration, the initial standalone search prompt, exact saved placement/opening motion, Extensions, profile switching and downloads remain unfinished. ARC_PARITY stays partial.
 
@@ -27,3 +27,9 @@ The Space creation animation must finish before closing the fresh window. After 
 Native Echo tests use scripts/drive.sh with a separate profile in `target/parity/little-arc-peek/drive/`. Run the complete deterministic `RUST_TEST_THREADS=4 cargo test` before pushing. Push only validated pieces under the required fetch/rebase/test/push lock.
 
 The owner’s current run rules override the Ringmind clause: never contact/call the owner; report blockers to the orchestrator. Each Arc session may create at most one window. Install cleanup before Cmd+N; if its window delta is not exactly one, close every window created by that script and abort. Two bounded System Events timeouts or no window after Cmd+N permit restarting Arc inside the screen lock. Never reuse the archived pre-restart CG IDs.
+
+The native pointer bridge reads the source window’s live native pointer in top-left view coordinates. CEF page clicks can leave GPUI’s cached pointer stale; close motion must not use that cached location on macOS. Other platforms retain the toolkit fallback. `drive position` is bottom-left AppKit coordinates: on the 3840×2160 primary display use `position 100 1300` for a 1000×760 window at screen top-left (100,100). Echo recordings made with `-R100,100` while positioned at AppKit (100,100) are invalid and named accordingly.
+
+Peek retains its render marker throughout asynchronous native close preparation. Clearing that marker early briefly rendered the Little toolbar while CEF retired the child; only its parent attachment is detached at close admission.
+
+Closing an owner requests the Peek child’s own asynchronous close boundary rather than directly removing its native window; the child page host retires even when a caller retains the GPUI Entity.

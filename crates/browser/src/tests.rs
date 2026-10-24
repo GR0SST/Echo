@@ -8404,7 +8404,7 @@ fn hovering_a_split_row_reveals_independent_pane_close_targets(cx: &mut TestAppC
 fn little_root(cx: &mut VisualTestContext) -> (Entity<BrowserWindow>, VisualTestContext) {
     let (view, handle) = cx.cx.update(|cx| {
         let handle = cx.windows().into_iter().filter_map(|w| w.downcast::<BrowserWindow>())
-            .find(|w| w.read(cx).is_ok_and(|view| view.transient.is_some())).expect("Little window");
+            .find(|w| w.read(cx).is_ok_and(|view| view.transient.is_some() && view.peek_owner.is_none())).expect("Little window");
         (handle.root(cx).unwrap(), handle)
     });
     let visual = VisualTestContext::from_window(handle.into(), &cx.cx);
@@ -8654,4 +8654,50 @@ fn boosts_are_sent_to_their_profile_engine_context_and_disabled_rules_are_remove
         assert!(fake.0.borrow().boosts[&StorageSelection::Default].is_empty());
         cx.notify();
     });
+}
+
+
+#[gpui::test]
+fn little_shortcut_from_private_or_blank_peek_retains_the_normal_source(cx: &mut TestAppContext) {
+    use gpui::AppContext;
+    let (regular, visual, _) = open_pages(cx);
+    regular.update(visual, |view, cx| view.retain_normal_source(cx));
+    let normal = regular.read_with(visual, |view, _| view.profile.handle.clone());
+    for mut browser in [browser_core::Browser::new_private(), browser_core::Browser::new_blank()] {
+        browser.new_tab("https://source.example", std::time::SystemTime::now());
+        let fake = FakeEngine::default();
+        let handle = visual.cx.update(|cx| cx.open_window(Default::default(), |window, cx| cx.new(|cx| {
+            let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+            view.focus(window); view
+        })).unwrap());
+        let source = visual.cx.update(|cx| handle.root(cx).unwrap());
+        let mut source_visual = VisualTestContext::from_window(handle.into(), &visual.cx);
+        source_visual.run_until_parked();
+        fake.send(&mut source_visual, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+        let (_, mut peek) = peek_window(&source, &mut source_visual);
+        peek.simulate_keystrokes("cmd-alt-n"); peek.run_until_parked();
+        let (little, mut lookup) = little_root(&mut peek);
+        little.read_with(&lookup, |view, _| {
+            assert!(!view.browser.is_private());
+            assert!(view.transient.as_ref().unwrap().source.profile.same_workspace(&normal));
+        });
+        lookup.simulate_keystrokes("cmd-w"); lookup.run_until_parked();
+    }
+}
+
+
+#[gpui::test]
+fn closing_a_peek_owner_retires_both_native_page_hosts(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (child, peek) = peek_window(&view, cx);
+    let child_handle = child.read_with(&peek, |view, _| view.main_window);
+    let parent_handle = view.read_with(cx, |view, _| view.main_window);
+    cx.simulate_keystrokes("cmd-shift-w"); cx.run_until_parked();
+    cx.cx.update(|cx| {
+        assert!(!cx.windows().iter().any(|handle| handle.window_id() == child_handle.window_id() || handle.window_id() == parent_handle.window_id()));
+    });
+    // Retaining the child Entity must not retain its native browser host.
+    assert!(child.read_with(cx, |view, _| view.peek_owner.is_some()));
+    assert!(fake.0.borrow().forks.last().unwrap().take_calls().iter().any(|call| matches!(call, Call::Close(_))));
 }
