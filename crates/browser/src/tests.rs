@@ -5638,7 +5638,7 @@ fn cmd_w_closes_only_the_focused_split_pane_from_ui_and_native_page_focus(cx: &m
 }
 
 #[gpui::test]
-fn add_split_immediately_shows_an_empty_pane_with_search_inside_it_and_escape_rolls_back(cx: &mut TestAppContext) {
+fn add_split_immediately_shows_an_empty_pane_with_window_wide_search_and_escape_rolls_back(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let before = view.read_with(cx, |w, _| w.browser.all_tabs().count());
     let active = active_url(&view, cx);
@@ -5656,8 +5656,8 @@ fn add_split_immediately_shows_an_empty_pane_with_search_inside_it_and_escape_ro
     assert!(cx.debug_bounds(test_selector(format!("sidebar-pane-{}", pane.get()))).is_some());
     let pane_header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
     let command = bar(&view, cx).debug_bounds("command-bar").unwrap();
-    assert!(command.origin.x >= pane_header.origin.x);
-    assert!(command.right() <= pane_header.right());
+    assert_eq!(f32::from(command.size.width), 764.);
+    assert!(command.origin.x < pane_header.origin.x);
     assert!(bar_input_focused(&view, cx));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
     bar(&view, cx).simulate_keystrokes("escape");
@@ -5746,15 +5746,15 @@ fn cmd_w_in_the_empty_split_search_cancels_without_archiving_the_source(cx: &mut
 }
 
 #[gpui::test]
-fn empty_vertical_pane_search_stays_inside_the_pane(cx: &mut TestAppContext) {
+fn empty_vertical_pane_search_uses_the_window_wide_command_bar(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     run_named_command(&view, cx, "add bottom split");
     let pane = view.read_with(cx, |w, _| w.split_draft.as_ref().unwrap().pane);
     let header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
     let search = bar(&view, cx).debug_bounds("command-bar").unwrap();
-    assert!(search.origin.y >= header.bottom());
-    let pane_bounds = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
-    assert!(search.bottom() <= pane_bounds.bottom());
+    assert_eq!(f32::from(search.size.width), 764.);
+    assert!(search.origin.y < header.bottom());
+    assert!(bar_input_focused(&view, cx));
     bar(&view, cx).simulate_keystrokes("escape");
 }
 
@@ -8078,3 +8078,18 @@ fn sidebar_close_hover_target_is_a_centered_twenty_four_pixel_square(cx: &mut Te
         assert_eq!(row.right() - close.right(), gpui::px(6.));
     }
 }
+
+#[gpui::test]
+fn four_pane_split_draft_keeps_the_ordinary_command_bar_width(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 3);
+    cx.simulate_keystrokes("ctrl-shift-=");
+    let mut overlay = bar(&view, cx);
+    let panel = overlay.debug_bounds("command-bar").unwrap();
+    assert_eq!(f32::from(panel.size.width), 764.);
+    assert!(bar_input_focused(&view, cx));
+    overlay.simulate_input("https://example.com/fourth-pane");
+    overlay.simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/fourth-pane"));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 4);
+}
+

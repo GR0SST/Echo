@@ -1241,7 +1241,9 @@ produce 1160×760 horizontally (240 px sidebar) and 1000×930 vertically, retain
 220 px frames and 10 px gaps. Evidence: `echo-four-horizontal.png`,
 `echo-four-vertical.png`, `window-extent-native.log`; six GPUI cases exercise
 2–4 panes in both axes without replacing loaded pages. The narrow draft
-Command Bar still clips (`echo-four-empty.png`) and remains separate work.
+Command Bar clipping was subsequently corrected: split drafts now use the ordinary
+window-wide 764 px panel, matching the settled Arc popup. The old clipped
+`echo-four-empty.png` is retained as before-change evidence.
 `arc-drop-preview.png` shows an outlined theme-filled half-pane and clipping
 of the existing page; `arc-drop-result.png` shows the committed split.
 
@@ -1261,3 +1263,16 @@ page. Both loaded pages survive resizing; Cmd+W archives one and retains the
 other live page. Arc/Echo comparison crops are `pair-*-crop.png`; they were
 viewed directly. Header materials/controls, Command Bar width/placement and
 menu positioning still visibly differ and are not claimed as full parity.
+
+
+## Split draft Command Bar width — 2026-10-24
+
+A fresh owned Arc window was tracked by CoreGraphics window number under the
+screen lock, and its test Space header was checked against a reference crop
+before input. Captures are in `target/parity/split-view/guard-session/`.
+`window.png` shows the settled ordinary Command Bar at x=118 with width 764 px
+in a 1000 px window. `arc-owned-three-empty.png` and `arc-owned-four-empty.png`
+confirm that split drafts retain the wide panel across pane boundaries. Earlier
+captures taken while the popup was settling have a different horizontal origin.
+Echo now uses the ordinary panel width and top anchor for drafts in both axes;
+GPUI regressions cover empty horizontal/vertical drafts and four-pane input.

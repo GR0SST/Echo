@@ -3484,22 +3484,15 @@ impl BrowserWindow {
         let panel_fill = self.command_bar_panel_fill(material_backdrop.get());
         let row_selection = self.command_bar_selection();
         let accent = self.accent();
-        let region = self.split_draft.as_ref().and_then(|draft| {
-            let split = self.browser.split_for(draft.pane)?;
-            let left = self.sidebar_width() * self.sidebar_amount() + CONTENT_INSET * (1. - self.sidebar_amount());
-            let card = engine::Bounds { x: left.into(), y: CONTENT_INSET.into(), width: (width - left - CONTENT_INSET).max(0.).into(), height: (height - 2. * CONTENT_INSET).max(0.).into() };
-            let index = split.panes.iter().position(|id| *id == draft.pane)?;
-            crate::split_layout::layout(card, split.axis, &split.weights, true).get(index).map(|bounds| bounds.page)
-        });
-        let panel_width = region.map_or(COMMAND_BAR_WIDTH.min((width - 32.).max(0.)), |bounds| COMMAND_BAR_WIDTH.min((bounds.width as f32 - 32.).max(0.)));
+        // Arc's split draft uses the ordinary window-wide Command Bar, even
+        // when its empty pane is only 220 px wide.
+        let panel_width = COMMAND_BAR_WIDTH.min((width - 32.).max(0.));
         let archive = matches!(bar.target, Target::Archive(_));
         // Arc anchors the top to the center of a nominal 338px panel. Result
         // changes grow down from that point instead of moving the input.
         let default_top = ((height - 338.) * 0.5).max(16.);
-        let rows_height = region.map_or((height - default_top - if archive { 150. } else { 90. } - 16.).max(40.), |bounds| (bounds.height as f32 - 96.).max(40.));
-        let count = self.suggestions(cx).len() as f32;
-        let panel_height = COMMAND_BAR_HEADER + if count > 0. { 18. + (count * 50. - 4.).min(rows_height) } else { 0. };
-        let top = region.map_or(default_top, |bounds| bounds.y as f32 + ((bounds.height as f32 - panel_height) * 0.5).max(8.));
+        let rows_height = (height - default_top - if archive { 150. } else { 90. } - 16.).max(40.);
+        let top = default_top;
         let mut previous_date = None;
         let rows: Vec<_> = self
             .suggestions(cx)
@@ -3633,7 +3626,6 @@ impl BrowserWindow {
             .flex_col()
             .items_center()
             .pt(px(top))
-            .when_some(region, |this, bounds| this.pl(px(bounds.x as f32)).pr(px((width - bounds.x as f32 - bounds.width as f32).max(0.))))
             .bg(gpui::transparent_black())
             .on_click(cx.listener(|this, _, _, cx| this.close_command_bar(cx)))
             .child(

@@ -321,7 +321,7 @@ keeps loaded views through focus and orientation changes.
 
 The installed Arc 1.169.0 was inspected on 2026-10-23 in a separate Blank
 Window. Add Split View immediately creates an empty pane with the ordinary
-Command Bar centered inside that pane; Escape cancels it. Cmd+W closes only
+window-wide Command Bar; Escape cancels it. Cmd+W closes only
 the focused pane. The sidebar displays one segmented row, with one target per
 pane, and the page headers have centered addresses without a shared title bar.
 These flows now have GPUI regression coverage and real-app CEF checks. See
@@ -329,7 +329,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Immediately shows an empty pane and the ordinary URL/search input centered inside it. Escape, outside dismissal and Cmd+W cancel without archiving the source; drafts are excluded from saved sessions. Existing tabs, history and new URLs are supported. Exact menu glyphs and full theme/animation fidelity remain |
+| Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | ⌃⇧= | partial | Immediately shows an empty pane and the ordinary window-wide 764 px Command Bar; narrow panes no longer clip its input or results. Escape, outside dismissal and Cmd+W cancel without archiving the source; drafts are excluded from saved sessions. Existing tabs, history and new URLs are supported. GPUI checks cover both orientations and a fourth pane. Exact placement during resize and full theme/animation fidelity remain |
 | Close a pane | ⌘W / ⌃⇧- | done | Closes only the focused pane from GPUI and native page focus; the other pages stay loaded. Sidebar group close still closes the entire item |
 | Split pane corner contour and focus | — | partial | Shared GPUI/native geometry reserves a stable 1 px focus contour around every pane; focusing never resizes the document. The header/page seam is square and leaving split restores page corners without reloading. Fresh Arc measurement: 10 px inter-pane gap and 32 px headers. Exact corner radius, theme-dependent outline color and header material remain |
 | Split sidebar item | — | partial | Equal-width pane segments fill the row without a reserved close-button gutter. Long titles truncate inside each segment; hover reveals the group close action over the last segment without resizing cells. Independent pane focus targets, favicons and custom group names are retained. Exact Favorite-group treatment and remaining visual states need comparison |
