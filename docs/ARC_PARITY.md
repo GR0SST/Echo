@@ -538,7 +538,7 @@ Max download rename/revert feedback awaits the later Max implementation.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | missing | — |
+| Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | partial | Read-only Chrome/Edge/Brave, Firefox and Safari readers for bookmarks, history and supported open-tab session formats; atomic import to a new Space and profile-scoped history. Password CSV parser/store interface. Import UI, encrypted sessions/password databases, cookies and autofill remain outstanding |
 | Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | missing | — |
 | Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | Local theme, Favorites, blocker, Arc Max with the user's AI provider and default-browser steps remain missing. Arc Members/member card and browser-account sign-in remain out of scope; AI-only ChatGPT OAuth is allowed |
 | "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | missing | — |

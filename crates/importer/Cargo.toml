@@ -1,0 +1,18 @@
+[package]
+name = "importer"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+browser_core = { package = "core", path = "../core" }
+serde_json = "1"
+rusqlite = { version = "0.41", features = ["bundled"] }
+plist = "1.10"
+lz4_flex = "0.14"
+csv = "1.4"
+url = "2"
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
