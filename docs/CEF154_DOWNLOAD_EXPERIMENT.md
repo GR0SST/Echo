@@ -33,10 +33,10 @@ shasum -a 256 -c patches/cef154/SHA256SUMS
 bun scripts/cef154-patches.ts base /path/to/cef154/chromium/src
 ```
 
-`base` checks 536 distinct selected paths, including absent files that the custom
+`base` checks 538 distinct selected paths, including absent files that the custom
 patches will create. After applying the diffs, `patched` checks their postimages.
 `qualified-inputs` also checks eight recorded generated/read prerequisites, for
-544 selected paths. The modes verify seven repository pins. They do not attest
+546 selected paths. The modes verify seven repository pins. They do not attest
 the entire checkout, SDK, all generated outputs, a compiled binary or a loaded
 framework. Keep the source tree stable while checking it.
 
@@ -207,9 +207,31 @@ unchanged. The seventh originally discarded a history-database reply while the
 manager still owned the save callback; it now destroys that actual queue while
 keeping the package alive and retaining the original release/outcome assertions.
 Two upstream SavePackage caller translation units passed syntax-only compilation;
-their tests were not run. The 35 native regression tests do not establish native
-Save Page serialization, successful file UX or source-dependent retirement.
-Those remain open.
+their tests were not run. Four additional native Alloy tests cover actual Save Page:
+
+- ONLY_HTML saves the complete expected HTTP body from a no-store loopback page.
+- MHTML captures the changed live DOM; its retained MIME output is checked for
+  the updated marker/title. Its hash records observed bytes rather than a full
+  predetermined MIME serialization specification.
+- Closing-first refusal preserves the live document and leaves an owned output
+  directory independently checked empty after native exit.
+- A second-fetch HTTP 503 cancels without reporting Complete or leaving output.
+
+The last case failed against unchanged SavePackage with IsComplete=true.
+SaveFinished now cancels a failed single-item ONLY_HTML package before Rename or
+Finish can report phantom completion. All four test bodies are unchanged from
+that red run. The 39 native tests pass, including all previous 35 cases unchanged.
+Both successful saves retain their source document through actual CEF terminal.
+
+Alloy exposes no public CEF SavePage call, so these tests use a separate helper
+in a test-only header. It invokes actual WebContents::SavePage with a chosen path;
+it is absent from the negotiated production API and adds no capability or CEF
+API-hash change. macOS resolves it through the already loaded framework handle.
+The retained failed attempts document an invalid-ID guard fixed in the helper
+and the initial mistaken assumption that ONLY_HTML captures DOM: it fetches the
+network document, whereas MHTML covers live DOM. Native picker UI, complete HTML,
+user cancellation/source loss, other platforms and document-retirement policy
+remain open.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

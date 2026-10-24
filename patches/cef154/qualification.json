@@ -158,10 +158,10 @@
     ],
     "all_once_successful": true,
     "io_binary_sha256": "2e8e6ed6d76159e2114d41000ddf30344aae6f8c1a553ff2e08074bb7d062eec",
-    "state_binary_sha256": "ae7898b6ac95889d4137fd77a011f4ce5a7d95441e14cdc28780d166fddde5f2"
+    "state_binary_sha256": "cc071f94ed060f8712ff1011bf91305ead399451f729303c6a9c054d3fc037ad"
   },
   "native": {
-    "count": 35,
+    "count": 39,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -197,10 +197,14 @@
       "EchoDownloadBridge.SubframePostKeepsBodyParentAndOriginalAdmissionAfterClosing",
       "EchoDownloadBridge.BeforeUnloadAllowRetainsOriginalAdmissionThroughCommit",
       "EchoDownloadBridge.CrossOriginSubframeGetRetainsParentAndOriginalAdmission",
-      "EchoDownloadBridge.CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission"
+      "EchoDownloadBridge.CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission",
+      "EchoDownloadBridge.SavePageSerializesOriginalLiveDocumentAfterClosing",
+      "EchoDownloadBridge.ClosedSavePageRefusesWithoutFileOrDocumentReplacement",
+      "EchoDownloadBridge.SavePageOnlyHtmlCopiesNetworkDocumentAfterClosing",
+      "EchoDownloadBridge.SavePageNetworkFailureCannotReportPhantomCompletion"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "202aed320bf068212129b033ae87d4bc710a56dc1926016b18e6a8604a365f49",
+    "test_source_sha256": "fc1c3d22121a88b7c748d611b5647774c96567ec93424d5db59ba597ffd9ec7e",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -238,15 +242,15 @@
     }
   ],
   "scope": {
-    "unit_source_paths": 78,
-    "authored_custom_paths": 85,
-    "framework_named_inputs": 87,
-    "archived_source_union": 93,
+    "unit_source_paths": 83,
+    "authored_custom_paths": 87,
+    "framework_named_inputs": 89,
+    "archived_source_union": 95,
     "full_checkout_attestation": false,
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "33b1178656828f8cda4926601b191ccfe3a76bce4e0b360d79509287e28d5a08",
+  "native_xml_sha256": "b04dae110b31bb8d8479b98f0c7547c18b416faf572b12f896c71bc574903d27",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -269,9 +273,9 @@
   ],
   "versioned_patch_replay": {
     "zero_fuzz": true,
-    "base_selected_images": 536,
-    "patched_selected_images": 536,
-    "qualified_selected_images": 544,
+    "base_selected_images": 538,
+    "patched_selected_images": 538,
+    "qualified_selected_images": 546,
     "repositories": 7,
     "selected_fixture_only": true,
     "new_build_performed_for_replay": false
@@ -292,9 +296,32 @@
     "service_worker_fixture": "first 34/35 run hit legacy CefServer 1 MiB buffer limit; all 35 tests unchanged for passing CefTestServer run",
     "save_package_manager": "receipt before ID allocation, original frame/context revalidation and association before embedder hooks; seven red tests plus legacy control, all eight bodies preserved; real WebContents refusal adds ninth test",
     "save_package_kind": "append-only kind 5; caller must retain original document until save terminal or reject at reserve; Associated is not document quiescence",
-    "save_package_remaining": "native save-page serialization/success/cancel UX and source-dependent retirement remain unqualified; public full fence remains off",
+    "save_package_remaining": "native picker UI, complete HTML, user cancellation/source loss during serialization, other platforms and source-dependent retirement remain unqualified; public full fence remains off",
     "save_package_early_admission": "original receipt before Stop/directory/picker work; callback owns carrier, package weak cancellation; source loss, frozen legacy absence and delayed ID guards covered on content test platform",
     "save_package_red_lineage": "seven early-save-info tests red before fix; six unchanged; one corrected to destroy actual manager-owned ID queue instead of only history reply; package remains alive and original outcome/release assertions retained; eighth new test verifies refusal cannot stop admitted navigation",
-    "save_package_upstream_callers": "two upstream SavePackage unit/browser-test translation units passed syntax-only compilation; their tests were not executed"
+    "save_package_upstream_callers": "two upstream SavePackage unit/browser-test translation units passed syntax-only compilation; their tests were not executed",
+    "save_package_native": "four native Alloy cases: exact ONLY_HTML HTTP body, live-DOM MHTML, Closing-first refusal without document replacement/files, and real second-fetch HTTP 503 cancellation without phantom Complete; original source retained through terminal, captured association checked; test-only helper outside negotiated API",
+    "save_package_native_failed_attempt": "R19 test-helper invalid-ID DCHECK corrected; R20 ONLY_HTML/live-DOM fixture assumption corrected with real HTTP and separate MHTML; R21 genuine HTTP-503 regression failed with IsComplete=true, then passed unchanged after main-fetch failure cancellation; all failed logs retained"
+  },
+  "native_save_page": {
+    "formats": {
+      "HTML": {
+        "size": 125,
+        "sha256": "a1429fcd4aca7810023a2bb6caa72137a53fb44b84d9034d8ee34c539e095062",
+        "verified": true,
+        "verification": "exact HTTP body"
+      },
+      "MHTML": {
+        "size": 894,
+        "sha256": "60f35b3ca312729fb8842c2dbe245697db3d3d9d84683c4ece4dfe9f9a0ff4cb",
+        "verified": true,
+        "verification": "live DOM/title markers"
+      }
+    },
+    "source_document_retained_until_terminal": true,
+    "closed_refusal_directory_empty_after_exit": true,
+    "http_503_cancels_without_complete_or_output": true,
+    "test_helper_outside_negotiated_api": true,
+    "complete_predetermined_mhtml_bytes_not_asserted": true
   }
 }

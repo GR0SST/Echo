@@ -2834,7 +2834,23 @@ diff --git a/content/browser/download/save_package.cc b/content/browser/download
  
    if (!page_)
      return;
-@@ -1458,29 +1491,50 @@
+@@ -925,9 +958,12 @@
+         std::vector<download::DownloadItem::ReceivedSlice>());
+   }
+ 
+-  if (save_item->save_source() == SaveFileCreateInfo::SAVE_FILE_FROM_DOM &&
+-      save_item->url() == page_url_ && !save_item->received_bytes()) {
+-    // If size of main HTML page is 0, treat it as disk error.
++  if ((save_type_ == SAVE_PAGE_TYPE_AS_ONLY_HTML && !is_success) ||
++      (save_item->save_source() == SaveFileCreateInfo::SAVE_FILE_FROM_DOM &&
++       save_item->url() == page_url_ && !save_item->received_bytes())) {
++    // ONLY_HTML has one network-backed main item. Its failure cannot become a
++    // completed package with no saved file. An empty serialized main is still
++    // treated as a disk error.
+     Cancel(false);
+     return;
+   }
+@@ -1458,29 +1494,50 @@
    }
  }
  
@@ -2893,7 +2909,7 @@ diff --git a/content/browser/download/save_package.cc b/content/browser/download
  }
  
  // static
-@@ -1535,21 +1589,27 @@
+@@ -1535,21 +1592,27 @@
    // The WebContents which owns this SavePackage may have disappeared during
    // the UI->download sequence->UI thread hop of
    // GetSaveInfo->CreateDirectoryOnFileThread->ContinueGetSaveInfo.
@@ -2925,7 +2941,7 @@ diff --git a/content/browser/download/save_package.cc b/content/browser/download
      SavePackagePathPickedParams params,
      SavePackageDownloadCreatedCallback download_created_callback) {
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
-@@ -1557,8 +1617,14 @@
+@@ -1557,8 +1620,14 @@
           (params.save_type == SAVE_PAGE_TYPE_AS_MHTML) ||
           (params.save_type == SAVE_PAGE_TYPE_AS_COMPLETE_HTML))
        << params.save_type;

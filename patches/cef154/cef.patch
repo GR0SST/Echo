@@ -1,17 +1,18 @@
 diff --git a/BUILD.gn b/BUILD.gn
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -410,6 +410,9 @@
+@@ -410,6 +410,10 @@
  # that is limited in scope (e.g. utility classes/methods).
  source_set("libcef_static_unittested") {
    sources = [
 +    "include/echo_cef_download_v1.h",
++    "include/test/echo_download_save_page_test.h",
 +    "libcef/browser/download_bridge_state.cc",
 +    "libcef/browser/download_bridge_state.h",
      "libcef/browser/devtools/devtools_util.cc",
      "libcef/browser/devtools/devtools_util.h",
      "libcef/browser/geometry_util.h",
-@@ -436,7 +439,12 @@
+@@ -436,7 +440,12 @@
  test("libcef_static_unittests") {
    testonly = true
  
@@ -24,7 +25,7 @@ diff --git a/BUILD.gn b/BUILD.gn
      "libcef/browser/devtools/devtools_util_unittest.cc",
      "libcef/browser/geometry_util_unittest.cc",
    ]
-@@ -444,6 +452,14 @@
+@@ -444,6 +453,14 @@
    deps = [
      ":libcef_static_unittested",
      "//base/test:run_all_unittests",
@@ -39,7 +40,7 @@ diff --git a/BUILD.gn b/BUILD.gn
      "//testing/gtest",
    ]
  
-@@ -538,6 +554,8 @@
+@@ -538,6 +555,8 @@
      "libcef/browser/browser_frame.h",
      "libcef/browser/browser_guest_util.cc",
      "libcef/browser/browser_guest_util.h",
@@ -48,7 +49,7 @@ diff --git a/BUILD.gn b/BUILD.gn
      "libcef/browser/browser_host_base.cc",
      "libcef/browser/browser_host_base.h",
      "libcef/browser/browser_host_create.cc",
-@@ -946,6 +964,7 @@
+@@ -946,6 +965,7 @@
    ]
  
    deps = [
@@ -56,7 +57,7 @@ diff --git a/BUILD.gn b/BUILD.gn
      ":cef_make_headers",
      "libcef/common/mojom",
  
-@@ -1756,6 +1775,7 @@
+@@ -1756,6 +1776,7 @@
                          gypi_paths.autogen_capi_versions_includes +
                          gypi_paths2.libcef_sources_common +
                          gypi_paths.autogen_library_side + [
@@ -254,6 +255,34 @@ new file mode 100644
 +#endif
 +ECHO_CEF_DOWNLOAD_EXPORT uint32_t ECHO_CEF_DOWNLOAD_CALL echo_cef_download_get_api_v1(
 +    uint32_t caller_size, echo_cef_download_api_v1* result);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/include/test/echo_download_save_page_test.h b/include/test/echo_download_save_page_test.h
+new file mode 100644
+--- /dev/null
++++ b/include/test/echo_download_save_page_test.h
+@@ -0,0 +1,23 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#ifndef CEF_INCLUDE_TEST_ECHO_DOWNLOAD_SAVE_PAGE_TEST_H_
++#define CEF_INCLUDE_TEST_ECHO_DOWNLOAD_SAVE_PAGE_TEST_H_
++#if !defined(BUILDING_CEF_SHARED) && !defined(WRAPPING_CEF_SHARED) && !defined(UNIT_TEST)
++#error This helper is for unit tests only.
++#endif
++#include "include/echo_cef_download_v1.h"
++// Test-only entry point, excluded from the negotiated download API. UI sequence
++// only; never call synchronously from a receipt callback. Saves ONLY_HTML (format=0) or MHTML (format=1) using
++// the actual WebContents pipeline, without a native picker. 1=accepted, 0=refused,
++// -1=wrong sequence. UTF-8 path is borrowed for the call and must be absolute.
++// The source document must remain alive until serialization reaches terminal.
++#ifdef __cplusplus
++extern "C" {
++#endif
++ECHO_CEF_DOWNLOAD_EXPORT int32_t ECHO_CEF_DOWNLOAD_CALL
++    echo_cef_download_save_page_for_tests(int32_t browser_id,
++                                        echo_cef_download_string_v1 path, uint32_t format);
 +#ifdef __cplusplus
 +}
 +#endif
@@ -5170,6 +5199,43 @@ diff --git a/libcef/browser/frame_host_impl.cc b/libcef/browser/frame_host_impl.
  }
  
  void CefFrameHostImpl::LoadURLWithExtras(const std::string& url,
+diff --git a/libcef/browser/test/test_helpers_impl.cc b/libcef/browser/test/test_helpers_impl.cc
+--- a/libcef/browser/test/test_helpers_impl.cc
++++ b/libcef/browser/test/test_helpers_impl.cc
+@@ -8,6 +8,11 @@
+ #include "base/logging.h"
+ #include "base/path_service.h"
+ #include "cef/include/test/cef_test_helpers.h"
++#define ECHO_CEF_DOWNLOAD_IMPLEMENTATION
++#include "cef/include/test/echo_download_save_page_test.h"
++#include "base/strings/string_util.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/save_page_type.h"
+ #include "cef/libcef/browser/browser_host_base.h"
+ #include "cef/libcef/browser/chrome/chrome_browser_host_impl.h"
+ #include "cef/libcef/browser/thread_util.h"
+@@ -119,3 +124,21 @@
+           expected_origin),
+       base::Time(), base::Time::Max(), std::move(complete));
+ }
++
++extern "C" ECHO_CEF_DOWNLOAD_EXPORT int32_t ECHO_CEF_DOWNLOAD_CALL
++    echo_cef_download_save_page_for_tests(int32_t browser_id,
++                                        echo_cef_download_string_v1 path, uint32_t format) {
++  if (!CEF_CURRENTLY_ON_UIT()) return -1;
++  if (browser_id <= 0 || !path.data || !path.len || format > 1) return 0;
++  const std::string spelling(path.data, path.len);
++  if (spelling.find('\0') != std::string::npos || !base::IsStringUTF8(spelling))
++    return 0;
++  const auto target = base::FilePath::FromUTF8Unsafe(spelling);
++  if (!target.IsAbsolute() || target.BaseName().empty()) return 0;
++  auto browser = CefBrowserHostBase::GetBrowserForBrowserId(browser_id);
++  if (!browser || !browser->IsAlloyStyle() || !browser->GetWebContents()) return 0;
++  return browser->GetWebContents()->SavePage(
++      target, target.DirName().AppendASCII("saved-resources"),
++      format == 1 ? content::SAVE_PAGE_TYPE_AS_MHTML
++                  : content::SAVE_PAGE_TYPE_AS_ONLY_HTML) ? 1 : 0;
++}
 diff --git a/libcef/common/mojom/cef.mojom b/libcef/common/mojom/cef.mojom
 --- a/libcef/common/mojom/cef.mojom
 +++ b/libcef/common/mojom/cef.mojom
@@ -5412,14 +5478,14 @@ diff --git a/libcef_dll/libcef.lst b/libcef_dll/libcef.lst
  {
    /* Only export necessary symbols from libcef.so. */
 -  global: cef_*;
-+  global: cef_*; echo_cef_download_get_api_v1;
++  global: cef_*; echo_cef_download_get_api_v1; echo_cef_download_save_page_for_tests;
    local: *;
  };
 diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/download_bridge_unittest.cc
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,3075 @@
+@@ -0,0 +1,3344 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -5465,6 +5531,7 @@ new file mode 100644
 +  uint32_t decision = 1;
 +  std::vector<uint64_t> direct_tokens;
 +  std::vector<uint64_t> renderer_tokens;
++  std::vector<uint64_t> save_package_tokens;
 +  std::vector<uint64_t> navigation_tokens;
 +  std::vector<uint64_t> association_tokens;
 +  std::vector<uint64_t> no_item_tokens;
@@ -5496,6 +5563,8 @@ new file mode 100644
 +          self.navigation_tokens.push_back(token);
 +        if (kind == ECHO_CEF_DOWNLOAD_RENDERER && token)
 +          self.renderer_tokens.push_back(token);
++        if (kind == ECHO_CEF_DOWNLOAD_SAVE_PACKAGE && token)
++          self.save_package_tokens.push_back(token);
 +        return token;
 +      },
 +      [](void* p, uint64_t token, echo_cef_download_string_v1 url,
@@ -8494,12 +8563,278 @@ new file mode 100644
 +  ReleaseAndWaitForDestructor(handler);
 +}
 +
++
++class SavePageReceiptHandler : public TestHandler {
++ public:
++  enum Mode { kOnlyHtml, kMhtml, kRefused, kFailedNetwork };
++  explicit SavePageReceiptHandler(Mode mode) : mode_(mode), refuse_(mode == kRefused) {}
++  ~SavePageReceiptHandler() override {
++    if (probe_->registration) {
++      static auto* retained = new std::vector<std::shared_ptr<Probe>>;
++      retained->push_back(probe_);
++    }
++  }
++  void RunTest() override {
++    SetTestTimeout();
++    SetSignalTestCompletionCount(1);
++    probe_->get_api = echo_download_test::ResolveGetApi();
++    save_page_ = echo_download_test::ResolveSavePageForTests();
++    if (!probe_->get_api || !save_page_) {
++      ADD_FAILURE() << "custom test helper or bridge not loaded";
++      Finish();
++      return;
++    }
++    SetUseViews(false);
++    SetUseAlloyStyle(true, false);
++    CefPostTask(TID_FILE_USER_VISIBLE,
++                base::BindOnce(&SavePageReceiptHandler::PrepareFile, this));
++  }
++  void PrepareFile() {
++    EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
++    path_ = client::file_util::JoinPath(temp_dir_.GetPath(),
++        mode_ == kMhtml ? "saved-document.mhtml" : "saved-document.html");
++    CefPostTask(TID_UI, base::BindOnce(&SavePageReceiptHandler::CreateSource, this));
++  }
++  void CreateSource() {
++    server_ = std::make_unique<Server>(this);
++    server_->Initialize(false);
++  }
++  void OnServerInitialized(const std::string& origin) {
++    server_initialized_ = true;
++    if (finished_) { server_->Shutdown(); return; }
++    source_url_ = origin + "/save-receipt-document";
++    CefRequestContextSettings settings;
++    CreateBrowser(source_url_, CefRequestContext::CreateContext(settings, nullptr));
++  }
++  bool OnServerRequest(CefRefPtr<CefRequest> request,
++                       const test_server::ResponseCallback& callback) {
++    if (request->GetURL() != source_url_) return false;
++    ++page_requests_;
++    const bool fail = mode_ == kFailedNetwork && page_requests_ > 1;
++    auto response = CefResponse::Create();
++    response->SetStatus(fail ? 503 : 200);
++    response->SetMimeType("text/html");
++    CefResponse::HeaderMap headers;
++    headers.emplace("Cache-Control", "no-store");
++    response->SetHeaderMap(headers);
++    callback.Run(response, fail ? "save-network-failed" : NetworkDocument());
++    return true;
++  }
++  static std::string NetworkDocument() {
++    return "<html><head><title>Saved receipt document</title></head>"
++        "<body><p id='receipt-marker'>original-live-document</p></body></html>";
++  }
++  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnAfterCreated(browser);
++    browser_id_ = browser->GetIdentifier();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, echo_download_test::CallGetApi(
++        probe_->get_api, sizeof(probe_->api), &probe_->api));
++    EXPECT_EQ(17u, probe_->api.capabilities);
++    auto callbacks = probe_->Callbacks();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.register_browser(browser_id_,
++        {probe_->browser_generation, probe_->context_generation},
++        &callbacks, &probe_->registration));
++  }
++  void OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int) override {
++    if (started_ || finished_ || !frame->IsMain()) return;
++    started_ = true;
++    EXPECT_EQ(source_url_, frame->GetURL().ToString());
++    EXPECT_EQ(1, probe_->reserves);
++    EXPECT_EQ(probe_->navigation_tokens, probe_->no_item_tokens);
++    EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD}, probe_->no_item);
++    probe_->navigation_tokens.clear(); probe_->no_item_tokens.clear(); probe_->no_item.clear();
++    probe_->reserves = 0; probe_->authorizations = 0;
++    probe_->expected_kind = ECHO_CEF_DOWNLOAD_SAVE_PACKAGE;
++    frame->ExecuteJavaScript(
++        "document.getElementById('receipt-marker').textContent='saved-live-dom-receipt-701';",
++        frame->GetURL(), 0);
++    frame->GetSource(new RendererSourceAck(base::BindOnce(
++        &SavePageReceiptHandler::SaveActualDocument, this)));
++  }
++  void SaveActualDocument(const CefString& source) {
++    EXPECT_NE(std::string::npos, source.ToString().find("saved-live-dom-receipt-701"));
++    EXPECT_EQ(0, echo_download_test::CallSavePageForTests(save_page_, -1, path_, mode_ == kMhtml ? 1 : 0));
++    if (refuse_) {
++      closing_ = true;
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    }
++    const int accepted = echo_download_test::CallSavePageForTests(save_page_, browser_id_, path_, mode_ == kMhtml ? 1 : 0);
++    EXPECT_EQ(refuse_ ? 0 : 1, accepted);
++    EXPECT_EQ(refuse_ ? 0 : 1, probe_->reserves);
++    EXPECT_EQ(refuse_ ? 0 : 1, probe_->authorizations);
++    if (!refuse_) {
++      EXPECT_EQ(source_url_, probe_->current_url);
++      // Keep the original document alive until SavePackage is terminal. Receipt
++      // drainage alone is deliberately NOT used as permission to blank it.
++      closing_ = true;
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    } else {
++      GetBrowser()->GetMainFrame()->GetSource(new RendererSourceAck(base::BindOnce(
++          &SavePageReceiptHandler::VerifyRefusedSource, this)));
++    }
++  }
++  void VerifyRefusedSource(const CefString& source) {
++    EXPECT_NE(std::string::npos, source.ToString().find("saved-live-dom-receipt-701"));
++    EXPECT_EQ(source_url_, GetBrowser()->GetMainFrame()->GetURL().ToString());
++    EXPECT_EQ(0, probe_->associated);
++    EXPECT_TRUE(probe_->no_item.empty());
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&SavePageReceiptHandler::VerifyFile, this));
++  }
++  bool OnBeforeDownload(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>,
++      const CefString&, CefRefPtr<CefBeforeDownloadCallback>) override {
++    ADD_FAILURE() << "SavePackage already has a chosen path; no target callback expected";
++    return false;
++  }
++  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++                         CefRefPtr<CefDownloadItemCallback>) override {
++    if (finished_ || verified_) return;
++    EXPECT_FALSE(refuse_);
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    EXPECT_EQ(1, probe_->associated);
++    EXPECT_EQ(probe_->item_id, item->GetId());
++    EXPECT_FALSE(item->IsInterrupted());
++    if (mode_ == kFailedNetwork) {
++      EXPECT_FALSE(item->IsComplete()) << "failed main save must not become Complete";
++      if (!item->IsCanceled() && !item->IsComplete()) return;
++      EXPECT_TRUE(item->IsCanceled());
++      EXPECT_GE(page_requests_, 2);
++      verified_ = true;
++      CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&SavePageReceiptHandler::VerifyFile, this));
++      return;
++    }
++    EXPECT_FALSE(item->IsCanceled());
++    if (!item->IsComplete()) return;
++    EXPECT_EQ(path_, item->GetFullPath().ToString());
++    EXPECT_EQ(source_url_, browser->GetMainFrame()->GetURL().ToString());
++    EXPECT_EQ(1u, probe_->association_tokens.size());
++    EXPECT_EQ(probe_->save_package_tokens, probe_->association_tokens);
++    EXPECT_TRUE(probe_->no_item.empty());
++    complete_ = true; verified_ = true;
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&SavePageReceiptHandler::VerifyFile, this));
++  }
++  void VerifyFile() {
++    std::string actual;
++    const bool exists = client::file_util::ReadFileToString(path_, &actual);
++    if (refuse_ || mode_ == kFailedNetwork) {
++      EXPECT_FALSE(exists);
++      const std::string directory = temp_dir_.Take();
++      EXPECT_FALSE(directory.empty());
++      std::cout << (refuse_ ? "ECHO_REFUSED_SAVE_PAGE_DIR=" : "ECHO_FAILED_SAVE_PAGE_DIR=") << directory << std::endl;
++    } else {
++      EXPECT_TRUE(exists);
++      if (mode_ == kMhtml) {
++        EXPECT_NE(std::string::npos, actual.find("saved-live-dom-receipt-701"));
++        EXPECT_NE(std::string::npos, actual.find("Saved receipt document"));
++        EXPECT_EQ(std::string::npos, actual.find("original-live-document"));
++      } else {
++        EXPECT_EQ(NetworkDocument(), actual);
++      }
++      EXPECT_FALSE(temp_dir_.Take().empty());
++      std::cout << (mode_ == kMhtml ? "ECHO_SAVED_PAGE_MHTML_FILE=" : "ECHO_SAVED_PAGE_HTML_FILE=") << path_ << std::endl;
++    }
++    CefPostTask(TID_UI, base::BindOnce(&SavePageReceiptHandler::Finish, this));
++  }
++  void Finish() {
++    if (finished_) return;
++    finished_ = true;
++    if (server_ && server_initialized_) server_->Shutdown();
++    else if (!server_) OnServerShutdown();
++    if (probe_->registration && !closing_) {
++      closing_ = true;
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    }
++    PollDrain();
++  }
++  void PollDrain() {
++    if (!probe_->registration) { drain_done_ = true; SignalExtraOnce(); return; }
++    const auto status = probe_->api.unregister_poll(probe_->registration);
++    if (status == ECHO_CEF_DOWNLOAD_PENDING && ++polls_ <= 500) {
++      CefPostDelayedTask(TID_UI, base::BindOnce(&SavePageReceiptHandler::PollDrain, this), 10);
++      return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, status);
++    if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
++    drain_done_ = true;
++    SignalExtraOnce();
++  }
++  void OnServerShutdown() {
++    server_.reset(); server_closed_ = true;
++    TestHandler::DestroyTest();
++    SignalExtraOnce();
++  }
++  void SignalExtraOnce() {
++    if (drain_done_ && server_closed_ && !extra_signaled_) {
++      extra_signaled_ = true; SignalTestCompletion();
++    }
++  }
++ protected:
++  void OnTestTimeout(int timeout, bool error) override {
++    if (error) ADD_FAILURE() << "SavePage timeout " << timeout
++        << " reserves=" << probe_->reserves << " associated=" << probe_->associated
++        << " complete=" << complete_;
++    Finish();
++  }
++ private:
++  class Server : public test_server::ObserverHelper {
++   public:
++    explicit Server(SavePageReceiptHandler* owner) : owner_(owner) {}
++    void OnInitialized(const std::string& origin) override {
++      CefPostTask(TID_UI, base::BindOnce(&SavePageReceiptHandler::OnServerInitialized,
++                                       CefRefPtr<SavePageReceiptHandler>(owner_), origin));
++    }
++    bool OnTestServerRequest(CefRefPtr<CefRequest> request, const ResponseCallback& callback) override {
++      return owner_->OnServerRequest(request, callback);
++    }
++    void OnShutdown() override {
++      CefPostTask(TID_UI, base::BindOnce(&SavePageReceiptHandler::OnServerShutdown,
++                                       CefRefPtr<SavePageReceiptHandler>(owner_)));
++    }
++   private:
++    SavePageReceiptHandler* const owner_;
++  };
++  const Mode mode_;
++  const bool refuse_;
++  std::unique_ptr<Server> server_;
++  std::string source_url_;
++  int page_requests_ = 0;
++  bool server_initialized_ = false, server_closed_ = false, drain_done_ = false;
++  const std::shared_ptr<Probe> probe_ = std::make_shared<Probe>();
++  echo_download_test::SavePageForTests save_page_ = nullptr;
++  CefScopedTempDir temp_dir_;
++  std::string path_;
++  int browser_id_ = 0, polls_ = 0;
++  bool started_ = false, closing_ = false, complete_ = false;
++  bool verified_ = false, finished_ = false, extra_signaled_ = false;
++  IMPLEMENT_REFCOUNTING(SavePageReceiptHandler);
++};
++TEST(EchoDownloadBridge, SavePageSerializesOriginalLiveDocumentAfterClosing) {
++  CefRefPtr<SavePageReceiptHandler> handler = new SavePageReceiptHandler(SavePageReceiptHandler::kMhtml);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, ClosedSavePageRefusesWithoutFileOrDocumentReplacement) {
++  CefRefPtr<SavePageReceiptHandler> handler = new SavePageReceiptHandler(SavePageReceiptHandler::kRefused);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, SavePageOnlyHtmlCopiesNetworkDocumentAfterClosing) {
++  CefRefPtr<SavePageReceiptHandler> handler = new SavePageReceiptHandler(SavePageReceiptHandler::kOnlyHtml);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, SavePageNetworkFailureCannotReportPhantomCompletion) {
++  CefRefPtr<SavePageReceiptHandler> handler = new SavePageReceiptHandler(SavePageReceiptHandler::kFailedNetwork);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
 +}  // namespace
 diff --git a/tests/ceftests/echo_download_bridge_loader.cc b/tests/ceftests/echo_download_bridge_loader.cc
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/echo_download_bridge_loader.cc
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,38 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include "tests/ceftests/echo_download_bridge_loader.h"
@@ -8525,17 +8860,31 @@ new file mode 100644
 +  // Caller must resolve successfully first and keep the CEF loader alive.
 +  return get_api(size, result);
 +}
++SavePageForTests ResolveSavePageForTests() {
++#if defined(OS_MAC)
++  return reinterpret_cast<SavePageForTests>(
++      cef_get_loaded_library_symbol("echo_cef_download_save_page_for_tests"));
++#else
++  return &echo_cef_download_save_page_for_tests;
++#endif
++}
++NO_SANITIZE("cfi-icall") int32_t CallSavePageForTests(
++    SavePageForTests save_page, int32_t browser_id, const std::string& path, uint32_t format) {
++  return save_page(browser_id, {path.data(), path.size()}, format);
++}
 +}  // namespace echo_download_test
 diff --git a/tests/ceftests/echo_download_bridge_loader.h b/tests/ceftests/echo_download_bridge_loader.h
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/echo_download_bridge_loader.h
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,24 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#ifndef CEF_TESTS_CEFTESTS_ECHO_DOWNLOAD_BRIDGE_LOADER_H_
 +#define CEF_TESTS_CEFTESTS_ECHO_DOWNLOAD_BRIDGE_LOADER_H_
++#include <string>
 +#include "include/echo_cef_download_v1.h"
++#include "include/test/echo_download_save_page_test.h"
 +namespace echo_download_test {
 +// decltype declares the function pointer type without referencing the framework
 +// symbol at link time. Includes the extension's explicit calling convention.
@@ -8544,6 +8893,10 @@ new file mode 100644
 +// use their existing libcef link. Null is a test failure, never a stock fallback.
 +// The process library loader must outlive all calls and registration drainage.
 +GetApi ResolveGetApi();
++using SavePageForTests = decltype(&echo_cef_download_save_page_for_tests);
++SavePageForTests ResolveSavePageForTests();
++int32_t CallSavePageForTests(SavePageForTests save_page, int32_t browser_id,
++                            const std::string& path, uint32_t format);
 +// Match the generated CEF wrapper's CFI boundary for a dynamically resolved API.
 +uint32_t CallGetApi(GetApi get_api, uint32_t size,
 +                    echo_cef_download_api_v1* result);

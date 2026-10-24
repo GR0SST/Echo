@@ -35,11 +35,11 @@
   "patch_files": [
     {
       "path": "chromium.patch",
-      "sha256": "7e1fd6c0efbc720db23016dbc985720af73fb623863aa0d2c056340382366ddd"
+      "sha256": "e2f405706460ea77e9c3b690684b6ecfd8900340d4f9985da0468bdf1f596e62"
     },
     {
       "path": "cef.patch",
-      "sha256": "13eaafebae4cb3cc8a6cd312556940245eee06c416a31fdeca5e2de680f916ed"
+      "sha256": "c096009fab5a5f39b0005d04a4df7008a37e80fb7418002c844d258337d4a3eb"
     }
   ],
   "standard_patch_files": [
@@ -2472,7 +2472,7 @@
     {
       "path": "content/browser/download/save_package.cc",
       "base_sha256": "9b4054a5e68199664befd4221dc4278f7d069ad97ec9f44e055657758ddccaa3",
-      "result_sha256": "de0bde674cced5b3bd332f54cda4190b3227958b1a7ea40b7cf8fc77efcb33fa",
+      "result_sha256": "bf65f9c7fc875017373f6d1e8eeb3572691c484ed97df7b22be0b3086b556e4a",
       "mode": "100644"
     },
     {
@@ -2706,7 +2706,7 @@
     {
       "path": "cef/BUILD.gn",
       "base_sha256": "6157524c9ce3af1c9455a498945d66b67c41a3aa1146da108fc589d8407d8f79",
-      "result_sha256": "786d7575234e3288a651d36602f72f7e3522f2b6eb8e0246b5730369dfaa5604",
+      "result_sha256": "2b9985bb7d64f586676584ce86d57f6ca525a0357d1878d2b116ba5873935b56",
       "mode": "100644"
     },
     {
@@ -2719,6 +2719,12 @@
       "path": "cef/include/echo_cef_download_v1.h",
       "base_sha256": null,
       "result_sha256": "d89c4287972cbe75cef459f2730eff4a5f714e1c91bb0757f9250e2a1b78cabb",
+      "mode": "100644"
+    },
+    {
+      "path": "cef/include/test/echo_download_save_page_test.h",
+      "base_sha256": null,
+      "result_sha256": "a2c4beb400de8bddcb4e81150e12e150b9c23e5adc1af26b5aa0407cdfca130c",
       "mode": "100644"
     },
     {
@@ -2788,6 +2794,12 @@
       "mode": "100644"
     },
     {
+      "path": "cef/libcef/browser/test/test_helpers_impl.cc",
+      "base_sha256": "a4f6711ed5dc694fb6dc0ac9188777a35f824557ab79df9623a0007d4af5a2a0",
+      "result_sha256": "a2ee2ddd1c408b29c5ebd608cd1a989af113bdb94f2232487382b7ee60c1ffa2",
+      "mode": "100644"
+    },
+    {
       "path": "cef/libcef/common/mojom/cef.mojom",
       "base_sha256": "a1633567c792625379e54952c1e6a6d75378cfba45e508edc2728965e0f0b11f",
       "result_sha256": "9a636200f7c54c3535f7be5bde1a446bb83f145abe325439486c14c0a887d9a8",
@@ -2826,25 +2838,25 @@
     {
       "path": "cef/libcef_dll/libcef.lst",
       "base_sha256": "fb006f56da60be8a79e98a3437235fef196c04aae5682e812ae245d34f1b62dd",
-      "result_sha256": "0945f2375df6a11a01f53045759b64cf2e7759cc6630a9102b9fdc68510c4c81",
+      "result_sha256": "73f70f4eac1648b79276a5342dd8f375f88d8fba4d74943ddaeb92efd049bf4d",
       "mode": "100644"
     },
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "202aed320bf068212129b033ae87d4bc710a56dc1926016b18e6a8604a365f49",
+      "result_sha256": "fc1c3d22121a88b7c748d611b5647774c96567ec93424d5db59ba597ffd9ec7e",
       "mode": "100644"
     },
     {
       "path": "cef/tests/ceftests/echo_download_bridge_loader.cc",
       "base_sha256": null,
-      "result_sha256": "93b95ff61ac7f60646fd7dc0a9b495e5dadf7cba44b7d693372ebff0842c3559",
+      "result_sha256": "c17ca87d44571cd7d8b1348e37e574484b6108de72a853f76ed549128697f869",
       "mode": "100644"
     },
     {
       "path": "cef/tests/ceftests/echo_download_bridge_loader.h",
       "base_sha256": null,
-      "result_sha256": "b064bf4586daceada5451ae84339a03564d10b1f485871a665b089cfe918a34c",
+      "result_sha256": "a672aa1f9481c7897cf1d25133fa3a3639c99bfa48e29ebb5664197c2e965ac4",
       "mode": "100644"
     },
     {
