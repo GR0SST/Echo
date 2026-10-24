@@ -1459,3 +1459,43 @@ fixture has fewer Favorites/other tabs and a different sidebar width, so these
 verify title behavior rather than whole-window pixel parity. Actual provider
 model quality remains unverified; the local fixture deliberately returns the
 same label observed in Arc.
+
+### Max completed-download renaming, 2026-10-25
+
+Arc Max settings remained read-only, including the disabled Tidy Downloads
+switch. Source for the two messages is the installed Arc 1.170.0 binary's
+ToastController string group: local extraction
+`target/parity/arc-max/arc-strings.txt:47511` (“Download name reverted!”) and
+`:47513` (“Download renamed!”), with adjacent Tidy Downloads comments.
+The plain/accessory layouts are the independently verified `d7ed3a3` reference
+in `docs/TOAST_REFERENCE.md`. No exact Arc download-toast visual is claimed.
+
+Echo queues inference only after a new canonical completion when enabled;
+enabling Max does not scan existing downloads. Only basename, MIME type and
+sanitized source URL reach the selected direct provider. The generated stem
+cannot choose a directory or change the original extension. Retained file and
+parent identities, conditional inventory edits, no-overwrite moves and local
+Undo preserve completed-record ownership. Edited files/replaced paths and stale
+provider/settings/record responses are rejected. Quit waits only for an already
+started local file move and its inventory commit, never for provider inference.
+
+An isolated native CEF attachment fixture made one compatible-provider SSE
+request, renamed the file, and used the toast accessory to restore its original
+name and all 2,800 bytes; the saved inventory retained its profile and record ID.
+The generated test credential was removed and CEF completed its quit barrier.
+This validates the canonical completion hook through the explicit download
+acceptance fixture. It does not enable the separately gated ordinary download
+routing/continuation pipeline. Windows/Linux native file moves remain unverified.
+
+Evidence at 1000×760: `target/parity/arc-max/echo_download_renamed.png`
+and `echo_download_reverted.png` include the passive child windows and were
+visually inspected. The retained generic Arc templates are
+`verified_toast_accessory_pair.png` and `arc_verified_plain_toast_template.png`
+in the same directory; they are explicitly not a download-specific Arc pair.
+`download-native-provider-observation.json`, `download-native-inventory.json`,
+`download-native-file-proof.txt` and `echo-download-run-native.log` record the
+request, restored record, bytes and clean shutdown. Seven added regressions
+cover core name/metadata validation, filesystem collision/replacement/symlink
+handling, and GPUI completion/Undo/stale-response behavior. The full workspace
+suite passed (989 browser, 212 core, 13 AI, 135 engine, 6 importer; the native
+credential-store integration test remains opt-in).

@@ -4,6 +4,8 @@ mod native;
 mod quit;
 mod find;
 mod max;
+mod max_downloads;
+mod max_downloads_files;
 mod toast;
 mod archive;
 mod command_suggestions;

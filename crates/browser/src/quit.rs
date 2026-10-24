@@ -437,7 +437,8 @@ pub(crate) fn init(cx: &mut App) {
                 // download batch owns its lease or the handoff fails.
                 let _ = cx.update(show_progress);
             }
-            if preparing && state.borrow().failure.is_none() {
+            if preparing && state.borrow().failure.is_none()
+                && !cx.update(|cx| crate::max_downloads::file_moves_pending(cx)).unwrap_or(true) {
                 // Exactly one running drain under the SHUTDOWN consumer lease,
                 // before detachment/begin_shutdown. No service means no drain:
                 // the disposable probe remains the sole running consumer.

@@ -183,6 +183,13 @@ impl ProfileHandle {
             .map_err(|error| format!("Cannot record completed download: {error:?}"))?;
         self.revision.set(self.revision.get().wrapping_add(1));
         self.notify();
+        if self.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::TidyDownloads)) {
+            let handle = self.clone();
+            let app = self.app.clone();
+            self.executor.spawn(async move {
+                let _ = app.update(|cx| crate::max_downloads::start(handle, id, cx));
+            }).detach();
+        }
         Ok(id)
     }
 

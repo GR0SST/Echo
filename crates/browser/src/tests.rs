@@ -12,6 +12,8 @@ use crate::pages::WebEngine;
 use crate::window::{BrowserWindow, Suggestion};
 use crate::{demo_browser, init};
 
+#[path = "max_downloads_tests.rs"]
+mod max_downloads_tests;
 #[path = "toolbar_tests.rs"]
 mod toolbar_tests;
 #[path = "space_context_tests.rs"]
@@ -10593,9 +10595,9 @@ mod max_feature_tests {
     use echo_ai::{ProviderConfig, Provider, client::{AiError,Cancellation,ChatRequest},credentials::CredentialStore};
     use std::{sync::{Arc,Mutex},task::{Poll,Waker}};
     #[derive(Default)]
-    struct Reply(Mutex<(Option<Result<String,AiError>>,Option<Waker>)>);
+    pub(super) struct Reply(Mutex<(Option<Result<String,AiError>>,Option<Waker>)>);
     impl Reply {
-        fn complete(&self,answer:Result<String,AiError>){let mut state=self.0.lock().unwrap();state.0=Some(answer);if let Some(waker)=state.1.take(){waker.wake();}}
+        pub(super) fn complete(&self,answer:Result<String,AiError>){let mut state=self.0.lock().unwrap();state.0=Some(answer);if let Some(waker)=state.1.take(){waker.wake();}}
     }
     struct Pending(Arc<Reply>);
     impl std::future::Future for Pending {
@@ -10605,7 +10607,7 @@ mod max_feature_tests {
         }
     }
     #[derive(Default)]
-    struct ProviderRequests(Mutex<Vec<(Vec<serde_json::Value>,Arc<Reply>)>>);
+    pub(super) struct ProviderRequests(pub(super) Mutex<Vec<(Vec<serde_json::Value>,Arc<Reply>)>>);
     impl crate::max::Inference for ProviderRequests {
         fn start(&self,config:ProviderConfig,request:ChatRequest,_:Arc<dyn CredentialStore>,_:Cancellation,executor:&gpui::BackgroundExecutor)->gpui::Task<Result<String,AiError>>{
             assert_eq!(config.model,"local-model");assert!(request.instructions.contains("untrusted"));

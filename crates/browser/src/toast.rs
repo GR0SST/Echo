@@ -12,6 +12,7 @@ pub(crate) struct Toast {
     pub overlay: Option<WindowHandle<Overlay>>,
     pub(crate) copied_link: bool,
     undo_hint: bool,
+    download_undo: bool,
     generation: u64,
     started: Instant,
     dismissed: Option<(Instant, f32)>,
@@ -22,6 +23,7 @@ pub(crate) struct Toast {
 #[derive(Clone)]
 enum ToastAction {
     ShareLinks(Vec<String>),
+    UndoDownload(crate::max_downloads::Receipt),
     RevealTab(browser_core::TabId, browser_core::UserProfileId),
     UndoArchive(Vec<browser_core::TabId>, browser_core::UserProfileId),
 }
@@ -165,6 +167,12 @@ impl BrowserWindow {
         let Some(action) = toast.action.clone() else { return; };
         let urls = match action {
             ToastAction::ShareLinks(urls) => urls,
+            ToastAction::UndoDownload(receipt) => {
+                if receipt.belongs_to(&self.profile.handle, self.browser.active_user_profile_id()) {
+                    crate::max_downloads::undo(receipt, cx);
+                }
+                return;
+            }
             ToastAction::RevealTab(tab, profile) => {
                 if profile != self.browser.active_user_profile_id() || self.browser.user_profile_id_for_tab(tab) != Some(profile) { return; }
                 if let Some(index) = self.browser.spaces.iter().position(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab)) {
@@ -196,26 +204,36 @@ impl BrowserWindow {
     }
 
     pub(crate) fn show_toast(&mut self, message: String, cx: &mut Context<Self>) {
+        self.present_toast(message, None, cx);
+    }
+
+    pub(crate) fn show_download_renamed(&mut self, receipt: crate::max_downloads::Receipt, cx: &mut Context<Self>) {
+        self.present_toast("Download renamed!".into(), Some(receipt), cx);
+    }
+
+    fn present_toast(&mut self, message: String, receipt: Option<crate::max_downloads::Receipt>, cx: &mut Context<Self>) {
+        let download_undo = receipt.is_some();
         self.retire_toast(cx);
         self.toast_generation += 1;
         let generation = self.toast_generation;
         self.toast = Some(Toast {
             copied_link: message.starts_with("Copied"),
             undo_hint: message.contains("⌘Z"),
+            download_undo,
             message,
             overlay: None,
             generation,
             started: cx.background_executor().now(),
             dismissed: None,
             motion: None,
-            action: None,
+            action: receipt.map(ToastAction::UndoDownload),
         });
         if self.toast.as_ref().is_some_and(|toast| toast.undo_hint) { self.attach_archive_undo(); }
         let main = self.main_window;
         let browser = cx.entity().downgrade();
         let parent = self.native_view;
         let message = self.toast.as_ref().unwrap().message.clone();
-        let copied_link = self.toast.as_ref().unwrap().copied_link;
+        let copied_link = self.toast.as_ref().unwrap().copied_link || download_undo;
         let undo_hint = self.toast.as_ref().unwrap().undo_hint;
         cx.defer(move |cx| {
             if !browser
@@ -346,7 +364,8 @@ impl BrowserWindow {
             return div().into_any_element();
         };
         let message = toast.message.clone();
-        let copied_link = toast.copied_link;
+        let copied_link = toast.copied_link || toast.download_undo;
+        let download_undo = toast.download_undo;
         let undo_hint = toast.undo_hint;
         let (scale, opacity, _) = toast.progress(now, crate::native::prefers_reduced_motion());
         if scale < 0.001 { return div().size_full().into_any_element(); }
@@ -384,11 +403,11 @@ impl BrowserWindow {
                     .flex().items_center().rounded(px(4. * scale)).bg(hsla(0., 0., 1., 0.1)).child("⌘Z"))
                 .child(undo_after.trim_start().to_string())))
             .when(copied_link, |this| this.child(
-                div().id("toast-share").debug_selector(|| "toast-share".into()).cursor_pointer()
+                div().id("toast-share").debug_selector(move || if download_undo { "toast-download-undo".into() } else { "toast-share".into() }).cursor_pointer()
                     .on_click(move |_, _, cx| { let _ = owner.update(cx, |this, cx| this.activate_toast_action(generation, cx)); })
                     .w(px(32. * scale)).h(px(28. * scale)).flex_none().rounded(px(6. * scale))
                     .bg(hsla(0., 0., 1., 0.2)).flex().items_center().justify_center()
-                    .child(crate::icons::control_sized(crate::icons::Icon::Share, 18. * scale))));
+                    .child(crate::icons::control_sized(if download_undo { crate::icons::Icon::Restore } else { crate::icons::Icon::Share }, 18. * scale))));
         div().size_full().flex().items_start().justify_center().pt(px(PAD_Y))
             .opacity(opacity).child(surface).into_any_element()
     }

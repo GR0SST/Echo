@@ -179,3 +179,19 @@ encoding. The full workspace run passes 1,222 tests. Native evidence lives in
 `echo-background-reveal.png`, and `echo-move.png` / `echo-move-reveal.png`
 verify native actions. `echo-folder.png` and `echo-drag.png` show creation
 around a tab and a real Today-to-folder drag. Logs show clean CEF shutdown.
+
+## Max download renaming
+
+The installed Arc binary string group (local extraction
+`target/parity/arc-max/arc-strings.txt`, lines 47511–47514) supplies
+“Download renamed!” and “Download name reverted!”, with comments explicitly
+identifying Tidy Downloads. The accessory source group uses
+`arrow.uturn.backward`. Echo reuses the plain/accessory layouts verified in
+`d7ed3a3` above, using its existing vector Undo control. The owner's Arc Tidy
+Downloads switch is disabled and was left unchanged: enabling it could send
+owner filenames to Arc's AI. The exact download-specific toast visual remains
+partial; a generic verified toast is not a direct download-toast capture.
+
+Undo performs a local no-overwrite move and updates the captured completed
+record. It does not request another model response. If the original name is
+occupied, the undo leaves both files and inventory unchanged.

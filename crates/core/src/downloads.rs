@@ -1,6 +1,8 @@
 //! Completed local-profile downloads. No active transfers or engine tokens are serialized.
 #[path = "download_paths.rs"]
 mod path_encoding;
+mod rename;
+pub use rename::DownloadRenamePlan;
 use crate::{Browser, UserProfileId};
 use serde::{Deserialize, Serialize};
 use std::{
