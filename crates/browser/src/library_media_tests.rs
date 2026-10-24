@@ -120,19 +120,19 @@ fn media_has_reference_width_list_after_shared_rail_and_separate_preview(cx: &mu
     let body = visual.debug_bounds("library-media-empty-body").unwrap();
     let learn_more = visual.debug_bounds("library-media-learn-more").unwrap();
     assert_eq!(list.origin.x, px(112.));
-    assert_eq!(list.size.width, px(284.));
+    assert_eq!(list.size.width, px(304.));
     assert_eq!(preview.origin.x, list.right());
-    assert_eq!(preview.origin.y, px(17.));
+    assert_eq!(preview.origin.y, px(10.));
     assert_eq!(preview.right(), px(707.));
-    assert_eq!(search.origin.x - list.origin.x, px(6.));
-    assert_eq!(search.origin.y, px(17.));
-    assert_eq!(search.size, gpui::size(px(270.), px(34.)));
-    assert_eq!(icon.size, gpui::size(px(48.), px(48.)));
+    assert_eq!(search.origin.x - list.origin.x, px(8.));
+    assert_eq!(search.origin.y, px(10.));
+    assert_eq!(search.size, gpui::size(px(288.), px(36.)));
+    assert_eq!(icon.size, gpui::size(px(56.), px(56.)));
     assert_eq!(title.origin.y - icon.bottom(), px(12.));
     assert_eq!(body.origin.y - title.bottom(), px(6.));
     assert_eq!(body.size, gpui::size(px(272.), px(48.)));
-    assert_eq!(learn_more.origin.y - body.bottom(), px(12.));
-    assert_eq!(learn_more.size, gpui::size(px(94.), px(26.)));
+    assert_eq!(learn_more.origin.y - body.bottom(), px(20.));
+    assert_eq!(learn_more.size, gpui::size(px(100.), px(28.)));
     let list_body = visual.debug_bounds("library-media-list-body").unwrap();
     assert!(((icon.origin.y + learn_more.bottom()) / 2. - list_body.center().y).abs() <= px(1.));
     assert!(log.borrow().is_empty());
@@ -151,7 +151,7 @@ fn empty_stays_centered_in_list_at_ordinary_window_sizes(cx: &mut TestAppContext
         let empty = visual.debug_bounds("library-media-empty").unwrap();
         let icon = visual.debug_bounds("library-media-empty-icon").unwrap();
         let preview = visual.debug_bounds("library-media-preview").unwrap();
-        assert_eq!(body.size.width, px(284.));
+        assert_eq!(body.size.width, px(304.));
         assert!((empty.center().y - body.center().y).abs() <= px(1.));
         assert_eq!(icon.center().x, body.center().x);
         assert!(empty.right() <= preview.origin.x);
@@ -241,7 +241,7 @@ fn all_library_sections_keep_the_same_rail_and_tile_geometry(cx: &mut TestAppCon
     let group = visual.debug_bounds("library-nav-group").unwrap();
     assert_eq!(rail.size.width, px(112.));
     assert_eq!(group.size, gpui::size(px(96.), px(580.)));
-    assert_eq!(group.origin, gpui::point(px(8.), px(110.)));
+    assert_eq!(group.origin, gpui::point(px(8.), px(105.)));
     let selectors = [
         "library-nav-media",
         "library-nav-downloads",

@@ -191,7 +191,7 @@ pub(crate) fn render_library(
         .absolute()
         .left_0()
         .top_0()
-        .bottom_0()
+        .bottom(px(10.))
         .w(px(112.))
         .overflow_y_scroll()
         .overflow_x_hidden();

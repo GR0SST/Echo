@@ -427,7 +427,7 @@ fn navigation_matches_captured_icon_tiles_at_reference_and_ordinary_heights(
         view.section = LibrarySection::Downloads;
         cx.notify();
     });
-    for (height, first_y) in [(2130., 775.), (800., 110.)] {
+    for (height, first_y) in [(2130., 770.), (800., 105.), (760., 85.)] {
         visual.simulate_resize(gpui::size(px(1920.), px(height)));
         visual.run_until_parked();
         assert_reference_navigation(visual, first_y);
@@ -463,7 +463,7 @@ fn short_navigation_keeps_tile_geometry_and_scrolls_to_last_route(cx: &mut TestA
     visual.run_until_parked();
     assert_reference_navigation(visual, 0.);
     let viewport = visual.debug_bounds("library-nav-scroll").unwrap();
-    assert_eq!(viewport.size, gpui::size(px(112.), px(480.)));
+    assert_eq!(viewport.size, gpui::size(px(112.), px(470.)));
     let card = visual.debug_bounds("library-space-0").unwrap();
     let last_before = visual.debug_bounds("library-nav-archive").unwrap();
     assert!(last_before.origin.y >= viewport.bottom());

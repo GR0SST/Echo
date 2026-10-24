@@ -135,7 +135,7 @@ pub struct Chromium {
 /// macOS window corner radius (measured on macOS 26+).
 pub const WINDOW_CORNER_RADIUS: f32 = 16.0;
 /// Gap between the window edge and the content card.
-pub const CONTENT_INSET: f32 = 8.0;
+pub const CONTENT_INSET: f32 = 10.0;
 /// Concentric with the window corner: inner radius = outer radius - inset.
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 

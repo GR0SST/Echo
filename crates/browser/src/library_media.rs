@@ -5,10 +5,8 @@ use gpui::{
     Window,
 };
 
-/// Provisional list width drawn from the supplied uncalibrated raster.
-/// The screenshot's ~284 image pixels are not verified logical points; keep
-/// this tunable reference value separate from the shared 112 px Library rail.
-pub(crate) const MEDIA_REFERENCE_COLUMN_WIDTH: f32 = 284.;
+/// Measured in the installed Arc at a 1000 × 760 logical-point window.
+pub(crate) const MEDIA_REFERENCE_COLUMN_WIDTH: f32 = 304.;
 pub(crate) const MEDIA_TITLE: &str = "Nothing here yet!";
 pub(crate) const MEDIA_BODY: &str = "Save media to your Documents, Desktop,\nand Download Folders to see them here,\nalongside your Captures in Echo.";
 
@@ -103,10 +101,10 @@ impl Render for MediaView {
                                     .id("library-media-search")
                                     .debug_selector(|| "library-media-search".into())
                                     .absolute()
-                                    .left(px(6.))
+                                    .left(px(8.))
                                     .right(px(8.))
-                                    .top(px(17.))
-                                    .h(px(34.))
+                                    .top(px(10.))
+                                    .h(px(36.))
                                     .rounded(px(10.))
                                     .bg(colors.control)
                                     .px(px(10.))
@@ -149,7 +147,7 @@ impl Render for MediaView {
                             .left_0()
                             .right_0()
                             .top(px(64.))
-                            .bottom_0()
+                            .bottom(px(10.))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -165,11 +163,11 @@ impl Render for MediaView {
                                         div()
                                             .debug_selector(|| "library-media-empty-icon".into())
                                             .flex_none()
-                                            .size(px(48.))
+                                            .size(px(56.))
                                             .text_color(colors.muted)
                                             .child(super::navigation_icon(
                                                 super::LibrarySection::Media,
-                                                2.,
+                                                56. / 24.,
                                             )),
                                     )
                                     .child(
@@ -199,15 +197,15 @@ impl Render for MediaView {
                                             .id("library-media-learn-more")
                                             .debug_selector(|| "library-media-learn-more".into())
                                             .flex_none()
-                                            .mt(px(12.))
-                                            .w(px(94.))
-                                            .h(px(26.))
+                                            .mt(px(20.))
+                                            .w(px(100.))
+                                            .h(px(28.))
                                             .rounded(px(8.))
                                             .bg(colors.control)
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .text_size(px(12.))
+                                            .text_size(px(13.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .cursor_pointer()
                                             .hover(move |s| s.bg(colors.hover))
@@ -224,11 +222,11 @@ impl Render for MediaView {
 }
 
 /// The same measured surface serves the standalone presenter and the live host.
-/// The provisional width controls layout only; CEF gets the resulting canvas.
+/// Inventory content owns this rectangle; hidden browser tabs never occupy it.
 pub(crate) fn render_preview(color: Hsla, content: Option<gpui::AnyElement>) -> gpui::AnyElement {
     div().debug_selector(|| "library-media-preview".into())
         .absolute().left(px(MEDIA_REFERENCE_COLUMN_WIDTH)).right_0()
-        .top(px(17.)).bottom(px(10.)).rounded(px(8.)).overflow_hidden()
+        .top(px(10.)).bottom(px(10.)).rounded(px(6.)).overflow_hidden()
         .bg(color).children(content).into_any_element()
 }
 

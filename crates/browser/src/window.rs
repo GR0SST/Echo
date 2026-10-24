@@ -3299,6 +3299,7 @@ impl BrowserWindow {
     fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let virtual_page = !self.page_content_visible();
         let split_open = !virtual_page && self.browser.active_split().is_some();
+        let has_page = !virtual_page && self.browser.active_tab().is_some();
         let history_open = !virtual_page && self.history_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
@@ -3327,9 +3328,10 @@ impl BrowserWindow {
                     .gap_2()
                     .when(!split_open, |this| this.px_8())
                     .overflow_hidden()
-                    .when(!split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).bg(gpui::white()).shadow_md())
-                    .when(self.browser.is_private() && !split_open, |this| this.bg(hsla(210. / 360., 0.035, 0.15, 1.)))
+                    .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).bg(gpui::white()).shadow_md())
+                    .when(self.browser.is_private() && has_page && !split_open, |this| this.bg(hsla(210. / 360., 0.035, 0.15, 1.)))
                     .relative()
+                    .when(!has_page, |this| this.child(div().debug_selector(|| "empty-space-canvas".into()).absolute().inset_0()))
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .children(placeholder.map(|(title, url)| {

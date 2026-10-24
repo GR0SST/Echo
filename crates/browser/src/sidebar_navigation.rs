@@ -615,7 +615,7 @@ impl BrowserWindow {
             });
         });
         let colors = LibraryColors {
-            background: hsla(0., 0., 0.96, 1.),
+            background: gpui::transparent_black(),
             card_surface: |hue| crate::window::tint(hue / 360., 0.82),
             text: hsla(0., 0., 0.1, 1.),
             muted: hsla(0., 0., 0.4, 1.),
@@ -628,7 +628,7 @@ impl BrowserWindow {
             // Reuse existing host semantic surfaces; never change App appearance.
             let media_colors = library::media::MediaColors {
                 column: colors.background,
-                preview: (colors.card_surface)(self.browser.space().hue),
+                preview: gpui::transparent_black(),
                 text: colors.text,
                 muted: colors.muted,
                 control: colors.selected,

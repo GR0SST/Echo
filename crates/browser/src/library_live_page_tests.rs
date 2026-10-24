@@ -605,3 +605,37 @@ fn find_and_other_popup_dismissal_restore_native_preview_input_without_another_c
     assert_eq!(fake.take_calls(), vec![Call::Back(raw(document))]);
     assert_preview(&fake, document, cx);
 }
+
+#[gpui::test]
+fn library_from_an_empty_space_never_leaks_the_other_spaces_live_page(cx: &mut TestAppContext) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let mut browser = demo_browser();
+        browser.add_space("Empty reference", 250.);
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    cx.run_until_parked();
+    let document = fake.0.borrow().focused_page.unwrap();
+    fake.take_calls();
+    cx.simulate_keystrokes("ctrl-4");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.browser.active_tab().is_none()));
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().name.clone()), "Empty reference");
+    enter(&view, cx);
+    for section in ["library-nav-downloads", "library-nav-media"] {
+        click(cx, section);
+        view.read_with(cx, |view, _| assert!(view.pages.as_ref().unwrap().borrow().surface_bounds().is_empty()));
+    }
+    let calls = fake.take_calls();
+    unchanged(&calls);
+    assert!(!calls.iter().any(|call| matches!(call, Call::Visible(_, true) | Call::FocusPage(_))));
+    click(cx, "library-nav-spaces");
+    click(cx, "library-space-select-0");
+    let calls = fake.take_calls();
+    unchanged(&calls);
+    assert!(calls.contains(&Call::Visible(raw(document), true)));
+}

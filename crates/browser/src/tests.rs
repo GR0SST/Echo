@@ -1049,9 +1049,10 @@ fn long_titles_do_not_widen_the_page(cx: &mut TestAppContext) {
     let bounds = fake.0.borrow().bounds[&1];
     let sidebar = view.read_with(cx, |w, _| w.sidebar_visible);
     assert!(sidebar);
+    let sidebar_width = f64::from(f32::from(cx.debug_bounds("sidebar").unwrap().size.width));
     assert_eq!(
         (bounds.x, bounds.y, bounds.width),
-        (240.0, 8.0, window_width - 240.0 - 8.0),
+        (sidebar_width, 10.0, window_width - sidebar_width - 10.0),
         "page must exactly cover the content card"
     );
 }
@@ -7405,3 +7406,5 @@ fn plain_space_heading_has_no_invented_dot_or_reserved_icon_slot(cx: &mut TestAp
     click(cx, "space-header-more-0");
     assert!(view.read_with(cx, |w, _| w.tab_menu.is_some()));
 }
+#[path = "empty_canvas_tests.rs"]
+mod empty_canvas_tests;

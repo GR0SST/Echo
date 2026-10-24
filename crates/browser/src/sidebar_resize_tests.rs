@@ -316,7 +316,7 @@ fn collapse_is_live_reversible_and_release_retains_the_begin_width(cx: &mut Test
     let at = move_to(visual, start, 340., 81.);
     let collapsed = visual.debug_bounds("page-surface").unwrap();
     assert!(
-        collapsed.left() <= px(8.),
+        collapsed.left() <= px(10.),
         "raw < 82 must collapse the content inset before release"
     );
     // Dragging back out before release recovers the same gesture.

@@ -56,8 +56,8 @@ impl BrowserWindow {
         // Same semantic surfaces as the existing Library Media host. Material
         // adoption stays separate from navigation and canonical ownership.
         DownloadsColors {
-            column: gpui::hsla(0., 0., 0.96, 1.),
-            preview: crate::window::tint(self.browser.space().hue / 360., 0.82),
+            column: gpui::transparent_black(),
+            preview: gpui::transparent_black(),
             text: gpui::hsla(0., 0., 0.1, 1.),
             muted: gpui::hsla(0., 0., 0.4, 1.),
             control: gpui::hsla(0., 0., 0., 0.08),
