@@ -18,6 +18,8 @@ mod native_requests;
 pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod editing;
+mod printing;
+pub use printing::{PrintDispatch, PrintRequest};
 mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
@@ -115,6 +117,7 @@ enum ViewRole { Page, Inspector(InspectorId) }
 // Defaults are the native types. Generic payloads let lifecycle tests exercise
 // the actual view ownership without loading CEF or constructing a native host.
 struct View<B = Browser, C = RequestContext> {
+    action_lifetime: std::rc::Rc<()>,
     role: ViewRole,
     browser: B,
     // Retain the exact registry Rc, not just a clone of the native CEF handle.
@@ -705,6 +708,7 @@ impl Engine {
         self.views.insert(
             id,
             View {
+                action_lifetime: std::rc::Rc::new(()),
                 role,
                 browser,
                 context,
@@ -1531,6 +1535,7 @@ mod view_storage_lifetime_tests {
     // not initialize CEF or assert native cookie/disk persistence behavior.
     fn view<C>(role: ViewRole, context: Rc<C>) -> View<(), C> {
         View {
+            action_lifetime: Rc::new(()),
             role,
             browser: (),
             context,

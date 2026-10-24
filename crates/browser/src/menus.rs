@@ -92,6 +92,8 @@ pub(crate) fn build() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
                 MenuItem::action("Archive Tab", window::CloseTab),
+                MenuItem::separator(),
+                MenuItem::action("Print", window::PrintPage),
             ],
         },
         Menu {

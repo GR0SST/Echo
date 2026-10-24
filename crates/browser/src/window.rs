@@ -92,6 +92,7 @@ actions!(
         ViewSource,
         ViewLibrary,
         ViewDownloads,
+        PrintPage,
         DeveloperTools,
         InspectElements,
         JavaScriptConsole,
@@ -167,6 +168,7 @@ window_shortcuts! {
     "cmd-l" => EditCurrentUrl,
     "cmd-shift-l" => ViewLibrary,
     "cmd-shift-j" => ViewDownloads,
+    "cmd-p" => PrintPage,
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
@@ -396,6 +398,7 @@ pub enum Command {
     ViewArchive,
     ViewHistory,
     OpenLibrary,
+    PrintPage,
     ViewDownloads,
     RequestClearArchive,
     ResetPinnedTab,
@@ -614,6 +617,7 @@ pub struct BrowserWindow {
     mouse_tracking: Rc<RefCell<MouseTracking>>,
     pub pager: Pager,
     pub(crate) focus_handle: FocusHandle,
+    print_generation: u64,
     popup_focus_generation: u64,
     popup_focus_pending: usize,
     popup_focus_on_activation: bool,
@@ -824,6 +828,7 @@ impl BrowserWindow {
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
             focus_handle: cx.focus_handle(),
+            print_generation: 0,
             popup_focus_generation: 0,
             popup_focus_pending: 0,
             popup_focus_on_activation: false,
@@ -1506,6 +1511,7 @@ impl BrowserWindow {
                 (Command::CloseTab, if pinned { "Close Tab" } else { "Archive Tab" }, "close tab|archive tab", active.is_some()),
                 (Command::ClearToday, "Clear Today", "clear unpinned tabs|clear today|archive background today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
+                (Command::PrintPage, "Print Page", "print|print page", self.print_available()),
                 (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
                 (Command::StopLoading, "Stop Loading", "stop loading|stop page", active.is_some()),
@@ -1864,6 +1870,7 @@ impl BrowserWindow {
             Command::RestoreTab => {
                 if self.edit_browser(|browser| { let id = browser.archive.iter().rev().find(|entry| entry.user_profile_id == browser.active_user_profile_id()).map(|entry| entry.tab.id)?; browser.restore_archived(id, SystemTime::now()) }).is_some() { self.settle_pager(cx); }
             }
+            Command::PrintPage => self.print_page(cx),
             Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
             Command::ForceReload => self.with_active_page(|pages, tab| pages.force_reload(tab)),
             Command::StopLoading => self.with_active_page(|pages, tab| pages.stop_loading(tab)),
@@ -1940,6 +1947,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
+            .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
                 .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))
@@ -3679,6 +3687,7 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
+            .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
                 .on_action(cx.listener(|this, _: &DeveloperTools, _, cx| this.run_devtools(crate::devtools::Command::Toggle, cx)))
@@ -3909,3 +3918,6 @@ mod sidebar_resize;
 #[cfg(test)]
 #[path = "sidebar_resize_tests.rs"]
 mod sidebar_resize_tests;
+
+#[path = "printing.rs"]
+mod printing;

@@ -202,6 +202,7 @@ enum Call {
     Find(u64, String, bool, bool),
     StopFinding(u64),
     Reload(u64),
+    Print(u64),
     Close(u64),
     Snapshot(u64, u64),
     InspectorOpen(u64, usize, Bounds, engine::InspectorPanel, bool),
@@ -213,6 +214,8 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    print_busy: usize,
+    print_hook: Option<Box<dyn FnOnce()>>,
     storage: std::collections::HashMap<u64, crate::pages::StorageSelection>,
     fork_storage: Vec<crate::pages::StorageSelection>,
     forks: Vec<FakeEngine>,
@@ -265,6 +268,21 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn supports_printing(&self) -> bool { true }
+    fn prepare_print(&mut self, view: ViewId) -> Option<crate::pages::NativePrint> {
+        let state = self.0.clone();
+        Some(Box::new(move || {
+            {
+                let mut state = state.borrow_mut();
+                if state.print_busy > 0 { state.print_busy -= 1; return engine::PrintDispatch::Busy; }
+            }
+            let hook = state.borrow_mut().print_hook.take();
+            if let Some(hook) = hook { hook(); }
+            state.borrow_mut().calls.push(Call::Print(raw(view)));
+            engine::PrintDispatch::Submitted
+        }))
+    }
+
     fn create_page_with_identity(&mut self, identity: crate::pages::PageIdentity, source_space: browser_core::SpaceId,
         storage: &crate::pages::StorageSelection, parent: *mut std::ffi::c_void, url: &str, bounds: Bounds) -> crate::pages::PageCreation {
         self.0.borrow_mut().identity_attempts.push((identity, source_space, storage.clone(), url.into()));
@@ -2338,7 +2356,10 @@ fn text_undo_native_page_menus_target_its_focused_pane_but_not_an_empty_name_edi
 
 #[gpui::test]
 fn application_menu_actions_are_reachable_from_the_browser_window(cx: &mut TestAppContext) {
-    let (_, cx) = open(cx);
+    // Native document actions require a loaded page and its active host.
+    let (_, cx, _) = open_pages(cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
     for menu in crate::menus::build() {
         for item in menu.items {
             if let gpui::MenuItem::Action { name, action, os_action: None } = item {
@@ -7314,3 +7335,6 @@ fn app_download_fixture_status_survives_source_entity_drop_with_retained_canonic
     });
     admission::reset();
 }
+
+#[path = "printing_tests.rs"]
+mod printing_tests;

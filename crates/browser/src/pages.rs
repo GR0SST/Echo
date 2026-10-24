@@ -46,9 +46,15 @@ pub struct PageIdentity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageCreation { Created(ViewId), Pending, Failed }
 
+/// A prepared request owns native leases, never Pages or the application.
+/// Invoke and drop it outside all application/model/engine borrows.
+pub type NativePrint = Box<dyn FnMut() -> engine::PrintDispatch>;
+
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn supports_printing(&self) -> bool { false }
+    fn prepare_print(&mut self, _view: ViewId) -> Option<NativePrint> { None }
     /// Independent page/event ownership over this engine's regular storage.
     fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> { None }
     fn fork_in_storage(&self, storage: &StorageSelection) -> Option<Box<dyn WebEngine>> {
@@ -142,6 +148,11 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn supports_printing(&self) -> bool { self.engine.supports_printing() }
+    fn prepare_print(&mut self, view: ViewId) -> Option<NativePrint> {
+        let mut request = self.engine.prepare_print(view)?;
+        Some(Box::new(move || request.try_dispatch()))
+    }
     fn fork_in_storage(&self, storage: &StorageSelection) -> Option<Box<dyn WebEngine>> {
         let context = self.resolve_storage(storage).ok()?;
         let engine = self.engine.fork_with_context(&context).ok()?;
@@ -1205,6 +1216,17 @@ impl Pages {
         if let Some(view) = self.view(tab) {
             self.store.borrow_mut().engine.reload(view);
         }
+    }
+
+    pub(crate) fn can_print(&self, tab: TabId) -> bool {
+        // Print targets the owned document, not its last painted rectangle.
+        // Library's measured viewport can arrive after the parent action tree.
+        self.view(tab).is_some() && self.store.borrow().engine.supports_printing()
+    }
+    pub(crate) fn prepare_print(&mut self, tab: TabId) -> Option<NativePrint> {
+        if !self.can_print(tab) { return None; }
+        let view = self.view(tab)?;
+        self.store.borrow_mut().engine.prepare_print(view)
     }
 
     pub fn force_reload(&mut self, tab: TabId) {

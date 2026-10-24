@@ -214,6 +214,9 @@ impl Lifecycle {
         CreationGuard(&self.creating)
     }
     pub(crate) fn download_dispatch_allowed(&self) -> bool {
+        self.native_dispatch_allowed()
+    }
+    pub(crate) fn native_dispatch_allowed(&self) -> bool {
         self.creating.get() == 0 && !self.pumping.get() && !self.polling.get() && !self.retiring.get()
     }
     fn begin(&self) {

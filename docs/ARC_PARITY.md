@@ -75,7 +75,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Capture… | ⇧⌘2 | missing | Screenshot of a page area |
 | Capture Full Page / Capture in Portrait Mode | — | missing | — |
 | Save Page As | ⇧⌘S | missing | — |
-| Print | ⌘P | missing | — |
+| Print | ⌘P | partial | File → Print, native-page shortcut and Command Bar → Print Page use the focused document. macOS dialog/Cancel checked; Windows native validation and Linux print handler remain pending. See [printing contract](PRINTING.md). |
 
 Normal-window behavior was checked in the installed Arc with disposable local
 pages: New Window starts with no selected page and an open Command Bar, but
