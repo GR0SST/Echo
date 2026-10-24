@@ -43,6 +43,7 @@ impl Toggle {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub max: echo_ai::MaxSettings,
     /// Shared across local website profiles; absent in older sessions.
     pub air_traffic_control: Option<crate::routing::AirTrafficControl>,
     toggles: BTreeMap<Toggle, bool>,
@@ -200,4 +201,21 @@ mod tests {
         assert_eq!(serde_json::from_str::<super::Settings>("{}").unwrap().theme_appearance, ThemeAppearance::Automatic);
     }
 
+}
+
+#[cfg(test)]
+mod max_tests {
+    #[test]
+    fn max_settings_migrate_disabled_and_round_trip_without_credentials() {
+        use crate::{Browser,session};
+        use echo_ai::MaxFeature;
+        let mut legacy:serde_json::Value=serde_json::from_str(&session::to_json(&Browser::new())).unwrap();legacy["settings"].as_object_mut().unwrap().remove("max");
+        let mut browser=session::from_json(&legacy.to_string()).unwrap();
+        assert!(browser.settings.max.enabled.is_empty());
+        browser.settings.max.set_enabled(MaxFeature::TidyTabs,true);
+        browser.settings.max.provider.api_key_id="opaque-os-credential-reference".into();
+        let saved=session::to_json(&browser);let loaded=session::from_json(&saved).unwrap();
+        assert_eq!(loaded.settings.max,browser.settings.max);
+        assert!(!saved.contains("access_token")&&!saved.contains("refresh_token"));
+    }
 }

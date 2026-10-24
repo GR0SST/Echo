@@ -1,4 +1,5 @@
 //! Arc-shaped local settings, in an independent GPUI native window.
+pub(crate) mod max;
 use crate::{
     icons::{self, Icon},
     profile::ProfileHandle,
@@ -19,15 +20,17 @@ use std::time::Duration;
 pub(crate) enum Tab {
     General,
     Profiles,
+    Max,
     Links,
     Shortcuts,
     Icon,
     Advanced,
 }
 impl Tab {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::General,
         Self::Profiles,
+        Self::Max,
         Self::Links,
         Self::Shortcuts,
         Self::Icon,
@@ -37,6 +40,7 @@ impl Tab {
         match self {
             Self::General => "General",
             Self::Profiles => "Profiles",
+            Self::Max => "Max",
             Self::Links => "Links",
             Self::Shortcuts => "Shortcuts",
             Self::Icon => "Icon",
@@ -47,6 +51,7 @@ impl Tab {
         match self {
             Self::General => "settings-outline",
             Self::Profiles => "person-outline",
+            Self::Max => "color-wand-outline",
             Self::Links => "browsers-outline",
             Self::Shortcuts => "keypad-outline",
             Self::Icon => "color-filter-outline",
@@ -75,6 +80,7 @@ pub(crate) struct SettingsWindow {
     pub(crate) atc: Option<Entity<crate::atc::AtcPanel>>,
     atc_return_focus: bool,
     _atc_dismiss: Option<Subscription>,
+    max: max::State,
     shortcut_search: Entity<crate::text_input::TextInput>,
     _search_changed: Subscription,
     _observe: Subscription,
@@ -194,7 +200,9 @@ fn open(
                     &shortcut_search,
                     |_, _, _: &crate::text_input::Changed, cx| cx.notify(),
                 );
+                let max = max::State::new(&profile, cx);
                 let mut view = SettingsWindow {
+                    max,
                     profile,
                     owner,
                     tab: Tab::General,
@@ -1174,6 +1182,7 @@ impl Render for SettingsWindow {
         let content = match self.tab {
             Tab::General => self.general(cx),
             Tab::Profiles => self.profiles(cx),
+            Tab::Max => self.max(cx),
             Tab::Links => self.links(cx),
             Tab::Shortcuts => self.shortcuts(cx),
             Tab::Icon => self.icon(),
@@ -1223,6 +1232,9 @@ impl Render for SettingsWindow {
                     cx.notify();
                     cx.stop_propagation();
                     return;
+                }
+                if self::Tab::Max == this.tab && event.keystroke.key == "enter" && this.max.key.focus_handle(cx).is_focused(window) {
+                    this.max_save_key(cx); cx.stop_propagation(); return;
                 }
                 match event.keystroke.key.as_str() {
                     "tab" => {
@@ -1307,11 +1319,11 @@ impl Render for SettingsWindow {
             )
             .child(
                 div()
-                    .id("settings-scroll")
+                    .id("settings-scroll").debug_selector(|| "settings-scroll".into())
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .when(self.tab != Tab::Links, |s| {
+                    .when(!matches!(self.tab, Tab::Links | Tab::Max), |s| {
                         s.px(px(64.)).pt(px(20.)).pb(px(12.))
                     })
                     .child(content),

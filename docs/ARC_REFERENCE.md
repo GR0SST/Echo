@@ -1361,3 +1361,30 @@ used sites and apps close”, labeled as the Top Apps tray empty-state title
 and subtitle beside `ARC_AppTray.bundle`. The shared profile's existing
 Favorites were not removed to reproduce that state. Exact theme contrast
 of a fresh live Arc empty tray remains unverified.
+
+### Max settings and user-owned AI foundation — 2026-10-24
+
+A guarded read-only session opened one fresh Arc browser window in the shared
+Echo Test Space, verified its header crop, and claimed the newly opened settings
+window separately before any popup input. Max is 684×650, with an 88 px toolbar,
+126 px banner, 64 px horizontal inset, 84 px Enable Max/future-features group,
+and 80 px feature rows with 94×62 previews and 36×16 switches. The scroll order
+is Tidy Tabs, Instant Links, 5-Second Previews, Tidy Tab Titles, Tidy Downloads,
+ChatGPT in the Command Bar. Ask on Page and Browse for Me were not switches in
+this installed Max pane. Both top and scrolled screenshots were inspected;
+no Arc toggles, profiles, themes, tabs or Spaces were changed, and both owned
+windows were closed. Reference/implementation pairs are under
+`target/parity/arc-max/`: `arc_max.png` / `echo_max.png` and
+`arc_max_bottom.png` / `echo_max_features.png`.
+
+Echo keeps the measured layout and feature preferences, with original banner
+and preview artwork instead of Arc assets. Its required user-owned provider
+controls are below the reference feature group: OpenAI, Anthropic, compatible
+base URL, masked key entry, model selection, and AI-only ChatGPT connection.
+The key field cannot Copy/Cut its secret and clears itself when saved. Session
+JSON stores only credential references/configuration. Provider and OS storage
+contracts, official OAuth sources and validation limits are documented in
+`crates/ai/README.md`. Actual account consent/inference and Windows/Linux
+credential stores have not been verified; the macOS isolated keychain round-trip
+and offline transport/identity tests passed. Feature request hooks are separate
+follow-up changes; switches alone are not complete Max feature parity.

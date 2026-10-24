@@ -10142,3 +10142,91 @@ fn air_traffic_opening_and_editing_existing_routes_preserves_rule_identity(cx: &
         assert_eq!(routes.rules[0].condition, LinkMatch::Contains("example.com".into()));
     }));
 }
+
+#[gpui::test]
+fn max_settings_preserve_feature_switches_and_store_only_credential_references(cx: &mut TestAppContext) {
+    use echo_ai::{credentials::{CredentialStore, CredentialError, Secret}, MaxFeature, Provider};
+    use std::sync::{Arc,Mutex};
+    #[derive(Default)] struct Store(Mutex<std::collections::BTreeMap<String,String>>);
+    impl CredentialStore for Store {
+        fn get(&self,id:&str)->Result<Option<Secret>,CredentialError>{Ok(self.0.lock().unwrap().get(id).cloned().map(Secret::new))}
+        fn set(&self,id:&str,key:&Secret)->Result<(),CredentialError>{self.0.lock().unwrap().insert(id.into(),key.expose().into());Ok(())}
+        fn delete(&self,id:&str)->Result<(),CredentialError>{self.0.lock().unwrap().remove(id);Ok(())}
+    }
+    let store=Arc::new(Store::default());
+    let (view,cx)=open(cx);
+    cx.update(|_,cx|cx.set_global(crate::settings::max::Services{store:store.clone(),..Default::default()}));
+    cx.simulate_keystrokes("cmd-,");let(_,mut settings)=settings_window(cx);
+    click(&mut settings,"settings-tab-Max");
+    click(&mut settings,"max-feature-TidyTabs");
+    view.read_with(cx,|w,_|assert!(w.browser.settings.max.enabled(MaxFeature::TidyTabs)));
+    // The future switch is focusable and keyboard operated.
+    click(&mut settings,"max-future");settings.simulate_keystrokes("space");settings.run_until_parked();
+    view.read_with(cx,|w,_|assert!(!w.browser.settings.max.automatically_enable_future));
+    scroll(&mut settings,"settings-scroll",gpui::TouchPhase::Moved,0.,-2000.);settings.run_until_parked();
+    click(&mut settings,"max-provider-OpenAiCompatible");
+    scroll(&mut settings,"settings-scroll",gpui::TouchPhase::Moved,0.,-2000.);settings.run_until_parked();
+    click(&mut settings,"max-base-url");settings.simulate_input("http://127.0.0.1:8129/v1");
+    click(&mut settings,"max-model");settings.simulate_input("my-local-model");
+    click(&mut settings,"max-api-key");settings.simulate_input("synthetic-test-key");
+    settings.update(|_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string("preserve".into())));
+    settings.simulate_keystrokes("cmd-a cmd-c");
+    assert_eq!(settings.update(|_,cx|cx.read_from_clipboard().and_then(|c|c.text())).as_deref(),Some("preserve"));
+    settings.simulate_keystrokes("enter");settings.run_until_parked();cx.run_until_parked();
+    let config=view.read_with(cx,|w,_|w.browser.settings.max.provider.clone());
+    assert_eq!(config.provider,Provider::OpenAiCompatible);
+    assert_eq!(config.base_url,"http://127.0.0.1:8129/v1");
+    assert_eq!(config.model,"my-local-model");
+    assert_eq!(store.get(&config.api_key_id).unwrap().unwrap().expose(),"synthetic-test-key");
+    let session=view.read_with(cx,|w,_|browser_core::session::to_json(&w.browser));
+    assert!(!session.contains("synthetic-test-key"));
+    settings.simulate_keystrokes("cmd-w");cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-,");let(_,mut settings)=settings_window(cx);click(&mut settings,"settings-tab-Max");
+    view.read_with(cx,|w,_|assert!(w.browser.settings.max.enabled(MaxFeature::TidyTabs)));
+}
+
+#[gpui::test]
+fn max_chatgpt_sign_in_opens_authorization_without_activating_an_unverified_account(cx:&mut TestAppContext){
+    use crate::settings::max::{Authorization,AuthorizationProvider,Services};
+    use echo_ai::{client::{AiError,Cancellation},credentials::{CredentialStore,CredentialError,Secret},oauth::Account};
+    use std::sync::Arc;
+    struct Store;
+    impl CredentialStore for Store {
+        fn get(&self,_:&str)->Result<Option<Secret>,CredentialError>{Ok(None)}
+        fn set(&self,_:&str,_:&Secret)->Result<(),CredentialError>{panic!("An unverified sign-in cannot save credentials")}
+        fn delete(&self,_:&str)->Result<(),CredentialError>{Ok(())}
+    }
+    struct Failed;
+    impl Authorization for Failed {
+        fn url(&self)->&str{"https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&agent_name_hint=Echo"}
+        fn finish(self:Box<Self>,_:&dyn CredentialStore,_:&Cancellation)->Result<Account,AiError>{Err(AiError::Identity)}
+    }
+    impl AuthorizationProvider for Failed {
+        fn start(&self,_:&dyn CredentialStore,host:&str,prior:Option<&str>)->Result<Box<dyn Authorization>,AiError>{assert!(host.starts_with("urn:uuid:"));assert!(prior.is_none());Ok(Box::new(Failed))}
+    }
+    let(view,cx)=open(cx);cx.update(|_,cx|cx.set_global(Services{store:Arc::new(Store),auth:Arc::new(Failed)}));
+    cx.simulate_keystrokes("cmd-,");let(_,mut settings)=settings_window(cx);click(&mut settings,"settings-tab-Max");
+    scroll(&mut settings,"settings-scroll",gpui::TouchPhase::Moved,0.,-2000.);settings.run_until_parked();
+    click(&mut settings,"max-chatgpt-sign-in");settings.run_until_parked();cx.run_until_parked();
+    assert!(settings.cx.opened_url().unwrap().starts_with("https://auth.openai.com/api/accounts/authorize?"));
+    view.read_with(cx,|w,_|{assert!(w.browser.settings.max.accounts.is_empty());assert!(w.browser.settings.max.provider.chatgpt_account_id.is_empty());});
+    settings.simulate_keystrokes("cmd-w");
+}
+
+#[gpui::test]
+fn max_sign_out_disconnects_even_if_credentials_are_unavailable(cx:&mut TestAppContext){
+    use echo_ai::{Authentication,credentials::{CredentialStore,CredentialError,Secret}};
+    use std::sync::Arc;
+    struct Unavailable;
+    impl CredentialStore for Unavailable {
+        fn get(&self,_:&str)->Result<Option<Secret>,CredentialError>{Err(CredentialError)}
+        fn set(&self,_:&str,_:&Secret)->Result<(),CredentialError>{Err(CredentialError)}
+        fn delete(&self,_:&str)->Result<(),CredentialError>{Err(CredentialError)}
+    }
+    let(view,cx)=open(cx);cx.update(|_,cx|cx.set_global(crate::settings::max::Services{store:Arc::new(Unavailable),..Default::default()}));
+    view.update(cx,|w,cx|{w.edit_profile(|b|{b.settings.max.provider.authentication=Authentication::ChatGpt;b.settings.max.provider.api_key_id="previous-key-reference".into();b.settings.max.provider.chatgpt_account_id="unavailable-account-reference".into();});cx.notify();});
+    cx.simulate_keystrokes("cmd-,");let(_,mut settings)=settings_window(cx);click(&mut settings,"settings-tab-Max");
+    scroll(&mut settings,"settings-scroll",gpui::TouchPhase::Moved,0.,-2000.);settings.run_until_parked();
+    click(&mut settings,"max-chatgpt-sign-out");settings.run_until_parked();cx.run_until_parked();
+    view.read_with(cx,|w,_|assert_eq!(w.browser.settings.max.provider.authentication,Authentication::Disconnected));
+}

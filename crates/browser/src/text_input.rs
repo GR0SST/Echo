@@ -91,6 +91,7 @@ struct EditState {
 }
 
 pub struct TextInput {
+    secure: bool,
     multiline: bool,
     lines: Vec<(usize, ShapedLine, Bounds<Pixels>)>,
     focus_handle: FocusHandle,
@@ -125,6 +126,7 @@ impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         let placeholder = placeholder.into();
         Self {
+            secure: false,
             multiline: false, lines: Vec::new(),
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
@@ -143,6 +145,11 @@ impl TextInput {
         }
     }
 
+    /// API credentials stay masked and cannot be exported through Copy/Cut.
+    /// One ASCII mask glyph per UTF-8 byte preserves editing/layout offsets.
+    pub(crate) fn secret(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(placeholder, cx); input.secure = true; input
+    }
     pub(crate) fn code(cx: &mut Context<Self>) -> Self {
         let mut input = Self::new("", cx); input.multiline = true; input
     }
@@ -357,6 +364,7 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.secure { return; }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -365,6 +373,7 @@ impl TextInput {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.secure { return; }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -670,6 +679,8 @@ impl Element for TextElement {
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), style.color.opacity(0.45))
+        } else if input.secure {
+            ("*".repeat(content.len()).into(), style.color)
         } else {
             (content, style.color)
         };
