@@ -36,6 +36,9 @@ fn handoff_captures_before_move_and_source_poll_wakes_the_target(cx: &mut TestAp
     // Repeated layouts coalesce rather than starting more captures.
     b.update(&mut vb, |view, _| view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Snapshot(..) | Call::MoveHost(..))));
+    // A result immediately before the deadline must still preserve the source.
+    vb.executor().advance_clock(Duration::from_millis(249));
+    vb.run_until_parked();
     complete(&fake, request, Some(vec![1, 2, 3]));
     a.update(va, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::MoveHost(..))));
@@ -139,13 +142,36 @@ fn stalled_capture_has_a_bounded_deadline_and_late_result_cannot_create_a_mirror
     fake.take_calls();
     click(&mut vb, test_selector(format!("tab-{}", tab.get())));
     let request = capture_request(&fake);
-    // Production deadlines use monotonic wall time, independently of GPUI's
-    // virtual executor clock (CEF completion is external to that executor).
-    std::thread::sleep(Duration::from_millis(270));
+    vb.executor().advance_clock(Duration::from_millis(249));
+    vb.run_until_parked();
+    b.update(&mut vb, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::MoveHost(..))));
+    assert!(a.read_with(va, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(tab)));
+    assert!(b.read_with(&vb, |view, _| view.pages.as_ref().unwrap().borrow().snapshot_pending(tab, request)));
+    vb.executor().advance_clock(Duration::from_millis(1));
+    vb.run_until_parked();
     b.update(&mut vb, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
     assert!(fake.take_calls().iter().any(|call| matches!(call, Call::MoveHost(1, 2, _))));
     complete(&fake, request, Some(vec![99]));
     a.update(va, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
+    assert!(a.read_with(va, |view, _| view.pages.as_ref().unwrap().borrow().mirrors().is_empty()));
+    assert!(b.read_with(&vb, |view, _| view.pages.as_ref().unwrap().borrow().snapshot(tab).is_none()));
+}
+
+#[gpui::test]
+fn capture_arriving_at_the_deadline_before_polling_cannot_create_a_mirror(cx: &mut TestAppContext) {
+    let fake = supported_engine();
+    let (a, va) = open_with(cx, Some(Box::new(fake.clone())));
+    let tab = a.read_with(va, |view, _| view.browser.active_tab().unwrap().id);
+    let (b, mut vb) = another_live_profile_window(&a, va);
+    fake.take_calls();
+    click(&mut vb, test_selector(format!("tab-{}", tab.get())));
+    let request = capture_request(&fake);
+    vb.executor().advance_clock(Duration::from_millis(250));
+    // Queue the external callback before the next poll processes the timeout.
+    complete(&fake, request, Some(vec![99]));
+    b.update(&mut vb, |view, _| { view.pages.as_ref().unwrap().borrow_mut().take_events(); });
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::MoveHost(1, 2, _))));
     assert!(a.read_with(va, |view, _| view.pages.as_ref().unwrap().borrow().mirrors().is_empty()));
     assert!(b.read_with(&vb, |view, _| view.pages.as_ref().unwrap().borrow().snapshot(tab).is_none()));
 }

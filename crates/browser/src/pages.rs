@@ -425,6 +425,8 @@ impl ResizePageFocus {
 }
 
 struct PageStore {
+    #[cfg(test)]
+    clock: Option<gpui::BackgroundExecutor>,
     inspector_probe: Option<InspectorProbe>,
     devtools: Option<devtools::Dock>,
     devtools_restore: HashSet<u64>,
@@ -539,7 +541,10 @@ impl WebEngine for RetiredEngine {
 impl Pages {
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
         let pages = Self {
-            store: Rc::new(RefCell::new(PageStore { devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+            store: Rc::new(RefCell::new(PageStore {
+                #[cfg(test)]
+                clock: None,
+                devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
                 events: Vec::new(), next_event: 0, metadata: BTreeMap::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             viewport: PageViewport::Content,
             viewport_generation: 0,
@@ -566,6 +571,12 @@ impl Pages {
             stores.push(Rc::downgrade(&pages.store));
         });
         pages
+    }
+
+    /// All hosts share the same controlled deadline clock in GPUI tests.
+    #[cfg(test)]
+    pub(crate) fn set_clock(&mut self, executor: gpui::BackgroundExecutor) {
+        self.store.borrow_mut().clock = Some(executor);
     }
 
     /// Independent models may reuse TabIds, so they must never share PageStore.
@@ -1510,6 +1521,12 @@ fn inspector_probe_frames(frame: Bounds) -> (Bounds, Bounds) {
 }
 
 impl PageStore {
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = &self.clock { return clock.now(); }
+        Instant::now()
+    }
+
     /// Drain without pumping before a transfer/parking changes owner metadata.
     /// Input keeps its callback-time attachment, even if no host polled first.
     fn capture_pending_engine_events(&mut self) {
@@ -1607,7 +1624,7 @@ impl PageStore {
         if page.owner == target || !self.engine.supports_snapshots() { return true; }
         if let Some(claim) = self.handoffs.get(&tab) {
             if claim.target == target {
-                if claim.ready || Instant::now() >= claim.deadline {
+                if claim.ready || self.now() >= claim.deadline {
                     self.freeze_cached(tab);
                     return true;
                 }
@@ -1626,7 +1643,7 @@ impl PageStore {
             request
         };
         self.handoffs.insert(tab, Handoff { source, target, view, frame, request,
-            deadline: Instant::now() + HANDOFF_TIMEOUT, ready: false });
+            deadline: self.now() + HANDOFF_TIMEOUT, ready: false });
         false
     }
 
@@ -1648,12 +1665,13 @@ impl PageStore {
         for result in self.engine.take_snapshots() {
             let Some(tab) = self.pages.iter().find_map(|(tab, page)|
                 (page.view == result.view && page.snapshot_pending == Some(result.request)).then_some(*tab)) else { continue; };
+            let now = self.now();
             let page = self.pages.get_mut(&tab).unwrap();
             page.snapshot_pending = None;
             let origin = page.snapshot_origin.take();
             let image = result.png.map(Arc::new);
             // Preserve the diagnostic cache API independently of handoff images.
-            let timely = self.handoffs.get(&tab).is_none_or(|claim| Instant::now() < claim.deadline);
+            let timely = self.handoffs.get(&tab).is_none_or(|claim| now < claim.deadline);
             if let Some(png) = &image {
                 if timely {
                     page.snapshot = Some((result.request, png.clone()));

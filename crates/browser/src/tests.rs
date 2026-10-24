@@ -23,6 +23,9 @@ fn open_with(
     cx.update(init);
     let (view, cx) = cx.add_window_view(|window, cx| {
         let view = BrowserWindow::new(demo_browser(), engine, window, cx);
+        if let Some(pages) = &view.pages {
+            pages.borrow_mut().set_clock(cx.background_executor().clone());
+        }
         view.focus(window);
         view
     });
