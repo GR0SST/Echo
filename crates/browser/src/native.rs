@@ -357,12 +357,27 @@ mod mac {
         }
     }
 
+    pub fn set_overlay_shadow(view: *mut c_void) {
+        let overlay = window(view);
+        if !overlay.is_null() {
+            unsafe { let _: () = msg_send![overlay, setHasShadow: Bool::YES]; }
+        }
+    }
+
     pub fn set_overlay_passthrough(view: *mut c_void) {
         let overlay = window(view);
         if !overlay.is_null() {
             unsafe { let _: () = msg_send![overlay, setIgnoresMouseEvents: Bool::YES]; }
         }
     }
+}
+
+/// Let the platform shadow follow the rounded alpha mask of a toast surface.
+pub fn set_overlay_shadow(view: *mut c_void) {
+    #[cfg(target_os = "macos")]
+    mac::set_overlay_shadow(view);
+    #[cfg(not(target_os = "macos"))]
+    let _ = view;
 }
 
 /// Passive overlays must let the page receive pointer events through them.

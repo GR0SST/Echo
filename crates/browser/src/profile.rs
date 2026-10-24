@@ -252,6 +252,7 @@ pub(crate) struct ProfileBinding {
     revision: u64,
     draft: DraftSlot,
     protected: Rc<RefCell<Vec<TabId>>>,
+    seen_auto_archive: std::collections::HashSet<TabId>,
     _observe_profile: Subscription,
     _observe_window: Subscription,
 }
@@ -262,13 +263,19 @@ impl ProfileBinding {
         let protected = Rc::new(RefCell::new(selection.selected_tabs().collect()));
         handle.drafts.borrow_mut().push(Rc::downgrade(&draft));
         handle.selections.borrow_mut().push(Rc::downgrade(&protected));
+        // Seed from the canonical archive: loading a saved session or opening
+        // another window must not announce historical automatic archives.
+        let seen_auto_archive = handle.data.borrow().archive.iter()
+            .filter(|entry| entry.reason == browser_core::ArchiveReason::Automatic)
+            .map(|entry| entry.tab.id).collect();
         let observe_profile = cx.observe(&handle.owner, |window, _, cx| {
             window.refresh_profile_projection();
+            window.notify_auto_archive(cx);
             window.validate_user_profile_dialog(cx);
             cx.notify();
         });
         let observe_window = cx.observe_self(|window, cx| { window.profile.remember_draft(&window.split_draft); window.validate_user_profile_dialog(cx); });
-        Self { revision: handle.revision.get(), handle, selection, draft, protected,
+        Self { revision: handle.revision.get(), handle, selection, draft, protected, seen_auto_archive,
             _observe_profile: observe_profile, _observe_window: observe_window }
     }
 
@@ -289,6 +296,17 @@ impl ProfileBinding {
 }
 
 impl BrowserWindow {
+    fn notify_auto_archive(&mut self, cx: &mut Context<Self>) {
+        let count = self.browser.archive.iter().filter(|entry|
+            entry.reason == browser_core::ArchiveReason::Automatic
+                && entry.user_profile_id == self.browser.active_user_profile_id()
+                && !self.profile.seen_auto_archive.contains(&entry.tab.id)).count();
+        self.profile.seen_auto_archive = self.browser.archive.iter()
+            .filter(|entry| entry.reason == browser_core::ArchiveReason::Automatic)
+            .map(|entry| entry.tab.id).collect();
+        if count > 0 { self.show_toast(format!("Auto archived {count} tabs"), cx); }
+    }
+
     pub(crate) fn refresh_profile_projection(&mut self) {
         if self.profile.revision == self.profile.handle.revision.get() { return; }
         let projection = self.profile.handle.projection(&self.profile.selection);

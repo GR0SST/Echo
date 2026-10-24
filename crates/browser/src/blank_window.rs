@@ -92,6 +92,11 @@ impl BrowserWindow {
         if self.browser.all_tabs().count() < before {
             if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, true); }
             self.after_tab_removal(cx);
+            // Clearing the last Blank tab closes the host; do not create a
+            // notification child after its parent has been scheduled to close.
+            if !(self.browser.is_blank() && self.browser.all_tabs().next().is_none()) {
+                self.show_toast("Cleared Tabs! Use ⌘Z to undo.".into(), cx);
+            }
         }
     }
 

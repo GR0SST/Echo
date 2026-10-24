@@ -238,7 +238,7 @@ Folder duplication follows the right-click action documented in the
 | "+" button in the dock: New Tab, New Space, New Folder, New Split (right/bottom), New Note, New Boost | — | partial | Dock + opens a translucent menu: New Space, New Folder, New Boost, New Split (⌃⇧=), New Tab (⌘T), keyboard navigable. New Boost opens the floating page editor; New Easel is left out |
 | "Springy" click animation on sidebar items | — | partial | Ordinary tab rows ease 1 px inward per edge over 60 ms, then expand from the current inset on release; nested indentation and drag-card grab points are retained. Native Arc/Echo recordings confirm 212 → 210 → 212 px at the same sidebar width. Other sidebar item types and reorder settling remain unfinished |
 | Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
-| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Local archive/blocker banners remain missing; Arc update-feed banners are out of scope |
+| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | missing | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. Local blocker banners remain missing; Arc update-feed and account banners are out of scope |
 | Media controls in the sidebar | — | missing | See "Media and PiP" |
 
 ## 3. Spaces
@@ -332,7 +332,7 @@ in code, so some were reconstructed from translator comments (?).
 | ⌘W and × send the tab to the archive | done | — |
 | Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | partial | Command Bar archive browser searches titles/URLs (including Split View panes), combines Space and reason filters, groups by local calendar day (Today/Yesterday/date), and loads older entries with Show More. Keyboard navigation and a bounded scrolling list are implemented. Dedicated Library layout and Little Arc remain missing |
 | Restore ("Tab restored to …. Click to view."), Delete, Clear Archive | done | Restore a selected entry and activate its original Space with a toast; delete an entry with ×; clear all with confirmation |
-| "Auto archived %d tabs" toast and the "We cleaned up!" banner | missing | — |
+| "Auto archived %d tabs" toast and the "We cleaned up!" banner | partial | Profile-driven toast; saved entries do not replay on startup/new windows. Education banner remains missing |
 
 ## 8. Split View
 
@@ -495,15 +495,25 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 
 ## 18. Notifications and toasts
 
-The main toasts from the `Toasts` module. Passive GPUI child-window toasts
-are implemented for copied links; the remaining notifications follow below.
+The main toasts from the `Toasts` module. One reusable passive GPUI child-window
+component renders content-sized feedback above CEF without taking page focus.
+Arc 1.170.0 native checks (2026-10-24) distinguish copy feedback (48 px high,
+16 px right / 19 px top inset, trailing share symbol) from plain feedback
+(42 px high, 4 px top/right inset; 48 px with an inline keycap). Both use
+14 px semibold text, 12 px corners
+and a purple gradient. Enter feedback scales/fades; replacement uses a generation
+guard so an earlier expiration cannot dismiss a later toast. Exact exit motion,
+stacking, hover duration and copy-accessory interaction remain unverified.
+Reference inventory: [TOAST_REFERENCE.md](TOAST_REFERENCE.md). Native evidence:
+`target/parity/toasts/`.
+Web notification permission/delivery is not part of this section's inventory.
 
 | Toast | Status |
 |---|---|
-| Undo for actions ("“%@”. ⌘Z to Undo.") | missing |
+| Undo for actions ("“%@”. ⌘Z to Undo.") | partial (Clear Today: “Cleared Tabs! Use ⌘Z to undo.” with inline keycap; generic action messages remain) |
 | Copied Current URL / clean link without trackers / Copied item links / as quote | partial (URL, clean URL and Markdown done; multi-item links and quotes remain) |
-| Pinned Tab to “%@” / Un-Pinned Tab from “%@” | missing |
-| Auto archived %d tabs; Tab/Folder restored to … | missing |
+| Pinned Tab to “%@” / Un-Pinned Tab from “%@” | partial (shortcut and Command Bar; only with hidden sidebar as observed in Arc; drag routes remain) |
+| Auto archived %d tabs; Tab/Folder restored to … | partial (automatic archive and existing tab restore; folder restore and click-to-view remain) |
 | New Tab Created in %@ (with the sidebar hidden); New Space Created | missing |
 | Cannot Add New Pane (Split View) | done |
 | Import: Now importing… / Success / partial / failure | missing |

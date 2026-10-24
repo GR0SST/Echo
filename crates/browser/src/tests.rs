@@ -1931,6 +1931,76 @@ fn repeated_toasts_replace_each_other_and_expire_without_stealing_focus(cx: &mut
     assert!(view.read_with(cx, |w, _| w.toast.is_none()));
 }
 
+#[gpui::test]
+fn copy_toast_is_content_sized_at_the_top_right_and_does_not_take_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-shift-c");
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.toast.as_ref().unwrap().overlay.unwrap());
+    let (main_bounds, toast_bounds) = cx.update(|window, cx| {
+        let toast = overlay.update(cx, |_, window, _| window.bounds()).unwrap();
+        (window.bounds(), toast)
+    });
+    assert_eq!(main_bounds.right() - toast_bounds.right(), gpui::px(16.));
+    assert_eq!(toast_bounds.origin.y - main_bounds.origin.y, gpui::px(19.));
+    assert_eq!(toast_bounds.size.height, gpui::px(48.));
+    assert!(toast_bounds.size.width < gpui::px(360.));
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Copied Current URL");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusUi)));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("keyboard still works");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("keyboard still works"));
+}
+
+#[gpui::test]
+fn clear_today_feedback_advertises_the_working_undo_shortcut(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = view.read_with(cx, |w, _| w.browser.space().today.len());
+    cx.simulate_keystrokes("cmd-shift-k");
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Cleared Tabs! Use ⌘Z to undo.");
+    assert!(view.read_with(cx, |w, _| w.browser.space().today.len() < before));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().today.len()), before);
+}
+
+#[gpui::test]
+fn pin_confirmation_only_appears_when_the_sidebar_is_hidden(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-d");
+    assert!(view.read_with(cx, |w, _| w.toast.is_none()));
+    cx.simulate_keystrokes("cmd-s cmd-d");
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Un-Pinned Tab from “Personal”");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-d");
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "Pinned Tab to “Personal”");
+    assert!(!view.read_with(cx, |w, _| w.toast.as_ref().unwrap().copied_link));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusUi)));
+    cx.simulate_keystrokes("cmd-z");
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_none()));
+}
+
+#[gpui::test]
+fn automatic_archive_notifications_do_not_replay_on_new_windows_or_unrelated_edits(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, _| w.edit_browser(|browser| {
+        browser.spaces[0].today.last_mut().unwrap().last_active = std::time::SystemTime::UNIX_EPOCH;
+    }));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(60));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().map(|toast| toast.message.clone())).as_deref(), Some("Auto archived 1 tabs"));
+    let (second, mut second_cx) = another_profile_window(&view, cx);
+    assert!(second.read_with(&second_cx, |w, _| w.toast.is_none()));
+    cx.executor().advance_clock(Duration::from_secs(4));
+    cx.run_until_parked();
+    view.update(cx, |w, _| w.edit_browser(|browser| browser.set_title(browser.space().active_tab.unwrap(), "Changed")));
+    cx.run_until_parked();
+    second_cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.toast.is_none()));
+    assert!(second.read_with(&second_cx, |w, _| w.toast.is_none()));
+}
+
 fn open_archive(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
     cx.simulate_keystrokes("cmd-t");
     bar(view, cx).simulate_input("view archive");

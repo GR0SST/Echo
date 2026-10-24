@@ -2001,7 +2001,7 @@ impl BrowserWindow {
             Command::RevealTab => self.reveal_active_tab(cx),
             Command::ToggleSidebar => self.toggle_sidebar(cx),
             Command::TogglePin => {
-                if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.toggle_pin(id)); }
+                if let Some(id) = self.browser.space().active_tab { self.toggle_tab_pin(id, cx); }
             }
             Command::ToggleFavorite => {
                 if let Some(id) = self.browser.space().active_tab {
@@ -2257,7 +2257,7 @@ impl BrowserWindow {
     fn on_toggle_pin(&mut self, _: &TogglePin, _: &mut Window, cx: &mut Context<Self>) {
         if self.browser.is_blank() { return; }
         if let Some(id) = self.browser.space().active_tab {
-            self.edit_browser(|browser| browser.toggle_pin(id));
+            self.toggle_tab_pin(id, cx);
             cx.notify();
         }
     }

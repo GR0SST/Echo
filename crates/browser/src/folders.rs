@@ -350,7 +350,7 @@ impl BrowserWindow {
                     })
                     .collect();
                 cx.write_to_clipboard(ClipboardItem::new_string(links.join("\n")));
-                self.show_toast("Copied folder links".into(), cx);
+                self.show_toast("Copied item links".into(), cx);
             }
             _ => {}
         }
