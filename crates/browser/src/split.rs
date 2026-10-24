@@ -48,24 +48,6 @@ impl SplitDraft {
 }
 
 impl BrowserWindow {
-    /// Arc grows the root when an added pane cannot retain its 220 px frame.
-    /// Use GPUI's portable window API; native pages keep their existing views.
-    pub(crate) fn ensure_split_window_extent(&self, window: &mut gpui::Window) {
-        if !self.page_content_visible() || window.is_fullscreen() { return; }
-        let Some(split) = self.browser.active_split() else { return; };
-        let extent = crate::split_layout::minimum_extent(split.panes.len()) as f32;
-        let current = window.bounds().size;
-        let mut wanted = current;
-        if split.axis == Axis::Horizontal {
-            let sidebar = self.sidebar_amount();
-            wanted.width = wanted.width.max(px(extent + self.sidebar_width() * sidebar
-                + crate::pages::CONTENT_INSET * (2. - sidebar)));
-        } else {
-            wanted.height = wanted.height.max(px(extent + 2. * crate::pages::CONTENT_INSET));
-        }
-        if wanted != current { window.resize(wanted); }
-    }
-
     pub(crate) fn expand_current_split(&mut self, cx: &mut Context<Self>) {
         if self.split_draft.is_some() { return; }
         let Some(split) = self.browser.active_split() else { return; };
@@ -269,9 +251,12 @@ impl BrowserWindow {
     pub(crate) fn render_split(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(split) = self.browser.active_split() else { return div().into_any_element(); };
         let horizontal = split.axis == Axis::Horizontal;
+        let minimum = crate::split_layout::minimum_extent(split.panes.len()) as f32;
+        let extent = f32::from(if horizontal { self.sidebar_navigation.normal_content_size.width } else { self.sidebar_navigation.normal_content_size.height }).max(minimum);
+        let weights = crate::split_layout::constrained_weights(extent as f64, &split.weights);
         let panes = div().w_full().flex_1().min_h_0().flex().gap(px(crate::split_layout::GAP as f32))
             .when(!horizontal, |this| this.flex_col())
-            .children(split.panes.iter().zip(&split.weights).filter_map(|(id, weight)| {
+            .children(split.panes.iter().zip(&weights).filter_map(|(id, weight)| {
                 let tab = self.browser.all_tabs().find(|tab| tab.id == *id)?;
                 let id = *id;
                 let key = id.get() as usize;
@@ -333,9 +318,9 @@ impl BrowserWindow {
                     .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("pane-body-{key}"))())).mx(px(crate::split_layout::BORDER as f32)).mb(px(crate::split_layout::BORDER as f32)).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
             }));
         let dividers = (0..split.panes.len().saturating_sub(1)).map(|index| {
-            let fraction: f32 = split.weights[..=index].iter().sum();
+            let fraction: f32 = weights[..=index].iter().sum();
             let correction = crate::split_layout::GAP as f32 * (index as f32 - fraction * (split.panes.len() - 1) as f32);
-            let drag = DividerDrag { split: split.id, axis: split.axis, panes: split.panes.clone(), weights: split.weights.clone(), index, offset: Default::default() };
+            let drag = DividerDrag { split: split.id, axis: split.axis, panes: split.panes.clone(), weights: weights.clone(), index, offset: Default::default() };
             div().id(("split-divider", index)).debug_selector(move || format!("split-divider-{index}"))
                 .absolute().flex().items_center().justify_center()
                 .when(horizontal, |this| this.left(gpui::relative(fraction)).ml(px(correction)).top_0().bottom_0().w(px(crate::split_layout::GAP as f32)).cursor(gpui::CursorStyle::ResizeLeftRight))
@@ -350,7 +335,12 @@ impl BrowserWindow {
                     cx.new(|_| drag.clone())
                 })
         });
-        div().size_full().relative().flex().flex_col().child(panes).children(dividers)
+        // Arc keeps its window frame fixed: horizontal panes overflow right;
+        // stacked panes remain bottom-aligned and overflow above the window.
+        div().absolute().left_0().bottom_0().size_full().flex_none()
+            .when(horizontal, |this| this.min_w(px(minimum)))
+            .when(!horizontal, |this| this.min_h(px(minimum)))
+            .flex().flex_col().child(panes).children(dividers)
             .on_drag_move::<DividerDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<DividerDrag>, _, cx| {
                 let drag = event.drag(cx).clone();
                 let Some(split) = this.browser.active_split().filter(|split| split.id == drag.split && split.axis == drag.axis && split.panes == drag.panes) else { return; };

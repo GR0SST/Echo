@@ -1234,16 +1234,13 @@ still visual acceptance work; these observations do not establish full parity.
 
 Additional captures: `arc-vertical-menu.png` confirms stacked menu order
 Move Up, Move Down, Add Top Split, Add Bottom Split (with the same separator,
-Separate/Convert/Share grouping). Adding a fourth stacked pane expands Arc's
-window beyond the requested 760 px height to retain 220 px pane frames. Echo
-now grows its root through GPUI's portable resize API. Native four-pane checks
-produce 1160×760 horizontally (240 px sidebar) and 1000×930 vertically, retaining
-220 px frames and 10 px gaps. Evidence: `echo-four-horizontal.png`,
-`echo-four-vertical.png`, `window-extent-native.log`; six GPUI cases exercise
-2–4 panes in both axes without replacing loaded pages. The narrow draft
-Command Bar clipping was subsequently corrected: split drafts now use the ordinary
-window-wide 764 px panel, matching the settled Arc popup. The old clipped
-`echo-four-empty.png` is retained as before-change evidence.
+Separate/Convert/Share grouping). The initial fourth-pane capture appeared to expand the window. A later clean
+CoreGraphics measurement disproved that interpretation: the frame stays fixed
+and the minimum-size pane layout overflows it (see the correction below).
+Echo's earlier 1160×760 / 1000×930 auto-resize behavior was incorrect and has
+been removed. Those earlier Echo images are retained as before-change evidence.
+The split Command Bar uses the ordinary window-wide panel; its old clipped
+`echo-four-empty.png` is also retained as before-change evidence.
 `arc-drop-preview.png` shows an outlined theme-filled half-pane and clipping
 of the existing page; `arc-drop-result.png` shows the committed split.
 
@@ -1317,3 +1314,22 @@ Echo's outer header now measures 32 px including its contour (previously 33),
 and its address group centers over the complete pane instead of the unequal
 left/right controls. Inactive Reload/Options reveal on header hover. Header
 material and narrow active-pane address truncation still need comparison.
+
+
+## Four-pane frame correction — 2026-10-24
+
+A clean guarded session tracked newly opened Arc CGWindowNumber **3050**.
+The initial window frame and the frames after opening a unique source URL,
+adding panes 2, 3 and 4 through View → Add Split View, and converting four panes
+to vertical were all exactly `{X:100,Y:100,Width:1000,Height:760}` according to
+`CGWindowListCopyWindowInfo`. The test Space header was compared with its known
+crop before input; all fresh test tabs and the owned window were closed.
+Evidence: `guard-clean-minimum.log` and
+`guard-session/arc-clean-four-{horizontal,vertical}.png` under
+`target/parity/split-view/`.
+
+Arc retains 220 px pane frames and 10 px gaps. Horizontal overflow extends
+right; vertical overflow extends above the window, with the last pane ending
+at y=750. Echo now matches those layout constraints without resizing its root.
+The earlier auto-expansion claim and commit ba71a47 were based on an incorrect
+interpretation of cropped captures and are superseded by this measurement.

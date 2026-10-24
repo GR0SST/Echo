@@ -3477,7 +3477,7 @@ impl BrowserWindow {
                     .justify_center()
                     .gap_2()
                     .when(!split_open, |this| this.px_8())
-                    .overflow_hidden()
+                    .when(!split_open, |this| this.overflow_hidden())
                     .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).bg(gpui::white()).shadow_md())
                     .when(self.browser.is_private() && has_page && !split_open, |this| this.bg(hsla(210. / 360., 0.035, 0.15, 1.)))
                     .relative()
@@ -3853,7 +3853,6 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
-        self.ensure_split_window_extent(window);
         self.sync_library_geometry(window.viewport_size(), cx);
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {
             use crate::material::*;

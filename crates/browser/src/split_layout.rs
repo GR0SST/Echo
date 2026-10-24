@@ -13,6 +13,36 @@ pub(crate) fn minimum_extent(count: usize) -> f64 {
     MIN_PANE_EXTENT * count as f64 + GAP * count.saturating_sub(1) as f64
 }
 
+/// Resolve proportional weights with Arc's minimum pane extent. The remaining
+/// space is redistributed among panes that have not reached their minimum.
+pub(crate) fn constrained_weights(extent: f64, weights: &[f32]) -> Vec<f32> {
+    let count = weights.len();
+    if count == 0 { return Vec::new(); }
+    let available = (extent.max(minimum_extent(count)) - GAP * count.saturating_sub(1) as f64).max(0.);
+    let sum: f64 = weights.iter().map(|v| f64::from(*v)).sum();
+    let valid = sum.is_finite() && sum > 0. && weights.iter().all(|v| v.is_finite() && *v > 0.);
+    let input: Vec<f64> = weights.iter().map(|v| if valid { f64::from(*v) } else { 1. }).collect();
+    let mut fixed = vec![false; count];
+    let mut sizes = vec![0.; count];
+    let mut remaining = available;
+    loop {
+        let weight: f64 = input.iter().zip(&fixed).filter(|(_,fixed)| !**fixed).map(|(v,_)| *v).sum();
+        if weight <= 0. { break; }
+        let mut constrained = false;
+        for i in 0..count {
+            if !fixed[i] && remaining * input[i] / weight < MIN_PANE_EXTENT {
+                sizes[i] = MIN_PANE_EXTENT; fixed[i] = true; constrained = true;
+            }
+        }
+        if !constrained {
+            for i in 0..count { if !fixed[i] { sizes[i] = remaining * input[i] / weight; } }
+            break;
+        }
+        remaining = available - sizes.iter().sum::<f64>();
+    }
+    sizes.into_iter().map(|v| (v / available) as f32).collect()
+}
+
 /// Arc's expanded split leaves the other panes visible as 220 px strips.
 /// Small windows fall back to equal shares rather than collapsing a page.
 pub(crate) fn expanded_weights(extent: f64, count: usize, active: usize) -> Vec<f32> {
@@ -37,6 +67,13 @@ pub(crate) struct PaneBounds {
 pub(crate) fn layout(card: Bounds, axis: Axis, weights: &[f32], split: bool) -> Vec<PaneBounds> {
     if weights.is_empty() || ![card.x, card.y, card.width, card.height].iter().all(|value| value.is_finite()) { return Vec::new(); }
     let card = if split { let inset = TITLE_HEIGHT.min(card.height.max(0.)); Bounds { y: card.y + inset, height: (card.height - inset).max(0.), ..card } } else { card };
+    let card = if split {
+        let minimum = minimum_extent(weights.len());
+        if axis == Axis::Horizontal { Bounds { width: card.width.max(minimum), ..card } }
+        else { let height = card.height.max(minimum); Bounds { y: card.y - (height - card.height), height, ..card } }
+    } else { card };
+    let constrained = split.then(|| constrained_weights(if axis == Axis::Horizontal { card.width } else { card.height }, weights));
+    let weights = constrained.as_deref().unwrap_or(weights);
     let count = weights.len();
     let horizontal = axis == Axis::Horizontal;
     let length = if horizontal { card.width } else { card.height }.max(0.);
@@ -91,8 +128,8 @@ mod tests {
                 let panes = layout(card, axis, &[1., 2., 3., 4.], true);
                 for pane in &panes {
                     assert!(pane.page.width >= 0. && pane.page.height >= 0.);
-                    assert!(pane.page.x + pane.page.width <= width + 0.001);
-                    assert!(pane.page.y + pane.page.height <= height + 0.001);
+                    assert!(pane.frame.width >= 0. && pane.frame.height >= 0.);
+                    if axis == Axis::Vertical { assert!(pane.page.y + pane.page.height <= height + 0.001); }
                     assert!(pane.page.width.is_finite() && pane.page.height.is_finite());
                 }
                 for pair in panes.windows(2) {

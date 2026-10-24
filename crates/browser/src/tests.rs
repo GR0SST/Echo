@@ -7985,25 +7985,28 @@ fn command_shortcuts_replace_the_icon_popover_with_the_normal_command_window(cx:
     assert!(bar_input_focused(&view, cx));
     assert!(view.read_with(cx, |w, _| matches!(w.command_bar.as_ref().unwrap().target, crate::window::Target::Tab(_))));
 }
-fn assert_split_window_grows_to_fit_panes(cx: &mut TestAppContext, count: usize, vertical: bool) {
+fn assert_split_panes_keep_minimum_without_growing_window(cx: &mut TestAppContext, count: usize, vertical: bool) {
     let (view, cx, fake) = open_split_pages(cx, count);
     if vertical { run_named_command(&view, cx, "convert to vertical split"); }
     let before = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
     fake.take_calls();
     cx.simulate_resize(gpui::size(gpui::px(600.), gpui::px(400.)));
     cx.run_until_parked();
-    let grown = cx.update(|window, _| window.bounds().size);
-    let minimum = crate::split_layout::minimum_extent(count) as f32;
-    assert_eq!(if vertical { f32::from(grown.height) - 2. * crate::pages::CONTENT_INSET }
-        else { f32::from(grown.width) - view.read_with(cx, |w, _| w.sidebar_width()) - crate::pages::CONTENT_INSET }, minimum);
-    // TestWindow.resize records the native size. Deliver the corresponding
-    // bounds event, as the real platform does, before inspecting page frames.
-    cx.simulate_resize(grown);
-    cx.run_until_parked();
+    let unchanged = cx.update(|window, _| window.bounds().size);
+    assert_eq!(unchanged,gpui::size(gpui::px(600.),gpui::px(400.)));
     for id in &before.panes {
         let frame = cx.debug_bounds(test_selector(format!("split-pane-{}", id.get()))).unwrap();
         let extent = f32::from(if vertical { frame.size.height } else { frame.size.width });
         assert!((extent - 220.).abs() < 0.6, "pane {id:?}: {extent}");
+    }
+    let first = cx.debug_bounds(test_selector(format!("split-pane-{}",before.panes[0].get()))).unwrap();
+    let last = cx.debug_bounds(test_selector(format!("split-pane-{}",before.panes.last().unwrap().get()))).unwrap();
+    if vertical {
+        assert_eq!(last.bottom(),gpui::px(390.));
+        assert!(first.top()<gpui::px(10.));
+    } else {
+        assert_eq!(first.left(),gpui::px(240.));
+        assert!(last.right()>gpui::px(590.));
     }
     view.read_with(cx, |w, _| {
         let split = w.browser.active_split().unwrap();
@@ -8014,17 +8017,17 @@ fn assert_split_window_grows_to_fit_panes(cx: &mut TestAppContext, count: usize,
 }
 
 #[gpui::test]
-fn split_window_minimum_fits_two_horizontal_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 2, false); }
+fn split_window_stays_fixed_with_two_horizontal_panes(cx: &mut TestAppContext) { assert_split_panes_keep_minimum_without_growing_window(cx, 2, false); }
 #[gpui::test]
-fn split_window_minimum_fits_three_horizontal_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 3, false); }
+fn split_window_stays_fixed_with_three_horizontal_panes(cx: &mut TestAppContext) { assert_split_panes_keep_minimum_without_growing_window(cx, 3, false); }
 #[gpui::test]
-fn split_window_minimum_fits_four_horizontal_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 4, false); }
+fn split_window_stays_fixed_with_four_horizontal_panes(cx: &mut TestAppContext) { assert_split_panes_keep_minimum_without_growing_window(cx, 4, false); }
 #[gpui::test]
-fn split_window_minimum_fits_two_vertical_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 2, true); }
+fn split_window_stays_fixed_with_two_vertical_panes(cx: &mut TestAppContext) { assert_split_panes_keep_minimum_without_growing_window(cx, 2, true); }
 #[gpui::test]
-fn split_window_minimum_fits_three_vertical_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 3, true); }
+fn split_window_stays_fixed_with_three_vertical_panes(cx: &mut TestAppContext) { assert_split_panes_keep_minimum_without_growing_window(cx, 3, true); }
 #[gpui::test]
-fn split_window_minimum_fits_four_vertical_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 4, true); }
+fn split_window_stays_fixed_with_four_vertical_panes(cx: &mut TestAppContext) { assert_split_panes_keep_minimum_without_growing_window(cx, 4, true); }
 
 #[gpui::test]
 fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx: &mut TestAppContext) {
