@@ -161,7 +161,7 @@
     "state_binary_sha256": "cc071f94ed060f8712ff1011bf91305ead399451f729303c6a9c054d3fc037ad"
   },
   "native": {
-    "count": 39,
+    "count": 41,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -201,10 +201,12 @@
       "EchoDownloadBridge.SavePageSerializesOriginalLiveDocumentAfterClosing",
       "EchoDownloadBridge.ClosedSavePageRefusesWithoutFileOrDocumentReplacement",
       "EchoDownloadBridge.SavePageOnlyHtmlCopiesNetworkDocumentAfterClosing",
-      "EchoDownloadBridge.SavePageNetworkFailureCannotReportPhantomCompletion"
+      "EchoDownloadBridge.SavePageNetworkFailureCannotReportPhantomCompletion",
+      "EchoDownloadBridge.InterruptedKnownItemResumesAfterUnregisterAndBlank",
+      "EchoDownloadBridge.InterruptedKnownItemCancelsAfterUnregisterAndBlank"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "fc1c3d22121a88b7c748d611b5647774c96567ec93424d5db59ba597ffd9ec7e",
+    "test_source_sha256": "2d08a5837ad46982fb96edbd0de9a8b1320cccb91601750f2918cdbc7cac6e9f",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -242,15 +244,15 @@
     }
   ],
   "scope": {
-    "unit_source_paths": 83,
+    "unit_source_paths": 84,
     "authored_custom_paths": 87,
-    "framework_named_inputs": 89,
-    "archived_source_union": 95,
+    "framework_named_inputs": 92,
+    "archived_source_union": 98,
     "full_checkout_attestation": false,
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "b04dae110b31bb8d8479b98f0c7547c18b416faf572b12f896c71bc574903d27",
+  "native_xml_sha256": "192383c395c0abefc91f55706f95f3e99a1605b57b43ee99b909efdda061b744",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -275,7 +277,7 @@
     "zero_fuzz": true,
     "base_selected_images": 538,
     "patched_selected_images": 538,
-    "qualified_selected_images": 546,
+    "qualified_selected_images": 549,
     "repositories": 7,
     "selected_fixture_only": true,
     "new_build_performed_for_replay": false
@@ -301,7 +303,11 @@
     "save_package_red_lineage": "seven early-save-info tests red before fix; six unchanged; one corrected to destroy actual manager-owned ID queue instead of only history reply; package remains alive and original outcome/release assertions retained; eighth new test verifies refusal cannot stop admitted navigation",
     "save_package_upstream_callers": "two upstream SavePackage unit/browser-test translation units passed syntax-only compilation; their tests were not executed",
     "save_package_native": "four native Alloy cases: exact ONLY_HTML HTTP body, live-DOM MHTML, Closing-first refusal without document replacement/files, and real second-fetch HTTP 503 cancellation without phantom Complete; original source retained through terminal, captured association checked; test-only helper outside negotiated API",
-    "save_package_native_failed_attempt": "R19 test-helper invalid-ID DCHECK corrected; R20 ONLY_HTML/live-DOM fixture assumption corrected with real HTTP and separate MHTML; R21 genuine HTTP-503 regression failed with IsComplete=true, then passed unchanged after main-fetch failure cancellation; all failed logs retained"
+    "save_package_native_failed_attempt": "R19 test-helper invalid-ID DCHECK corrected; R20 ONLY_HTML/live-DOM fixture assumption corrected with real HTTP and separate MHTML; R21 genuine HTTP-503 regression failed with IsComplete=true, then passed unchanged after main-fetch failure cancellation; all failed logs retained",
+    "interrupted_controls": "same 1 MiB native item resumes with nonzero Range/If-Range after unregister and blanking, without new admission or association; Cancel now accepts INTERRUPTED as well as IN_PROGRESS and produces actual Canceled notification plus partial-file deletion",
+    "interrupted_controls_red": "real-socket Resume and 39 prior native cases passed; Cancel alone failed its shared-UI-runner notification barrier and retained 64 KiB; entire native test source unchanged after DoCancel fix",
+    "interrupted_controls_scope": "macOS Alloy loopback HTTP truncation with source browser alive at about:blank; source destruction, other failure classes, multiple profiles and other platforms remain unqualified; no full-fence or production adoption claim",
+    "interrupted_fixture_corrections": "initial context-scheme fixture could not serve Chromium no-renderer resume; replaced by real socket HTTP. Failure teardown detaches temp directory on FILE, and server continuations use CefCreateClosureTask. Failed artifacts retained."
   },
   "native_save_page": {
     "formats": {
@@ -313,7 +319,7 @@
       },
       "MHTML": {
         "size": 894,
-        "sha256": "60f35b3ca312729fb8842c2dbe245697db3d3d9d84683c4ece4dfe9f9a0ff4cb",
+        "sha256": "704ff061a803076b4ad4966ddc4181edec92a486e728078dadbce0be55728298",
         "verified": true,
         "verification": "live DOM/title markers"
       }
@@ -323,5 +329,18 @@
     "http_503_cancels_without_complete_or_output": true,
     "test_helper_outside_negotiated_api": true,
     "complete_predetermined_mhtml_bytes_not_asserted": true
+  },
+  "native_interrupted_transfer": {
+    "resume_output": {
+      "size": 1048576,
+      "sha256": "4da3b4254dff4f3c59b40ddb0e2607c9b4db0dbfb53f16532971bd3f47670181",
+      "expected_sha256": "4da3b4254dff4f3c59b40ddb0e2607c9b4db0dbfb53f16532971bd3f47670181"
+    },
+    "interruption": "real loopback HTTP socket closes after first valid 64 KiB chunk without terminating chunk; native Interrupted observed after unregister and about:blank",
+    "range_and_etag_checked": true,
+    "original_receipt_and_native_item_id_preserved": true,
+    "cancel_verified_after_same_ui_runner_effect_barrier": true,
+    "cancel_directory_empty_after_exit": true,
+    "red_cancel_left_partial_bytes": 65536
   }
 }

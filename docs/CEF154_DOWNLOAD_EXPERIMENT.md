@@ -35,8 +35,8 @@ bun scripts/cef154-patches.ts base /path/to/cef154/chromium/src
 
 `base` checks 538 distinct selected paths, including absent files that the custom
 patches will create. After applying the diffs, `patched` checks their postimages.
-`qualified-inputs` also checks eight recorded generated/read prerequisites, for
-546 selected paths. The modes verify seven repository pins. They do not attest
+`qualified-inputs` also checks eleven recorded generated/read prerequisites, for
+549 selected paths. The modes verify seven repository pins. They do not attest
 the entire checkout, SDK, all generated outputs, a compiled binary or a loaded
 framework. Keep the source tree stable while checking it.
 
@@ -220,7 +220,8 @@ their tests were not run. Four additional native Alloy tests cover actual Save P
 The last case failed against unchanged SavePackage with IsComplete=true.
 SaveFinished now cancels a failed single-item ONLY_HTML package before Rename or
 Finish can report phantom completion. All four test bodies are unchanged from
-that red run. The 39 native tests pass, including all previous 35 cases unchanged.
+that red run. These four cases and the previous 35 remain unchanged in the
+current native suite.
 Both successful saves retain their source document through actual CEF terminal.
 
 Alloy exposes no public CEF SavePage call, so these tests use a separate helper
@@ -232,6 +233,28 @@ and the initial mistaken assumption that ONLY_HTML captures DOM: it fetches the
 network document, whereas MHTML covers live DOM. Native picker UI, complete HTML,
 user cancellation/source loss, other platforms and document-retirement policy
 remain open.
+
+Two further native tests cover interrupted controls after unregister and
+`about:blank`. A real loopback HTTP server sends a valid 64 KiB chunk, waits for
+observed native byte progress and drainage, then closes before the terminating
+chunk. Chromium reports Interrupted. Resume sends a nonzero Range and the exact
+If-Range ETag; the same native item completes with the full expected 1 MiB body,
+without a new receipt or association.
+
+Cancel initially failed: CEF's `DoCancel` accepted only `IN_PROGRESS`, ignored
+the Interrupted item and retained its 64 KiB partial file. It now also accepts
+`INTERRUPTED`. The unchanged test queues a check after Cancel on the same UI
+runner and requires the genuine Canceled notification. It independently checks
+that the output directory is empty after exit. All 41 native tests pass.
+The three relevant task-runner source prerequisites are included in qualification
+inputs. The first fixture's context-scheme handler could not serve Chromium's
+no-renderer resume loader; it was replaced with actual socket HTTP, and its
+failure teardown now detaches the temporary directory on FILE before release.
+Failed runs and the original partial bytes are retained in the local archive.
+
+This proves the tested macOS Alloy known-item path with its source browser still
+alive at about:blank. Source destruction, other transport errors, multiple
+profiles and other platforms require further acceptance work.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

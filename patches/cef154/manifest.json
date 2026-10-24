@@ -39,7 +39,7 @@
     },
     {
       "path": "cef.patch",
-      "sha256": "c096009fab5a5f39b0005d04a4df7008a37e80fb7418002c844d258337d4a3eb"
+      "sha256": "38f21bed3225e41c26e1812cdacc53303c827e3e7f7e5f011481fb251867b2c4"
     }
   ],
   "standard_patch_files": [
@@ -2784,7 +2784,7 @@
     {
       "path": "cef/libcef/browser/download_manager_delegate_impl.cc",
       "base_sha256": "93327bbf93d9edaf023908f7240abe6e0ccd70cd331fed061fc380129e75ba0d",
-      "result_sha256": "341a3f79986366a06fa276818ad38cf03426b575ab6d97c8f816d31a8d33991b",
+      "result_sha256": "c081307ecac185462c10ab875016157224e67f79dfc52d1d25ce9fdba0959c02",
       "mode": "100644"
     },
     {
@@ -2844,7 +2844,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "fc1c3d22121a88b7c748d611b5647774c96567ec93424d5db59ba597ffd9ec7e",
+      "result_sha256": "2d08a5837ad46982fb96edbd0de9a8b1320cccb91601750f2918cdbc7cac6e9f",
       "mode": "100644"
     },
     {
@@ -2898,6 +2898,18 @@
     {
       "path": "content/browser/download/save_package_browsertest.cc",
       "sha256": "ffcb0dea5192fd1d1fe0b927fce0d78e66cdbe1695ab39500035907ff29582eb"
+    },
+    {
+      "path": "cef/libcef/browser/thread_util.h",
+      "sha256": "e0bcc8a8e4d9639e3e9f1251fe90d3716ae348a4d92bcaf5c37575d010d70081"
+    },
+    {
+      "path": "cef/libcef/common/task_runner_impl.cc",
+      "sha256": "9e0cda9a1ee08b2b867bf82f819bb187a4fdf9c77706b62cb98d421ab1248d9e"
+    },
+    {
+      "path": "cef/libcef/common/task_impl.cc",
+      "sha256": "37edadf881b22ec3e90a948c15e9ab7ab803043e92e978fe92bba6948c0878cd"
     }
   ],
   "capabilities": 17,

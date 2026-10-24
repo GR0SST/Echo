@@ -5084,7 +5084,18 @@ diff --git a/libcef/browser/download_manager_delegate_impl.cc b/libcef/browser/d
  
  #include <tuple>
  
-@@ -489,11 +490,15 @@
+@@ -248,7 +249,9 @@
+ 
+     if (manager_) {
+       DownloadItem* item = manager_->GetDownload(download_id_);
+-      if (item && item->GetState() == DownloadItem::IN_PROGRESS) {
++      if (item && (item->GetState() == DownloadItem::IN_PROGRESS ||
++                   item->GetState() == DownloadItem::INTERRUPTED)) {
++        // Interrupted items still own partial data and accept cancellation.
+         item->Cancel(true);
+       }
+     }
+@@ -489,11 +492,15 @@
    }
  
    CefRefPtr<CefBrowserHostBase> browser;
@@ -5485,10 +5496,12 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,3344 @@
+@@ -0,0 +1,3732 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
++#include <charconv>
++#include "include/cef_server.h"
 +#include <array>
 +#include <cstring>
 +#include <iostream>
@@ -8825,6 +8838,392 @@ new file mode 100644
 +}
 +TEST(EchoDownloadBridge, SavePageNetworkFailureCannotReportPhantomCompletion) {
 +  CefRefPtr<SavePageReceiptHandler> handler = new SavePageReceiptHandler(SavePageReceiptHandler::kFailedNetwork);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++
++constexpr size_t kInterruptedSize = 1024 * 1024;
++constexpr size_t kInterruptedPrefix = 65536;
++constexpr char kInterruptedEtag[] = "\"echo-interrupted-receipt-v1\"";
++std::string InterruptedPayload() {
++  std::string bytes(kInterruptedSize, '\0');
++  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<char>((i * 37 + 61) % 251);
++  return bytes;
++}
++class InterruptedSocketServer : public CefServerHandler {
++ public:
++  using Started = base::OnceCallback<void(CefRefPtr<CefServer>, const std::string&, bool)>;
++  using Hold = base::OnceCallback<void(base::OnceClosure)>;
++  using Seen = base::RepeatingCallback<void(size_t, const std::string&, const std::string&)>;
++  InterruptedSocketServer(Started started, base::OnceClosure closed, Hold hold, Seen seen)
++      : started_(std::move(started)), closed_(std::move(closed)),
++        hold_(std::move(hold)), seen_(std::move(seen)), bytes_(InterruptedPayload()) {}
++  size_t requests() const { return requests_.load(); }
++  void OnServerCreated(CefRefPtr<CefServer> server) override {
++    const bool running = server->IsRunning();
++    origin_ = "http://" + server->GetAddress().ToString();
++    std::move(started_).Run(server, origin_, running);
++  }
++  void OnServerDestroyed(CefRefPtr<CefServer>) override {
++    seen_.Reset(); hold_.Reset();
++    std::move(closed_).Run();
++  }
++  void OnClientConnected(CefRefPtr<CefServer>, int) override {}
++  void OnClientDisconnected(CefRefPtr<CefServer>, int) override {}
++  void OnHttpRequest(CefRefPtr<CefServer> server, int connection,
++      const CefString&, CefRefPtr<CefRequest> request) override {
++    if (request->GetURL() == origin_ + "/") {
++      const std::string body = "<html><body>interruption source</body></html>";
++      server->SendHttp200Response(connection, "text/html", body.data(), body.size());
++      return;
++    }
++    if (request->GetURL() != origin_ + "/resumable.bin") {
++      server->SendHttp404Response(connection); return;
++    }
++    const size_t ordinal = requests_.fetch_add(1);
++    const std::string range = request->GetHeaderByName("Range");
++    const std::string validator = request->GetHeaderByName("If-Range");
++    CefServer::HeaderMap headers;
++    headers.emplace("Content-Disposition", "attachment; filename=resumable.bin");
++    headers.emplace("ETag", kInterruptedEtag);
++    headers.emplace("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT");
++    headers.emplace("Accept-Ranges", "bytes");
++    headers.emplace("Cache-Control", "no-store");
++    seen_.Run(ordinal, range, validator);
++    if (ordinal == 0) {
++      EXPECT_TRUE(range.empty());
++      // A valid first HTTP chunk is sent, then the socket is deliberately
++      // closed before its terminating chunk. Chromium must report the actual
++      // transport error; no download metadata or callback is fabricated.
++      headers.emplace("Transfer-Encoding", "chunked");
++      server->SendHttpResponse(connection, 200, "application/octet-stream", -1, headers);
++      const std::string chunk = "10000\r\n" + bytes_.substr(0, kInterruptedPrefix) + "\r\n";
++      server->SendRawData(connection, chunk.data(), chunk.size());
++      if (hold_) std::move(hold_).Run(base::BindOnce(
++          [](CefRefPtr<CefServer> pending, int id) { pending->CloseConnection(id); }, server, connection));
++      return;
++    }
++    EXPECT_EQ(1u, ordinal);
++    EXPECT_TRUE(range.starts_with("bytes=") && range.ends_with("-"));
++    if (!range.starts_with("bytes=") || !range.ends_with("-")) {
++      server->SendHttp500Response(connection, "missing resume range"); return;
++    }
++    size_t start = 0;
++    const auto parsed = std::from_chars(range.data() + 6, range.data() + range.size() - 1, start);
++    EXPECT_EQ(std::errc{}, parsed.ec); EXPECT_EQ(range.data() + range.size() - 1, parsed.ptr);
++    EXPECT_GT(start, 0u); EXPECT_LE(start, kInterruptedPrefix);
++    if (parsed.ec != std::errc{} || start == 0 || start > kInterruptedPrefix) {
++      server->SendHttp500Response(connection, "invalid resume offset"); return;
++    }
++    headers.emplace("Content-Range", "bytes " + std::to_string(start) + "-" +
++        std::to_string(bytes_.size() - 1) + "/" + std::to_string(bytes_.size()));
++    server->SendHttpResponse(connection, 206, "application/octet-stream", bytes_.size() - start, headers);
++    SendRemainder(server, connection, start);
++  }
++  void SendRemainder(CefRefPtr<CefServer> server, int connection, size_t offset) {
++    if (!server->IsValidConnection(connection)) return;
++    if (offset == bytes_.size()) { server->CloseConnection(connection); return; }
++    const size_t count = std::min(size_t{65536}, bytes_.size() - offset);
++    server->SendRawData(connection, bytes_.data() + offset, count);
++    // Bound the small test server's write queue; this delay only paces body
++    // transmission and is never used as an admission or completion fence.
++    server->GetTaskRunner()->PostDelayedTask(CefCreateClosureTask(base::BindOnce(
++        &InterruptedSocketServer::SendRemainder, this, server, connection, offset + count)), 1);
++  }
++  void OnWebSocketRequest(CefRefPtr<CefServer>, int, const CefString&,
++      CefRefPtr<CefRequest>, CefRefPtr<CefCallback> callback) override {
++    ADD_FAILURE() << "unexpected WebSocket"; callback->Cancel();
++  }
++  void OnWebSocketConnected(CefRefPtr<CefServer>, int) override { ADD_FAILURE(); }
++  void OnWebSocketMessage(CefRefPtr<CefServer>, int, const void*, size_t) override { ADD_FAILURE(); }
++ private:
++  Started started_;
++  base::OnceClosure closed_;
++  Hold hold_;
++  Seen seen_;
++  const std::string bytes_;
++  std::string origin_;
++  std::atomic<size_t> requests_{0};
++  IMPLEMENT_REFCOUNTING(InterruptedSocketServer);
++};
++class InterruptedReceiptHandler : public TestHandler {
++ public:
++  explicit InterruptedReceiptHandler(bool cancel) : cancel_(cancel) {}
++  ~InterruptedReceiptHandler() override {
++    if (probe_->registration) {
++      static auto* retained = new std::vector<std::shared_ptr<Probe>>;
++      retained->push_back(probe_);
++    }
++  }
++  void RunTest() override {
++    SetTestTimeout(); SetSignalTestCompletionCount(1);
++    probe_->get_api = echo_download_test::ResolveGetApi();
++    if (!probe_->get_api) { ADD_FAILURE() << "bridge not loaded"; Finish(); return; }
++    SetUseViews(false); SetUseAlloyStyle(true, false);
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&InterruptedReceiptHandler::PrepareFile, this));
++  }
++  void PrepareFile() {
++    EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
++    path_ = client::file_util::JoinPath(temp_dir_.GetPath(), "resumable.bin");
++    CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::CreateSource, this));
++  }
++  void CreateSource() {
++    server_requested_ = true;
++    socket_handler_ = new InterruptedSocketServer(
++        base::BindOnce(&InterruptedReceiptHandler::OnServerReady, this),
++        base::BindOnce(&InterruptedReceiptHandler::OnServerClosed, this),
++        base::BindOnce(&InterruptedReceiptHandler::OnHeld, this),
++        base::BindRepeating(&InterruptedReceiptHandler::OnResourceRequest, this));
++    CefServer::CreateServer("127.0.0.1", 0, 10, socket_handler_);
++  }
++  void OnServerReady(CefRefPtr<CefServer> server, const std::string& origin, bool running) {
++    if (!CefCurrentlyOn(TID_UI)) {
++      CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::OnServerReady, this, server, origin, running));
++      return;
++    }
++    server_ = server;
++    EXPECT_TRUE(running);
++    if (finished_ || !running) { server_->Shutdown(); return; }
++    page_url_ = origin + "/"; file_url_ = origin + "/resumable.bin";
++    CefRequestContextSettings settings;
++    CreateBrowser(page_url_, CefRequestContext::CreateContext(settings, nullptr));
++  }
++  void OnServerClosed() {
++    if (!CefCurrentlyOn(TID_UI)) {
++      CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::OnServerClosed, this));
++      return;
++    }
++    if (server_closed_) return;
++    server_closed_ = true; server_ = nullptr; socket_handler_ = nullptr;
++    if (!finished_) { ADD_FAILURE() << "socket server closed unexpectedly"; Finish(); }
++    TestHandler::DestroyTest();
++    SignalExtraOnce();
++  }
++  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnAfterCreated(browser);
++    browser_id_ = browser->GetIdentifier();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, echo_download_test::CallGetApi(
++        probe_->get_api, sizeof(probe_->api), &probe_->api));
++    auto callbacks = probe_->Callbacks();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.register_browser(browser_id_,
++        {probe_->browser_generation, probe_->context_generation}, &callbacks, &probe_->registration));
++  }
++  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int) override {
++    if (finished_ || !frame->IsMain()) return;
++    if (!started_) {
++      started_ = true;
++      EXPECT_EQ(page_url_, frame->GetURL().ToString());
++      EXPECT_EQ(probe_->navigation_tokens, probe_->no_item_tokens);
++      EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD}, probe_->no_item);
++      probe_->navigation_tokens.clear(); probe_->no_item_tokens.clear(); probe_->no_item.clear();
++      probe_->reserves = 0; probe_->authorizations = 0;
++      probe_->expected_kind = ECHO_CEF_DOWNLOAD_START_DOWNLOAD;
++      browser->GetHost()->StartDownload(file_url_);
++      return;
++    }
++    EXPECT_EQ("about:blank", frame->GetURL().ToString());
++    EXPECT_EQ(0u, probe_->registration);
++    EXPECT_TRUE(held_disconnect_);
++    blank_loaded_ = true;
++    if (held_disconnect_) std::move(held_disconnect_).Run();
++  }
++  void OnHeld(base::OnceClosure release) {
++    if (!CefCurrentlyOn(TID_UI)) {
++      CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::OnHeld, this, std::move(release)));
++      return;
++    }
++    EXPECT_FALSE(held_disconnect_); held_disconnect_ = std::move(release);
++    BeginIfReady();
++  }
++  void OnResourceRequest(size_t ordinal, const std::string& range, const std::string& validator) {
++    if (!CefCurrentlyOn(TID_UI)) {
++      CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::OnResourceRequest,
++                                       this, ordinal, range, validator));
++      return;
++    }
++    if (ordinal == 0) { EXPECT_TRUE(range.empty()); return; }
++    EXPECT_FALSE(cancel_); EXPECT_TRUE(interrupted_); EXPECT_TRUE(resume_requested_);
++    EXPECT_EQ(0u, probe_->registration); EXPECT_TRUE(blank_loaded_);
++    EXPECT_EQ(kInterruptedEtag, validator);
++    resumed_range_ = range;
++    VerifyWhenReady();
++  }
++  bool OnBeforeDownload(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++      const CefString&, CefRefPtr<CefBeforeDownloadCallback> callback) override {
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    EXPECT_EQ(1, probe_->associated); EXPECT_EQ(probe_->item_id, item->GetId());
++    EXPECT_EQ(1, probe_->reserves); EXPECT_EQ(1, probe_->authorizations);
++    if (target_chosen_) {
++      EXPECT_TRUE(interrupted_); EXPECT_TRUE(resume_requested_); EXPECT_FALSE(cancel_);
++      EXPECT_EQ(0u, probe_->registration);
++    }
++    target_chosen_ = true;
++    callback->Continue(path_, false);
++    return true;
++  }
++  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++                         CefRefPtr<CefDownloadItemCallback> callback) override {
++    if (finished_) return;
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    EXPECT_EQ(file_url_, item->GetURL().ToString());
++    EXPECT_EQ(1, probe_->associated); EXPECT_EQ(probe_->item_id, item->GetId());
++    EXPECT_EQ(probe_->direct_tokens, probe_->association_tokens);
++    EXPECT_EQ(1, probe_->reserves); EXPECT_EQ(1, probe_->authorizations);
++    controls_ = callback; bytes_ = item->GetReceivedBytes();
++    active_ = item->IsInProgress() && !item->GetFullPath().empty();
++    if (item->IsInterrupted()) {
++      EXPECT_TRUE(blank_loaded_); EXPECT_EQ(0u, probe_->registration);
++      EXPECT_GT(bytes_, 0); EXPECT_LT(bytes_, static_cast<int64_t>(kInterruptedSize));
++      if (interrupted_) {
++        ADD_FAILURE() << "repeated interruption after control: reason=" << item->GetInterruptReason();
++        Finish(); return;
++      }
++      interrupted_ = true;
++      if (cancel_) {
++        cancel_requested_ = true;
++        callback->Cancel();
++        // CEF's DoCancel and CefPostTask(TID_UI) use the same UI runner. The
++        // barrier observes the genuine synchronous cancellation notification,
++        // rather than interpreting elapsed silence as success.
++        CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::CheckCancelAfterPostedEffect, this));
++      } else {
++        resume_requested_ = true;
++        callback->Resume();
++      }
++      return;
++    }
++    if (item->IsCanceled()) {
++      EXPECT_TRUE(cancel_); EXPECT_TRUE(cancel_requested_); EXPECT_TRUE(interrupted_);
++      canceled_event_ = true;
++      return;
++    }
++    if (item->IsComplete()) {
++      EXPECT_FALSE(cancel_); EXPECT_TRUE(interrupted_); EXPECT_TRUE(resume_requested_);
++      EXPECT_EQ(0u, probe_->registration); EXPECT_TRUE(blank_loaded_);
++      EXPECT_EQ(path_, item->GetFullPath().ToString());
++      EXPECT_EQ(static_cast<int64_t>(kInterruptedSize), bytes_);
++      EXPECT_EQ(2u, socket_handler_->requests());
++      complete_ = true;
++      VerifyWhenReady();
++      return;
++    }
++    BeginIfReady();
++  }
++  void BeginIfReady() {
++    if (finished_ || closing_ || !held_disconnect_ || !target_chosen_ || !active_ || bytes_ <= 0) return;
++    EXPECT_LT(bytes_, static_cast<int64_t>(kInterruptedSize));
++    closing_ = true;
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    PollDrain();
++  }
++  void PollDrain() {
++    const auto status = probe_->api.unregister_poll(probe_->registration);
++    if (status == ECHO_CEF_DOWNLOAD_PENDING && ++polls_ <= 500) {
++      CefPostDelayedTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::PollDrain, this), 10);
++      return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, status);
++    if (status != ECHO_CEF_DOWNLOAD_OK) { Finish(); return; }
++    probe_->registration = 0;
++    GetBrowser()->GetMainFrame()->LoadURL("about:blank");
++  }
++  void CheckCancelAfterPostedEffect() {
++    EXPECT_TRUE(canceled_event_) << "interrupted cancellation did not reach the real item";
++    EXPECT_FALSE(complete_); EXPECT_FALSE(resume_requested_);
++    EXPECT_EQ(1u, socket_handler_->requests()); EXPECT_TRUE(resumed_range_.empty());
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&InterruptedReceiptHandler::PreserveCanceledDirectory, this));
++  }
++  void PreserveCanceledDirectory() {
++    const std::string directory = temp_dir_.Take();
++    EXPECT_FALSE(directory.empty());
++    std::cout << "ECHO_INTERRUPTED_CANCEL_DIR=" << directory << std::endl;
++    CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::Finish, this));
++  }
++  void VerifyWhenReady() {
++    if (finished_ || verified_ || !complete_ || resumed_range_.empty()) return;
++    verified_ = true;
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&InterruptedReceiptHandler::VerifyResumeFile, this));
++  }
++  void VerifyResumeFile() {
++    std::string actual;
++    EXPECT_TRUE(client::file_util::ReadFileToString(path_, &actual));
++    EXPECT_EQ(InterruptedPayload(), actual);
++    EXPECT_FALSE(temp_dir_.Take().empty());
++    std::cout << "ECHO_INTERRUPTED_RESUME_FILE=" << path_ << std::endl;
++    CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::Finish, this));
++  }
++  void Finish() {
++    if (finished_) return;
++    finished_ = true;
++    held_disconnect_.Reset(); controls_ = nullptr;
++    // Detach even on timeout before browser/client references can make the
++    // final handler release happen on UI. CefScopedTempDir deletion does IO.
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&InterruptedReceiptHandler::DetachDirectoryBeforeFinish, this));
++  }
++  void DetachDirectoryBeforeFinish() {
++    if (!temp_dir_.IsEmpty()) {
++      const std::string directory = temp_dir_.Take();
++      std::cout << "ECHO_INTERRUPTED_FAILURE_DIR=" << directory << std::endl;
++    }
++    CefPostTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::CompleteFinish, this));
++  }
++  void CompleteFinish() {
++    if (server_) server_->Shutdown();
++    else if (!server_requested_) OnServerClosed();
++    if (probe_->registration && !closing_) {
++      closing_ = true; probe_->api.unregister_begin(probe_->registration);
++    }
++    PollCleanup();
++  }
++  void PollCleanup() {
++    if (!probe_->registration) { drain_done_ = true; SignalExtraOnce(); return; }
++    const auto status = probe_->api.unregister_poll(probe_->registration);
++    if (status == ECHO_CEF_DOWNLOAD_PENDING && ++cleanup_polls_ <= 500) {
++      CefPostDelayedTask(TID_UI, base::BindOnce(&InterruptedReceiptHandler::PollCleanup, this), 10);
++      return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, status);
++    if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
++    drain_done_ = true;
++    SignalExtraOnce();
++  }
++  void SignalExtraOnce() {
++    if (server_closed_ && drain_done_ && !extra_signaled_) { extra_signaled_ = true; SignalTestCompletion(); }
++  }
++ protected:
++  void OnTestTimeout(int timeout, bool error) override {
++    if (error) ADD_FAILURE() << "interrupted control timeout " << timeout << " bytes=" << bytes_
++        << " interrupted=" << interrupted_ << " resume=" << resume_requested_ << " complete=" << complete_;
++    if (controls_) controls_->Cancel();
++    Finish();
++  }
++ private:
++  const bool cancel_;
++  const std::shared_ptr<Probe> probe_ = std::make_shared<Probe>();
++  CefScopedTempDir temp_dir_;
++  CefRefPtr<CefServer> server_;
++  CefRefPtr<InterruptedSocketServer> socket_handler_;
++  bool server_requested_ = false, server_closed_ = false, drain_done_ = false;
++  std::string page_url_, file_url_;
++  CefRefPtr<CefDownloadItemCallback> controls_;
++  std::string path_, resumed_range_;
++  base::OnceClosure held_disconnect_;
++  int browser_id_ = 0, polls_ = 0, cleanup_polls_ = 0;
++  int64_t bytes_ = 0;
++  bool started_ = false, target_chosen_ = false, active_ = false, closing_ = false;
++  bool blank_loaded_ = false, interrupted_ = false, cancel_requested_ = false;
++  bool resume_requested_ = false, canceled_event_ = false, complete_ = false;
++  bool finished_ = false, extra_signaled_ = false, verified_ = false;
++  IMPLEMENT_REFCOUNTING(InterruptedReceiptHandler);
++};
++TEST(EchoDownloadBridge, InterruptedKnownItemResumesAfterUnregisterAndBlank) {
++  CefRefPtr<InterruptedReceiptHandler> handler = new InterruptedReceiptHandler(false);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, InterruptedKnownItemCancelsAfterUnregisterAndBlank) {
++  CefRefPtr<InterruptedReceiptHandler> handler = new InterruptedReceiptHandler(true);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
 +}
