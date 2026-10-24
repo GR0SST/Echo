@@ -54,6 +54,7 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn set_site_boosts(&mut self, _storage: &StorageSelection, _boosts: Vec<engine::SiteBoost>) {}
     fn prepare_paste_and_match_style(&mut self, _view: ViewId) -> Option<NativePaste> { None }
     fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
     fn supports_printing(&self) -> bool { false }
@@ -155,6 +156,11 @@ impl Chromium {
 impl WebEngine for Chromium {
     fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
+    fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
+        if let Ok(context) = self.resolve_storage(storage) {
+            if let Err(error) = self.engine.set_site_boosts(&context, boosts) { eprintln!("Cannot configure Boosts: {error}"); }
+        }
+    }
     fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<NativePaste> {
         let mut request = self.engine.prepare_paste_and_match_style(view)?;
         Some(Box::new(move || request.try_dispatch()))
@@ -804,6 +810,16 @@ impl Pages {
 
     pub fn sync(&mut self, browser: &Browser, visible: bool) {
         if crate::quit::is_quitting() { return; }
+        {
+            let mut store = self.store.borrow_mut();
+            for profile in browser.user_profiles().filter(|profile| !browser.is_private() || profile.id() == browser.active_user_profile_id()) {
+                let storage = if browser.is_private() { StorageSelection::Current } else { StorageSelection::for_profile(profile.id()) };
+                let boosts = profile.boosts.iter().filter(|boost| boost.enabled).map(|boost| engine::SiteBoost {
+                    domain: boost.domain().into(), css: boost.stylesheet(), javascript: boost.javascript.clone(),
+                }).collect();
+                store.engine.set_site_boosts(&storage, boosts);
+            }
+        }
         self.reconcile_inventory(browser);
         self.store.borrow_mut().prune();
         self.wanted.clear();

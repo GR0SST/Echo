@@ -455,8 +455,9 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | Feature | Status |
 |---|---|
 | Editor: color (color wheel, Brightness, Original Saturation, Invert lightness, Advanced color controls), font, text size and case | missing |
-| Zap: pick an element to hide (Pick Selector, "Zap all related elements") | missing |
-| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | missing |
+| Local per-domain Boost model, enabled state, CSS/JS and Zap selectors persisted per profile | done |
+| Zap: pick an element to hide (Pick Selector, "Zap all related elements") | partial — persisted selectors generate hiding CSS; picker and related-element controls missing |
+| Custom CSS/JS ("Refresh to Run"); Boosts with JS can't be shared | partial — profile-scoped document-start injection, live CSS updates and JS on the next document; editor and refresh control missing |
 | Turning on and off per site, "Customize Page…" in the context menu, Boosts section in the Site Control Center | missing |
 | Share Space/Folder/Easel via arc.net; publish Easels/Boosts to the gallery | out of scope |
 | Sharing and installing someone else's Boost ("Add this Boost to Arc?"), Boost Gallery | out of scope (Arc service/account dependency; no UI) |

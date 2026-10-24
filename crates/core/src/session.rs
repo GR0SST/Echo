@@ -57,6 +57,9 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
     if browser.spaces.iter().any(|space| space.theme.as_ref().is_some_and(|theme| !theme.valid())) {
         return Err(serde_json::Error::custom("invalid Space theme"));
     }
+    for profile in browser.user_profiles() {
+        profile.boosts.validate().map_err(serde_json::Error::custom)?;
+    }
     browser.validate_downloads().map_err(serde_json::Error::custom)?;
     browser.repair();
     Ok(browser)

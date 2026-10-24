@@ -1820,6 +1820,7 @@ dependencies = [
  "libloading 0.8.9",
  "objc2",
  "objc2-foundation",
+ "serde",
  "serde_json",
  "url",
 ]

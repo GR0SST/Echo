@@ -18,6 +18,8 @@ mod native_requests;
 pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod editing;
+mod boosts;
+pub use boosts::SiteBoost;
 mod printing;
 pub use printing::{PrintDispatch, PrintRequest};
 mod paste_style;
@@ -255,6 +257,7 @@ pub struct Engine {
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
     snapshots: snapshot::Snapshots,
+    boosts: Vec<(std::rc::Weak<RequestContext>, Vec<SiteBoost>)>,
     message_ids: devtools::MessageIds,
     inspectors: devtools::Inspectors,
     // Always the actual CEF context, including the global normal profile.
@@ -371,6 +374,7 @@ impl Engine {
             by_browser_id: HashMap::new(),
             next_id: 1,
             snapshots: snapshot::Snapshots::default(),
+            boosts: Vec::new(),
             message_ids: devtools::MessageIds::default(),
             inspectors: devtools::Inspectors::default(),
             _runtime: runtime,
@@ -534,6 +538,25 @@ impl Engine {
             .collect()
     }
 
+    /// Configure document-start Boosts for pages subsequently created in this
+    /// exact storage context. Existing documents receive live CSS updates;
+    /// JavaScript changes take effect when the document is next created.
+    /// Renderer replacement currently bootstraps from the browser creation
+    /// snapshot; updated snapshots need recreation plumbing before editor UI.
+    pub fn set_site_boosts(&mut self, context: &StorageContext, boosts: Vec<SiteBoost>) -> Result<(), String> {
+        self.check_storage_context(context)?;
+        self.boosts.retain(|(context, _)| context.strong_count() > 0);
+        let weak = std::rc::Rc::downgrade(&context.context);
+        if let Some((_, current)) = self.boosts.iter_mut().find(|(context, _)| std::rc::Weak::ptr_eq(context, &weak)) {
+            if *current == boosts { return Ok(()); }
+            *current = boosts.clone();
+        } else { self.boosts.push((weak, boosts.clone())); }
+        for view in self.views.values().filter(|view| view.role == ViewRole::Page && std::rc::Rc::ptr_eq(&view.context, &context.context)) {
+            boosts::update(&view.browser, &boosts);
+        }
+        Ok(())
+    }
+
     /// Creates a page over `ui_view` (the toolkit's `NSView*` on macOS),
     /// with `frame` in that view's coordinates, clipped to `corner_radius`.
     pub fn create_view(
@@ -641,7 +664,10 @@ impl Engine {
             ..Default::default()
         }
         .set_as_child(page_parent as _, &bounds);
-        let mut extra = None;
+        let mut extra = if role == ViewRole::Page {
+            let weak = std::rc::Rc::downgrade(&context);
+            self.boosts.iter().find(|(context, _)| std::rc::Weak::ptr_eq(context, &weak)).and_then(|(_, boosts)| boosts::extra(boosts))
+        } else { None };
         let policy = Arc::new(Mutex::new(PeekPolicy::default()));
         let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone());
         if let ViewRole::Inspector(id) = role {

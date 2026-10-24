@@ -21,6 +21,7 @@ pub mod undo;
 pub mod themes;
 pub mod windows;
 pub mod profiles;
+pub mod boosts;
 pub mod downloads;
 pub use profiles::UserProfileId;
 

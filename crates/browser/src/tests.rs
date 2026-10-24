@@ -220,6 +220,7 @@ enum Call {
 #[derive(Default)]
 struct FakeState {
     peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
+    boosts: std::collections::HashMap<crate::pages::StorageSelection, Vec<engine::SiteBoost>>,
     paste_busy: usize,
     paste_hook: Option<Box<dyn FnOnce()>>,
     print_busy: usize,
@@ -277,6 +278,7 @@ impl FakeEngine {
 
 impl WebEngine for FakeEngine {
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.0.borrow_mut().peek_policies.insert(raw(view), policy); }
+    fn set_site_boosts(&mut self, storage: &crate::pages::StorageSelection, boosts: Vec<engine::SiteBoost>) { self.0.borrow_mut().boosts.insert(storage.clone(), boosts); }
     fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<crate::pages::NativePaste> {
         let fake = self.clone();
         Some(Box::new(move || {
@@ -8628,4 +8630,28 @@ fn peek_native_page_zoom_targets_the_card_and_cmd_w_leaves_the_source(cx: &mut T
     peek.simulate_keystrokes("cmd-w"); peek.run_until_parked(); cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
     assert!(view.read_with(cx, |view, _| view.browser.active_tab().is_some()));
+}
+
+#[gpui::test]
+fn boosts_are_sent_to_their_profile_engine_context_and_disabled_rules_are_removed(cx: &mut TestAppContext) {
+    use crate::pages::StorageSelection;
+    let fake = FakeEngine::default();
+    let (view, cx) = open_with(cx, Some(Box::new(fake.clone())));
+    view.update(cx, |view, cx| {
+        let (other, id) = view.edit_browser(|browser| {
+            let other = browser.create_user_profile("Boost isolation").unwrap();
+            let boosts = &mut browser.active_user_profile_mut().boosts;
+            let id = boosts.create("https://example.com").unwrap();
+            boosts.get_mut(id).unwrap().css = "body { color: red; }".into();
+            boosts.get_mut(id).unwrap().zap_selectors.push(".ad".into());
+            (other, id)
+        });
+        if let Some(pages) = &view.pages { pages.borrow_mut().sync(&view.browser, true); }
+        assert!(fake.0.borrow().boosts[&StorageSelection::Default][0].css.contains(".ad { display: none !important; }"));
+        assert!(fake.0.borrow().boosts[&StorageSelection::for_profile(other)].is_empty());
+        view.edit_browser(|browser| browser.active_user_profile_mut().boosts.get_mut(id).unwrap().enabled = false);
+        if let Some(pages) = &view.pages { pages.borrow_mut().sync(&view.browser, true); }
+        assert!(fake.0.borrow().boosts[&StorageSelection::Default].is_empty());
+        cx.notify();
+    });
 }
