@@ -293,7 +293,7 @@ with original tokens and expected target URLs after Closing. Rejection tests
 invoke their APIs after Closing; accepted tests invoke before it. Existing 42 native
 TEST bodies are preserved. Fourteen added C++ regressions cover this ownership,
 removed entries, POST replacement, scroll updates and distinct subframe plans.
-All 167 selected C++ tests and 46 native tests pass once on macOS Alloy.
+That checkpoint passed 167 selected C++ tests and 46 native tests on macOS Alloy.
 
 The initial native fixture incorrectly assumed every accepted command replaces
 the pending network request. A rapid identical NORMAL reload is suppressed by
@@ -304,6 +304,44 @@ OnBeforeBrowse. The corrected fixture requires those concrete branches; all 46
 native TEST bodies remain unchanged from the early-capture red run. Five upstream
 navigation/security/SavePackage test translation units passed fresh syntax-only
 compilation; their full test suites were not executed.
+
+Seven further native cases use real loopback HTTP responses. The first request
+reaches the server before admission is closed; only then does the server send
+the redirect. Cross-origin cases change the host from `127.0.0.1` to `localhost`
+on the same owned server port.
+
+| Ingress | Response | Observed result after Closing |
+| --- | --- | --- |
+| Navigation GET | 302 | Original token, final GET, exact 1 MiB file |
+| Navigation POST | 303 | Original token, final GET with no POST body, exact file |
+| Navigation POST | Cross-origin 307 | Original token, unchanged POST/body, exact file |
+| StartDownload | Cross-origin 302 | Original token through IO authorization, exact file |
+| Renderer download attribute | 302 | Original renderer receipt through IO, exact file |
+| Navigation, denied target | 302 | PolicyDenied, zero target requests or associations |
+| StartDownload, denied target | 302 | Same factual denial through the IO reply and drain |
+
+The server checks actual wire method, body and Host. After checking the initial
+source navigation, each transfer attempt has one reserve and two authorizations
+of that same opaque token. Allowed cases verify both
+original/final item URLs and association before the public callback. Five full
+1 MiB outputs are independently compared with their generated bodies and SHA256
+values in [qualification.json](../patches/cef154/qualification.json); stdout
+identifies them with `ECHO_REDIRECT_FILE` markers (seeds 97, 101, 103, 107 and
+113). Both denied-output directories are
+independently empty after native exit. The IO denial waits for an actual
+PolicyDenied outcome and carrier drain; elapsed silence is not success.
+
+Every new case first captures a renderer-created `crypto.randomUUID()` from the
+live source DOM. After completion or denial, the same UUID, Browser ID and URL
+must remain, with exactly one source HTTP request. This checks document state
+rather than assuming equal URLs establish identity. All 53 native and 167
+selected C++ tests pass once; all previous 46 native test bodies remain unchanged.
+Only the native test source changed, so earlier upstream syntax checks are
+reused. Production behavior required no correction for these cases.
+
+These tests retain the source browser through the transfer. Source destruction
+during redirect, other redirect/failure combinations and other platforms still
+need acceptance work; this does not enable a complete fence or Rust adoption.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

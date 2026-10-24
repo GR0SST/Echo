@@ -180,7 +180,7 @@
     "state_binary_sha256": "792e2f79bf44f3f125ea008afd49e5dd5fdae941eb32049bc66ac13360a10ccb"
   },
   "native": {
-    "count": 46,
+    "count": 53,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -227,10 +227,17 @@
       "EchoDownloadBridge.QueuedReloadRetainsOriginalAdmissionAfterClosing",
       "EchoDownloadBridge.QueuedIgnoreCacheRetainsOriginalAdmissionAfterClosing",
       "EchoDownloadBridge.QueuedBackRetainsOriginalEntryAndAdmissionAfterClosing",
-      "EchoDownloadBridge.QueuedForwardRetainsOriginalEntryAndAdmissionAfterClosing"
+      "EchoDownloadBridge.QueuedForwardRetainsOriginalEntryAndAdmissionAfterClosing",
+      "EchoDownloadBridge.Http302NavigationKeepsOriginalReceiptAfterClosing",
+      "EchoDownloadBridge.Http303ChangesPostToGetOnOriginalReceiptAfterClosing",
+      "EchoDownloadBridge.Http307CrossOriginPreservesPostBodyAndOriginalReceiptAfterClosing",
+      "EchoDownloadBridge.Http302DirectCrossOriginKeepsOriginalReceiptAfterClosing",
+      "EchoDownloadBridge.DeniedHttpRedirectCannotDispatchTargetOrReplaceSource",
+      "EchoDownloadBridge.Http302RendererDownloadKeepsOriginalReceiptAfterClosing",
+      "EchoDownloadBridge.DeniedHttpDirectRedirectCannotDispatchTargetOrCreateItem"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "a30c53890553487c5aa7a8f82f66df18f5c17c689a9701373a3daa9141ac0937",
+    "test_source_sha256": "da628177ab608598a1ab8bd33dea7abfe0872ca1efb0cb96fb5ed1650d00a9fe",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -276,7 +283,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "1b1549935be38c38122a9ae64c00780192cdc7cd1cef9fe9fc4132c4d84f6336",
+  "native_xml_sha256": "0b46f989db06f2bbb235557523194420006d2d55d14f2dcc004eb120b6f066a1",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -350,7 +357,9 @@
     "queued_controller_scope": "normal registered macOS Alloy main-frame LoadURL; unregistered legacy route unchanged; complete public fence remains unqualified",
     "queued_history": "four unchanged native red tests now preserve early receipt through NavigationLock and Closing; reject commands first requested after Closing without canceling original request; keep captured entry ID and frame plan",
     "queued_history_identity": "source observer reports Shutdown before queued action release; stale entry, POST identity and changed frame plan reject before mutation; scroll state changes remain allowed; two-subframe distinct receipts retained",
-    "queued_history_fixture": "first fixture incorrectly required every accepted command to replace the pending network request; native/source evidence established duplicate NORMAL reload suppression and BFCache history bypass. Corrected constraints require actual queued Abandoned before releasing original reload, and status0 plus zero new OnBeforeBrowse for Back/Forward; all 46 native TEST bodies unchanged from red"
+    "queued_history_fixture": "first fixture incorrectly required every accepted command to replace the pending network request; native/source evidence established duplicate NORMAL reload suppression and BFCache history bypass. Corrected constraints require actual queued Abandoned before releasing original reload, and status0 plus zero new OnBeforeBrowse for Back/Forward; all 46 native TEST bodies unchanged from red",
+    "http_redirects": "seven real loopback cases: UI navigation 302/303/307, StartDownload and renderer download-attribute redirects, UI and IO policy denials after Closing. Original token, actual method/body/Host, original/final URL, exact bytes and live source DOM UUID checked",
+    "http_redirect_scope": "macOS Alloy with source browsers alive; only native test source changed and original 46 test bodies remain. No general all-exit, source-loss, other-platform, public seal or full-fence acceptance. Earlier syntax checks reused for unchanged production sources"
   },
   "native_save_page": {
     "formats": {
@@ -362,7 +371,7 @@
       },
       "MHTML": {
         "size": 894,
-        "sha256": "b32cb7fa8e534ae8a942d26b0ba20f1114520ce628c0ef0e19ac6a45a0c13cf3",
+        "sha256": "e49cd8ebbdff21b7eceb95c0e2dcef0867619e80a430cab9e38aa5f574f7e036",
         "verified": true,
         "verification": "live DOM/title markers"
       }
@@ -413,5 +422,50 @@
     "normal_reload_duplicate_abandons_queued_then_original_completes": true,
     "history_restores_bfcache_without_new_browse": true,
     "fixture_constraints_updated_after_native_evidence": true
+  },
+  "native_http_redirects": {
+    "outputs": {
+      "navigation_get_302": {
+        "size": 1048576,
+        "sha256": "39e6c99fdac9db0e1a0fb0b1af9692c10e2457a9777c048abd94cee107549b92",
+        "expected_sha256": "39e6c99fdac9db0e1a0fb0b1af9692c10e2457a9777c048abd94cee107549b92"
+      },
+      "navigation_post_303_get": {
+        "size": 1048576,
+        "sha256": "18388424158fb1d2b88817352b7a6ee9b6e3a62910e8568afd41bd933dea053b",
+        "expected_sha256": "18388424158fb1d2b88817352b7a6ee9b6e3a62910e8568afd41bd933dea053b"
+      },
+      "navigation_post_307_cross_origin": {
+        "size": 1048576,
+        "sha256": "150a7e7b43c02f85460e03de2e35756b4f7fa275e2f0285b56dd0e7ad87998ff",
+        "expected_sha256": "150a7e7b43c02f85460e03de2e35756b4f7fa275e2f0285b56dd0e7ad87998ff"
+      },
+      "direct_302_cross_origin": {
+        "size": 1048576,
+        "sha256": "c8ec76e09f71cdf7fee50ca8c16f9f4fd66ba78c9cf8372f78743b0ae6fde53e",
+        "expected_sha256": "c8ec76e09f71cdf7fee50ca8c16f9f4fd66ba78c9cf8372f78743b0ae6fde53e"
+      },
+      "renderer_download_302": {
+        "size": 1048576,
+        "sha256": "1c473d9f0a7b7f2f0563fd609d952803c04fa06b89aba767874f5dbab5a3e175",
+        "expected_sha256": "1c473d9f0a7b7f2f0563fd609d952803c04fa06b89aba767874f5dbab5a3e175"
+      }
+    },
+    "actual_wire_method_body_and_host_checked": true,
+    "original_and_final_item_urls_checked": true,
+    "source_renderer_dom_uuid_and_browser_id_preserved": true,
+    "one_source_http_request_per_case": true,
+    "ui_and_io_denials": {
+      "genuine_policy_denied": true,
+      "target_requests": 0,
+      "associations": 0,
+      "output_directories_empty_after_native_exit": true
+    },
+    "source_browsers_retained_through_transfer": true,
+    "source_loss_during_redirect_qualified": false,
+    "production_changed": false,
+    "capabilities": 17,
+    "full_fence": false,
+    "one_original_reserve_and_two_authorizations_per_transfer_attempt": true
   }
 }

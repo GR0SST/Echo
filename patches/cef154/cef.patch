@@ -6016,7 +6016,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,3991 @@
+@@ -0,0 +1,4329 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -6075,6 +6075,8 @@ new file mode 100644
 +  uint32_t item_id = 0;
 +  std::string current_url;
 +  std::string expected_method = "GET";
++  struct AuthorizationFact { uint64_t token; std::string url, method; };
++  std::vector<AuthorizationFact> authorization_facts;
 +  echo_cef_download_callbacks_v1 Callbacks() {
 +    return {sizeof(echo_cef_download_callbacks_v1), 1, this,
 +      [](void* p, echo_cef_download_origin_v1 origin, uint32_t kind,
@@ -6108,6 +6110,7 @@ new file mode 100644
 +        EXPECT_EQ(self.expected_method, std::string(method.data, method.len));
 +        self.current_url.assign(url.data, url.len);  // Borrow copied here.
 +        ++self.authorizations;
++        self.authorization_facts.push_back({token, self.current_url, std::string(method.data, method.len)});
 +        return self.decision;
 +      },
 +      [](void* p, uint64_t token, echo_cef_download_origin_v1 origin,
@@ -10007,6 +10010,341 @@ new file mode 100644
 +  CefRefPtr<QueuedNavigationHandler> handler = new QueuedNavigationHandler(QueuedNavigationHandler::kForwardAdmitted);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
++}
++
++// Actual HTTP redirect responses cross Closing before the next request. The
++// server observes the method/body on the wire; policy observes the same opaque
++// token with Chromium's redirected URL/method, including POST -> GET for 303.
++class NativeRedirectReceiptHandler : public TestHandler {
++ public:
++  enum Mode { kGet302, kPost303, kPost307CrossOrigin, kDirect302CrossOrigin, kDeny302, kRenderer302, kDirectDeny302 };
++  explicit NativeRedirectReceiptHandler(Mode mode) : mode_(mode) {}
++  ~NativeRedirectReceiptHandler() override {
++    if (probe_->registration) {
++      static auto* retained = new std::vector<std::shared_ptr<Probe>>;
++      retained->push_back(probe_);  // Failed drainage cannot release userdata.
++    }
++  }
++  void RunTest() override {
++    SetTestTimeout(); SetSignalTestCompletionCount(1);
++    probe_->get_api = echo_download_test::ResolveGetApi();
++    if (!probe_->get_api) { ADD_FAILURE() << "bridge missing"; failed_=true; Finish(); return; }
++    SetUseViews(false); SetUseAlloyStyle(true, false);
++    CefPostTask(TID_FILE_USER_VISIBLE, base::BindOnce(&NativeRedirectReceiptHandler::PrepareFile, this));
++  }
++  void PrepareFile() {
++    if (!temp_dir_.CreateUniqueTempDir()) {
++      ADD_FAILURE() << "owned redirect directory unavailable";
++      CefPostTask(TID_UI, base::BindOnce(&NativeRedirectReceiptHandler::FileFailed, this));
++      return;
++    }
++    path_ = client::file_util::JoinPath(temp_dir_.GetPath(), "redirect-" + std::to_string(Seed()) + ".bin");
++    CefPostTask(TID_UI, base::BindOnce(&NativeRedirectReceiptHandler::StartServer, this));
++  }
++  void FileFailed() { failed_=true; Finish(); }
++  void StartServer() { if(finishing_) return; server_=std::make_unique<Server>(this); server_->Initialize(false); }
++  void OnServerInitialized(const std::string& origin) {
++    server_initialized_=true;
++    if (finishing_) { server_->Shutdown(); return; }
++    ASSERT_TRUE(origin.starts_with("http://127.0.0.1:"));
++    stem_ = "/receipt-native-redirect-" + std::to_string(probe_->browser_generation) + "/";
++    source_=origin+stem_+"source"; start_=origin+stem_+"start";
++    const auto target_origin = CrossOrigin() ? "http://localhost:" + origin.substr(std::string("http://127.0.0.1:").size()) : origin;
++    target_=target_origin+stem_+"final";
++    target_host_=target_origin.substr(std::string("http://").size());
++    source_host_=origin.substr(std::string("http://").size());
++    CefRequestContextSettings settings;
++    CreateBrowser(source_, CefRequestContext::CreateContext(settings, nullptr));
++  }
++  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnAfterCreated(browser); browser_created_=true; browser_id_=browser->GetIdentifier();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, echo_download_test::CallGetApi(probe_->get_api, sizeof(probe_->api), &probe_->api));
++    EXPECT_EQ(17u, probe_->api.capabilities);
++    auto callbacks=probe_->Callbacks();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.register_browser(browser_id_,
++        {probe_->browser_generation,probe_->context_generation}, &callbacks,&probe_->registration));
++  }
++  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int status) override {
++    if (finishing_ || started_ || !frame->IsMain()) return;
++    EXPECT_EQ(200,status); EXPECT_EQ(source_,frame->GetURL().ToString());
++    EXPECT_EQ(1,probe_->reserves); EXPECT_EQ(probe_->navigation_tokens,probe_->no_item_tokens);
++    EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD},probe_->no_item);
++    started_=true;
++    frame->GetSource(new RendererSourceAck(base::BindOnce(&NativeRedirectReceiptHandler::SourceCaptured,this)));
++  }
++  void SourceCaptured(const CefString& markup) {
++    source_nonce_=SourceNonce(markup);
++    ASSERT_EQ(36u,source_nonce_.size());
++    source_ready_=true;
++    auto browser=GetBrowser(); ASSERT_TRUE(browser);
++    auto frame=browser->GetMainFrame();
++    probe_->reserves=0; probe_->authorizations=0;
++    probe_->navigation_tokens.clear(); probe_->no_item_tokens.clear(); probe_->no_item.clear();
++    probe_->authorization_facts.clear();
++    probe_->expected_kind=Direct() ? ECHO_CEF_DOWNLOAD_START_DOWNLOAD : Renderer() ? ECHO_CEF_DOWNLOAD_RENDERER : ECHO_CEF_DOWNLOAD_NAVIGATION;
++    probe_->expected_method=Post() ? "POST" : "GET";
++    if (Direct()) browser->GetHost()->StartDownload(start_);
++    else if (Renderer()) frame->ExecuteJavaScript(
++        "const redirectAnchor=document.createElement('a');redirectAnchor.href='"+start_+
++        "';redirectAnchor.download='renderer-redirect.bin';document.body.appendChild(redirectAnchor);redirectAnchor.click();",source_,1);
++    else if (Post()) {
++      auto request=CefRequest::Create(); request->SetURL(start_); request->SetMethod("POST");
++      auto data=CefPostData::Create(); auto element=CefPostDataElement::Create();
++      element->SetToBytes(PostBody().size(),PostBody().data()); data->AddElement(element); request->SetPostData(data);
++      CefRequest::HeaderMap headers; headers.emplace("Content-Type","application/x-www-form-urlencoded"); request->SetHeaderMap(headers);
++      frame->LoadRequest(request);
++    } else frame->LoadURL(start_);
++  }
++
++  bool OnServerRequest(CefRefPtr<CefRequest> request, const test_server::ResponseCallback& callback) {
++    const std::string url=request->GetURL(); const auto pos=url.find(stem_);
++    if (stem_.empty() || pos==std::string::npos) return false;
++    const auto route=url.substr(pos+stem_.size());
++    if (finishing_) { Reply(callback,"closed","text/plain",503); return true; }
++    if (route=="source") {
++      ++source_requests_; EXPECT_EQ(1,source_requests_);
++      Reply(callback,"<html><body>redirect original source marker<script>document.body.dataset.redirectIdentity=crypto.randomUUID();</script></body></html>","text/html");
++    } else if (route=="start") {
++      ++start_requests_;
++      EXPECT_EQ(1,start_requests_); EXPECT_TRUE(started_ && source_ready_);
++      EXPECT_EQ(Post() ? "POST" : "GET",request->GetMethod().ToString());
++      EXPECT_EQ(Post() ? PostBody() : std::string(),Body(request));
++      EXPECT_EQ(source_host_,request->GetHeaderByName("Host").ToString());
++      EXPECT_EQ(1,probe_->reserves); EXPECT_EQ(1,probe_->authorizations);
++      CheckInitialAdmission();
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK,probe_->api.unregister_begin(probe_->registration));
++      closing_=true;
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING,probe_->api.unregister_poll(probe_->registration));
++      probe_->expected_method=FinalMethod();
++      if (Denied()) probe_->decision=0;
++      auto response=CefResponse::Create(); response->SetStatus(RedirectStatus()); response->SetMimeType("text/plain");
++      CefResponse::HeaderMap headers; headers.emplace("Location",target_); response->SetHeaderMap(headers);
++      redirect_released_=true; callback.Run(response,"redirect");
++      if (Denied() && Direct()) CefPostTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::PollDirectDenied,this));
++    } else if (route=="final") {
++      ++target_requests_; EXPECT_FALSE(Denied()); EXPECT_TRUE(closing_ && redirect_released_);
++      EXPECT_EQ(1,target_requests_); EXPECT_EQ(FinalMethod(),request->GetMethod().ToString());
++      EXPECT_EQ(mode_==kPost307CrossOrigin ? PostBody() : std::string(),Body(request));
++      EXPECT_EQ(target_host_,request->GetHeaderByName("Host").ToString());
++      EXPECT_EQ(1,probe_->reserves); EXPECT_EQ(2,probe_->authorizations);
++      CheckAuthorizationFacts();
++      Reply(callback,Payload(),"application/octet-stream");
++    } else Reply(callback,"not found","text/plain",404);
++    return true;
++  }
++  // No fatal assertion may return void from the bool server callback.
++  void CheckInitialAdmission() {
++    EXPECT_EQ(1u,Tokens().size());
++    EXPECT_EQ(0,probe_->associated); EXPECT_TRUE(probe_->no_item.empty());
++  }
++  bool OnBeforeDownload(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++      const CefString&, CefRefPtr<CefBeforeDownloadCallback> callback) override {
++    EXPECT_FALSE(Denied()); EXPECT_FALSE(before_); before_=true;
++    EXPECT_EQ(browser_id_,browser->GetIdentifier()); EXPECT_EQ(target_,item->GetURL().ToString());
++    EXPECT_EQ(start_,item->GetOriginalUrl().ToString());
++    EXPECT_TRUE(closing_ && redirect_released_); EXPECT_EQ(1,target_requests_);
++    EXPECT_EQ(Tokens(),probe_->association_tokens); EXPECT_TRUE(probe_->no_item.empty());
++    EXPECT_EQ(probe_->item_id,item->GetId()); CheckAuthorizationFacts();
++    callback->Continue(path_,false); return true;
++  }
++  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++      CefRefPtr<CefDownloadItemCallback> callback) override {
++    if (finishing_) { if (item->IsInProgress()) callback->Cancel(); return; }
++    controls_=callback; EXPECT_FALSE(Denied()); EXPECT_EQ(browser_id_,browser->GetIdentifier());
++    EXPECT_EQ(target_,item->GetURL().ToString()); EXPECT_EQ(start_,item->GetOriginalUrl().ToString());
++    EXPECT_FALSE(item->IsCanceled()); EXPECT_FALSE(item->IsInterrupted());
++    EXPECT_EQ(Tokens(),probe_->association_tokens);
++    if (!item->IsComplete() || complete_) return;
++    complete_=true; EXPECT_TRUE(before_); EXPECT_EQ(1048576,item->GetReceivedBytes());
++    EXPECT_EQ(path_,item->GetFullPath().ToString()); controls_=nullptr;
++    CefPostTask(TID_FILE_USER_VISIBLE,base::BindOnce(&NativeRedirectReceiptHandler::VerifyFile,this));
++  }
++  void VerifyFile() {
++    std::string actual; EXPECT_TRUE(client::file_util::ReadFileToString(path_,&actual));
++    EXPECT_EQ(Payload(),actual);
++    std::cout << "ECHO_REDIRECT_FILE_" << Seed() << "=" << path_ << std::endl;
++    CefPostTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::VerifyRetainedSource,this));
++  }
++  void OnLoadError(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame> frame,ErrorCode error,
++      const CefString&,const CefString& failed_url) override {
++    if (finishing_ || !started_ || !frame->IsMain()) return;
++    EXPECT_EQ(ERR_ABORTED,error);
++    if (!Denied()) return;  // Genuine navigation -> download handoff aborts.
++    EXPECT_EQ(target_,failed_url.ToString()); EXPECT_TRUE(closing_ && redirect_released_);
++    EXPECT_EQ(0,target_requests_); EXPECT_EQ(0,probe_->associated); EXPECT_FALSE(before_);
++    EXPECT_EQ(Tokens(),probe_->no_item_tokens);
++    EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_POLICY_DENIED},probe_->no_item);
++    CheckAuthorizationFacts(); denied_outcome_seen_=true;
++    frame->GetSource(new RendererSourceAck(base::BindOnce(&NativeRedirectReceiptHandler::RetainedSource,this)));
++  }
++  void PollDirectDenied() {
++    if(finishing_) return;
++    if(probe_->no_item.empty()) {
++      if(++denial_polls_<=500) { CefPostDelayedTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::PollDirectDenied,this),10); return; }
++      ADD_FAILURE()<<"IO redirect did not report a genuine NoItem outcome"; failed_=true; Finish(); return;
++    }
++    EXPECT_EQ(Tokens(),probe_->no_item_tokens);
++    EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_POLICY_DENIED},probe_->no_item);
++    EXPECT_EQ(0,probe_->associated); EXPECT_EQ(0,target_requests_); EXPECT_FALSE(before_);
++    CheckAuthorizationFacts(); denied_outcome_seen_=true;
++    GetBrowser()->GetMainFrame()->GetSource(new RendererSourceAck(base::BindOnce(&NativeRedirectReceiptHandler::RetainedSource,this)));
++  }
++  void VerifyRetainedSource() {
++    auto browser=GetBrowser(); ASSERT_TRUE(browser);
++    browser->GetMainFrame()->GetSource(new RendererSourceAck(base::BindOnce(&NativeRedirectReceiptHandler::RetainedSource,this)));
++  }
++  void RetainedSource(const CefString& source) {
++    EXPECT_EQ(source_nonce_,SourceNonce(source));
++    EXPECT_EQ(1,source_requests_);
++    EXPECT_EQ(browser_id_,GetBrowser()->GetIdentifier());
++    EXPECT_NE(std::string::npos,source.ToString().find("redirect original source marker"));
++    EXPECT_EQ(source_,GetBrowser()->GetMainFrame()->GetURL().ToString());
++    source_preserved_=true; PollDrain();
++  }
++  void PollDrain() {
++    const auto status=probe_->api.unregister_poll(probe_->registration);
++    if (status==ECHO_CEF_DOWNLOAD_PENDING && ++polls_<=500) {
++      CefPostDelayedTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::PollDrain,this),10); return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK,status); if(status==ECHO_CEF_DOWNLOAD_OK) probe_->registration=0;
++    EXPECT_EQ(1,start_requests_); EXPECT_EQ(Denied()?0:1,target_requests_); CheckAuthorizationFacts();
++    if (Denied()) { EXPECT_TRUE(denied_outcome_seen_ && source_preserved_); EXPECT_EQ(0,probe_->associated); }
++    else { EXPECT_TRUE(complete_ && source_preserved_); EXPECT_EQ(1,probe_->associated); EXPECT_TRUE(probe_->no_item.empty()); }
++    Finish();
++  }
++  void Finish() {
++    if (finishing_) return; finishing_=true;
++    if(controls_) { controls_->Cancel(); controls_=nullptr; }
++    if(probe_->registration && !closing_) { closing_=true; probe_->api.unregister_begin(probe_->registration); }
++    CefPostTask(TID_FILE_USER_VISIBLE,base::BindOnce(&NativeRedirectReceiptHandler::DetachDirectory,this));
++  }
++  void DetachDirectory() {
++    const auto directory=temp_dir_.IsEmpty()?std::string():temp_dir_.Take().ToString();
++    if(Denied() && !directory.empty()) std::cout << "ECHO_REDIRECT_DENIED_DIR_" << Seed() << "=" << directory << std::endl;
++    CefPostTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::DirectoryDetached,this));
++  }
++  void DirectoryDetached() {
++    if(server_ && server_initialized_) server_->Shutdown();
++    else if(!server_) OnServerShutdown();
++  }
++  void OnServerShutdown() {
++    server_.reset(); server_closed_=true;
++    if(failed_ && GetBrowser()) GetBrowser()->StopLoad();
++    TestHandler::DestroyTest(); if(!browser_created_ || browser_closed_) SignalOnce();
++  }
++  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnBeforeClose(browser); browser_closed_=true;
++    if(probe_->registration) CefPostTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::PollCleanup,this));
++    else SignalOnce();
++  }
++  void PollCleanup() {
++    const auto status=probe_->api.unregister_poll(probe_->registration);
++    if(status==ECHO_CEF_DOWNLOAD_PENDING && ++cleanup_polls_<=500) {
++      CefPostDelayedTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::PollCleanup,this),10); return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK,status); if(status==ECHO_CEF_DOWNLOAD_OK) probe_->registration=0;
++    SignalOnce();
++  }
++ protected:
++  void OnTestTimeout(int timeout,bool error) override {
++    if(error) ADD_FAILURE()<<"redirect timeout "<<timeout<<" mode="<<mode_<<" started="<<started_
++      <<" start="<<start_requests_<<" target="<<target_requests_<<" auth="<<probe_->authorizations
++      <<" association="<<probe_->associated<<" noitem="<<probe_->no_item.size()<<" complete="<<complete_;
++    failed_=true; Finish();
++  }
++ private:
++  class Server : public test_server::ObserverHelper {
++   public:
++    explicit Server(NativeRedirectReceiptHandler* owner):owner_(owner) {}
++    void OnInitialized(const std::string& origin) override {
++      CefPostTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::OnServerInitialized,CefRefPtr<NativeRedirectReceiptHandler>(owner_),origin));
++    }
++    bool OnTestServerRequest(CefRefPtr<CefRequest> request,const ResponseCallback& callback) override { return owner_->OnServerRequest(request,callback); }
++    void OnShutdown() override { CefPostTask(TID_UI,base::BindOnce(&NativeRedirectReceiptHandler::OnServerShutdown,CefRefPtr<NativeRedirectReceiptHandler>(owner_))); }
++   private:
++    NativeRedirectReceiptHandler* const owner_;
++  };
++  static void Reply(const test_server::ResponseCallback& callback,const std::string& data,
++      const std::string& mime,int status=200) {
++    auto response=CefResponse::Create(); response->SetStatus(status); response->SetMimeType(mime);
++    if(mime=="application/octet-stream") { CefResponse::HeaderMap h; h.emplace("Content-Disposition","attachment; filename=redirect.bin"); response->SetHeaderMap(h); }
++    callback.Run(response,data);
++  }
++  static std::string Body(CefRefPtr<CefRequest> request) {
++    auto post=request->GetPostData(); if(!post) return {};
++    CefPostData::ElementVector elements; post->GetElements(elements); std::string result;
++    for(auto element:elements) { EXPECT_EQ(PDE_TYPE_BYTES,element->GetType()); std::string bytes(element->GetBytesCount(),'\0'); element->GetBytes(bytes.size(),bytes.data()); result+=bytes; }
++    return result;
++  }
++  static std::string SourceNonce(const CefString& source) {
++    const auto markup=source.ToString();
++    const std::string prefix="data-redirect-identity=";
++    const auto position=markup.find(prefix);
++    if(position==std::string::npos) return {};
++    const auto quote=position+prefix.size();
++    if(quote>=markup.size() || markup[quote]!='"') return {};
++    const auto begin=quote+1; const auto end=markup.find('"',begin);
++    return end==std::string::npos ? std::string() : markup.substr(begin,end-begin);
++  }
++  bool Post() const { return mode_==kPost303 || mode_==kPost307CrossOrigin; }
++  bool Direct() const { return mode_==kDirect302CrossOrigin || mode_==kDirectDeny302; }
++  bool Renderer() const { return mode_==kRenderer302; }
++  bool Denied() const { return mode_==kDeny302 || mode_==kDirectDeny302; }
++  bool CrossOrigin() const { return mode_==kPost307CrossOrigin || Direct() || Denied(); }
++  int RedirectStatus() const { return mode_==kPost303?303:mode_==kPost307CrossOrigin?307:302; }
++  std::string FinalMethod() const { return mode_==kPost307CrossOrigin?"POST":"GET"; }
++  static std::string PostBody() { return "receipt=redirect-method&body=must-survive-307"; }
++  int Seed() const { return mode_==kGet302?97:mode_==kPost303?101:mode_==kPost307CrossOrigin?103:mode_==kDirect302CrossOrigin?107:mode_==kRenderer302?113:mode_==kDeny302?109:127; }
++  std::string Payload() const { std::string bytes(1048576,'\0'); for(size_t i=0;i<bytes.size();++i) bytes[i]=static_cast<char>((i*37+Seed())%251); return bytes; }
++  const std::vector<uint64_t>& Tokens() const { return Direct()?probe_->direct_tokens:Renderer()?probe_->renderer_tokens:probe_->navigation_tokens; }
++  void CheckAuthorizationFacts() const {
++    ASSERT_EQ(1u,Tokens().size()); ASSERT_EQ(2u,probe_->authorization_facts.size());
++    EXPECT_EQ(1,probe_->reserves); EXPECT_EQ(2,probe_->authorizations);
++    const auto& initial=probe_->authorization_facts[0]; const auto& redirected=probe_->authorization_facts[1];
++    EXPECT_EQ(Tokens()[0],initial.token); EXPECT_EQ(Tokens()[0],redirected.token);
++    EXPECT_EQ(start_,initial.url); EXPECT_EQ(Post()?"POST":"GET",initial.method);
++    EXPECT_EQ(target_,redirected.url); EXPECT_EQ(FinalMethod(),redirected.method);
++  }
++  void SignalOnce() { if(!server_closed_ || extra_signaled_) return; extra_signaled_=true; SignalTestCompletion(); }
++  const Mode mode_;
++  std::shared_ptr<Probe> probe_=std::make_shared<Probe>();
++  CefScopedTempDir temp_dir_; std::unique_ptr<Server> server_;
++  CefRefPtr<CefDownloadItemCallback> controls_;
++  std::string path_,stem_,source_,start_,target_,source_host_,target_host_,source_nonce_;
++  int browser_id_=0,start_requests_=0,target_requests_=0,source_requests_=0,polls_=0,cleanup_polls_=0,denial_polls_=0;
++  bool source_ready_=false,started_=false,closing_=false,redirect_released_=false,before_=false,complete_=false;
++  bool denied_outcome_seen_=false,source_preserved_=false,failed_=false,finishing_=false;
++  bool server_initialized_=false,server_closed_=false,browser_created_=false,browser_closed_=false,extra_signaled_=false;
++  IMPLEMENT_REFCOUNTING(NativeRedirectReceiptHandler);
++};
++TEST(EchoDownloadBridge, Http302NavigationKeepsOriginalReceiptAfterClosing) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kGet302);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, Http303ChangesPostToGetOnOriginalReceiptAfterClosing) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kPost303);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, Http307CrossOriginPreservesPostBodyAndOriginalReceiptAfterClosing) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kPost307CrossOrigin);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, Http302DirectCrossOriginKeepsOriginalReceiptAfterClosing) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kDirect302CrossOrigin);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, DeniedHttpRedirectCannotDispatchTargetOrReplaceSource) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kDeny302);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, Http302RendererDownloadKeepsOriginalReceiptAfterClosing) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kRenderer302);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, DeniedHttpDirectRedirectCannotDispatchTargetOrCreateItem) {
++  CefRefPtr<NativeRedirectReceiptHandler> handler=new NativeRedirectReceiptHandler(NativeRedirectReceiptHandler::kDirectDeny302);
++  handler->ExecuteTest(); ReleaseAndWaitForDestructor(handler);
 +}
 diff --git a/tests/ceftests/echo_download_bridge_loader.cc b/tests/ceftests/echo_download_bridge_loader.cc
 new file mode 100644
