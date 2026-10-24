@@ -9114,3 +9114,47 @@ fn theme_noise_dial_starts_at_noon_and_intensity_thumb_follows_the_pointer(cx: &
     assert!((view.read_with(cx, |w, _| w.theme_editor.as_ref().unwrap().draft.intensity) - 0.25).abs() < 0.001);
     assert!((f32::from(editor.debug_bounds("theme-intensity-thumb").unwrap().center().x - p.x)).abs() < 0.01);
 }
+
+#[gpui::test]
+fn boost_library_filters_and_toggles_profile_owned_records(cx:&mut TestAppContext){
+    let (view,cx)=open(cx);
+    view.update(cx,|view,cx|{view.edit_browser(|browser|{let boosts=&mut browser.active_user_profile_mut().boosts;let id=boosts.create("https://example.com").unwrap();boosts.get_mut(id).unwrap().name="Example Boost".into();boosts.create("https://zebra.example").unwrap();});cx.notify();});
+    cx.simulate_keystrokes("cmd-shift-l");cx.run_until_parked();click(cx,"library-nav-boosts");
+    assert_eq!(cx.debug_bounds("boost-library-column").unwrap().size.width,gpui::px(304.));
+    assert_eq!(cx.debug_bounds("boost-library-row-0").unwrap().size.height,gpui::px(56.));
+    click(cx,"boost-library-toggle-0");
+    assert!(!view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().enabled));
+    click(cx,"boost-library-search");cx.simulate_input("zebra");cx.run_until_parked();
+    assert!(cx.debug_bounds("boost-library-row-0").is_some());
+    click(cx,"boost-library-toggle-0");
+    assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().all(|boost|!boost.enabled)));
+}
+#[gpui::test]
+fn boost_library_preview_edits_canonical_profile_and_targets_preview_renderer(cx:&mut TestAppContext){
+    let (view,cx,fake)=open_pages(cx);
+    view.update(cx,|view,cx|{view.edit_browser(|browser|{browser.active_user_profile_mut().boosts.create("https://example.com");});cx.notify();});
+    cx.simulate_keystrokes("cmd-shift-l");cx.run_until_parked();click(cx,"library-nav-boosts");click(cx,"boost-library-row-0");
+    let (preview,mut peek)=peek_window(&view,cx);
+    let child=fake.0.borrow().forks.last().unwrap().clone();
+    let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-size");
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.size),1);
+    assert_eq!(preview.read_with(&peek,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.size),1);
+    click(&mut panel,"boost-zap");
+    fake.send(cx,Event::BoostZap{view:page(1),selector:"#wrong-host".into()});cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().zap_selectors.is_empty()));
+    child.send(&mut peek,Event::BoostZap{view:page(1),selector:"#preview-advert".into()});cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().zap_selectors.clone()),vec!["#preview-advert"]);
+    click(&mut panel,"boost-zap");panel.simulate_keystrokes("escape");peek.simulate_keystrokes("cmd-w");peek.run_until_parked();cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.peek_child.is_none()));
+}
+
+#[gpui::test]
+fn zap_done_bar_stops_picker_and_closes_its_native_child(cx:&mut TestAppContext){
+    let (view,cx,_)=open_pages(cx);
+    view.update(cx,|view,cx|view.new_boost(cx));let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-zap");
+    let editor=view.read_with(cx,|view,_|view.boost_editor.unwrap());
+    let done=editor.read_with(cx,|editor,_|editor.picker_bar).unwrap().unwrap();
+    let mut bar=VisualTestContext::from_window(done.into(),&cx.cx);bar.run_until_parked();click(&mut bar,"boost-picker-done");cx.run_until_parked();
+    assert!(!editor.read_with(cx,|editor,_|editor.picking).unwrap());
+    assert!(editor.read_with(cx,|editor,_|editor.picker_bar.is_none()).unwrap());
+}

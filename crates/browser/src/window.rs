@@ -418,6 +418,7 @@ pub enum Command {
     ViewArchive,
     ViewHistory,
     OpenLibrary,
+    ViewBoosts,
     ManageSpaces,
     PrintPage,
     ViewDownloads,
@@ -1163,7 +1164,8 @@ impl BrowserWindow {
                 }
                 Event::BoostZap { selector, .. } => {
                     if let (Some(identity),Some(editor))=(identity,self.boost_editor) {
-                        cx.defer(move |cx| { let _=editor.update(cx,|editor,_,cx|editor.receive_zap(identity.profile,identity.tab,selector,cx)); });
+                        let source=self.main_window.window_id();
+                        cx.defer(move |cx| { let _=editor.update(cx,|editor,_,cx|editor.receive_zap(source,identity.profile,identity.tab,selector,cx)); });
                     }
                 }
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
@@ -1628,6 +1630,7 @@ impl BrowserWindow {
                 (Command::ViewHistory, "View History", "view history|open history|browsing history", true),
                 (Command::OpenLibrary, "Open Library", "open library|view library|library", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ManageSpaces, "Manage Spaces", "manage spaces|space management|organize|toggle space manager|view spaces", !self.browser.is_private() && !self.browser.is_blank()),
+                (Command::ViewBoosts, "View Boosts", "view boosts|boosts", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewDownloads, "View Downloads", "view downloads|downloads", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
@@ -1974,6 +1977,7 @@ impl BrowserWindow {
             Command::OpenLibrary => self.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx),
             Command::ManageSpaces => self.open_library_spaces(cx),
             Command::ViewDownloads => self.open_library_downloads(cx),
+            Command::ViewBoosts => self.open_library_boosts(cx),
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),

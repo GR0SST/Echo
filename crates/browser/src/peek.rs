@@ -39,7 +39,7 @@ impl BrowserWindow {
         let bounds = window.bounds();
         let origin = self.native_view.and_then(native::pointer_in_view)
             .map(|(x,y)| point(px(x),px(y))).unwrap_or_else(|| window.mouse_position());
-        let sidebar = self.sidebar_width() * self.sidebar_amount();
+        let sidebar = if self.sidebar_navigation.controller.selected()==crate::sidebar_pages::SidebarPage::Library {0.}else{self.sidebar_width() * self.sidebar_amount()};
         let parent = self.native_view;
         let owner = cx.weak_entity();
         if let Some(pages) = &self.pages { pages.borrow_mut().request_ui_focus(); }
@@ -78,7 +78,7 @@ impl BrowserWindow {
     pub(crate) fn resize_peek(&self, window: &Window, cx: &mut Context<Self>) {
         let Some(child) = self.peek_child else { return; };
         let size = window.viewport_size();
-        let sidebar = self.sidebar_width() * self.sidebar_amount();
+        let sidebar = if self.sidebar_navigation.controller.selected()==crate::sidebar_pages::SidebarPage::Library {0.}else{self.sidebar_width() * self.sidebar_amount()};
         cx.defer(move |cx| {
             let _ = child.update(cx, |view, window, cx| {
                 let Some(state) = &mut view.peek_owner else { return; };

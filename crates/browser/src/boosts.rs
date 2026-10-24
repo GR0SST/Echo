@@ -16,6 +16,7 @@ use gpui::{
 use std::{cell::Cell, rc::Rc};
 
 mod advanced;
+mod picker_bar;
 const HEIGHT: f32 = 590.;
 const SIMPLE_WIDTH: f32 = 184.;
 const CODE_WIDTH: f32 = 480.;
@@ -52,6 +53,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 
 pub(crate) struct BoostEditor {
     browser: WeakEntity<BrowserWindow>,
+    page_browser: WeakEntity<BrowserWindow>,
     pub profile: UserProfileId,
     pub id: BoostId,
     pub tab: TabId,
@@ -60,6 +62,7 @@ pub(crate) struct BoostEditor {
     javascript: bool,
     menu: bool,
     advanced: Option<WindowHandle<advanced::Advanced>>,
+    pub(crate) picker_bar: Option<WindowHandle<picker_bar::PickerBar>>,
     css: Entity<TextInput>,
     js: Entity<TextInput>,
     focus: gpui::FocusHandle,
@@ -135,25 +138,50 @@ impl BrowserWindow {
         tab: TabId,
         cx: &mut Context<Self>,
     ) {
+        self.open_boost_editor_on(profile, id, tab, cx.weak_entity(), cx);
+    }
+    pub(crate) fn open_boost_editor_on(
+        &mut self,
+        profile: UserProfileId,
+        id: BoostId,
+        tab: TabId,
+        page_browser: WeakEntity<BrowserWindow>,
+        cx: &mut Context<Self>,
+    ) {
         self.close_site_controls(cx);
         self.close_new_menu(cx);
         self.close_command_bar(cx);
         if let Some(old) = self.boost_editor.take() {
-            if let Ok(tab) = old.update(cx, |editor, window, cx| {
+            if let Ok((tab, page)) = old.update(cx, |editor, window, cx| {
                 editor.close_advanced(cx);
                 editor.picking = false;
                 window.remove_window();
-                editor.tab
+                (editor.tab, editor.page_browser.clone())
             }) {
-                if let Some(pages) = &self.pages {
-                    pages.borrow_mut().set_boost_picker(tab, false);
+                if page.entity_id() == cx.entity().entity_id() {
+                    if let Some(pages) = &self.pages {
+                        pages.borrow_mut().set_boost_picker(tab, false);
+                    }
+                } else {
+                    let _ = page.update(cx, |page, _| {
+                        if let Some(pages) = &page.pages {
+                            pages.borrow_mut().set_boost_picker(tab, false);
+                        }
+                    });
                 }
             }
         }
         self.sync_boosts(cx);
         let owner = cx.entity().downgrade();
         let main = self.main_window;
-        let parent = self.native_view;
+        let parent = if page_browser.entity_id() == cx.entity().entity_id() {
+            self.native_view
+        } else {
+            page_browser
+                .read_with(cx, |page, _| page.native_view)
+                .ok()
+                .flatten()
+        };
         cx.defer(move |cx| {
             let Ok(bounds) = main.update(cx, |_, window, _| window.bounds()) else {
                 return;
@@ -179,8 +207,19 @@ impl BrowserWindow {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
                 }
-                cx.new(|cx| BoostEditor::new(owner.clone(), profile, id, tab, window, cx))
+                cx.new(|cx| {
+                    BoostEditor::new(
+                        owner.clone(),
+                        page_browser.clone(),
+                        profile,
+                        id,
+                        tab,
+                        window,
+                        cx,
+                    )
+                })
             }) {
+                let _ = page_browser.update(cx, |page, _| page.boost_editor = Some(handle));
                 let _ = owner.update(cx, |this, cx| {
                     this.boost_editor = Some(handle);
                     cx.notify();
@@ -207,6 +246,7 @@ impl BrowserWindow {
 impl BoostEditor {
     fn new(
         browser: WeakEntity<BrowserWindow>,
+        page_browser: WeakEntity<BrowserWindow>,
         profile: UserProfileId,
         id: BoostId,
         tab: TabId,
@@ -247,12 +287,16 @@ impl BoostEditor {
             subscriptions.push(cx.observe(&owner, |_, _, cx| cx.notify()));
         }
         subscriptions.push(cx.on_release(|editor, cx| {
+            if let Some(handle) = editor.picker_bar.take() {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
             if let Some(window) = editor.advanced.take() {
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
         }));
         Self {
             browser,
+            page_browser,
             profile,
             id,
             tab,
@@ -261,6 +305,7 @@ impl BoostEditor {
             javascript: false,
             menu: false,
             advanced: None,
+            picker_bar: None,
             css,
             js,
             focus,
@@ -285,42 +330,82 @@ impl BoostEditor {
     fn edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Boost)) {
         let profile = self.profile;
         let id = self.id;
-        let _ = self.browser.update(cx, |browser, cx| {
-            browser.edit_browser(|model| {
-                if let Some(boost) = model
-                    .user_profile_mut(profile)
-                    .and_then(|profile| profile.boosts.get_mut(id))
-                {
-                    edit(boost);
-                }
-            });
-            browser.sync_boosts(cx);
-        });
+        let registry = self
+            .browser
+            .update(cx, |browser, cx| {
+                browser.edit_browser(|model| {
+                    if let Some(boost) = model
+                        .user_profile_mut(profile)
+                        .and_then(|profile| profile.boosts.get_mut(id))
+                    {
+                        edit(boost);
+                    }
+                });
+                browser.sync_boosts(cx);
+                browser
+                    .browser
+                    .user_profile(profile)
+                    .map(|profile| profile.boosts.clone())
+            })
+            .ok()
+            .flatten();
+        if self.page_browser.entity_id() != self.browser.entity_id() {
+            if let Some(registry) = registry {
+                let _ = self.page_browser.update(cx, |page, cx| {
+                    page.edit_browser(|browser| {
+                        if let Some(profile) = browser.user_profile_mut(profile) {
+                            profile.boosts = registry;
+                        }
+                    });
+                    page.sync_boosts(cx);
+                });
+            }
+        }
         cx.notify();
     }
     pub(crate) fn stop_picker(&mut self, cx: &mut Context<Self>) {
         self.picking = false;
         self.picker_engine(false, cx);
     }
-    fn picker_engine(&self, enabled: bool, cx: &mut Context<Self>) {
-        let _ = self.browser.update(cx, |browser, _| {
+    fn picker_engine(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.picker_bar(enabled, cx);
+        let _ = self.page_browser.update(cx, |browser, _| {
             if let Some(pages) = &browser.pages {
                 pages.borrow_mut().set_boost_picker(self.tab, enabled);
             }
         });
         if enabled {
-            let owner=self.browser.clone();let main=owner.read_with(cx,|browser,_|browser.main_window).ok();
-            cx.defer(move|cx|{if let Some(main)=main{let _=main.update(cx,|_,window,_|window.activate_window());}let _=owner.update(cx,|browser,_|{if let Some(pages)=&browser.pages{pages.borrow_mut().focus_shown();}});});
+            let owner = self.page_browser.clone();
+            let main = owner.read_with(cx, |browser, _| browser.main_window).ok();
+            cx.defer(move |cx| {
+                if let Some(main) = main {
+                    let _ = main.update(cx, |_, window, _| window.activate_window());
+                }
+                let _ = owner.update(cx, |browser, _| {
+                    if let Some(pages) = &browser.pages {
+                        pages.borrow_mut().focus_shown();
+                    }
+                });
+            });
         }
     }
     pub(crate) fn receive_zap(
         &mut self,
+        source: gpui::WindowId,
         profile: UserProfileId,
         tab: TabId,
         selector: String,
         cx: &mut Context<Self>,
     ) {
-        if !self.picking || profile != self.profile || tab != self.tab {
+        if !self.picking
+            || profile != self.profile
+            || tab != self.tab
+            || self
+                .page_browser
+                .read_with(cx, |page, _| page.main_window.window_id())
+                .ok()
+                != Some(source)
+        {
             return;
         }
         if selector == "\u{1b}" {
@@ -351,6 +436,11 @@ impl BoostEditor {
             browser.boost_editor = None;
             cx.notify();
         });
+        if self.page_browser.entity_id() != self.browser.entity_id() {
+            let _ = self
+                .page_browser
+                .update(cx, |page, _| page.boost_editor = None);
+        }
         window.remove_window();
     }
     fn code_mode(&mut self, code: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -374,7 +464,8 @@ impl BoostEditor {
         };
         let editor = cx.entity();
         let owner = self.browser.clone();
-        let parent = owner
+        let page_browser = self.page_browser.clone();
+        let parent = page_browser
             .read_with(cx, |browser, _| browser.native_view)
             .ok()
             .flatten();
@@ -409,6 +500,7 @@ impl BoostEditor {
                 focus.focus(window);
                 editor
             }) {
+                let _ = page_browser.update(cx, |page, _| page.boost_editor = Some(handle));
                 let _ = owner.update(cx, |browser, cx| {
                     browser.boost_editor = Some(handle);
                     cx.notify();
@@ -457,6 +549,31 @@ impl BoostEditor {
                     if let Ok(path) = path.build() {
                         window.paint_path(path, window.text_style().color);
                     }
+                }
+            },
+        )
+        .size(px(18.))
+        .into_any_element()
+    }
+    fn prohibition() -> AnyElement {
+        gpui::canvas(
+            |_, _, _| (),
+            |bounds, _, window, _| {
+                let mut path = gpui::PathBuilder::stroke(px(1.3));
+                for index in 0..=32 {
+                    let angle = index as f32 * std::f32::consts::TAU / 32.;
+                    let at =
+                        bounds.origin + point(px(9. + 6. * angle.cos()), px(9. + 6. * angle.sin()));
+                    if index == 0 {
+                        path.move_to(at);
+                    } else {
+                        path.line_to(at);
+                    }
+                }
+                path.move_to(bounds.origin + point(px(4.8), px(4.8)));
+                path.line_to(bounds.origin + point(px(13.2), px(13.2)));
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, rgb(0xb4b4b8));
                 }
             },
         )
@@ -637,7 +754,7 @@ impl Render for BoostEditor {
                                 .child(
                                     Self::control("boost-code-picker")
                                         .size(px(38.))
-                                        .child(icons::ionicon("eyedrop", 18., 1.))
+                                        .child(icons::ionicon("eyedrop-outline", 18., 1.))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.picking = !this.picking;
                                             this.picker_engine(this.picking, cx);
@@ -647,7 +764,7 @@ impl Render for BoostEditor {
                                 .child(
                                     Self::control("boost-code-undo")
                                         .size(px(38.))
-                                        .child(icons::ionicon("hammer", 18., 1.))
+                                        .child(icons::ionicon("hammer-outline", 18., 1.))
                                         .on_click(cx.listener(|this, _, _, cx| this.undo_zap(cx))),
                                 ),
                         )
@@ -658,7 +775,7 @@ impl Render for BoostEditor {
                                     .h(px(30.))
                                     .child("Refresh to Run")
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        let _ = this.browser.update(cx, |browser, _| {
+                                        let _ = this.page_browser.update(cx, |browser, _| {
                                             if let Some(pages) = &browser.pages {
                                                 pages.borrow_mut().reload(this.tab);
                                             }
@@ -699,7 +816,8 @@ impl Render for BoostEditor {
                                 .gap(px(4.))
                                 .items_center()
                                 .cursor_pointer()
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_size(px(13.))
                                 .child(
                                     boost
                                         .as_ref()
@@ -772,17 +890,19 @@ impl Render for BoostEditor {
                                         .when(index == 1 && self.advanced.is_some(), |el| {
                                             el.bg(rgb(0x333333)).text_color(rgb(0xffffff))
                                         })
-                                        .child(icons::ionicon(
-                                            if index == 0 {
-                                                "bulb-outline"
-                                            } else if index == 1 {
-                                                "options-outline"
-                                            } else {
-                                                "close-circle-outline"
-                                            },
-                                            18.,
-                                            1.,
-                                        ))
+                                        .child(if index == 2 {
+                                            Self::prohibition()
+                                        } else {
+                                            icons::ionicon(
+                                                if index == 0 {
+                                                    "bulb-outline"
+                                                } else {
+                                                    "options-outline"
+                                                },
+                                                18.,
+                                                1.,
+                                            )
+                                        })
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             if index == 1 {
                                                 this.toggle_advanced(window, cx);

@@ -42,6 +42,7 @@ pub(crate) struct SidebarNavigation {
     pub(crate) library_origin: SpaceId,
     pub(crate) form: Option<Entity<SpaceCreationView>>,
     pub(crate) media: Option<Entity<library::media::MediaView>>,
+    boosts:Option<Entity<crate::boost_library::BoostLibrary>>,
     media_events: Option<Subscription>,
     pub(crate) media_search_focus: bool,
     pub(crate) downloads: crate::library_downloads::DownloadsNavigation,
@@ -67,6 +68,7 @@ impl SidebarNavigation {
             library_origin: browser.space().id,
             form: None,
             media: None,
+            boosts:None,
             media_events: None,
             media_search_focus: false,
             downloads: Default::default(),
@@ -639,7 +641,7 @@ impl BrowserWindow {
             return;
         }
         match intent {
-            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces)) => {
+            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces | LibrarySection::Boosts)) => {
                 self.retire_library_downloads_route();
                 self.invalidate_sidebar_focus();
                 self.sidebar_navigation.library_section = section;
@@ -667,6 +669,16 @@ impl BrowserWindow {
             }
             _ => {}
         }
+    }
+    pub(crate) fn open_library_boosts(&mut self,cx:&mut Context<Self>){
+        if crate::quit::is_quitting()||self.browser.is_private()||self.browser.is_blank(){return;}
+        self.select_sidebar_page(SidebarPage::Library,cx);
+        self.retire_library_downloads_route();
+        self.invalidate_sidebar_focus();
+        self.sidebar_navigation.library_section=LibrarySection::Boosts;
+        self.sync_navigation_visibility();
+        self.defer_sidebar_focus(cx);
+        cx.notify();
     }
     pub(crate) fn render_library_host(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(projection) =
@@ -733,6 +745,12 @@ impl BrowserWindow {
         if section == LibrarySection::Downloads {
             empty = self.sidebar_navigation.downloads.host.as_ref().map(|host| host.view().into_any_element());
         }
+        if section==LibrarySection::Boosts {
+            let owner=cx.weak_entity();
+            let view=self.sidebar_navigation.boosts.get_or_insert_with(||cx.new(|cx|crate::boost_library::BoostLibrary::new(owner,colors,cx))).clone();
+            view.update(cx,|view,_|view.set_colors(colors));
+            empty=Some(view.into_any_element());
+        }
         library::render_library(
             &projection,
             section,
@@ -742,6 +760,7 @@ impl BrowserWindow {
                 profile: true,
                 media: true,
                 downloads: true,
+                boosts: true,
                 ..Default::default()
             },
             events,

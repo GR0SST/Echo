@@ -11,6 +11,7 @@ mod history;
 mod tab_menu;
 mod site_controls;
 mod boosts;
+mod boost_library;
 mod panel;
 mod material;
 mod favicon_style;

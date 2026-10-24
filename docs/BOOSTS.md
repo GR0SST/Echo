@@ -35,9 +35,18 @@ Browser events retain page/profile ownership before modifying a Boost; Undo
 removes the last Zap selector. The native request handler sends the current
 profile configuration again before navigation and when a render view is ready.
 
+## Library
+
+The Boosts route uses the reference's 304 px searchable column and 56 px rows.
+Hover reveals a per-record toggle. Opening a record creates an independent site
+preview with the captured profile's storage and Boosts; the floating editor
+writes to the canonical profile while picker events are checked against the
+preview's window, profile and tab. Preview edits are reflected immediately and
+survive closing the preview. The preview does not allocate a regular tab.
+
 ## Remaining work
 
-Library management is the next UI piece. Related-element Zap selector editing
+Library rename/delete, related-element Zap selector editing
 and full color remapping fidelity remain unfinished. Constructed stylesheets do
 not support CSS `@import` rules. Renderer replacement synchronization has native
 hooks but still needs dedicated crash/recovery acceptance coverage.

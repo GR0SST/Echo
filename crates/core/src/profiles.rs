@@ -231,6 +231,7 @@ impl Browser {
             UserProfile::empty(id, source.name.clone(), source.archive_after),
         );
         blank.profiles.get_mut(&id).unwrap().settings = source.settings.clone();
+        blank.profiles.get_mut(&id).unwrap().boosts = source.boosts.clone();
         blank.spaces[0].user_profile_id = id;
         blank.blank_source_user_profile_id = Some(id);
         blank.next_user_profile_id = self.next_user_profile_id;
