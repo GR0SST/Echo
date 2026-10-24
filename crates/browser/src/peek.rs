@@ -201,6 +201,7 @@ impl BrowserWindow {
         let Some(state) = &self.peek_owner else { return; };
         let Some(tab) = self.browser.active_tab().cloned() else { return; };
         let pages = self.pages.clone();
+        let favicon = self.browser.favicon(self.browser.active_user_profile_id(), &tab.url).map(Vec::from);
         let owner = state.owner.clone();
         let child = cx.weak_entity();
         cx.defer(move |cx| {
@@ -215,6 +216,9 @@ impl BrowserWindow {
                     view.cancel_split_draft();
                     cx.notify();
                     return false;
+                }
+                if let Some(png) = &favicon {
+                    view.edit_browser(|browser| { browser.cache_favicon(browser.active_user_profile_id(), &tab.url, png.clone()); });
                 }
                 view.split_draft.take();
                 cx.notify();

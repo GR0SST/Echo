@@ -8996,9 +8996,13 @@ fn peek_split_fills_a_new_pane_and_keeps_pinned_original(cx: &mut TestAppContext
     cx.run_until_parked();
     fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/split".into() });
     let (_, mut peek) = peek_window(&view, cx);
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    let icon = include_bytes!("../testdata/favicon.png").to_vec();
+    child.send(&mut peek, Event::Favicon { view: page(1), page_url: "https://peek.example/split".into(), png: icon.clone() });
     let bounds = peek.debug_bounds("peek-split").unwrap();
     peek.simulate_click(bounds.center(), Modifiers::none()); peek.run_until_parked(); cx.run_until_parked();
     view.read_with(cx, |view, _| {
+        assert_eq!(view.browser.favicon(view.browser.active_user_profile_id(), "https://peek.example/split"), Some(icon.as_slice()));
         assert!(view.peek_child.is_none()); assert!(view.split_draft.is_none());
         assert!(view.browser.space().pinned.iter().any(|tab| tab.id == original));
         assert_eq!(view.browser.active_split().unwrap().panes.len(), 2);
@@ -9332,8 +9336,12 @@ fn peek_expansion_adopts_the_renderer_and_preserves_navigation_history(cx: &mut 
     let (_, mut peek) = peek_window(&owner, cx);
     let child = fake.0.borrow().forks.last().unwrap().clone();
     child.send(&mut peek, Event::LoadingChanged { view: page(1), loading: false, can_go_back: true, can_go_forward: false });
+    let icon = include_bytes!("../testdata/favicon.png").to_vec();
+    child.send(&mut peek, Event::Favicon { view: page(1), page_url: "https://peek.example/history".into(), png: icon.clone() });
+    assert!(owner.read_with(cx, |view, _| view.browser.favicon(view.browser.active_user_profile_id(), "https://peek.example/history").is_none()));
     fake.take_calls(); child.take_calls();
     click(&mut peek, "peek-expand"); cx.run_until_parked();
+    owner.read_with(cx, |view, _| assert_eq!(view.browser.favicon(view.browser.active_user_profile_id(), "https://peek.example/history"), Some(icon.as_slice())));
     let calls = fake.take_calls();
     let imported = calls.iter().find_map(|call| if let Call::Transfer(1, id) = call { Some(*id) } else { None }).expect("same renderer imported");
     assert!(!calls.iter().chain(child.take_calls().iter()).any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));
@@ -9353,8 +9361,12 @@ fn little_promotion_adopts_its_live_renderer_without_a_second_load(cx: &mut Test
     bar(&little, &mut compact).simulate_keystrokes("enter"); compact.run_until_parked();
     let child = fake.0.borrow().forks.last().unwrap().clone();
     child.send(&mut compact, Event::LoadingChanged { view: page(1), loading: false, can_go_back: true, can_go_forward: true });
+    let icon = include_bytes!("../testdata/favicon.png").to_vec();
+    child.send(&mut compact, Event::Favicon { view: page(1), page_url: "https://little.example/live".into(), png: icon.clone() });
+    assert!(owner.read_with(cx, |view, _| view.browser.favicon(view.browser.active_user_profile_id(), "https://little.example/live").is_none()));
     fake.take_calls(); child.take_calls();
     compact.simulate_keystrokes("cmd-o"); compact.run_until_parked(); cx.run_until_parked();
+    owner.read_with(cx, |view, _| assert_eq!(view.browser.favicon(view.browser.active_user_profile_id(), "https://little.example/live"), Some(icon.as_slice())));
     let calls = fake.take_calls();
     assert!(calls.iter().any(|call| matches!(call, Call::Transfer(1, _))));
     assert!(!calls.iter().chain(child.take_calls().iter()).any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..))));

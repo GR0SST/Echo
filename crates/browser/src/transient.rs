@@ -180,6 +180,7 @@ impl BrowserWindow {
         let source = transient.source.clone();
         let lookup_pages = self.pages.clone();
         let lookup_profile = self.browser.active_user_profile_id();
+        let favicon = self.browser.favicon(lookup_profile, &tab.url).map(Vec::from);
         let space = destination.unwrap_or_else(|| self.routed_promotion_space());
         let roots: Vec<_> = cx.windows().into_iter().filter_map(|w| w.downcast::<BrowserWindow>()).collect();
         let target = roots.into_iter().find(|handle| handle.read(cx).is_ok_and(|view|
@@ -210,7 +211,9 @@ impl BrowserWindow {
                         let adopted = browser.adopt_lookup_tab(tab.clone(), SystemTime::now(), |browser, id| {
                             transfer_lookup_document(lookup_pages.as_ref(), tab.id, pages.as_ref(), id, browser)
                         }).is_some();
-                        if !adopted { browser.switch_space(previous); }
+                        if adopted {
+                            if let Some(png) = &favicon { browser.cache_favicon(lookup_profile, &tab.url, png.clone()); }
+                        } else { browser.switch_space(previous); }
                         adopted
                     });
                     if !moved {
