@@ -609,6 +609,7 @@ pub struct BrowserWindow {
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     pub(crate) tab_drag_active: bool,
+    tab_drag_press: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_drop: Option<crate::split_drop::SplitDropPreview>,
     pub(crate) split_drop_generation: u64,
@@ -845,6 +846,7 @@ impl BrowserWindow {
             pinned_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
             tab_drag_active: false,
+            tab_drag_press: Rc::new(Cell::new(None)),
             space_drag_hover: None,
             split_drop: None,
             split_drop_generation: 0,
@@ -2606,13 +2608,22 @@ impl BrowserWindow {
         let move_edge = edge.clone();
         let paint_edge = edge.clone();
         let drag_owner = cx.entity().downgrade();
+        let drag_row_width = (self.sidebar_width() - 16.).max(1.);
+        let drag_press = self.tab_drag_press.clone();
+        let record_drag_press = drag_press.clone();
 
         div()
             .id(("tab", key))
             .relative().child(self.track_icon_anchor(crate::icons::IconTarget::Tab(id)))
             .debug_selector(|| self.sidebar_debug_name((|| format!("tab-{key}"))()))
             .group(group.clone())
-            .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
+            .on_mouse_down(gpui::MouseButton::Left, move |event, _, _| record_drag_press.set(Some(event.position)))
+            .on_drag(self.tab_drag(tab), move |drag, offset, window, cx| {
+                // GPUI reports the first move past its threshold, rather than
+                // the press. Preserve the original grab point on the larger card.
+                let offset = offset - (window.mouse_position() - drag_press.get().unwrap_or(window.mouse_position()));
+                drag.start_at(drag_owner.clone(),offset,drag_row_width,if segmented {36.} else {SIDEBAR_ROW_HEIGHT},cx)
+            })
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
             .on_drag_move::<crate::tab_drag::TabDrag>(move |event, _, _| { if drag_moves_active { move_edge.set(event.event.position.y > event.bounds.center().y); } })
             .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {

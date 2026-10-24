@@ -8230,7 +8230,18 @@ fn edge_drag_previews_without_reflow_and_commits_the_existing_tab(cx: &mut TestA
         assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout(),before);
         assert!(w.browser.active_split().is_none());
     });
-    finish_sidebar_drag(cx,edge);
+    let handle=view.read_with(cx,|w,_|w.split_drop.as_ref().unwrap().overlay.unwrap());
+    let mut popup=VisualTestContext::from_window(handle.into(),&cx.cx);
+    popup.run_until_parked();
+    let card=popup.debug_bounds("split-drag-card").unwrap();
+    assert_eq!(card.size,gpui::size(gpui::px(128.),gpui::px(250.)));
+    // The centered press stays centered even after crossing the drag threshold.
+    assert_eq!(card.origin,edge+gpui::point(gpui::px(136.),gpui::px(80.)));
+    let moved=edge+gpui::point(gpui::px(0.),gpui::px(20.));
+    cx.simulate_mouse_move(moved,gpui::MouseButton::Left,Modifiers::none());cx.run_until_parked();popup.run_until_parked();
+    let next=popup.debug_bounds("split-drag-card").unwrap();
+    assert_eq!(next.origin-card.origin,gpui::point(gpui::px(0.),gpui::px(20.)));
+    finish_sidebar_drag(cx,moved);
     view.read_with(cx, |w, _| {
         assert!(w.split_drop.is_none() && w.command_bar.is_none());
         let split=w.browser.active_split().unwrap();

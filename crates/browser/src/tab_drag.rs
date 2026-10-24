@@ -8,6 +8,7 @@ use std::time::SystemTime;
 #[derive(Clone)]
 pub(crate) struct TabDrag {
     pub id: TabId,
+    pub(crate) card_hotspot: std::rc::Rc<std::cell::Cell<gpui::Point<gpui::Pixels>>>,
     source: gpui::AnyWindowHandle,
     workspace: crate::profile::ProfileHandle,
     profile: browser_core::UserProfileId,
@@ -20,6 +21,10 @@ pub(crate) struct TabDrag {
 }
 
 impl TabDrag {
+    pub(crate) fn start_at(&self, owner: gpui::WeakEntity<BrowserWindow>, offset: gpui::Point<gpui::Pixels>, width: f32, height: f32, cx: &mut gpui::App) -> gpui::Entity<Self> {
+        self.card_hotspot.set(gpui::point(px((f32::from(offset.x) / width).clamp(0.,1.) * 128.), px((f32::from(offset.y) / height).clamp(0.,1.) * 250. - 5.)));
+        self.start(owner,cx)
+    }
     pub(crate) fn start(
         &self,
         owner: gpui::WeakEntity<BrowserWindow>,
@@ -204,6 +209,7 @@ impl BrowserWindow {
                     .map_or(tab.id, |split| split.active)
             });
         TabDrag {
+            card_hotspot: std::rc::Rc::new(std::cell::Cell::new(gpui::point(px(64.),px(120.)))),
             source: self.main_window,
             workspace: self.profile.handle.clone(),
             profile: self.browser.user_profile_id_for_tab(tab.id).expect("dragged tab owner"),
