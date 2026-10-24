@@ -556,7 +556,7 @@ impl Render for Overlay {
                     OverlayKind::LinkStatus => browser.render_link_status(window),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
-                    OverlayKind::TabMenu => browser.render_tab_menu(cx),
+                    OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
                     OverlayKind::SiteControls => browser.render_site_controls(cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },

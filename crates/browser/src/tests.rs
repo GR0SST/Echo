@@ -8067,6 +8067,35 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
 
 
 #[gpui::test]
+fn sidebar_submenu_overlaps_its_parent_and_flips_using_its_measured_width(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    right_click(cx, "tab-4");
+    let mut menu = tab_menu(&view, cx);
+    click(&mut menu, "tab-menu-edit-pinned-page");
+    let parent = menu.debug_bounds("tab-context-menu").unwrap();
+    let child = menu.debug_bounds("tab-context-submenu").unwrap();
+    assert_eq!(parent.size.height, gpui::px(307.));
+    assert_eq!(child.origin.x, parent.right() - gpui::px(5.));
+    assert_eq!(child.origin.y, parent.top() + gpui::px(155.));
+    assert_eq!(child.size.height, gpui::px(58.));
+    assert_eq!(child.size.width, gpui::px(232.));
+    menu.simulate_keystrokes("escape");
+    let id = view.read_with(cx, |w, _| w.browser.space().pinned[0].id);
+    let viewport = cx.update(|window, _| window.viewport_size());
+    cx.update(|window, app| view.update(app, |w, cx| {
+        w.open_tab_menu(id, gpui::point(viewport.width - gpui::px(10.), viewport.height - gpui::px(10.)), window, cx);
+    }));
+    cx.run_until_parked();
+    let mut menu = tab_menu(&view, cx);
+    click(&mut menu, "tab-menu-edit-pinned-page");
+    let parent = menu.debug_bounds("tab-context-menu").unwrap();
+    let child = menu.debug_bounds("tab-context-submenu").unwrap();
+    assert_eq!(child.right(), parent.left() + gpui::px(5.));
+    assert!(parent.right() <= viewport.width - gpui::px(8.));
+    assert!(child.bottom() <= viewport.height - gpui::px(8.));
+}
+
+#[gpui::test]
 fn ordinary_sidebar_menu_widths_match_arc_today_and_pinned(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     right_click(cx, "tab-8");

@@ -11,16 +11,14 @@ use gpui::{
 use std::{cell::Cell, rc::Rc};
 
 const CONTEXT: &str = "TabContextMenu";
-/// Used only to keep a menu inside the window before it is measured.
-const ESTIMATED_WIDTH: f32 = 260.0;
 const ROW_HEIGHT: f32 = 24.0;
 const SEPARATOR_HEIGHT: f32 = 11.0;
 const PADDING: f32 = 5.0;
 /// Text starts here; a checkmark column moves it right.
 const TEXT_INSET: f32 = 16.0;
 const CHECK_INSET: f32 = 31.0;
-/// Gap between a menu and its submenu, so the submenu never covers it.
-const SUBMENU_GAP: f32 = 2.0;
+/// Native menus overlap their parent frame without covering its row text.
+const SUBMENU_OVERLAP: f32 = 5.0;
 const MIN_WIDTH: f32 = 180.0;
 actions!(tab_menu, [Dismiss, Next, Previous, Confirm, OpenSubmenu, CloseSubmenu]);
 
@@ -46,7 +44,8 @@ pub(crate) struct TabMenu {
     pub submenu: Option<usize>,
     pub sub_selected: Option<usize>,
     max_height: Pixels,
-    window_width: Pixels,
+    viewport: gpui::Size<Pixels>,
+    width: Pixels,
     scroll: gpui::ScrollHandle,
     pane: bool,
     backdrop: [Rc<Cell<bool>>; 2],
@@ -100,10 +99,11 @@ pub(crate) struct Item {
     /// The split pane the command acts on, instead of the menu's target.
     pub pane: Option<TabId>,
     pub submenu: Vec<Entry>,
+    submenu_width: Option<f32>,
 }
 
 pub(crate) fn item(label: impl Into<SharedString>, command: Command) -> Item {
-    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, pane: None, submenu: Vec::new() }
+    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, pane: None, submenu: Vec::new(), submenu_width: None }
 }
 
 /// A row the reference has whose action is not built yet.
@@ -118,6 +118,7 @@ impl Item {
     pub(crate) fn icon(mut self, tab: TabId) -> Self { self.icon = Some(tab); self }
     pub(crate) fn pane(mut self, tab: TabId) -> Self { self.pane = Some(tab); self }
     pub(crate) fn submenu(mut self, entries: Vec<Entry>) -> Self { self.submenu = entries; self }
+    fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
     fn selector(&self) -> String {
         match (self.command, self.submenu.is_empty()) {
             (Some(command), true) => format!("tab-menu-{}", command.selector()),
@@ -196,7 +197,9 @@ impl BrowserWindow {
         self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { target, selected: None, submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), window_width: window.bounds().size.width, scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        self.tab_menu = Some(TabMenu { target, selected: None, submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        let width = self.menu_level_width(&self.menu_entries(), false, window);
+        if let Some(menu) = &mut self.tab_menu { menu.width = width; }
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -209,9 +212,9 @@ impl BrowserWindow {
                 let height = px(entries_height(&this.menu_entries())).min((bounds.size.height - px(16.)).max(px(32.)));
                 if let Some(menu) = &mut this.tab_menu {
                     menu.max_height = (bounds.size.height - px(16.)).max(px(32.));
-                    menu.window_width = bounds.size.width;
-                    let at = position + (origin - bounds.origin);
-                    menu.position = point(at.x.clamp(px(8.), (bounds.size.width - px(ESTIMATED_WIDTH + 8.)).max(px(8.))), at.y.clamp(px(8.), (bounds.size.height - height - px(8.)).max(px(8.))));
+                    menu.viewport = bounds.size;
+                    let at = position + point(px(1.), px(-6.)) + (origin - bounds.origin);
+                    menu.position = point(at.x.clamp(px(8.), (bounds.size.width - menu.width - px(8.)).max(px(8.))), at.y.clamp(px(8.), (bounds.size.height - height - px(8.)).max(px(8.))));
                 }
             });
             let options = WindowOptions {
@@ -233,6 +236,8 @@ impl BrowserWindow {
         if self.browser.split_for(tab).is_none() { return; }
         self.open_tab_menu(tab, position, window, cx);
         if let Some(menu) = &mut self.tab_menu { menu.pane = true; }
+        let width = self.menu_level_width(&self.menu_entries(), false, window);
+        if let Some(menu) = &mut self.tab_menu { menu.width = width; }
         cx.notify();
     }
 
@@ -344,7 +349,7 @@ impl BrowserWindow {
             rows.push(pending("Edit Pinned Page").submenu(vec![
                 item("Replace Pinned URL with Current", Command::Replace).enabled(moved).into(),
                 pending("Edit…").into(),
-            ]).into());
+            ]).submenu_width(232.).into());
         }
         rows.push(Entry::Separator);
         if !internal { rows.push(item(if self.browser.space().active_tab == Some(id) { "Add Split View" } else { "Open in Split View" }, Command::Add(Placement::Right)).into()); }
@@ -483,10 +488,10 @@ impl BrowserWindow {
     }
 
 
-    pub(crate) fn render_tab_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_tab_menu(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(menu) = &self.tab_menu else { return div().into_any_element(); };
         let entries = self.menu_entries();
-        let top = self.render_menu_level(&entries, menu.selected, menu.submenu, false, cx)
+        let top = self.render_menu_level(&entries, menu.selected, menu.submenu, false, window, cx)
             .absolute().left(menu.position.x).top(menu.position.y).max_h(menu.max_height)
             .overflow_y_scroll().track_scroll(&menu.scroll);
         let bounds = menu.bounds.clone();
@@ -494,11 +499,13 @@ impl BrowserWindow {
         let sub = submenu.as_ref().and_then(|(index, sub_entries)| {
             let parent = menu.bounds.get()?;
             let row_top: f32 = PADDING + entries[..*index].iter().map(entry_height).sum::<f32>();
-            let width = px(ESTIMATED_WIDTH);
-            let right = parent.right() + px(SUBMENU_GAP);
-            let left = if right + width > menu.window_width - px(8.) { parent.left() - width - px(SUBMENU_GAP) } else { right };
-            Some(self.render_menu_level(sub_entries, menu.sub_selected, None, true, cx)
-                .absolute().left(left).top(parent.top() + px(row_top - PADDING)))
+            let width = self.menu_level_width(sub_entries, true, window);
+            let right = parent.right() - px(SUBMENU_OVERLAP);
+            let left = if right + width > menu.viewport.width - px(8.) { parent.left() - width + px(SUBMENU_OVERLAP) } else { right };
+            let height = px(entries_height(sub_entries));
+            let top = parent.top() + px(row_top - PADDING) + menu.scroll.offset().y;
+            Some(self.render_menu_level(sub_entries, menu.sub_selected, None, true, window, cx)
+                .absolute().left(left.max(px(8.))).top(top.clamp(px(8.), (menu.viewport.height - height - px(8.)).max(px(8.)))))
         });
         let has_sub = sub.is_some();
         div().id("tab-menu-backdrop").debug_selector(|| "tab-menu-backdrop".into()).size_full().key_context(CONTEXT).track_focus(&menu.focus)
@@ -519,8 +526,38 @@ impl BrowserWindow {
             .into_any_element()
     }
 
+    fn menu_level_width(&self, entries: &[Entry], nested: bool, window: &Window) -> Pixels {
+        if let Some(width) = nested.then(|| self.tab_menu.as_ref()?.submenu
+            .and_then(|index| match self.menu_entries().get(index) {
+                Some(Entry::Item(item)) => item.submenu_width,
+                _ => None,
+            })).flatten() { return px(width); }
+        let minimum = if nested { 0. } else {
+            self.tab_menu.as_ref().and_then(|menu| match menu.target {
+                MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
+                    self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
+                _ => None,
+            }).unwrap_or(MIN_WIDTH)
+        };
+        let checks = entries.iter().any(|entry| matches!(entry, Entry::Item(item) if item.checked));
+        let inset = if checks { CHECK_INSET } else { TEXT_INSET };
+        let text_width = |label: &str| f32::from(window.text_system().shape_line(label.to_owned().into(), px(13.),
+            &[gpui::TextRun { len: label.len(), font: gpui::font(".SystemUIFont"), color: gpui::white(),
+                background_color: None, underline: None, strikethrough: None }], None).width);
+        let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
+        px(entries.iter().filter_map(|entry| match entry {
+            Entry::Item(item) => Some(inset + 17. + text_width(&item.label)
+                + if item.icon.is_some() { 22. } else { 0. }
+                + if pane_controls { 22. } else { 0. }
+                + item.shortcut.map_or(0., |shortcut| 30. + text_width(shortcut))
+                + if item.submenu.is_empty() { 0. } else { 38. }),
+            Entry::Header(label) => Some(inset + 17. + text_width(label)),
+            Entry::Separator => None,
+        }).fold(minimum, f32::max).ceil())
+    }
+
     /// One menu panel: rows, separators and headers; `nested` is a submenu.
-    fn render_menu_level(&self, entries: &[Entry], selected: Option<usize>, open: Option<usize>, nested: bool, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+    fn render_menu_level(&self, entries: &[Entry], selected: Option<usize>, open: Option<usize>, nested: bool, window: &Window, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
         let horizontal = self.browser.active_split().is_some_and(|split| split.axis == Axis::Horizontal);
         let checks = entries.iter().any(|entry| matches!(entry, Entry::Item(item) if item.checked));
@@ -576,16 +613,10 @@ impl BrowserWindow {
             }
         });
         let id = if nested { "tab-context-submenu" } else { "tab-context-menu" };
-        let width = if nested { MIN_WIDTH } else {
-            self.tab_menu.as_ref().and_then(|menu| match menu.target {
-                MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
-                    self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
-                _ => None,
-            }).unwrap_or(MIN_WIDTH)
-        };
+        let width = self.menu_level_width(entries, nested, window);
         let backdrop = self.tab_menu.as_ref().map(|menu| menu.backdrop[usize::from(nested)].clone()).unwrap_or_default();
         crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop).debug_selector(move || id.into())
-            .min_w(px(width)).py(px(PADDING)).flex().flex_col().children(rows)
+            .w(width).py(px(PADDING)).flex().flex_col().children(rows)
     }
 }
 

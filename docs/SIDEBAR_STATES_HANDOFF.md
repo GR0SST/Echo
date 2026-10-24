@@ -77,3 +77,17 @@ Inspected pairs: `pair-r2-menu-material-3x.png`,
 (48, 47, 50) in Echo; Arc varies with its underlying Space/page from neutral
 (48, 48, 48) to tinted (51, 48, 60). The sample profiles use different underlying
 Space materials, so exact blur/color parity remains partial.
+
+## Round 2: submenu geometry
+
+`pair-r2-submenu-3x.png` was inspected after native capture. Edit Pinned Page is
+232 × 58 px, overlaps the parent by 5 px, and aligns its first row with the
+parent item. Root menus open (+1, −6) px from the click. Font-shaped intrinsic
+widths replace the 260 px positioning estimate; submenus flip using their actual
+width and clamp vertically. Overlay windows still limit menus to the browser
+frame; Arc's ability to extend onto the surrounding desktop remains a gap.
+Borders now paint over the frame rather than adding layout insets; item text
+starts 16 px from the panel edge and Today/Pinned menu height is 307 px. Native
+material installation defers refresh until after paint, fixing a submenu that
+otherwise stayed opaque until the next pointer event. A GPUI regression test
+checks overlap, height, fixed Edit width, left flipping and bottom-edge placement.

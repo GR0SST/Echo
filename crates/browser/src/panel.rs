@@ -36,10 +36,10 @@ pub(crate) fn shell(id: &'static str) -> gpui::Stateful<Div> {
 pub(crate) fn menu_shell(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>) -> gpui::Stateful<Div> {
     div().id(id)
         .relative().rounded(px(MENU_RADIUS)).bg(menu_fill(hue, installed.get()))
-        .border_1().border_color(hsla(0., 0., 0., 0.15)).shadow_lg()
+        .shadow_lg()
         .text_color(hsla(0., 0., 1., 0.85)).font_family(".SystemUIFont").text_size(px(13.))
         .child(div().absolute().inset_0().rounded(px(MENU_RADIUS - 1.)).border_1().border_color(hsla(0., 0., 1., 0.10)))
-        .child(canvas(|_, _, _| (), move |bounds, _, window, _| {
+        .child(canvas(|_, _, _| (), move |bounds, _, window, cx| {
             use crate::material::*;
             let blurred = crate::native::view_of(window).is_some_and(|view| {
                 crate::native::set_backdrop_configured(view, key,
@@ -51,6 +51,10 @@ pub(crate) fn menu_shell(id: impl Into<gpui::ElementId>, key: &'static str, hue:
                         effect_alpha: 1., material: EffectMaterial::Menu,
                     }) == BackdropInstallation::Installed
             });
-            if installed.replace(blurred) != blurred { window.refresh(); }
+            if installed.replace(blurred) != blurred {
+                // A refresh requested while painting is ignored by GPUI. Rebuild
+                // the fill after this frame, even if the pointer stays still.
+                window.defer(cx, |window, _| window.refresh());
+            }
         }).absolute().inset_0())
 }
