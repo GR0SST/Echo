@@ -56,6 +56,8 @@ impl BrowserWindow {
         let ids = self.sidebar_selection_items();
         if ids.len() < 2 { return vec![]; }
         let muted = ids.iter().flat_map(|id| self.browser.related_tabs(*id)).all(|id| self.browser.all_tabs().find(|tab| tab.id == id).is_some_and(|tab| tab.muted));
+        let today_only = ids.iter().all(|id| self.browser.space().today.iter().any(|tab| tab.id == *id));
+        let alternate = today_only && self.tab_menu.as_ref().is_some_and(|menu| menu.alternate);
         let mut rows = vec![
             item("Copy Links", Command::Copy).into(),
             Entry::Separator,
@@ -64,19 +66,21 @@ impl BrowserWindow {
             Entry::Separator,
             item("Open in Split View", Command::SelectionSplit).enabled(ids.len() <= browser_core::splits::MAX_SPLIT_PANES && ids.iter().all(|id| self.browser.split_for(*id).is_none())).into(),
             item("Duplicate", Command::Duplicate).shortcut("⌥D").into(),
-            tab_menu::pending("Move to").submenu(self.selection_move_entries()).into(),
+            tab_menu::pending("Move to").submenu(self.selection_move_entries(None)).into(),
             item(format!("New Folder with {} Items", ids.len()), Command::NewFolderWithTab).enabled(!self.browser.is_blank()).into(),
             Entry::Separator,
-            item("Archive Tabs", Command::Close).into(),
+            item(if alternate { "Archive Other Tabs" } else { "Archive Tabs" }, if alternate { Command::SelectionArchiveOthers } else { Command::Close }).into(),
         ];
-        if ids.iter().all(|id| self.browser.space().today.iter().any(|tab| tab.id == *id)) {
-            rows.push(item("Archive Tabs Below", Command::SelectionArchiveBelow).enabled(!self.selection_tabs_below().is_empty()).into());
+        if today_only {
+            // Arc changes the alternate row's title/action but retains the
+            // ordinary Below row's validation (arc-multi-option.png).
+            rows.push(item(if alternate { "Archive Tabs Above" } else { "Archive Tabs Below" }, if alternate { Command::SelectionArchiveAbove } else { Command::SelectionArchiveBelow }).enabled(!self.selection_tabs_below().is_empty()).into());
         }
         rows
     }
-    fn selection_move_entries(&self) -> Vec<Entry> {
-        let mut entries: Vec<_> = self.browser.spaces.iter().filter(|space| space.user_profile_id == self.browser.active_user_profile_id())
-            .map(|space| tab_menu::item(space.name.clone(), Command::SelectionMove(space.id)).space_icon(space.id).checked(space.id == self.browser.space().id).into()).collect();
+    pub(crate) fn selection_move_entries(&self, item: Option<TabId>) -> Vec<Entry> {
+        let mut entries: Vec<_> = self.browser.spaces.iter()
+            .map(|space| tab_menu::item(space.name.clone(), Command::SelectionMove(space.id)).space_destination(space.id).checked(space.id == self.browser.space().id).enabled(!item.is_some_and(|id| self.browser.is_favorite(id)) || space.user_profile_id == self.browser.active_user_profile_id()).into()).collect();
         entries.push(Entry::Separator);
         entries.push(tab_menu::item("New Space…", Command::SelectionNewSpace).enabled(!self.browser.is_blank() && !self.browser.is_private()).into());
         entries
@@ -85,6 +89,11 @@ impl BrowserWindow {
         let ids = self.sidebar_selection_items();
         let order: Vec<_> = self.browser.space().today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
         order.iter().rposition(|id| ids.contains(id)).map_or(vec![], |last| order[last+1..].to_vec())
+    }
+    fn selection_tabs_above(&self) -> Vec<TabId> {
+        let ids = self.sidebar_selection_items();
+        let order: Vec<_> = self.browser.space().today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| tab.id).collect();
+        order.iter().position(|id| ids.contains(id)).map_or(vec![], |first| order[..first].to_vec())
     }
     pub(crate) fn confirm_selection_menu(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         let ids = self.sidebar_selection_items();
@@ -95,8 +104,13 @@ impl BrowserWindow {
                 let urls = ids.iter().flat_map(|id| self.browser.related_tabs(*id)).filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == id)).map(|tab| tab.url.clone()).collect();
                 self.share_context_links(urls, window, cx);
             }
-            Command::Close | Command::SelectionArchiveBelow => {
-                let targets = if matches!(command, Command::Close) { ids } else { self.selection_tabs_below() };
+            Command::Close | Command::SelectionArchiveBelow | Command::SelectionArchiveAbove | Command::SelectionArchiveOthers => {
+                let targets = match command {
+                    Command::SelectionArchiveBelow => self.selection_tabs_below(),
+                    Command::SelectionArchiveAbove => self.selection_tabs_above(),
+                    Command::SelectionArchiveOthers => self.browser.space().today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id) && !ids.contains(&tab.id)).map(|tab| tab.id).collect(),
+                    _ => ids,
+                };
                 if self.edit_browser(|browser| browser.archive_sidebar_items(&targets, std::time::SystemTime::now())) > 0 {
                     self.sidebar_selection.ids.clear();
                     self.after_tab_removal(cx);
@@ -108,25 +122,32 @@ impl BrowserWindow {
                 for id in ids.into_iter().flat_map(|id| self.browser.related_tabs(id)).collect::<Vec<_>>() { self.set_tab_muted(id, muted, cx); }
             }
             Command::SelectionSplit => {
-                let first = ids[0];
-                self.edit_browser(|browser| { for id in ids.iter().skip(1).rev() { browser.add_split(first, *id, Placement::Right, std::time::SystemTime::now()); } });
-                self.sidebar_selection.ids.clear();
-            }
-            Command::SelectionMove(space) => {
-                if !self.browser.spaces.iter().any(|entry| entry.id == space && entry.user_profile_id == self.browser.active_user_profile_id()) { return; }
+                if ids.len() > browser_core::splits::MAX_SPLIT_PANES || ids.iter().any(|id| self.browser.split_for(*id).is_some()) { return; }
+                let first = self.browser.space().active_tab.filter(|id| ids.contains(id)).unwrap_or(ids[0]);
+                let peers: Vec<_> = ids.iter().copied().filter(|id| *id != first).collect();
                 self.edit_browser(|browser| {
-                    let (pins, today): (Vec<_>, Vec<_>) = ids.iter().copied().partition(|id| browser.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| tab.pinned_url.is_some()));
-                    for id in pins { browser.move_tab(id, space, browser_core::Section::Pinned); }
-                    for id in today.into_iter().rev() { browser.move_tab(id, space, browser_core::Section::Today); }
+                    for id in peers.iter().rev() { let _ = browser.add_split(first, *id, Placement::Right, std::time::SystemTime::now()); }
+                    if let Some(focus) = peers.last() { browser.activate_tab(*focus, std::time::SystemTime::now()); }
                 });
                 self.sidebar_selection.ids.clear();
             }
+            Command::SelectionMove(space) => { self.move_sidebar_context_items(&ids, space, cx); }
             Command::SelectionNewSpace => { self.begin_space_creation(self.browser.space().id, cx); self.sidebar_selection.new_space_items = ids; }
             Command::NewFolderWithTab => { self.open_folder_creator(None, Some(ids[0]), window, cx); self.sidebar_selection.folder_items = ids; }
             _ => {}
         }
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
+    }
+    pub(crate) fn move_sidebar_context_items(&mut self, ids: &[TabId], space: SpaceId, _cx: &mut Context<Self>) {
+        if !self.browser.spaces.iter().any(|entry| entry.id == space) { return; }
+        self.edit_browser(|browser| {
+            let (pins, today): (Vec<_>, Vec<_>) = ids.iter().copied().partition(|id| browser.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| tab.pinned_url.is_some()));
+            for id in pins { browser.move_sidebar_item_to_space(id, space); }
+            for id in today.into_iter().rev() { browser.move_sidebar_item_to_space(id, space); }
+        });
+        if let Some(pages) = &self.pages { pages.borrow_mut().reconcile_inventory(&self.browser); }
+        self.sidebar_selection.ids.clear();
     }
     pub(crate) fn copy_sidebar_selection(&mut self, markdown: bool, cx: &mut Context<Self>) -> bool {
         self.pending_context_image=None;

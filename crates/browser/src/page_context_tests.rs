@@ -214,12 +214,37 @@ fn page_context_image_copy_rejects_superseded_requests_navigation_and_a_later_ur
     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
         "Known fixture sentinel".into(),
     ));
+    view.update(cx, |view, cx| view.copy_url_as_quote(cx));
+    let quote = fake
+        .take_calls()
+        .iter()
+        .find_map(|call| {
+            if let Call::Quote(_, request) = call {
+                Some(*request)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     for url in [
         "https://image.example/one.png",
         "https://image.example/two.png",
     ] {
         choose(&fake, &view, cx, Action::CopyImage(url.into()));
     }
+    fake.send(
+        cx,
+        Event::QuoteSelection {
+            view: page(1),
+            request: quote,
+            text: "Superseded quote".into(),
+            source_url: source.clone(),
+        },
+    );
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("Known fixture sentinel")
+    );
     let requests = fake.0.borrow().context_images.clone();
     assert_eq!(requests.len(), 2);
     assert!(requests

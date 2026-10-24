@@ -20,6 +20,8 @@ mod max_downloads_tests;
 mod toolbar_tests;
 #[path = "page_context_tests.rs"]
 mod page_context_tests;
+#[path = "context_followup_tests.rs"]
+mod context_followup_tests;
 #[path = "space_context_tests.rs"]
 mod space_context_tests;
 #[path = "page_zoom_tests.rs"]

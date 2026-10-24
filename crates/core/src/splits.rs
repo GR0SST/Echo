@@ -320,6 +320,31 @@ impl Browser {
         self.repair_folders();
     }
 
+    /// An explicit sidebar move may adopt another profile. This moves only
+    /// item metadata; adapters must retire native documents whose storage
+    /// changes. Favorites across profiles require a separate referenced flow.
+    pub fn move_sidebar_item_to_space(&mut self, tab: TabId, destination: crate::SpaceId) -> bool {
+        if !self.can_edit_persistent_sidebar() || self.is_private() { return false; }
+        let tab = self.item_anchor(tab);
+        let Some(scope) = self.tab_scope(tab) else { return false; };
+        let section = match scope { Scope::Favorites => Section::Pinned, Scope::Space(_, section) => section };
+        let Some(index) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
+        let profile = self.spaces[index].user_profile_id;
+        if self.user_profile_id_for_tab(tab) == Some(profile) { return self.move_tab(tab, destination, section); }
+        if scope == Scope::Favorites || self.user_profile(profile).is_none() { return false; }
+        let ids = self.related_tabs(tab);
+        if ids.iter().any(|id| self.tab_scope(*id) != Some(scope)) { return false; }
+        self.forget_pinned_item(tab);
+        let split = self.take_split(tab).map(|(_, split)| split);
+        let pages: Vec<_> = ids.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
+        let target = Scope::Space(index, section);
+        for page in pages { self.place_tab(target, page); }
+        if let Some(split) = split { self.arrange_split_tabs(target, &split); self.put_split(target, split); }
+        self.repair_folders();
+        self.clear_sidebar_history();
+        true
+    }
+
     pub(crate) fn move_split(&mut self, tab: TabId, destination: crate::SpaceId, section: Section) -> bool {
         if section == Section::Pinned && !self.can_edit_persistent_sidebar() { return false; }
         let Some(index) = self.spaces.iter().position(|space| space.id == destination) else { return false; };
@@ -604,3 +629,7 @@ fn remove_pane(split: &mut SplitView, tab: TabId) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "splits/space_moves_tests.rs"]
+mod space_moves_tests;

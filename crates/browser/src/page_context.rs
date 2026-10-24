@@ -56,6 +56,7 @@ impl BrowserWindow {
         }
         match request.action {
             Action::CopyImage(url) => {
+                self.pending_quote = None;
                 self.quote_request = self.quote_request.wrapping_add(1);
                 let token = self.quote_request;
                 self.pending_context_image = Some((
@@ -76,6 +77,7 @@ impl BrowserWindow {
                 }
             }
             Action::Copy(text) => {
+                self.pending_quote = None;
                 self.pending_context_image = None;
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }

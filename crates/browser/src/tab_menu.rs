@@ -28,6 +28,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", Next, Some(CONTEXT)),
         KeyBinding::new("up", Previous, Some(CONTEXT)),
         KeyBinding::new("enter", Confirm, Some(CONTEXT)),
+        KeyBinding::new("alt-down", Next, Some(CONTEXT)),
+        KeyBinding::new("alt-up", Previous, Some(CONTEXT)),
+        KeyBinding::new("alt-enter", Confirm, Some(CONTEXT)),
+        KeyBinding::new("alt-right", OpenSubmenu, Some(CONTEXT)),
+        KeyBinding::new("alt-left", CloseSubmenu, Some(CONTEXT)),
+        KeyBinding::new("alt-escape", Dismiss, Some(CONTEXT)),
         KeyBinding::new("right", OpenSubmenu, Some(CONTEXT)),
         KeyBinding::new("left", CloseSubmenu, Some(CONTEXT)),
     ]);
@@ -38,11 +44,13 @@ pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), Space
 
 pub(crate) struct TabMenu {
     pub target: MenuTarget,
+    owner_profile: Option<browser_core::UserProfileId>,
     /// Highlighted row of the top level.
     pub selected: Option<usize>,
     /// Top-level row whose submenu is open, and the highlighted row in it.
     pub submenu: Option<usize>,
     pub sub_selected: Option<usize>,
+    pub alternate: bool,
     max_height: Pixels,
     viewport: gpui::Size<Pixels>,
     width: Pixels,
@@ -59,14 +67,14 @@ pub(crate) struct TabMenu {
 #[derive(Clone, Copy)]
 pub(crate) enum Command { ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
-    Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow,
+    Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
-            Self::Share => "share", Self::SelectionSplit => "selection-split", Self::SelectionMove(_) => "selection-move", Self::SelectionNewSpace => "selection-new-space", Self::SelectionArchiveBelow => "selection-archive-below",
+            Self::Share => "share", Self::SelectionSplit => "selection-split", Self::SelectionMove(_) => "selection-move", Self::SelectionNewSpace => "selection-new-space", Self::SelectionArchiveBelow => "selection-archive-below", Self::SelectionArchiveAbove => "selection-archive-above", Self::SelectionArchiveOthers => "selection-archive-others",
             Self::ToggleToolbar => "toggle-toolbar",
             Self::Download(action) => action.selector(),
             Self::CustomizePage => "customize-page",
@@ -104,6 +112,7 @@ pub(crate) struct Item {
     /// A tab whose favicon leads the row.
     pub icon: Option<TabId>,
     pub space_icon: Option<SpaceId>,
+    space_destination: bool,
     /// The split pane the command acts on, instead of the menu's target.
     pub pane: Option<TabId>,
     pub submenu: Vec<Entry>,
@@ -111,7 +120,7 @@ pub(crate) struct Item {
 }
 
 pub(crate) fn item(label: impl Into<SharedString>, command: Command) -> Item {
-    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, pane: None, submenu: Vec::new(), submenu_width: None }
+    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, space_destination: false, pane: None, submenu: Vec::new(), submenu_width: None }
 }
 
 /// A row the reference has whose action is not built yet.
@@ -125,6 +134,7 @@ impl Item {
     pub(crate) fn enabled(mut self, enabled: bool) -> Self { self.enabled = enabled; self }
     pub(crate) fn icon(mut self, tab: TabId) -> Self { self.icon = Some(tab); self }
     pub(crate) fn space_icon(mut self, space: SpaceId) -> Self { self.space_icon = Some(space); self }
+    pub(crate) fn space_destination(mut self, space: SpaceId) -> Self { self.space_icon = Some(space); self.space_destination = true; self }
     pub(crate) fn pane(mut self, tab: TabId) -> Self { self.pane = Some(tab); self }
     pub(crate) fn submenu(mut self, entries: Vec<Entry>) -> Self { self.submenu = entries; self }
     fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
@@ -207,6 +217,20 @@ impl BrowserWindow {
         }
     }
 
+    fn menu_target_profile(&self, target: MenuTarget) -> Option<browser_core::UserProfileId> {
+        let space = match target {
+            MenuTarget::Tab(id) => return self.browser.user_profile_id_for_tab(id),
+            MenuTarget::Address => return self.browser.active_tab().and_then(|tab| self.browser.user_profile_id_for_tab(tab.id)),
+            MenuTarget::Folder(id) => self.browser.folder_space(id)?,
+            MenuTarget::Space(id) | MenuTarget::SpaceDelete(id) | MenuTarget::Selection(id) => id,
+            MenuTarget::Download(..) => return None, // Its presenter owner has a separate generation/profile guard.
+        };
+        self.browser.spaces.iter().find(|entry| entry.id == space).map(|entry| entry.user_profile_id)
+    }
+    pub(crate) fn menu_is_current(&self, menu: &TabMenu) -> bool {
+        self.menu_target_exists(menu.target) && menu.owner_profile == self.menu_target_profile(menu.target)
+    }
+
     pub(crate) fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.menu_target_exists(target) { return; }
         let position = if matches!(target,MenuTarget::Download(..)) { point(position.x,position.y-px(5.)) } else { position };
@@ -214,7 +238,7 @@ impl BrowserWindow {
         self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { target, selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        self.tab_menu = Some(TabMenu { target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
         let width = self.menu_level_width(&self.menu_entries(), false, window);
         if let Some(menu) = &mut self.tab_menu { menu.width = width; }
         let origin = window.bounds().origin;
@@ -328,27 +352,32 @@ impl BrowserWindow {
             ];
         }
         if let Some(split) = split {
-            let mut rows: Vec<Entry> = vec![item("Separate All Tabs", Command::SeparateAll).into(), item("Add Tab…", Command::Add(Placement::Right)).into(), orientation.into(),
+            let mut rows: Vec<Entry> = vec![item("Separate All Tabs", Command::SeparateAll).into(), item("Add Tab…", Command::Add(Placement::Right)).enabled(split.panes.len() < browser_core::splits::MAX_SPLIT_PANES).into(), orientation.into(),
                 Entry::Separator, Entry::Header("Tab Options")];
             for pane in split.panes.iter().filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == *id)) {
                 let pane_internal = browser_core::omnibox::is_internal_url(&pane.url);
-                rows.push(Item { label: short_title(&pane.title).into(), ..pending("") }.icon(pane.id).submenu(vec![
+                let mut pane_item = Item { label: short_title(&pane.title).into(), ..pending("") };
+                if pane.custom_icon.is_some() || self.browser.favicon(self.browser.active_user_profile_id(), &pane.url).is_some() { pane_item = pane_item.icon(pane.id); }
+                rows.push(pane_item.submenu(vec![
                     item("Separate from Split View", Command::SeparatePane).pane(pane.id).into(),
                     Entry::Separator,
-                    pending("Share").submenu(vec![item("Copy Link as Markdown", Command::CopyMarkdown).pane(pane.id).into()]).into(),
+                    item("Share", Command::Share).pane(pane.id).into(),
                     item(if pane.muted { "Unmute" } else { "Mute" }, Command::Mute).pane(pane.id).enabled(!pane_internal && self.show_tab_audio(pane)).into(),
-                    item("Copy Link", Command::Copy).shortcut("⇧⌘C").pane(pane.id).into(),
+                    item("Copy Link", Command::Copy).pane(pane.id).into(),
                     item("Copy link as Markdown", Command::CopyMarkdown).pane(pane.id).into(),
                     Entry::Separator,
                     item("Archive Item", Command::ClosePane).pane(pane.id).into(),
-                ]).into());
+                ]).submenu_width(212.).into());
             }
             rows.extend([Entry::Separator, item("Change Icon…", Command::Icon).into(), item("Rename…", Command::Rename).into()]);
             if self.browser.item_has_custom_name(tab.id) { rows.push(item("Reset Name", Command::ResetName).into()); }
             rows.extend([Entry::Separator, item("Duplicate", Command::Duplicate).shortcut("⌥D").into(),
-                pending("Move to").submenu(self.move_to_entries()).into(), Entry::Separator,
+                pending("Move to").submenu(self.selection_move_entries(Some(id))).into(), Entry::Separator,
                 item(if tab.pinned_url.is_some() { "Close Tab" } else { "Archive Item" }, Command::Close).into()]);
-            archive_relative(&mut rows);
+            if tab.pinned_url.is_none() && !self.browser.is_favorite(tab.id) {
+                let below = browser_core::bulk_archive::Relative::Below;
+                rows.push(item("Archive Tabs Below", Command::ArchiveRelative(below)).enabled(!self.browser.tabs_to_archive(tab.id, below).is_empty()).into());
+            } else { archive_relative(&mut rows); }
             return rows;
         }
         let favorite = self.browser.is_favorite(tab.id);
@@ -435,6 +464,8 @@ impl BrowserWindow {
     }
 
     fn confirm_menu_item(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_profile_projection();
+        if self.tab_menu.as_ref().is_none_or(|menu| !self.menu_is_current(menu)) { self.close_tab_menu(cx); return; }
         if !item.enabled { return; }
         if !item.submenu.is_empty() { return; }
         let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
@@ -477,6 +508,8 @@ impl BrowserWindow {
                 if self.edit_browser(|browser| browser.separate_split_pane(id)) { self.edit_browser(|browser| browser.activate_tab(id, std::time::SystemTime::now())); }
                 else { self.show_toast("You can have up to 12 Favorites".into(), cx); }
             }
+            Command::SelectionMove(space) => self.move_sidebar_context_items(&[id], space, cx),
+            Command::SelectionNewSpace => { if !self.browser.is_blank() && !self.browser.is_private() {self.begin_space_creation(self.browser.space().id, cx); self.sidebar_selection.new_space_items=vec![id];} }
             Command::Move(delta) => { self.edit_browser(|browser| browser.move_split_pane(id, delta)); }
             Command::ResetName => { self.edit_browser(|browser| browser.reset_tab_name(id)); }
             Command::ClosePane => self.close_split_pane(id, cx),
@@ -486,6 +519,7 @@ impl BrowserWindow {
             Command::Duplicate => self.duplicate_tab(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),
             Command::CopyMarkdown => self.copy_tab_url(id, true, cx),
+            Command::Share => { let url = self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| tab.url.clone()); if let Some(url) = url { self.share_context_links(vec![url], window, cx); } }
             Command::Pin => self.remove_pin(id, cx),
             Command::Favorite => {
                 let active = self.browser.space().active_tab;
@@ -537,6 +571,9 @@ impl BrowserWindow {
         });
         let has_sub = sub.is_some();
         div().id("tab-menu-backdrop").debug_selector(|| "tab-menu-backdrop".into()).size_full().key_context(CONTEXT).track_focus(&menu.focus)
+            .on_modifiers_changed(cx.listener(|this, event: &gpui::ModifiersChangedEvent, _, cx| {
+                if let Some(menu)=&mut this.tab_menu { if menu.alternate!=event.modifiers.alt {menu.alternate=event.modifiers.alt;cx.notify();} }
+            }))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, _, _, cx| this.close_tab_menu(cx)))
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.close_tab_menu(cx)))
             .on_action(cx.listener(|this, _: &Next, _, cx| this.select_tab_menu(1, cx)))
@@ -564,6 +601,7 @@ impl BrowserWindow {
             self.tab_menu.as_ref().and_then(|menu| match menu.target {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
+                MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_some() => Some(256.),
                 MenuTarget::Selection(_) => Some(224.),
                 MenuTarget::Space(_) => Some(246.),
                 MenuTarget::Download(..) => Some(120.),
@@ -580,7 +618,7 @@ impl BrowserWindow {
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
         px(entries.iter().filter_map(|entry| match entry {
             Entry::Item(item) => Some(inset + 17. + text_width(&item.label)
-                + if item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
+                + if item.space_destination { 19. } else if item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
                 + if pane_controls { 22. } else { 0. }
                 + item.shortcut.map_or(0., |shortcut| 30. + text_width(shortcut))
                 + if item.submenu.is_empty() { 0. } else if space_menu { 31. } else { 38. }),
@@ -638,7 +676,16 @@ impl BrowserWindow {
                     .when(pane_controls, |row| row.child(pane_control_icon(item.command, horizontal)))
                     .when_some(item.icon.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id)), |row, tab| row.child(div().size(px(16.)).flex_none().flex().items_center().justify_center()
                         .child(self.render_favicon(tab, self.accent()))))
-                    .when_some(item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).and_then(|space| space.custom_icon.as_deref()), |row, icon| row.child(crate::icons::glyph(icon)))
+                    .when_some(item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)), |row, space| {
+                        if item.space_destination {
+                            let mark = match space.custom_icon.as_deref() {
+                                Some(icon) if icon.starts_with("ion:") => crate::icons::ionicon(icon.trim_start_matches("ion:"),13.,1.),
+                                Some(icon) if icon != "shape:circle" => div().text_size(px(12.)).line_height(px(13.)).child(icon.to_owned()).into_any_element(),
+                                _ => div().size(px(12.)).rounded_full().bg(self.theme_foreground_for(space.id).opacity(if enabled {1.}else{0.3})).into_any_element(),
+                            };
+                            row.child(div().w(px(13.)).h(px(18.)).flex_none().flex().items_center().justify_center().text_color(self.theme_foreground_for(space.id).opacity(if enabled {1.}else{0.3})).child(mark))
+                        } else { row.when_some(space.custom_icon.as_deref(),|row,icon|row.child(crate::icons::glyph(icon))) }
+                    })
                     .child(div().debug_selector(move || selector.clone()).flex_1().whitespace_nowrap().child(item.label.clone()))
                     .when_some(item.shortcut, |row, shortcut| row.child(div().ml(px(24.)).whitespace_nowrap()
                         .text_color(if highlighted && enabled { hsla(0., 0., 1., 0.85) } else { hsla(0., 0., 1., 0.4) }).child(shortcut)))

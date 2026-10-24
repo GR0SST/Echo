@@ -1,10 +1,10 @@
-# Context menus — Arc 1.170.0, 2026-10-24
+# Context menus — Arc 1.170.0, 2026-10-24–25
 
 Installed `/Applications/Arc.app` is the reference. Evidence is under
 `target/parity/context-menus/` in this worktree. Bounded sessions hold the
 shared screen lock, claim one new Arc window and use the existing Echo Test
 Space and shared header crop. Other agents' fixture tabs are preserved; only
-uniquely named Echo CM Alpha/Beta/Gamma tabs are opened and archived by these
+uniquely named Echo CM Alpha/Beta/Gamma/Delta tabs are opened and archived by these
 scripts. No Space was created, deleted or reassigned. The Delete confirmation
 was inspected and cancelled. Accessibility presses do not activate these
 SwiftUI controls, so discrete guarded mouse events are used, without gestures.
@@ -24,7 +24,7 @@ to Archive Other Tabs / Archive Tabs Above (`arc-multi-option.png`).
 
 Share 2 Items… opens the Arc-server Folder sharing dialog (`arc-share-popup.png`),
 not the system share sheet. It is deliberately omitted in Echo under AGENTS.md.
-The dialog was cancelled with no publication; its new CG window and retained
+The dialog was cancelled without copying or sending a sharing link; its new CG window and retained
 owned parent were verified before dismissal. Other menu rows retain their order.
 `arc-multi-archive.png` / `arc-multi-undo.png` record archiving and Undo on the
 owned tabs. No new toast text is invented for this action. Copy feedback uses
@@ -41,9 +41,9 @@ reuse existing actions. A cancelled New Space or folder draft cannot move a
 later ordinary creation's items. Five GPUI regressions and two core regressions
 cover selection, copying, folder/Space moves, split creation and atomic Undo.
 
-Unfinished selection cases: Favorites/folder-header selection, cross-profile
-moves, combining already-grouped splits, exact inline folder-creation UI,
-Option-alternate archive commands and native selection dismissal timing.
+Unfinished selection cases: Favorites/folder-header selection, combining
+already-grouped splits, exact inline folder-creation UI, non-Today alternate
+states and native selection dismissal timing.
 The follow-up matches the observed plural Edit labels Copy URLs / Copy URLs as
 Markdown, omits Archive Tabs Below for mixed/Pinned selections, and offers
 Unmute when every selected item is muted.
@@ -174,10 +174,15 @@ callback-transfer coverage now includes context input.
 
 The remaining cloud Share Split View placeholders are removed from both pane
 and sidebar menus using the previously inspected Split View references. Local
-pane sharing still requires completing the nested system-service menu.
-The follow-up four-pane Arc session stopped at claim with “expected one new
-Arc window, got 0”; no input followed that failure and no window was claimed.
-The earlier two-pane session completed and closed its owned window/tabs.
+pane sharing opens the existing system service picker for only the chosen pane;
+Arc's hover-open third menu level remains incomplete. A fresh four-pane source
+session captured `arc-four-split-sidebar-menu.png`, `arc-split-pane-submenu.png`
+and `arc-split-pane-share.png`: Add Tab… is disabled at four, pane Share lists
+AirDrop/Notes/Freeform/Journal/Shortcuts on this install, and four sidebar chips
+show icons only. No service was invoked. The earlier attempt stopped at claim
+with “expected one new Arc window, got 0”; no input followed that failure.
+Successful sessions closed their owned windows and fixture tabs, preserving
+other agents' tabs in the shared Echo Test Space.
 
 
 Native page validation: `page-native-run.Ph7wlq/drive.log` records exact link
@@ -202,3 +207,72 @@ Full validation before the two additional window-routing tests: 987 browser,
 208 core, 12 AI, 136 engine, 2 bundle and 4 importer tests passed; one AI test
 was ignored. All eight page-context GPUI tests and the new engine regression
 also passed together in `page-tests-5.log`.
+
+
+## Selection alternates and Space moves
+
+The Today selection menu follows `arc-multi-option.png`: Option changes Archive
+Tabs to Archive Other Tabs and Archive Tabs Below to Archive Tabs Above, keeping
+the ordinary Below row's enablement. This reproduces the captured disabled
+Above row even though an unselected item exists above. Other/Above commands
+archive only the corresponding logical Today items as one Undo transaction.
+Option keyboard navigation/confirmation works; unmodified menu geometry and
+ordinary Today/Pinned/Favorite/folder menus are preserved. Mixed/Pinned alternate
+states have not been captured and are not inferred.
+
+Multi-selection and Split View Move to use the already-verified Space list.
+Complete groups retain identities, pane order, axis, weights, active pane,
+customization and original Pinned URLs. Explicit moves across profiles move
+metadata only and clear stale sidebar history; native documents are retired
+before any destination storage opens. No profile data or cookies are copied.
+Favorites across profiles stay disabled pending their separate reference.
+New Space retains captured item IDs and uses the existing creation commit.
+Profile choices/creation ordering still need their separate reference.
+
+Sidebar menus capture their target profile, refresh the canonical projection
+before dispatch and invalidate on reassignment. Delete confirmations and late
+callbacks from retired confirmations obey the same guard. Starting a context
+image/text copy also cancels an older pending quote result.
+
+Three core regressions cover profile isolation, complete-group preservation,
+rejected Favorite moves and malformed-group atomicity. Six GPUI regressions
+cover Option navigation/Undo, profile storage replacement, whole-group Space
+moves without re-creating same-profile pages, stale Delete confirmation
+cancellation, four-pane selection ordering/focus, and the four-pane Add limit
+with pane-specific local sharing. The image-copy regression now also covers a superseded quote.
+The earlier full run passed 1006 browser, 215 core, 13 AI, 136 engine,
+2 bundle and 4 importer tests (one AI test ignored). The final Split-menu
+follow-up is checked again below.
+
+The four-pane Arc source keeps the active selected page first, then appends the
+other selected pages in sidebar order, and focuses the final peer. The fixture
+produced Alpha/Delta/Gamma/Beta with Beta focused; Echo uses this ordering for
+plain Today selections and revalidates size/group eligibility before mutation.
+Active-page-excluded, mixed Pinned and already-grouped selections still need
+separate references. Move to shows the measured 12 px default Space circles
+and custom icons in their own leading column; colors use the existing Space
+theme foreground and remain subject to overall theme parity.
+
+The four-pane follow-up also verifies the 256 px sidebar menu and 212 px pane
+submenu. Today groups retain disabled Archive Tabs Below, omit unobserved
+plain-menu Other/Above rows, and pane Copy Link has no shortcut label. Empty
+favicons do not add a placeholder icon to the pane submenu row. Ordinary
+Today/Pinned/Favorite/folder menu layouts are unchanged.
+
+Final native runs: `followup-native-run.fc3SmX/drive.log` and
+`four-split-native-run.V1R6L2/drive.log` exit cleanly after CEF teardown. Saved
+sessions assert selected IDs/order across profiles and the four-pane
+Alpha/Delta/Gamma/Beta order with Beta focused. Pane sharing exposes the same
+five OS services without invoking one. A stalled local fixture server caused
+blank page backgrounds in an earlier capture; the page-loaded repeat is the
+canonical evidence. Reviewed 3× pairs: `pair-multi-option-3x.png`,
+`pair-multi-move-3x.png`, `pair-four-split-sidebar-3x.png`,
+`pair-four-split-pane-3x.png`. Cloud rows are omitted;
+fixture Space names/counts differ. Shared GPUI menu font weight, material and
+border still visibly differ from Arc and remain partial.
+
+`followup-final-full-tests-4.log`: 1006 browser, 215 core, 13 AI, 136 engine,
+2 bundle and 4 importer tests passed; one AI test ignored. The limit-test
+fixture now removes unrelated demo tabs before asserting disabled Below.
+The guard cleanup snapshot confirms the owned Arc source window is gone;
+other active sessions' windows were left untouched.

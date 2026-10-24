@@ -4277,7 +4277,7 @@ impl Render for BrowserWindow {
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
         if self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() { self.sync_history_focus(window, cx); }
-        if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_target_exists(menu.target)) {
+        if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_is_current(menu)) {
             self.close_tab_menu(cx);
         }
         if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {

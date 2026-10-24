@@ -147,6 +147,8 @@ impl BrowserWindow {
     }
 
     pub(crate) fn confirm_space_delete(&mut self, id: SpaceId, cx: &mut Context<Self>) {
+        self.refresh_profile_projection();
+        if self.tab_menu.as_ref().is_none_or(|menu| menu.target != MenuTarget::SpaceDelete(id) || !self.menu_is_current(menu)) { self.close_tab_menu(cx); return; }
         self.close_tab_menu(cx);
         if self.edit_browser(|browser| browser.delete_space(id, std::time::SystemTime::now())) {
             if let Some(pages) = &self.pages {
