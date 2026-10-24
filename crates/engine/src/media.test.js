@@ -62,3 +62,17 @@ test('DOM transport uses current playback state and removes stale track handlers
     expect(reports.at(-1)).toMatchObject({ active: true, playing: true });
   });
 });
+
+test('native video PiP entry and exit report document state without changing playback', () => {
+  const video = {paused:false,ended:false,tagName:'VIDEO',readyState:4,videoWidth:640,currentTime:3,duration:30,volume:1};
+  fixture([video], ({reports,events}) => {
+    expect(reports.at(-1).picture_in_picture).toBe(false);
+    document.pictureInPictureElement=video;
+    events.get('enterpictureinpicture')();
+    expect(reports.at(-1)).toMatchObject({video:true,playing:true,picture_in_picture:true});
+    document.pictureInPictureElement=null;
+    events.get('leavepictureinpicture')();
+    expect(reports.at(-1)).toMatchObject({playing:true,picture_in_picture:false});
+    expect(video.currentTime).toBe(3);
+  });
+});

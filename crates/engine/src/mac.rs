@@ -32,10 +32,13 @@ extern "C-unwind" fn set_handling_send_event(_: *mut AnyObject, _: Sel, value: B
 }
 
 extern "C-unwind" fn send_event(this: *mut AnyObject, sel: Sel, event: *mut AnyObject) {
+    remember_pip_frame(event);
+    observe_pip_return(event);
     let was_handling = HANDLING_SEND_EVENT.replace(true);
     if let Some(original) = ORIGINAL_SEND_EVENT.get() {
         unsafe { original(this, sel, event) };
     }
+    remember_pip_frame(event);
     HANDLING_SEND_EVENT.set(was_handling);
 }
 
@@ -327,4 +330,151 @@ pub(crate) fn release_retired_window(window: *mut c_void) {
         let _: () = msg_send![window, close];
         ffi::objc_release(window);
     }
+}
+
+/// Adjust only Chromium's verified native video overlay. Chromium retains
+/// ownership, drag/resize handling, transport controls and remembered location.
+/// The localized title comes from the pinned CEF resource bundle, not web text.
+#[derive(Clone)]
+struct PipReturn {
+    window: isize,
+    label: String,
+    callback: std::rc::Rc<dyn Fn()>,
+}
+type PipStyle = (String, String, std::rc::Rc<dyn Fn()>, std::time::Instant);
+thread_local! {
+    static PIP_STYLE: std::cell::RefCell<Option<PipStyle>> = const { std::cell::RefCell::new(None) };
+    static PIP_RETURN: std::cell::RefCell<Option<PipReturn>> = const { std::cell::RefCell::new(None) };
+    static PIP_OWNER: Cell<Option<i32>> = const { Cell::new(None) };
+    static PIP_STYLED: Cell<isize> = const { Cell::new(0) };
+    static PIP_ARMED: Cell<Option<isize>> = const { Cell::new(None) };
+    static PIP_FRAME: Cell<Option<NSRect>> = const { Cell::new(None) };
+}
+
+// Sampling after native dispatch also catches AppKit header-drag tracking,
+// which can consume its release event inside the original sendEvent call.
+fn remember_pip_frame(event: *mut AnyObject) {
+    let Some(number)=PIP_RETURN.with_borrow(|binding|binding.as_ref().map(|binding|binding.window)) else { return; };
+    unsafe {
+        let window:*mut AnyObject=msg_send![event,window];
+        if window.is_null() { return; }
+        let actual:isize=msg_send![window,windowNumber];
+        let visible:Bool=msg_send![window,isVisible];
+        if actual==number && visible.as_bool() { PIP_FRAME.set(Some(msg_send![window,frame])); }
+    }
+}
+
+// Alloy's WebContents activation does not select the embedding app's tab.
+// Observe the existing native control semantically, without replacing its UI,
+// consuming its event, or guessing its hit rectangle after a user resize.
+fn observe_pip_return(event: *mut AnyObject) {
+    unsafe {
+        let kind:usize=msg_send![event,type];
+        if kind!=1 && kind!=2 { return; } // left mouse down/up
+        let armed=PIP_ARMED.replace(None);
+        let Some(binding)=PIP_RETURN.with_borrow(Clone::clone) else { return; };
+        if kind==2 && armed!=Some(binding.window) { return; }
+        let window:*mut AnyObject=msg_send![event,window];
+        if window.is_null() { return; }
+        let number:isize=msg_send![window,windowNumber];
+        if number!=binding.window { return; }
+        let local:NSPoint=msg_send![event,locationInWindow];
+        let point:NSPoint=msg_send![window,convertPointToScreen:local];
+        let mut element:*mut AnyObject=msg_send![window,accessibilityHitTest:point];
+        for _ in 0..5 {
+            if element.is_null() { break; }
+            let role_supported:Bool=msg_send![element,respondsToSelector:sel!(accessibilityRole)];
+            let is_button=if role_supported.as_bool() {
+                let role:*mut AnyObject=msg_send![element,accessibilityRole];
+                let role_name:*const c_char=if role.is_null(){std::ptr::null()}else{msg_send![role,UTF8String]};
+                !role_name.is_null() && CStr::from_ptr(role_name).to_bytes()==b"AXButton"
+            }else{false};
+            if is_button {
+                for selector in [sel!(accessibilityLabel),sel!(accessibilityTitle)] {
+                    let supported:Bool=msg_send![element,respondsToSelector:selector];
+                    if !supported.as_bool() { continue; }
+                    let text:*mut AnyObject=match selector {
+                        value if value==sel!(accessibilityLabel)=>msg_send![element,accessibilityLabel],
+                        _=>msg_send![element,accessibilityTitle],
+                    };
+                    if text.is_null() { continue; }
+                    let bytes:*const c_char=msg_send![text,UTF8String];
+                    if !bytes.is_null() && CStr::from_ptr(bytes).to_bytes()==binding.label.as_bytes() {
+                        if kind==1 { PIP_ARMED.set(Some(number)); } else { (binding.callback)(); }
+                        return;
+                    }
+                }
+            }
+            let supported:Bool=msg_send![element,respondsToSelector:sel!(accessibilityParent)];
+            if !supported.as_bool() { break; }
+            element=msg_send![element,accessibilityParent];
+        }
+    }
+}
+
+pub fn video_pip_exited(owner: i32) {
+    if PIP_OWNER.get()!=Some(owner) { return; }
+    PIP_OWNER.set(None);PIP_STYLED.set(0);PIP_ARMED.set(None);
+    PIP_STYLE.with_borrow_mut(|pending|*pending=None);
+    PIP_RETURN.with_borrow_mut(|binding|*binding=None);
+}
+
+pub fn style_video_pip(owner: i32, title: &str, return_label: &str, on_return: impl Fn()+'static) {
+    if PIP_OWNER.get()!=Some(owner) { PIP_OWNER.set(Some(owner));PIP_STYLED.set(0); }
+    if !title.is_empty() && !return_label.is_empty() {
+        PIP_STYLE.with_borrow_mut(|pending|*pending=Some((title.into(),return_label.into(),std::rc::Rc::new(on_return),std::time::Instant::now())));
+    }
+}
+
+pub fn poll_video_pip_style() {
+    // The DOM event can precede native widget creation. Retry even for a paused
+    // video whose deduplicated media report will not otherwise change again.
+    let Some((title,label,callback,started))=PIP_STYLE.with_borrow_mut(Option::take) else { return; };
+    if !apply_video_pip_style(&title,&label,&callback) && started.elapsed()<std::time::Duration::from_secs(2) {
+        PIP_STYLE.with_borrow_mut(|pending|*pending=Some((title,label,callback,started)));
+    }
+}
+
+fn apply_video_pip_style(title: &str, label: &str, callback: &std::rc::Rc<dyn Fn()>) -> bool {
+    unsafe {
+        let Some(app_class)=AnyClass::get(c"NSApplication") else { return false; };
+        let Some(pip_class)=AnyClass::get(c"NativeWidgetMacFramelessNSWindow") else { return false; };
+        let app: *mut AnyObject=msg_send![app_class,sharedApplication];
+        let windows:*mut AnyObject=msg_send![app,windows];
+        let count:usize=msg_send![windows,count];
+        for i in 0..count {
+            let window:*mut AnyObject=msg_send![windows,objectAtIndex:i];
+            let native:Bool=msg_send![window,isKindOfClass:pip_class];
+            let level:isize=msg_send![window,level];
+            let visible:Bool=msg_send![window,isVisible];
+            if !native.as_bool() || level!=3 || !visible.as_bool() { continue; }
+            let name:*mut AnyObject=msg_send![window,title];
+            let text:*const c_char=msg_send![name,UTF8String];
+            if text.is_null() || CStr::from_ptr(text).to_bytes()!=title.as_bytes() { continue; }
+            let number:isize=msg_send![window,windowNumber];
+            PIP_RETURN.with_borrow_mut(|binding|*binding=Some(PipReturn { window:number,label:label.into(),callback:callback.clone() }));
+            let frame:NSRect=msg_send![window,frame];
+            if PIP_STYLED.get()==number { PIP_FRAME.set(Some(frame));return true; }
+            if frame.size.width<=0. || frame.size.height<=0. { continue; }
+            let saved=PIP_FRAME.get();
+            let width=saved.map_or(224.,|saved|saved.size.width);
+            let size=NSSize::new(width,(width*frame.size.height/frame.size.width).round());
+            let _:()=msg_send![window,setMinSize:size];
+            let _:()=msg_send![window,setContentMinSize:size];
+            // Preserve Chromium's chosen bottom/right corner and screen margin.
+            let origin=saved.map_or_else(||NSPoint::new(frame.origin.x+frame.size.width-size.width,frame.origin.y),|saved|saved.origin);
+            let bounds=NSRect::new(origin,size);
+            let _:()=msg_send![window,setFrame:bounds display:true];
+            let content:*mut AnyObject=msg_send![window,contentView];
+            let _:()=msg_send![content,setWantsLayer:true];
+            let layer:*mut AnyObject=msg_send![content,layer];
+            if !layer.is_null() {
+                let _:()=msg_send![layer,setCornerRadius:9f64];
+                let _:()=msg_send![layer,setMasksToBounds:true];
+            }
+            PIP_STYLED.set(number);PIP_FRAME.set(Some(bounds));
+            return true;
+        }
+    }
+    false
 }

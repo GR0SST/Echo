@@ -24,6 +24,7 @@
       active: current ? started.has(current) && !current.ended : (session?.playbackState !== 'none' && !!metadata),
       playing: current ? !current.paused && !current.ended : session?.playbackState === 'playing',
       video: current?.tagName === 'VIDEO' && current.videoWidth > 0,
+      picture_in_picture: !!document.pictureInPictureElement,
       title: String(metadata?.title || document.title || '').slice(0, 512),
       artist: String(metadata?.artist || '').slice(0, 512),
       artwork: String(metadata?.artwork?.[0]?.src || '').slice(0, 2048),
@@ -35,7 +36,7 @@
     const json = JSON.stringify(data);
     if (json !== previous) { previous = json; report(json); }
   };
-  for (const event of ['play','pause','ended','emptied','loadedmetadata','volumechange']) document.addEventListener(event, update, true);
+  for (const event of ['play','pause','ended','emptied','loadedmetadata','volumechange','enterpictureinpicture','leavepictureinpicture']) document.addEventListener(event, update, true);
   setInterval(update, 500);
   update();
   return (action, volume) => {

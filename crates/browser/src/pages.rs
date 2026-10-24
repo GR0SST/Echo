@@ -38,7 +38,7 @@ fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) 
 pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     match event {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
-        Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
+        Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
@@ -76,6 +76,7 @@ pub trait WebEngine {
 
     fn set_audio_volume(&mut self, _view: ViewId, _volume: f32) -> bool { false }
     fn audio_volume(&self, _view: ViewId) -> Option<f32> { None }
+    fn set_picture_in_picture(&mut self, _view: ViewId, _enabled: bool) -> bool { false }
     fn media_action(&mut self, _view: ViewId, _action: engine::MediaAction) -> bool { false }
     fn set_boost_picker(&mut self, _view: ViewId, _enabled: bool) {}
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
@@ -193,6 +194,7 @@ impl WebEngine for Chromium {
 
     fn set_audio_volume(&mut self, view: ViewId, volume: f32) -> bool { self.engine.set_audio_volume(view,volume) }
     fn audio_volume(&self, view: ViewId) -> Option<f32> { self.engine.audio_volume(view) }
+    fn set_picture_in_picture(&mut self, view: ViewId, enabled: bool) -> bool { self.engine.set_picture_in_picture(view, enabled) }
     fn media_action(&mut self, view: ViewId, action: engine::MediaAction) -> bool { self.engine.media_action(view, action) }
     fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { self.engine.set_boost_picker(view,enabled); }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
@@ -539,6 +541,7 @@ pub struct Pages {
     resize_focus_suppressed: bool,
     wanted: Vec<PageIntent>,
     wanted_focus: Option<TabId>,
+    pip_selected: Option<TabId>,
     axis: browser_core::splits::Axis,
     split: bool,
     square_top: bool,
@@ -623,6 +626,7 @@ impl Pages {
             resize_focus_suppressed: false,
             wanted: Vec::new(),
             wanted_focus: None,
+            pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
             square_top: false, top_toolbar: false, peek_mode: false,
@@ -786,7 +790,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
+        Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, peek_mode: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
@@ -982,6 +986,20 @@ impl Pages {
         }
         self.reconcile_inventory(browser);
         self.store.borrow_mut().prune();
+        let selected=browser.active_tab().map(|tab|tab.id);
+        if selected!=self.pip_selected {
+            let mut store=self.store.borrow_mut();
+            let PageStore { engine,pages,.. }=&mut *store;
+            if !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture) {
+                if let Some(page)=self.pip_selected.and_then(|tab|pages.get(&tab)).filter(|page|page.owner==self.host && page.visible && page.state.media.playing && page.state.media.video && !page.state.media.picture_in_picture) {
+                    engine.set_picture_in_picture(page.view,true);
+                }
+            }
+            if let Some(page)=selected.and_then(|tab|pages.get(&tab)).filter(|page|page.owner==self.host && page.state.media.picture_in_picture) {
+                engine.set_picture_in_picture(page.view,false);
+            }
+            self.pip_selected=selected;
+        }
         self.wanted.clear();
         self.wanted_focus = None;
         self.split = false;
@@ -1758,7 +1776,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::PictureInPictureReturnRequested { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }
@@ -1789,7 +1807,7 @@ impl PageStore {
             _ => None,
         })?;
         let page = self.pages.values().find(|page| page.view == view)?;
-        let input_origin = matches!(&event, Event::PageContext { .. } | Event::Shortcut { .. } | Event::InspectorInput(_)).then_some(InputOrigin {
+        let input_origin = matches!(&event, Event::PageContext { .. } | Event::PictureInPictureReturnRequested { .. } | Event::Shortcut { .. } | Event::InspectorInput(_)).then_some(InputOrigin {
             identity: page.identity, host: page.owner, attachment: page.input_attachment,
             inspector: match &event { Event::InspectorInput(input) => self.inspector_input_owner(input).map(|dock| dock.id), _ => None },
         });

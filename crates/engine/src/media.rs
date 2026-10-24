@@ -10,6 +10,8 @@ pub struct MediaState {
     pub active: bool,
     pub playing: bool,
     pub video: bool,
+    /// Chromium's standard video PiP session for this document.
+    pub picture_in_picture: bool,
     pub title: String,
     pub artist: String,
     pub artwork: String,
@@ -122,3 +124,22 @@ mod tests {
         assert_eq!(state.title.chars().count(),512);assert!(state.next);assert!(state.playing);
     }
 }
+
+/// Fixed native command; no page-supplied expression is evaluated. The protocol
+/// grants activation only for this user/browser-requested media operation.
+pub(crate) fn picture_in_picture(browser: &Browser, enabled: bool, ids: &crate::devtools::MessageIds) -> bool {
+    let Some(host)=browser.host() else { return false; };
+    let Some(id)=ids.next() else { return false; };
+    let message=serde_json::json!({"id":id,"method":"Runtime.evaluate","params":{
+        "expression": if enabled { ENTER_PIP } else { EXIT_PIP },
+        "userGesture":true,"awaitPromise":true,"returnByValue":true
+    }});
+    host.send_dev_tools_message(Some(message.to_string().as_bytes()))!=0
+}
+const ENTER_PIP: &str = r#"(async()=>{
+ if(document.pictureInPictureElement)return true;
+ const video=[...document.querySelectorAll('video')].find(v=>!v.paused&&!v.ended&&v.readyState>=1&&v.videoWidth>0&&!v.disablePictureInPicture);
+ if(!video||!document.pictureInPictureEnabled)return false;
+ try{await video.requestPictureInPicture();return true;}catch{return false;}
+})()"#;
+const EXIT_PIP: &str = "document.pictureInPictureElement ? document.exitPictureInPicture().then(()=>true,()=>false) : false";

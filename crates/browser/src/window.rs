@@ -1177,6 +1177,9 @@ impl BrowserWindow {
             if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
+                Event::PictureInPictureReturnRequested { .. } => {
+                    if let Some(identity)=identity { self.return_to_media_tab(identity.tab,cx);cx.notify(); }
+                }
                 Event::Focused { view } => {
                     self.finish_tab_rename(true, cx);
                     let tab = pages.borrow().tab_for(view).filter(|tab| pages.borrow().is_visible(*tab));

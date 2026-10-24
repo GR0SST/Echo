@@ -219,6 +219,7 @@ enum Call {
     StopLoading(u64),
     Mute(u64, bool),
     Media(u64, engine::MediaAction),
+    PictureInPicture(u64,bool),
     Volume(u64, f32),
     ColorScheme(u64, Option<bool>),
     Zoom(u64, i32),
@@ -325,6 +326,7 @@ impl WebEngine for FakeEngine {
         self.call(Call::ClearSiteData(raw(view),origin.into(),kind));true
     }
 
+    fn set_picture_in_picture(&mut self, view: ViewId, enabled: bool) -> bool {self.call(Call::PictureInPicture(raw(view),enabled));true}
     fn media_action(&mut self, view: ViewId, action: engine::MediaAction) -> bool {self.call(Call::Media(raw(view),action));true}
     fn set_audio_volume(&mut self, view: ViewId, volume: f32) -> bool {self.0.borrow_mut().volumes.insert(raw(view),volume);self.call(Call::Volume(raw(view),volume));true}
     fn audio_volume(&self, view: ViewId) -> Option<f32> {Some(self.0.borrow().volumes.get(&raw(view)).copied().unwrap_or(1.))}
@@ -10701,4 +10703,66 @@ mod max_feature_tests {
         view.read_with(cx,|w,_|{assert!(w.browser.active_tab().unwrap().ai_title.is_none());assert_eq!(w.browser.settings.max.provider.provider,Provider::Anthropic);});settings.simulate_keystrokes("cmd-w");
     }
 
+}
+
+#[gpui::test]
+fn video_pip_follows_tab_switches_and_preserves_the_live_source(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    let tab=view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id);
+    let mut media=playing_media();media.video=true;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:media.clone()});
+    fake.take_calls();
+    // Command Bar overlays do not leave the selected tab.
+    cx.simulate_keystrokes("cmd-t");cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::PictureInPicture(..))));
+    bar(&view,cx).simulate_input("https://example.com");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::PictureInPicture(1,true)));
+    media.picture_in_picture=true;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:media});fake.take_calls();
+    // Only the native return control can reactivate the hidden live document.
+    fake.send(cx,Event::Focused{view:page(1)});
+    assert_ne!(view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id),tab,"ordinary focus is not a PiP return");
+    fake.send(cx,Event::PictureInPictureReturnRequested{view:page(1)});
+    assert_eq!(view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id),tab);
+    let calls=fake.take_calls();assert!(calls.contains(&Call::PictureInPicture(1,false)));
+    assert!(!calls.iter().any(|call|matches!(call,Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn video_pip_respects_the_preference_and_never_opens_for_audio(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    let mut media=playing_media();media.video=true;
+    view.update(cx,|w,_|w.edit_browser(|b|b.settings.set_enabled(browser_core::settings::Toggle::AutomaticPictureInPicture,false)));
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:media});fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("https://example.com");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::PictureInPicture(..))));
+    view.update(cx,|w,_|w.edit_browser(|b|b.settings.set_enabled(browser_core::settings::Toggle::AutomaticPictureInPicture,true)));
+    fake.send(cx,Event::MediaStateChanged{view:page(2),state:playing_media()});fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("https://example.org");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::PictureInPicture(..))));
+    let mut paused=playing_media();paused.video=true;paused.playing=false;
+    fake.send(cx,Event::MediaStateChanged{view:page(3),state:paused});fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("https://example.net");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::PictureInPicture(..))));
+
+}
+
+#[gpui::test]
+fn native_pip_return_intent_precedes_the_renderer_exit_in_one_batch(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    let source=view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id);
+    let mut media=playing_media();media.video=true;media.picture_in_picture=true;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:media.clone()});
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("https://example.com");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    let background=active_url(&view,cx);
+    media.picture_in_picture=false;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:media.clone()});
+    assert_eq!(active_url(&view,cx),background,"closing PiP alone must not activate the source");
+    media.picture_in_picture=true;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:media.clone()});fake.take_calls();
+    media.picture_in_picture=false;
+    fake.0.borrow_mut().events.extend([Event::PictureInPictureReturnRequested{view:page(1)},Event::MediaStateChanged{view:page(1),state:media}]);
+    cx.executor().advance_clock(Duration::from_millis(50));cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id),source);
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..))));
 }

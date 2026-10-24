@@ -95,6 +95,7 @@ pub enum Event {
     MediaStateChanged { view: ViewId, state: MediaState },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     Focused { view: ViewId },
+    PictureInPictureReturnRequested { view: ViewId },
     EditFocusChanged { view: ViewId, editable: bool },
     FindResult { view: ViewId, count: i32, active: i32, final_update: bool },
     UrlChanged { view: ViewId, url: String },
@@ -133,6 +134,7 @@ enum RawEvent {
     Title(String),
     Favicon(String, Vec<u8>),
     Focused,
+    PipReturn,
     EditFocus(bool),
     Find(i32, i32, bool),
     Url(String),
@@ -547,6 +549,8 @@ impl Engine {
                 if let Some(audio) = &runtime.audio { audio.poll(); }
             }
         });
+        #[cfg(target_os = "macos")]
+        mac::poll_video_pip_style();
         shutdown::pump_once();
     }
 
@@ -588,6 +592,19 @@ impl Engine {
                         event => { if let Some(event) = inspector_input(inspector, &event) { self.inspectors.ready.push(event); } }
                     }
                     return None;
+                }
+                #[cfg(target_os = "macos")]
+                if matches!(&event,RawEvent::Media(state) if !state.picture_in_picture) { mac::video_pip_exited(browser_id); }
+                #[cfg(target_os = "macos")]
+                if matches!(&event,RawEvent::Media(state) if state.picture_in_picture) {
+                    // IDS_PICTURE_IN_PICTURE_TITLE_TEXT in CEF 154's
+                    // cef_pack_strings.h. Match the native window's own locale.
+                    if let Some(bundle)=resource_bundle_get_global() {
+                        let events=self.views.get(&view)?.callback_events.clone();
+                        mac::style_video_pip(browser_id,&CefString::from(&bundle.localized_string(11715)).to_string(),
+                            &CefString::from(&bundle.localized_string(11719)).to_string(),
+                            move||events.push((browser_id,RawEvent::PipReturn)));
+                    }
                 }
                 page_event(view, self.views.get(&view)?.role, event)
             })
@@ -1044,6 +1061,14 @@ impl Engine {
         }
     }
 
+    /// Chromium's standard video PiP. The native engine owns its video surface,
+    /// transport controls and lifetime; no duplicate playback or capture stream.
+    pub fn set_picture_in_picture(&mut self, id: ViewId, enabled: bool) -> bool {
+        if self._runtime.lifecycle.require_running().is_err() { return false; }
+        self.views.get(&id).filter(|view|view.role==ViewRole::Page)
+            .is_some_and(|view|media::picture_in_picture(&view.browser, enabled, &self.message_ids))
+    }
+
     pub fn media_action(&mut self, id: ViewId, action: MediaAction) -> bool {
         if self._runtime.lifecycle.require_running().is_err() { return false; }
         self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view| media::command(&view.browser, action))
@@ -1270,6 +1295,7 @@ fn browser_input(view: ViewId, role: ViewRole, event: &RawEvent) -> Option<Event
         ViewRole::Page => match event {
             RawEvent::Context(request) => Some(Event::PageContext { view, request: request.clone() }),
             RawEvent::Focused => Some(Event::Focused { view }),
+            RawEvent::PipReturn => Some(Event::PictureInPictureReturnRequested { view }),
             RawEvent::Shortcut(shortcut) => Some(Event::Shortcut { view, shortcut: shortcut.clone() }),
             _ => None,
         },
@@ -1307,6 +1333,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::Title(title) => Event::TitleChanged { view, title },
         RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
         RawEvent::Focused => Event::Focused { view },
+        RawEvent::PipReturn => Event::PictureInPictureReturnRequested { view },
         RawEvent::EditFocus(editable) => Event::EditFocusChanged { view, editable },
         RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
         RawEvent::Url(url) => Event::UrlChanged { view, url },
@@ -1366,7 +1393,9 @@ wrap_client! {
             if source_process == ProcessId::RENDERER && frame.as_ref().is_some_and(|frame| frame.is_main()!=0) {
                 if let Some(message)=message.as_ref().filter(|message|CefString::from(&message.name()).to_string()==media::STATE) {
                     if let Some(args)=message.argument_list().filter(|args|args.size()==1&&args.get_type(0)==ValueType::STRING) {
-                        if let Some(state)=media::decode(&CefString::from(&args.string(0)).to_string()) { push(&self.events,browser,RawEvent::Media(state)); }
+                        if let Some(state)=media::decode(&CefString::from(&args.string(0)).to_string()) {
+                            push(&self.events,browser,RawEvent::Media(state));
+                        }
                     }
                     return 1;
                 }
@@ -1805,7 +1834,7 @@ mod tests {
         let role = ViewRole::Inspector(InspectorId(3));
         for event in [
             RawEvent::Audio(true), RawEvent::Title("DevTools".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()),
-            RawEvent::Loading(false, false, false), RawEvent::Focused,
+            RawEvent::Loading(false, false, false), RawEvent::Focused, RawEvent::PipReturn,
             RawEvent::EditFocus(true), RawEvent::Status("internal".into()),
             RawEvent::Popup("https://example.com".into()), RawEvent::Shortcut(Shortcut::default()),
             RawEvent::Find(1, 1, true), RawEvent::Favicon("internal".into(), vec![]),
@@ -1823,6 +1852,10 @@ mod tests {
             assert_eq!(page_event(ViewId::from_raw(1), ViewRole::Inspector(inspector), RawEvent::Shortcut(shortcut)), None);
         }
         assert_eq!(inspector_input(inspector, &RawEvent::Focused), Some(InspectorEvent::Focused { inspector }));
+        let view=ViewId::from_raw(1);
+        assert_eq!(browser_input(view,ViewRole::Page,&RawEvent::PipReturn),Some(Event::PictureInPictureReturnRequested { view }));
+        assert_eq!(inspector_input(inspector,&RawEvent::PipReturn),None);
+        assert!(!transferable_metadata(&RawEvent::PipReturn));
         for metadata in [RawEvent::Title("private frontend title".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()), RawEvent::EditFocus(true), RawEvent::Loading(false, false, false)] { assert_eq!(inspector_input(inspector, &metadata), None); }
     }
 
