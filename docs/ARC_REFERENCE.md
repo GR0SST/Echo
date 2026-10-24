@@ -1276,3 +1276,19 @@ confirm that split drafts retain the wide panel across pane boundaries. Earlier
 captures taken while the popup was settling have a different horizontal origin.
 Echo now uses the ordinary panel width and top anchor for drafts in both axes;
 GPUI regressions cover empty horizontal/vertical drafts and four-pane input.
+
+
+## Edge-drop Split View preview — 2026-10-24
+
+The Arc reference `arc-drop-preview.png` clips the current document without
+reflow while its target half shows the window's own theme field, with a thin
+light outline and 6 px corners. Echo now uses a passive, click-through child
+overlay with the same root-gradient origin (`theme_region`). The preview covers
+the prospective divider gap as well as the target half, leaving a 10 px gap
+between the retained document and the outlined destination. Native verification
+is `echo-drop-preview-new.png`, `echo-drop-result-new.png` and
+`drop-preview-native.log`; `pair-drop-preview.png` was inspected directly.
+The copied Pinned/Favorite source remains intact, while ordinary tabs reuse their
+identity and engine. Four GPUI tests cover committing, cancellation and protected
+originals. The retained half's rounded clipping, the floating drag card and exact
+activation thresholds/animation remain different; this is partial parity.

@@ -35,6 +35,7 @@ impl TabDrag {
             cx.on_release(move |_, cx| {
                 let _ = owner.update(cx, |this, cx| {
                     this.tab_drag_active = false;
+                    this.close_split_drop(cx);
                     cx.notify();
                 });
             })
@@ -45,7 +46,7 @@ impl TabDrag {
 }
 
 impl BrowserWindow {
-    fn accepts_tab_drag(&self, drag: &TabDrag) -> bool {
+    pub(crate) fn accepts_tab_drag(&self, drag: &TabDrag) -> bool {
         self.profile.handle.same_workspace(&drag.workspace)
             && self.browser.user_profile_id_for_tab(drag.id) == Some(drag.profile)
             && (!(self.browser.is_blank() || drag.blank) || self.main_window == drag.source)

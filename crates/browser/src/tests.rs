@@ -8093,3 +8093,92 @@ fn four_pane_split_draft_keeps_the_ordinary_command_bar_width(cx: &mut TestAppCo
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().panes.len()), 4);
 }
 
+#[gpui::test]
+fn edge_drag_previews_without_reflow_and_commits_the_existing_tab(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 1);
+    let anchor = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    let other = view.update(cx, |w, cx| {
+        let other = w.edit_browser(|b| b.new_tab("https://dragged.example", std::time::SystemTime::now()));
+        w.edit_browser(|b| b.activate_tab(anchor, std::time::SystemTime::now())); cx.notify(); other
+    });
+    cx.run_until_parked();
+    let before = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
+    fake.take_calls();
+    let start = cx.debug_bounds(test_selector(format!("tab-{}",other.get()))).unwrap().center();
+    let surface = cx.debug_bounds("page-surface").unwrap();
+    let edge = gpui::point(surface.right()-gpui::px(12.),surface.center().y);
+    cx.simulate_mouse_move(start,None,Modifiers::none());
+    cx.simulate_mouse_down(start,gpui::MouseButton::Left,Modifiers::none());
+    cx.simulate_mouse_move(start+gpui::point(gpui::px(8.),gpui::px(0.)),gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(edge,gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        let preview=w.split_drop.as_ref().expect("edge preview");
+        assert_eq!(preview.anchor,anchor); assert_eq!(preview.source,other);
+        assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout(),before);
+        assert!(w.browser.active_split().is_none());
+    });
+    finish_sidebar_drag(cx,edge);
+    view.read_with(cx, |w, _| {
+        assert!(w.split_drop.is_none() && w.command_bar.is_none());
+        let split=w.browser.active_split().unwrap();
+        assert_eq!(split.panes,vec![anchor,other]); assert_eq!(split.active,other);
+    });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call,Call::Close(..)|Call::Navigate(..)|Call::Reload(..))));
+}
+
+#[gpui::test]
+fn leaving_the_page_edge_cancels_the_split_preview(cx: &mut TestAppContext) {
+    let (view,cx,_) = open_split_pages(cx,1);
+    let anchor=view.read_with(cx,|w,_|w.browser.space().active_tab.unwrap());
+    let other=view.update(cx,|w,cx| {
+        let id=w.edit_browser(|b|b.new_tab("https://dragged.example",std::time::SystemTime::now()));
+        w.edit_browser(|b|b.activate_tab(anchor,std::time::SystemTime::now()));cx.notify();id
+    });
+    cx.run_until_parked();
+    let start=cx.debug_bounds(test_selector(format!("tab-{}",other.get()))).unwrap().center();
+    let frame=cx.debug_bounds("page-surface").unwrap();
+    cx.simulate_mouse_move(start,None,Modifiers::none());
+    cx.simulate_mouse_down(start,gpui::MouseButton::Left,Modifiers::none());
+    cx.simulate_mouse_move(start+gpui::point(gpui::px(8.),gpui::px(0.)),gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(gpui::point(frame.right()-gpui::px(12.),frame.center().y),gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.split_drop.is_some()));
+    finish_sidebar_drag(cx,frame.center());
+    assert!(view.read_with(cx,|w,_|w.split_drop.is_none() && w.browser.active_split().is_none() && w.browser.space().active_tab==Some(anchor)));
+}
+
+fn assert_edge_drop_keeps_protected_original(cx: &mut TestAppContext, favorite: bool) {
+    let (view,cx,_) = open_split_pages(cx,1);
+    let anchor=view.read_with(cx,|w,_|w.browser.space().active_tab.unwrap());
+    let source=view.update(cx,|w,cx| {
+        let id=w.edit_browser(|b|b.new_tab("https://protected.example",std::time::SystemTime::now()));
+        if favorite { w.edit_browser(|b|b.favorite_tab(id)); } else { w.edit_browser(|b|b.toggle_pin(id)); }
+        w.edit_browser(|b|b.activate_tab(anchor,std::time::SystemTime::now()));cx.notify();id
+    });
+    cx.run_until_parked();
+    let original=view.read_with(cx,|w,_|w.browser.all_tabs().find(|t|t.id==source).unwrap().clone());
+    let selector=if favorite {format!("favorite-{}",source.get())} else {format!("tab-{}",source.get())};
+    let start=cx.debug_bounds(test_selector(selector)).unwrap().center();
+    let frame=cx.debug_bounds("page-surface").unwrap();
+    cx.simulate_mouse_move(start,None,Modifiers::none());
+    cx.simulate_mouse_down(start,gpui::MouseButton::Left,Modifiers::none());
+    cx.simulate_mouse_move(start+gpui::point(gpui::px(8.),gpui::px(0.)),gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    finish_sidebar_drag(cx,gpui::point(frame.right()-gpui::px(12.),frame.center().y));
+    view.read_with(cx,|w,_| {
+        let split=w.browser.active_split().expect("protected drag creates a split");
+        assert_eq!(split.panes.len(),2);assert!(!split.panes.contains(&source));
+        let retained=w.browser.all_tabs().find(|t|t.id==source).unwrap();
+        assert_eq!(retained.url,original.url);assert_eq!(retained.pinned_url,original.pinned_url);
+        assert!(if favorite {w.browser.is_favorite(source)} else {w.browser.space().pinned.iter().any(|t|t.id==source)});
+        assert_eq!(w.browser.active_tab().unwrap().url,original.url);
+        assert!(w.browser.space().today.iter().any(|t|t.id==split.active));
+    });
+}
+#[gpui::test]
+fn edge_drop_copies_a_pin_and_retains_its_original(cx: &mut TestAppContext) {assert_edge_drop_keeps_protected_original(cx,false);}
+#[gpui::test]
+fn edge_drop_copies_a_favorite_and_retains_its_original(cx: &mut TestAppContext) {assert_edge_drop_keeps_protected_original(cx,true);}

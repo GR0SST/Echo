@@ -19,6 +19,7 @@ mod new_window;
 mod blank_window;
 mod audio;
 mod split_layout;
+mod split_drop;
 mod sidebar_title;
 mod split;
 mod icons;

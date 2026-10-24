@@ -483,6 +483,7 @@ pub enum OverlayKind {
     Find,
     Toast,
     LinkStatus,
+    SplitDrop,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
     TabMenu,
@@ -531,6 +532,7 @@ impl Render for Overlay {
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast => browser.render_toast(),
                     OverlayKind::LinkStatus => browser.render_link_status(window),
+                    OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(cx),
                     OverlayKind::SiteControls => browser.render_site_controls(cx),
@@ -584,6 +586,8 @@ pub struct BrowserWindow {
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     pub(crate) tab_drag_active: bool,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
+    pub(crate) split_drop: Option<crate::split_drop::SplitDropPreview>,
+    pub(crate) split_drop_generation: u64,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub(crate) hovered_row: Option<TabId>,
     /// Layout that changes on sidebar hover (Today actions) needs state:
@@ -816,6 +820,8 @@ impl BrowserWindow {
             tab_drop_edges: RefCell::new(HashMap::new()),
             tab_drag_active: false,
             space_drag_hover: None,
+            split_drop: None,
+            split_drop_generation: 0,
             split_draft: None,
             hovered_row: None,
             sidebar_hovered: false,
@@ -997,6 +1003,7 @@ impl BrowserWindow {
             self.new_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
             self.toast.take().and_then(|toast| toast.overlay).map(|handle| handle.into()),
             self.link_status.take().and_then(|status| status.overlay).map(|handle| handle.into()),
+            self.split_drop.take().and_then(|preview| preview.overlay).map(|handle| handle.into()),
             self.floating_sidebar.take().and_then(|sidebar| sidebar.overlay).map(|handle| handle.into()),
         ];
         for child in children.into_iter().flatten() {
@@ -3372,6 +3379,7 @@ impl BrowserWindow {
             .child(
                 div()
                     .debug_selector(|| "page-surface".into())
+                    .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, window, cx| this.drop_tab_into_split(drag, window.mouse_position(), window, cx)))
                     .left(px(self.library_page_offset()))
                     .size_full()
                     .flex()
@@ -3789,6 +3797,7 @@ impl Render for BrowserWindow {
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),
             }
         }
+        if self.split_drop.is_some() && !cx.has_active_drag() { self.close_split_drop(cx); }
         self.sync_link_status(window, cx);
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
@@ -3805,6 +3814,10 @@ impl Render for BrowserWindow {
             .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
             .track_focus(&self.focus_handle)
+            .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, window, cx| {
+                let drag = event.drag(cx).clone();
+                this.update_split_drop(&drag, event.event.position, window, cx);
+            }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
