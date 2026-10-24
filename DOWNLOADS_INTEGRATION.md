@@ -655,3 +655,8 @@ were inspected. A reload through the actual core session reader retained the one
 original genuine completed record under its captured named Profile, with none in
 Default. These checks used a fresh copy of previously verified owned fixture data;
 no new admission, destination policy, file action or full-fence capability was enabled.
+
+The source-controlled [CEF154 receipt experiment](docs/CEF154_DOWNLOAD_EXPERIMENT.md)
+now preserves the qualified engine patch set, source pins and selected-test
+record. It includes native pre-close GET/POST relay and same-document coverage;
+the ordered public fence and production adoption remain incomplete.

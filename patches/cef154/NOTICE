@@ -1,0 +1,10 @@
+These source diffs target Chromium 154.0.8037.98 and CEF commit
+14c5a089e8452874cb1a556dc3fde26ed2d87723. Upstream copyright notices are retained
+in the patch context and new integration sources.
+
+LICENSE.chromium and LICENSE.cef are unmodified copies of the corresponding
+licenses at the pinned source revisions. Preserve the upstream checkout's full
+licenses and third-party notices when building or distributing its code.
+
+This directory contains source patches and validation records, not a CEF binary
+distribution or Arc branding/assets.

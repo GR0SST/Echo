@@ -88,6 +88,9 @@ The supplied [build configuration](config/args.gn) targets Apple Silicon.
 These commands build the standalone Chromium fork; they do not replace the
 prebuilt CEF used by Echo.
 
+The separate [CEF154 download experiment](docs/CEF154_DOWNLOAD_EXPERIMENT.md)
+documents the pinned engine patches and their validation boundary.
+
 ## License
 
 This repository does not currently include a top-level license for Echo's

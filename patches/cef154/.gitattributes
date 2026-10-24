@@ -1,0 +1,2 @@
+# Patch context includes significant leading spaces on otherwise empty lines.
+*.patch -whitespace
