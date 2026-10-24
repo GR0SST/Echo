@@ -141,6 +141,68 @@ pub(crate) fn speaker(muted: bool) -> AnyElement {
     }).size(px(18.)).flex_none().into_any_element()
 }
 
+/// Fixed media transport geometry measured in the native 33 px strip.
+pub(crate) fn media_transport(action: &str) -> AnyElement {
+    let action=action.to_owned();
+    gpui::canvas(|_,_,_|(),move|bounds,_,window,_|{
+        let color=window.text_style().color;
+        let at=|x:f32,y:f32|bounds.origin+gpui::point(px(x),px(y));
+        if action=="pause" {
+            for x in [5.5,11.] {
+                window.paint_quad(gpui::fill(gpui::Bounds::new(at(x,4.),gpui::size(px(3.5),px(12.))),color).corner_radii(px(1.)));
+            }
+        }else{
+            let skip=action!="play";
+            let back=action=="previous";
+            let transform=|x:f32,y:f32|at(if back{20.-x}else{x},y);
+            let (left,right)=if skip{(3.5,14.)}else{(6.,15.)};
+            let mut path=gpui::PathBuilder::fill();
+            path.move_to(transform(left,4.8));
+            path.curve_to(transform(left+1.4,4.1),transform(left,3.4));
+            path.line_to(transform(right-0.4,9.2));
+            path.curve_to(transform(right-0.4,10.8),transform(right+1.,10.));
+            path.line_to(transform(left+1.4,15.9));
+            path.curve_to(transform(left,15.2),transform(left,16.6));
+            path.close();
+            if let Ok(path)=path.build(){window.paint_path(path,color);}
+            if skip {
+                let x=if back{3.}else{14.};
+                window.paint_quad(gpui::fill(gpui::Bounds::new(at(x,4.),gpui::size(px(3.),px(12.))),color).corner_radii(px(1.)));
+            }
+        }
+    }).size(px(20.)).flex_none().into_any_element()
+}
+
+/// Filled, variable-wave speaker used by the observed 33 px media strip.
+pub(crate) fn media_speaker(volume: f32, muted: bool) -> AnyElement {
+    gpui::canvas(|_,_,_|(),move|bounds,_,window,_|{
+        let color=window.text_style().color;
+        let mut body=gpui::PathBuilder::fill();
+        for (index,(x,y)) in [(1.,7.),(4.,7.),(8.,3.5),(8.,16.5),(4.,13.),(1.,13.)].into_iter().enumerate(){
+            let p=bounds.origin+gpui::point(px(x),px(y));
+            if index==0{body.move_to(p);}else{body.line_to(p);}
+        }
+        body.close();if let Ok(path)=body.build(){window.paint_path(path,color);}
+        let waves=if muted||volume==0.{0}else{(volume*3.).ceil().clamp(1.,3.) as usize};
+        for radius in [4.5,7.,9.5].into_iter().take(waves){
+            let points=arc(8.,10.,radius,-0.72,0.72);
+            let mut path=gpui::PathBuilder::stroke(px(1.35));
+            for (index,(x,y)) in points.iter().copied().enumerate(){
+                let p=bounds.origin+gpui::point(px(x),px(y));
+                if index==0{path.move_to(p);}else{path.line_to(p);}
+            }
+            if let Ok(path)=path.build(){window.paint_path(path,color);}
+            for (x,y) in [points[0],*points.last().unwrap()]{
+                window.paint_quad(gpui::fill(gpui::Bounds::new(bounds.origin+gpui::point(px(x-0.675),px(y-0.675)),gpui::size(px(1.35),px(1.35))),color).corner_radii(px(0.675)));
+            }
+        }
+        if muted||volume==0.{
+            let mut slash=gpui::PathBuilder::stroke(px(1.5));slash.move_to(bounds.origin+gpui::point(px(2.),px(2.)));slash.line_to(bounds.origin+gpui::point(px(18.),px(18.)));
+            if let Ok(path)=slash.build(){window.paint_path(path,color);}
+        }
+    }).size(px(20.)).flex_none().into_any_element()
+}
+
 /// A catalog-backed control scaled to `size`; frame controls keep the 18 px grid.
 pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement { zoomed(icon, size, 1.) }
 

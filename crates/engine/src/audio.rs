@@ -52,6 +52,7 @@ struct Playback {
     muted: AtomicBool,
     active: AtomicBool,
     generation: AtomicU64,
+    gain: std::sync::atomic::AtomicU32,
 }
 impl Playback {
     fn clear(&self) { self.generation.fetch_add(1, Ordering::Relaxed); while self.frames.pop().is_some() {} }
@@ -65,7 +66,7 @@ impl State {
     fn register(&mut self, browser: i32, rate: u32) {
         self.tracks.insert(browser, Track {
             output: Some(Arc::new(Playback { frames: crossbeam_queue::ArrayQueue::new((rate as usize / 4).max(2)),
-                muted: AtomicBool::new(false), active: AtomicBool::new(true), generation: AtomicU64::new(0) })), ..Track::default()
+                muted: AtomicBool::new(false), active: AtomicBool::new(true), generation: AtomicU64::new(0), gain: std::sync::atomic::AtomicU32::new(1_f32.to_bits()) })), ..Track::default()
         });
         self.refresh();
     }
@@ -150,7 +151,8 @@ impl Mixer {
         let mut mixed = [0.; 2];
         for source in &mut self.sources {
             let frame = source.sample(at, self.late_limit);
-            mixed[0] += frame[0]; mixed[1] += frame[1];
+            let gain=f32::from_bits(source.output.gain.load(Ordering::Relaxed));
+            mixed[0] += frame[0]*gain; mixed[1] += frame[1]*gain;
         }
         mixed
     }
@@ -257,6 +259,16 @@ impl Output {
             if self.rebuild(&device).is_none() { self.failed.store(true, Ordering::Relaxed); }
         }
     }
+    pub(crate) fn set_volume(&self, browser: i32, volume: f32) -> bool {
+        if !volume.is_finite() || !(0. ..=1.).contains(&volume) { return false; }
+        let state=self.capture.state.lock().unwrap();
+        let Some(output)=state.tracks.get(&browser).and_then(|track|track.output.as_ref()) else{return false;};
+        output.gain.store(volume.to_bits(),Ordering::Relaxed);true
+    }
+    pub(crate) fn volume(&self, browser: i32) -> Option<f32> {
+        self.capture.state.lock().unwrap().tracks.get(&browser).and_then(|track|track.output.as_ref())
+            .map(|output|f32::from_bits(output.gain.load(Ordering::Relaxed)))
+    }
     pub(crate) fn capture(&self) -> Capture { self.capture.clone() }
     pub(crate) fn register(&self, browser: i32) { self.capture.state.lock().unwrap().register(browser, self.capture.rate); }
     pub(crate) fn mute(&self, browser: i32, muted: bool) { self.capture.state.lock().unwrap().mute(browser, muted); }
@@ -290,11 +302,12 @@ wrap_audio_handler! {
                 let Some(track) = state.tracks.get_mut(&id) else { return; };
                 let now = Instant::now();
                 let at = track.clock.packet(pts, now);
+                let gain=track.output.as_ref().map_or(1.,|output|f32::from_bits(output.gain.load(Ordering::Relaxed)));
                 let mut sound = false;
                 for (index, (&l, &r)) in left.iter().zip(right).enumerate() {
                     let l = if l.is_finite() { l } else { 0. };
                     let r = if r.is_finite() { r } else { 0. };
-                    sound |= l.abs() > 0.0001 || r.abs() > 0.0001;
+                    sound |= (l*gain).abs() > 0.0001 || (r*gain).abs() > 0.0001;
                     if !track.muted { if let Some(output) = &track.output { output.frames.force_push(Frame { samples: [l, r], at: at + Duration::from_secs_f64(index as f64 / self.capture.rate as f64) }); } }
                 }
                 track.activity(sound, Instant::now())
@@ -394,6 +407,27 @@ mod tests {
                 assert_eq!(l,-r);
             }
         }
+    }
+    #[test]
+    fn tab_gain_scales_only_its_source_and_survives_mute() {
+        let state=Arc::new(Mutex::new(State::default()));
+        state.lock().unwrap().register(1,48000);state.lock().unwrap().register(2,48000);
+        let output=Output { capture:Capture {state:state.clone(),rate:48000},stream:RefCell::new(None),device:RefCell::new(String::new()),failed:Arc::new(AtomicBool::new(false)),checked:Cell::new(Instant::now()) };
+        assert!(output.set_volume(1,0.25));
+        assert!(!output.set_volume(1,f32::NAN));assert!(!output.set_volume(1,1.1));assert!(!output.set_volume(99,0.5));
+        assert_eq!(output.volume(2),Some(1.));
+        let now=Instant::now();
+        let mut mixer=Mixer::new(1.);
+        {
+            let state=state.lock().unwrap();
+            state.tracks[&1].output.as_ref().unwrap().frames.force_push(Frame {samples:[1.,-1.],at:now});
+            state.tracks[&2].output.as_ref().unwrap().frames.force_push(Frame {samples:[0.1,0.1],at:now});
+            mixer.refresh(state.outputs.clone());
+        }
+        let [left,right]=mixer.sample(now);
+        assert!((left-0.35).abs()<0.0001);assert!((right+0.15).abs()<0.0001);
+        output.mute(1,true);output.mute(1,false);assert_eq!(output.volume(1),Some(0.25));
+        output.close(1);assert!(!output.set_volume(1,1.));assert_eq!(output.volume(1),None);
     }
     #[test]
     fn silence_expires_activity_and_restart_is_reported_once() {

@@ -209,6 +209,8 @@ enum Call {
     ForceReload(u64),
     StopLoading(u64),
     Mute(u64, bool),
+    Media(u64, engine::MediaAction),
+    Volume(u64, f32),
     ColorScheme(u64, Option<bool>),
     Zoom(u64, i32),
     Find(u64, String, bool, bool),
@@ -246,6 +248,7 @@ struct FakeState {
     focused_page: Option<ViewId>,
     events: Vec<Event>,
     muted: std::collections::HashSet<u64>,
+    volumes: std::collections::HashMap<u64, f32>,
     focus_on_create: bool,
     reject_move: bool,
     reject_snapshot: bool,
@@ -299,6 +302,9 @@ impl WebEngine for FakeEngine {
         self.call(Call::ClearSiteData(raw(view),origin.into(),kind));true
     }
 
+    fn media_action(&mut self, view: ViewId, action: engine::MediaAction) -> bool {self.call(Call::Media(raw(view),action));true}
+    fn set_audio_volume(&mut self, view: ViewId, volume: f32) -> bool {self.0.borrow_mut().volumes.insert(raw(view),volume);self.call(Call::Volume(raw(view),volume));true}
+    fn audio_volume(&self, view: ViewId) -> Option<f32> {Some(self.0.borrow().volumes.get(&raw(view)).copied().unwrap_or(1.))}
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
     fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut std::ffi::c_void, bounds: Bounds) -> Option<ViewId> {
         let target = target.as_any_mut()?.downcast_mut::<Self>()?;
@@ -9848,4 +9854,85 @@ fn default_material_and_contrast_return_after_theme_undo(cx: &mut TestAppContext
         assert_eq!(w.theme_default_fraction(), 1.);
         assert!(w.theme_colors().foreground.l > 0.9);
     });
+}
+
+fn playing_media() -> engine::MediaState {
+    engine::MediaState {active:true,playing:true,previous:true,next:true,volume:1.,title:"Track metadata differs from tab title".into(),..Default::default()}
+}
+fn background_media(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext,fake:&FakeEngine){
+    fake.send(cx,Event::MediaStateChanged {view:page(1),state:playing_media()});
+    assert!(view.read_with(cx,|view,_|view.mini_player_source().is_none()));
+    cx.simulate_keystrokes("cmd-t");
+    bar(view,cx).simulate_input("https://example.com/background-media");
+    bar(view,cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+#[gpui::test]
+fn mini_media_transport_targets_the_background_page_and_return_restores_it(cx:&mut TestAppContext){
+    let (view,cx,fake)=open_pages(cx);
+    let original=active_url(&view,cx);
+    background_media(&view,cx,&fake);
+    let foreground=active_url(&view,cx);
+    let source=view.read_with(cx,|view,_|view.mini_player_source().unwrap().0);
+    fake.take_calls();
+    click(cx,"media-toggle");click(cx,"media-next");click(cx,"media-previous");
+    assert_eq!(active_url(&view,cx),foreground);
+    let calls=fake.take_calls();
+    assert!(calls.contains(&Call::Media(1,engine::MediaAction::Toggle)));
+    assert!(calls.contains(&Call::Media(1,engine::MediaAction::Next)));
+    assert!(calls.contains(&Call::Media(1,engine::MediaAction::Previous)));
+    assert!(!calls.iter().any(|call|matches!(call,Call::Create(..)|Call::Navigate(..)|Call::Close(..)|Call::FocusPage(1))));
+    let mut paused=playing_media();paused.playing=false;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:paused});
+    assert_eq!(view.read_with(cx,|view,_|view.mini_player_source().unwrap().0),source);
+    click(cx,"media-return");
+    assert_eq!(active_url(&view,cx),original);
+    assert!(view.read_with(cx,|view,_|view.mini_player_source().is_none()));
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(..)|Call::Navigate(..))));
+}
+#[gpui::test]
+fn mini_media_hover_delays_collapse_and_volume_drag_keeps_the_active_tab(cx:&mut TestAppContext){
+    let (view,cx,fake)=open_pages(cx);background_media(&view,cx,&fake);
+    let foreground=active_url(&view,cx);
+    assert_eq!(cx.debug_bounds("mini-player").unwrap().size.height,gpui::px(33.));
+    let center=cx.debug_bounds("mini-player").unwrap().center();
+    cx.simulate_mouse_move(center,None,Modifiers::none());cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("mini-player").unwrap().size.height,gpui::px(66.));
+    click(cx,"media-volume");
+    cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("mini-player").unwrap().size.height,gpui::px(99.));
+    fake.take_calls();click(cx,"media-volume-slider");
+    assert_eq!(active_url(&view,cx),foreground);
+    assert!((fake.0.borrow().volumes[&1]-0.5).abs()<0.01);
+    let bounds=cx.debug_bounds("media-volume-slider").unwrap();
+    cx.simulate_mouse_down(bounds.center(),gpui::MouseButton::Left,Modifiers::none());
+    let outside=gpui::point(gpui::px(-20.),bounds.center().y);
+    cx.simulate_mouse_move(outside,gpui::MouseButton::Left,Modifiers::none());cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(2500));cx.run_until_parked();
+    assert!(cx.debug_bounds("mini-player").unwrap().size.height>gpui::px(33.));
+    cx.simulate_mouse_up(outside,gpui::MouseButton::Left,Modifiers::none());cx.run_until_parked();
+    assert_eq!(fake.0.borrow().volumes[&1],0.);
+    assert_eq!(active_url(&view,cx),foreground);
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Mute(..)|Call::Navigate(..)|Call::FocusPage(1))));
+    cx.simulate_mouse_move(gpui::point(gpui::px(600.),gpui::px(100.)),None,Modifiers::none());cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(1500));cx.run_until_parked();
+    assert!(cx.debug_bounds("mini-player").unwrap().size.height>gpui::px(33.));
+    cx.executor().advance_clock(Duration::from_millis(700));cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("mini-player").unwrap().size.height,gpui::px(33.));
+}
+#[gpui::test]
+fn mini_media_ignores_unknown_sources_and_disabled_track_commands(cx:&mut TestAppContext){
+    let (view,cx,fake)=open_pages(cx);
+    fake.send(cx,Event::MediaStateChanged{view:page(999),state:playing_media()});
+    assert!(view.read_with(cx,|view,_|view.mini_player_source().is_none()));
+    background_media(&view,cx,&fake);
+    let mut state=playing_media();state.previous=false;state.next=false;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state});fake.take_calls();
+    click(cx,"media-next");click(cx,"media-previous");
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Media(..))));
+    let mut ended=playing_media();ended.active=false;ended.playing=false;
+    fake.send(cx,Event::MediaStateChanged{view:page(1),state:ended});
+    assert!(view.read_with(cx,|view,_|view.mini_player_source().is_none()));
 }

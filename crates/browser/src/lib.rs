@@ -25,6 +25,7 @@ mod global_little;
 mod peek;
 mod peek_history;
 mod audio;
+mod mini_player;
 mod split_layout;
 mod split_drop;
 mod sidebar_title;

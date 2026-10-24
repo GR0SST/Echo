@@ -612,6 +612,7 @@ pub struct BrowserWindow {
     pub browser: browser_core::windows::WindowProjection,
     pub(crate) profile: crate::profile::ProfileBinding,
     pub(crate) sidebar_navigation: crate::sidebar_navigation::SidebarNavigation,
+    pub(crate) mini_player: crate::mini_player::MiniPlayer,
     pub(crate) sidebar_debug_namespace: Option<String>,
     pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
@@ -872,6 +873,7 @@ impl BrowserWindow {
             browser,
             profile,
             sidebar_navigation,
+            mini_player: Default::default(),
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
@@ -1177,6 +1179,10 @@ impl BrowserWindow {
                         // by clearing Pages focus before their next frame.
                         self.remember_library_native_popup_focus();
                     }
+                }
+                Event::MediaStateChanged { state, .. } => {
+                    if let Some(identity)=identity { self.mini_player.record(identity.tab,&state); }
+                    cx.notify();
                 }
                 Event::AudioStateChanged { .. } => { cx.notify(); }
                 Event::TitleChanged { view, title } => {
@@ -2957,19 +2963,28 @@ impl BrowserWindow {
 
     /// `tab`'s favicon for a light surface, or a dark one when `dark`.
     pub(crate) fn render_favicon_on(&self, tab: &Tab, _hue: f32, dark: bool) -> AnyElement {
+        self.render_favicon_for_profile(tab,self.browser.active_user_profile_id(),dark)
+    }
+    pub(crate) fn render_favicon_for_profile(&self, tab: &Tab, profile: browser_core::UserProfileId, dark: bool) -> AnyElement {
+        self.render_favicon_styled(tab,profile,dark,false)
+    }
+    pub(crate) fn render_media_favicon(&self, tab: &Tab, profile: browser_core::UserProfileId) -> AnyElement {
+        self.render_favicon_styled(tab,profile,true,true)
+    }
+    fn render_favicon_styled(&self, tab: &Tab, profile: browser_core::UserProfileId, dark: bool, media: bool) -> AnyElement {
         if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
-        let icon = match self.browser.favicon(self.browser.active_user_profile_id(), &tab.url) {
+        let icon = match self.browser.favicon(profile, &tab.url) {
             Some(png) => {
                 let style = self.favicon_styles.borrow_mut().get(png);
                 gpui::img(if dark { style.on_dark } else { style.image })
-                    .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
+                    .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain).rounded(px(if media{3.}else{0.}))
                     .with_fallback(move || favicon_placeholder(dark).into_any_element())
                     .into_any_element()
             }
             None => favicon_placeholder(dark).into_any_element(),
         };
         // Favicons are 16 px, centered in the 18 px slot shared with symbols.
-        div().size(px(18.)).flex_none().flex().items_center().justify_center().child(icon).into_any_element()
+        div().size(px(if media{16.}else{18.})).flex_none().flex().items_center().justify_center().child(icon).into_any_element()
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -3146,6 +3161,7 @@ impl BrowserWindow {
                         .children(pages),
                 ),
             )
+            .when_some(self.render_mini_player(cx),|this,player|this.child(player))
             .when(!private && !blank, |this| this.child(self.render_space_switcher(cx)))
             .when(private, |this| this.child(div().h(px(SPACE_BAR_HEIGHT)).flex_none().px(px(7.)).flex().items_center()
                 .text_color(hsla(0., 0., 1., 0.5))

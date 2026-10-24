@@ -19,6 +19,8 @@ pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod audio;
 mod audio_clock;
+mod media;
+pub use media::{MediaState, MediaAction};
 mod editing;
 mod boosts;
 mod site_info;
@@ -84,6 +86,7 @@ pub enum Event {
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     AudioStateChanged { view: ViewId, audible: bool },
+    MediaStateChanged { view: ViewId, state: MediaState },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     Focused { view: ViewId },
     EditFocusChanged { view: ViewId, editable: bool },
@@ -116,6 +119,7 @@ enum RawEvent {
     Progress(u16),
     BoostZap(String),
     Audio(bool),
+    Media(MediaState),
     Title(String),
     Favicon(String, Vec<u8>),
     Focused,
@@ -970,6 +974,16 @@ impl Engine {
         if let Some(view) = self.views.get(&id) { view.browser.stop_load(); }
     }
 
+    pub fn set_audio_volume(&mut self, id: ViewId, volume: f32) -> bool {
+        if !volume.is_finite() || !(0. ..=1.).contains(&volume) { return false; }
+        let Some(view)=self.views.get(&id).filter(|view|view.role==ViewRole::Page) else{return false;};
+        self._runtime.audio.as_ref().is_some_and(|audio|audio.set_volume(view.browser.identifier(),volume))
+            || media::command(&view.browser,MediaAction::SetVolume(volume as f64))
+    }
+    pub fn audio_volume(&self, id: ViewId) -> Option<f32> {
+        self.views.get(&id).and_then(|view|self._runtime.audio.as_ref()?.volume(view.browser.identifier()))
+    }
+
     pub fn set_audio_muted(&mut self, id: ViewId, muted: bool) {
         if let Some(view) = self.views.get(&id) {
             if let Some(audio) = &self._runtime.audio { audio.mute(view.browser.identifier(), muted); }
@@ -1001,6 +1015,11 @@ impl Engine {
             let factor = next_zoom_factor(1.2_f64.powf(host.zoom_level()), direction);
             host.set_zoom_level(factor.ln() / 1.2_f64.ln());
         }
+    }
+
+    pub fn media_action(&mut self, id: ViewId, action: MediaAction) -> bool {
+        if self._runtime.lifecycle.require_running().is_err() { return false; }
+        self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view| media::command(&view.browser, action))
     }
 
     pub fn find(&mut self, id: ViewId, text: &str, forward: bool, next: bool) {
@@ -1225,7 +1244,7 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
 }
 
 fn transferable_metadata(event: &RawEvent) -> bool {
-    matches!(event, RawEvent::Audio(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
+    matches!(event, RawEvent::Audio(_) | RawEvent::Media(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
         | RawEvent::EditFocus(_) | RawEvent::Find(..) | RawEvent::Url(_)
         | RawEvent::Progress(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
 }
@@ -1238,6 +1257,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     Some(match event {
         RawEvent::Shortcut(_) => unreachable!(),
         RawEvent::LoadError(_, _, _) => return None,
+        RawEvent::Media(state) => Event::MediaStateChanged { view, state },
         RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
         RawEvent::Title(title) => Event::TitleChanged { view, title },
         RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
@@ -1290,6 +1310,14 @@ wrap_client! {
         fn on_process_message_received(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
             if let Some((id, queue)) = &self.inspector {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
+            }
+            if source_process == ProcessId::RENDERER && frame.as_ref().is_some_and(|frame| frame.is_main()!=0) {
+                if let Some(message)=message.as_ref().filter(|message|CefString::from(&message.name()).to_string()==media::STATE) {
+                    if let Some(args)=message.argument_list().filter(|args|args.size()==1&&args.get_type(0)==ValueType::STRING) {
+                        if let Some(state)=media::decode(&CefString::from(&args.string(0)).to_string()) { push(&self.events,browser,RawEvent::Media(state)); }
+                    }
+                    return 1;
+                }
             }
             if source_process == ProcessId::RENDERER {
                 if let Some(message) = message.as_ref().filter(|message| CefString::from(&message.name()).to_string() == quote::RESULT) {

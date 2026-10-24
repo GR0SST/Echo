@@ -40,7 +40,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -72,6 +72,9 @@ pub trait WebEngine {
     fn clear_site_data(&mut self, _view: ViewId, _origin: &str, _kind: engine::ClearSiteData) -> bool { false }
     fn zoom_percent(&self, _view: ViewId) -> u16 { 100 }
 
+    fn set_audio_volume(&mut self, _view: ViewId, _volume: f32) -> bool { false }
+    fn audio_volume(&self, _view: ViewId) -> Option<f32> { None }
+    fn media_action(&mut self, _view: ViewId, _action: engine::MediaAction) -> bool { false }
     fn set_boost_picker(&mut self, _view: ViewId, _enabled: bool) {}
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
     fn transfer_view(&mut self, _view: ViewId, _target: &mut dyn WebEngine, _parent: *mut c_void, _bounds: Bounds) -> Option<ViewId> { None }
@@ -182,6 +185,9 @@ impl WebEngine for Chromium {
     fn clear_site_data(&mut self, view: ViewId, origin: &str, kind: engine::ClearSiteData) -> bool { self.engine.clear_site_data(view, origin, kind) }
     fn zoom_percent(&self, view: ViewId) -> u16 { self.engine.zoom_percent(view) }
 
+    fn set_audio_volume(&mut self, view: ViewId, volume: f32) -> bool { self.engine.set_audio_volume(view,volume) }
+    fn audio_volume(&self, view: ViewId) -> Option<f32> { self.engine.audio_volume(view) }
+    fn media_action(&mut self, view: ViewId, action: engine::MediaAction) -> bool { self.engine.media_action(view, action) }
     fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { self.engine.set_boost_picker(view,enabled); }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
     fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut c_void, bounds: Bounds) -> Option<ViewId> {
@@ -342,7 +348,7 @@ impl WebEngine for Chromium {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageState {
     pub loading_progress: u16,
     pub loading: bool,
@@ -351,6 +357,7 @@ pub struct PageState {
     pub status: String,
     pub editable: bool,
     pub audible: bool,
+    pub media: engine::MediaState,
 }
 
 struct Page {
@@ -421,7 +428,7 @@ pub(crate) struct PageEvent {
 impl PageEvent {
     pub(crate) fn is_metadata(&self) -> bool {
         matches!(self.event, Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
-            | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
+            | Event::MediaStateChanged { .. } | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
     }
 }
 
@@ -856,6 +863,10 @@ impl Pages {
         store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page| store.engine.zoom_percent(page.view)).unwrap_or(100)
     }
 
+    pub(crate) fn owned_media(&self, tab: TabId) -> Option<engine::MediaState> {
+        self.store.borrow().pages.get(&tab).filter(|page|page.owner==self.host).map(|page|page.state.media.clone())
+    }
+
     pub fn state(&self, tab: TabId) -> PageState {
         self.store.borrow().pages
             .get(&tab)
@@ -990,6 +1001,28 @@ impl Pages {
                 store.pages.get_mut(&tab).unwrap().color_scheme = scheme;
             }
         }
+    }
+
+    pub(crate) fn media_identity(&self, tab: TabId) -> Option<PageIdentity> {
+        self.store.borrow().pages.get(&tab).filter(|page|page.owner==self.host).map(|page|page.identity)
+    }
+    pub(crate) fn media_volume(&self, tab: TabId) -> f32 {
+        let store=self.store.borrow();
+        store.pages.get(&tab).filter(|page|page.owner==self.host)
+            .map_or(1.,|page|store.engine.audio_volume(page.view).unwrap_or(page.state.media.volume as f32))
+    }
+    pub(crate) fn set_media_volume(&mut self, tab: TabId, volume: f32) -> bool {
+        if !volume.is_finite() || !(0. ..=1.).contains(&volume) {return false;}
+        let mut store=self.store.borrow_mut();
+        let Some(view)=store.pages.get(&tab).filter(|page|page.owner==self.host).map(|page|page.view)else{return false;};
+        if !store.engine.set_audio_volume(view,volume){return false;}
+        store.pages.get_mut(&tab).unwrap().state.media.volume=volume as f64;true
+    }
+
+    pub fn media_action(&mut self, tab: TabId, action: engine::MediaAction) -> bool {
+        let mut store = self.store.borrow_mut();
+        let Some(view) = store.pages.get(&tab).filter(|page|page.owner==self.host).map(|page|page.view) else { return false; };
+        store.engine.media_action(view, action)
     }
 
     /// Applies mute intent even when an occluded window is not rendering.
@@ -1656,6 +1689,9 @@ impl Pages {
         match event {
             Event::LoadingProgress { view, progress } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.loading_progress = (*progress).min(1000); }
+            }
+            Event::MediaStateChanged { view, state } => {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.media = state.clone(); }
             }
             Event::AudioStateChanged { view, audible } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.audible = *audible; }
