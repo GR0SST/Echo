@@ -1422,3 +1422,40 @@ in `target/parity/arc-max/`. The reference produced no successful groups, so
 `arc_tidy_public_result.png` / `echo_tidy_groups.png` is behavioral evidence,
 not a claim of matching group-result visuals. Fixture Favorites/sidebar widths
 also differ.
+
+
+### Tidy Tab Titles — 2026-10-25
+
+Guarded Arc Pin Tab menu inspection changed a newly opened Wikipedia “Rust
+(programming language)” Today tab to the pinned label “Rust Language”. Unpin
+kept that label. The generated tab was unpinned and individually archived,
+without changing Max preferences or other tabs. The initial physical ⌘D attempt
+did not pin in the owner's Arc setup and is not shortcut evidence. Current
+captures are `arc_tab_title_before.png`, `arc_tab_title_pinned.png`,
+`arc_tab_title_result.png` and `arc_tab_title_unpinned.png` under
+`target/parity/arc-max/`. The shared Space's other fixture tabs changed between
+sessions; no visual claim relies on their count or placement.
+
+Echo queues only Today → Pinned transitions, separates AI names from explicit
+user names and live page titles, retains the label after unpinning, and restores
+the latest page title with Reset Name. Requests are shared-claimed per workspace
+and tab, cancelled on changed identity/provider, and discarded during inline
+editing. UI regressions cover pin/unpin/reset with retained engine pages, late
+manual edits and switching providers in Settings. Core tests cover persistence,
+changed URLs, unpinning and disabled features. Provider context strips URL
+credentials, queries and fragments; non-web URLs submit only their scheme,
+never local paths or inline document bodies. Successful actual model output
+quality, Split/Favorites title behavior and Arc cloud feedback are unverified.
+
+Native Echo validation used an isolated session and synthetic key entered in
+Max settings, then one authorized loopback streaming response. Pin displayed
+“Rust Language”; unpin retained it; Reset Name restored the live Wikipedia
+title without navigation/reloading. CEF quit cleanly and the generated keychain
+entry was removed. Inspected 1000×760 pairs:
+`arc_tab_title_result.png` / `echo_tab_title_result.png`, and
+`arc_tab_title_unpinned.png` / `echo_tab_title_unpinned.png`; reset evidence is
+`echo_tab_title_reset.png`. All are under `target/parity/arc-max/`. The Echo
+fixture has fewer Favorites/other tabs and a different sidebar width, so these
+verify title behavior rather than whole-window pixel parity. Actual provider
+model quality remains unverified; the local fixture deliberately returns the
+same label observed in Arc.

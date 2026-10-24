@@ -65,6 +65,9 @@ pub struct Tab {
     /// A user label, kept independently of titles reported by the page.
     #[serde(default)]
     pub custom_title: Option<String>,
+    /// Automatic Max label; a user name always takes precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_title: Option<String>,
     #[serde(default)]
     pub custom_icon: Option<String>,
     #[serde(default)]
@@ -85,7 +88,7 @@ impl Tab {
         let Some(url) = self.pinned_url.clone() else { return false; };
         self.url = url;
         self.page_title = self.pinned_title.clone();
-        if let Some(title) = self.custom_title.clone().or_else(|| self.pinned_title.clone()) {
+        if let Some(title) = self.custom_title.clone().or_else(|| self.ai_title.clone()).or_else(|| self.pinned_title.clone()) {
             self.title = title;
         }
         true
@@ -364,6 +367,7 @@ impl Browser {
                 id,
                 title: url.clone(),
                 custom_title: None,
+                ai_title: None,
                 custom_icon: None,
                 page_title: None,
                 pinned_title: None,
@@ -668,7 +672,7 @@ impl Browser {
         let url = url.into();
         if let Some(tab) = self.tab_mut(id) {
             tab.page_title = None;
-            tab.title = tab.custom_title.clone().unwrap_or_else(|| url.clone());
+            tab.title = tab.custom_title.clone().or_else(|| tab.ai_title.clone()).unwrap_or_else(|| url.clone());
             tab.url = url;
         }
     }
@@ -699,7 +703,7 @@ impl Browser {
         if let Some(tab) = self.tab_mut(id) {
             tab.page_title = Some(title.clone());
             if tab.pinned_url.as_ref() == Some(&tab.url) { tab.pinned_title = Some(title.clone()); }
-            tab.title = tab.custom_title.clone().unwrap_or(title);
+            tab.title = tab.custom_title.clone().or_else(|| tab.ai_title.clone()).unwrap_or(title);
         }
     }
 
@@ -718,7 +722,9 @@ impl Browser {
     pub fn reset_tab_name(&mut self, id: TabId) -> bool {
         if self.split_for(id).is_some() { return self.rename_split(id, None); }
         let Some(tab) = self.tab_mut(id) else { return false; };
-        if tab.custom_title.take().is_none() { return false; }
+        let custom = tab.custom_title.take();
+        let ai = tab.ai_title.take();
+        if custom.is_none() && ai.is_none() { return false; }
         tab.title = tab.page_title.clone().unwrap_or_else(|| tab.url.clone());
         true
     }

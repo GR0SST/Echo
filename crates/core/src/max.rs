@@ -484,3 +484,6 @@ mod split_tests {
         assert_eq!(b.split_for(ids[0]).unwrap().panes, panes);
     }
 }
+
+mod titles;
+pub use titles::TitleSnapshot;

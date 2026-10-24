@@ -143,3 +143,40 @@ mod tests {
         );
     }
 }
+
+/// Browser context keeps useful web paths but never submits URL credentials,
+/// query tokens, fragments, local file paths or inline document bodies.
+pub fn context_url(value: &str) -> String {
+    let Ok(mut url) = Url::parse(value) else {
+        return String::new();
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return if value == "about:blank" {
+            value.into()
+        } else {
+            format!("{}:", url.scheme())
+        };
+    }
+    let _ = url.set_password(None);
+    let _ = url.set_username("");
+    url.set_query(None);
+    url.set_fragment(None);
+    url.into()
+}
+#[cfg(test)]
+mod context_tests {
+    #[test]
+    fn browser_context_strips_credentials_tokens_and_local_document_bodies() {
+        assert_eq!(
+            super::context_url("https://alice:private@example.test/doc?token=secret#private"),
+            "https://example.test/doc"
+        );
+        assert_eq!(
+            super::context_url("file:///Users/name/private.pdf"),
+            "file:"
+        );
+        assert_eq!(super::context_url("data:text/html,private body"), "data:");
+        assert_eq!(super::context_url("about:blank"), "about:blank");
+        assert_eq!(super::context_url("not a URL"), "");
+    }
+}

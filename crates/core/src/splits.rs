@@ -72,7 +72,7 @@ impl Browser {
 
     pub fn item_has_custom_name(&self, tab: TabId) -> bool {
         if let Some(split) = self.split_for(tab) { return split.title.is_some(); }
-        self.all_tabs().find(|entry| entry.id == tab).is_some_and(|tab| tab.custom_title.is_some())
+        self.all_tabs().find(|entry| entry.id == tab).is_some_and(|tab| tab.custom_title.is_some() || tab.ai_title.is_some())
     }
 
     pub fn activate_sidebar_item(&mut self, tab: TabId, now: SystemTime) {

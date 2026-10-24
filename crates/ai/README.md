@@ -9,6 +9,10 @@ sessions; actual keys and OAuth token sets are stored through `CredentialStore`.
 Anthropic keys not scoped to one workspace can select a Workspace ID in Max
 settings; it is sent only to Anthropic on inference and model-list requests.
 
+Browser-context URLs strip credentials, queries and fragments. Non-web URLs
+provide only their scheme, excluding file paths and inline document bodies.
+The browser retains the exact local URL separately for stale-response checks.
+
 Providers: OpenAI Responses, Anthropic Messages, and an OpenAI-compatible
 `/chat/completions` endpoint. Remote endpoints require HTTPS; local compatible
 providers may use loopback HTTP. Credentials in URLs and cross-origin HTTP

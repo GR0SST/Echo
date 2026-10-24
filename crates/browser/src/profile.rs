@@ -64,6 +64,7 @@ pub(crate) struct ProfileHandle {
     app: AsyncApp,
     // Retains the actual normal profile (and its session writer), never a window snapshot.
     history_source: Option<(Box<ProfileHandle>, UserProfileId)>,
+    pub(crate) ai_title_claims: Rc<RefCell<std::collections::HashSet<browser_core::TabId>>>,
 }
 
 impl ProfileHandle {
@@ -87,7 +88,7 @@ impl ProfileHandle {
                 path: None, saved: None, _save_on_quit: None, _observe_history: None }
         });
         Self { owner, data, drafts, selections, revision, pending: Rc::default(),
-            executor: cx.foreground_executor().clone(), app: cx.to_async(), history_source: None }
+            executor: cx.foreground_executor().clone(), app: cx.to_async(), history_source: None, ai_title_claims: Rc::default() }
     }
 
     /// Blank owns its tabs, archive, IDs and selections; only browsing history
@@ -331,11 +332,15 @@ impl BrowserWindow {
     }
 
     pub(crate) fn edit_browser<R>(&mut self, edit: impl FnOnce(&mut Browser) -> R) -> R {
+        let prior_today:Vec<_> = if !self.browser.is_private() && !self.browser.is_blank() && self.browser.settings.max.enabled(echo_ai::MaxFeature::TidyTabTitles) {
+            self.browser.spaces.iter().flat_map(|s|s.today.iter().map(|t|t.id)).collect()
+        } else {Vec::new()};
         let (result, projection) = self.profile.handle.edit(|browser| {
             let result = browser.edit_in_window(&mut self.profile.selection, edit);
             let projection = browser.window_projection(&self.profile.selection);
             (result, projection)
         });
+        self.max.queue_title_pins(&prior_today, &projection);
         let selection_changed = self.browser.space().id != projection.space().id
             || self.browser.space().active_tab != projection.space().active_tab;
         if selection_changed && self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() && self.command_bar.is_none() && self.tab_rename.is_none() {

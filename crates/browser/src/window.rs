@@ -4202,6 +4202,7 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
+        self.start_max_title_jobs(cx);
         if self.peek_owner.is_some() { return self.render_peek(window, cx); }
         self.sync_library_geometry(window.viewport_size(), cx);
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {

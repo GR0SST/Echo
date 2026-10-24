@@ -10606,7 +10606,8 @@ mod max_feature_tests {
     impl crate::max::Inference for ProviderRequests {
         fn start(&self,config:ProviderConfig,request:ChatRequest,_:Arc<dyn CredentialStore>,_:Cancellation,executor:&gpui::BackgroundExecutor)->gpui::Task<Result<String,AiError>>{
             assert_eq!(config.model,"local-model");assert!(request.instructions.contains("untrusted"));
-            let tabs:Vec<serde_json::Value>=serde_json::from_str(&request.messages[0].text).unwrap();
+            let payload:serde_json::Value=serde_json::from_str(&request.messages[0].text).unwrap();
+            let tabs=payload.as_array().cloned().unwrap_or_else(||vec![payload]);
             let reply=Arc::new(Reply::default());self.0.lock().unwrap().push((tabs,reply.clone()));executor.spawn(Pending(reply))
         }
     }
@@ -10653,4 +10654,42 @@ mod max_feature_tests {
         let before=today_urls(&view,cx);click(cx,"tidy-today");let(reply,_)=answer(&requests,0);reply.complete(Ok("{\"groups\":[]}".into()));cx.run_until_parked();
         assert_eq!(today_urls(&view,cx),before);assert_eq!(view.read_with(cx,|w,_|w.toast.as_ref().map(|t|t.message.clone())).as_deref(),Some("No tab groups found"));
     }
+    fn enable_titles(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext){
+        view.update(cx,|w,cx|{
+            w.edit_profile(|b|{b.settings.max.set_enabled(echo_ai::MaxFeature::TidyTabTitles,true);b.settings.max.provider=ProviderConfig{provider:Provider::OpenAiCompatible,model:"local-model".into(),base_url:"http://127.0.0.1:8129/v1".into(),api_key_id:"opaque-reference".into(),..Default::default()};});
+            w.edit_browser(|b|{let id=b.space().active_tab.unwrap();b.navigate(id,"https://en.wikipedia.org/wiki/Rust_(programming_language)");b.set_title(id,"Rust (programming language) - Wikipedia");});cx.notify();
+        });cx.run_until_parked();
+    }
+    #[gpui::test]
+    fn max_pin_renames_in_place_and_keeps_label_after_page_updates_and_unpin(cx:&mut TestAppContext){
+        let(view,cx,fake)=open_pages(cx);let requests=Arc::new(ProviderRequests::default());cx.update(|_,cx|cx.set_global(crate::max::InferenceService(requests.clone())));enable_titles(&view,cx);fake.take_calls();
+        cx.simulate_keystrokes("cmd-d");cx.run_until_parked();
+        let reply={let pending=requests.0.lock().unwrap();assert_eq!(pending.len(),1);assert_eq!(pending[0].0[0]["title"],"Rust (programming language) - Wikipedia");pending[0].1.clone()};
+        reply.complete(Ok("{\"title\":\"Rust Language\"}".into()));cx.run_until_parked();
+        view.read_with(cx,|w,_|{assert_eq!(w.browser.active_tab().unwrap().title,"Rust Language");assert_eq!(w.browser.active_tab().unwrap().ai_title.as_deref(),Some("Rust Language"));});
+        assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(..)|Call::Navigate(..)|Call::Close(..))));
+        fake.send(cx,Event::TitleChanged{view:page(1),title:"Updated Rust page".into()});cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-d");cx.run_until_parked();view.read_with(cx,|w,_|assert_eq!(w.browser.active_tab().unwrap().title,"Rust Language"));
+        cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("reset tab name");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+        view.read_with(cx,|w,_|assert_eq!(w.browser.active_tab().unwrap().title,"Updated Rust page"));assert_eq!(requests.0.lock().unwrap().len(),1);
+    }
+    #[gpui::test]
+    fn max_title_response_cannot_overwrite_an_inline_user_name(cx:&mut TestAppContext){
+        let(view,cx)=open(cx);let requests=Arc::new(ProviderRequests::default());cx.update(|_,cx|cx.set_global(crate::max::InferenceService(requests.clone())));enable_titles(&view,cx);
+        cx.simulate_keystrokes("cmd-d");cx.run_until_parked();assert_eq!(requests.0.lock().unwrap().len(),1);
+        double_click(cx,"tab-8");cx.simulate_input("My Rust notes");cx.simulate_keystrokes("enter");cx.run_until_parked();
+        let reply=requests.0.lock().unwrap()[0].1.clone();reply.complete(Ok("{\"title\":\"Late AI label\"}".into()));cx.run_until_parked();
+        view.read_with(cx,|w,_|{assert_eq!(w.browser.active_tab().unwrap().title,"My Rust notes");assert!(w.browser.active_tab().unwrap().ai_title.is_none());});
+    }
+
+    #[gpui::test]
+    fn max_title_response_is_discarded_after_switching_the_provider_in_settings(cx:&mut TestAppContext){
+        let(view,cx)=open(cx);let requests=Arc::new(ProviderRequests::default());cx.update(|_,cx|cx.set_global(crate::max::InferenceService(requests.clone())));enable_titles(&view,cx);
+        cx.simulate_keystrokes("cmd-d");cx.run_until_parked();assert_eq!(requests.0.lock().unwrap().len(),1);
+        cx.simulate_keystrokes("cmd-,");let(_,mut settings)=settings_window(cx);click(&mut settings,"settings-tab-Max");
+        scroll(&mut settings,"settings-scroll",gpui::TouchPhase::Moved,0.,-2000.);settings.run_until_parked();click(&mut settings,"max-provider-Anthropic");settings.run_until_parked();
+        let reply=requests.0.lock().unwrap()[0].1.clone();reply.complete(Ok("{\"title\":\"Late AI label\"}".into()));cx.run_until_parked();
+        view.read_with(cx,|w,_|{assert!(w.browser.active_tab().unwrap().ai_title.is_none());assert_eq!(w.browser.settings.max.provider.provider,Provider::Anthropic);});settings.simulate_keystrokes("cmd-w");
+    }
+
 }
