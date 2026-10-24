@@ -3357,6 +3357,7 @@ impl BrowserWindow {
             .child(
                 div()
                     .debug_selector(|| "page-surface".into())
+                    .left(px(self.library_page_offset()))
                     .size_full()
                     .flex()
                     .flex_col()
@@ -3736,6 +3737,7 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
+        self.sync_library_geometry(window.viewport_size(), cx);
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);
         }

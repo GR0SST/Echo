@@ -852,10 +852,19 @@ impl Pages {
     /// This never changes a document, its host attachment or its storage.
     pub(crate) fn set_viewport(&mut self, viewport: PageViewport) {
         if self.viewport == viewport { return; }
+        let keeps_document = self.viewport != PageViewport::Hidden && viewport != PageViewport::Hidden;
         self.viewport = viewport;
         self.viewport_generation = self.viewport_generation.wrapping_add(1);
-        self.bounds = None;
-        if viewport != PageViewport::Content { self.request_ui_focus(); }
+        if !keeps_document { self.bounds = None; }
+        if viewport != PageViewport::Content {
+            self.request_ui_focus();
+            // Keeping the page visible must not leave its native responder in
+            // charge after the user explicitly opens Library's controls.
+            if keeps_document && !self.resize_focus_suppressed {
+                let mut store = self.store.borrow_mut();
+                if store.active_host == self.host { store.engine.focus_ui_in_host(self.parent); }
+            }
+        }
     }
 
     pub(crate) fn viewport_generation(&self) -> u64 { self.viewport_generation }

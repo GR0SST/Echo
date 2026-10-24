@@ -52,6 +52,12 @@ pub(crate) struct SidebarNavigation {
     preview_native_intent: Option<PreviewNativeResponder>,
     events: Option<Subscription>,
     generation: u64,
+    pub(crate) normal_content_size: gpui::Size<gpui::Pixels>,
+    normal_content_left: f32,
+    library_slide_amount: f32,
+    library_slide_target: bool,
+    library_slide_generation: u64,
+    library_slide_task: Option<gpui::Task<()>>,
 }
 impl SidebarNavigation {
     pub(crate) fn new(browser: &Browser) -> Self {
@@ -71,10 +77,65 @@ impl SidebarNavigation {
             preview_native_intent: None,
             events: None,
             generation: 0,
+            normal_content_size: Default::default(),
+            normal_content_left: 0.,
+            library_slide_amount: 0.,
+            library_slide_target: false,
+            library_slide_generation: 0,
+            library_slide_task: None,
         }
     }
 }
 impl BrowserWindow {
+    /// Arc translates the original page viewport into Library without reflow.
+    pub(crate) fn sync_library_geometry(&mut self, viewport: gpui::Size<gpui::Pixels>, cx: &mut Context<Self>) {
+        let left = self.sidebar_width() * self.sidebar_amount()
+            + crate::pages::CONTENT_INSET * (1. - self.sidebar_amount());
+        self.sidebar_navigation.normal_content_left = left;
+        self.sidebar_navigation.normal_content_size = gpui::size(
+            px((f32::from(viewport.width) - left - crate::pages::CONTENT_INSET).max(0.)),
+            px((f32::from(viewport.height) - 2. * crate::pages::CONTENT_INSET).max(0.)),
+        );
+        let entering = self.sidebar_navigation.controller.selected() == SidebarPage::Library;
+        if self.sidebar_navigation.library_slide_target != entering {
+            self.animate_library_slide(entering, cx);
+        }
+    }
+    pub(crate) fn library_page_offset(&self) -> f32 {
+        (112. + library::media::MEDIA_REFERENCE_COLUMN_WIDTH - self.sidebar_navigation.normal_content_left)
+            * self.sidebar_navigation.library_slide_amount
+    }
+    pub(crate) fn library_preview_left(&self) -> f32 {
+        self.sidebar_navigation.normal_content_left + self.library_page_offset() - 112.
+    }
+    fn animate_library_slide(&mut self, entering: bool, cx: &mut Context<Self>) {
+        self.sidebar_navigation.library_slide_target = entering;
+        let from = self.sidebar_navigation.library_slide_amount;
+        let to = if entering { 1. } else { 0. };
+        self.sidebar_navigation.library_slide_generation = self.sidebar_navigation.library_slide_generation.wrapping_add(1);
+        let generation = self.sidebar_navigation.library_slide_generation;
+        self.sidebar_navigation.library_slide_task = None;
+        if crate::native::prefers_reduced_motion() || from == to {
+            self.sidebar_navigation.library_slide_amount = to;
+            return;
+        }
+        // Installed Arc recording: fast initial travel, then a short settling
+        // tail; approximately 0.28 s into Library and 0.35 s on return.
+        let duration = if entering { 0.28 } else { 0.35 };
+        let started = cx.background_executor().now();
+        self.sidebar_navigation.library_slide_task = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+            let t = (cx.background_executor().now().duration_since(started).as_secs_f32() / duration).clamp(0., 1.);
+            let eased = (1. - (-7. * t).exp()) / (1. - (-7_f32).exp());
+            let keep = this.update(cx, |this, cx| {
+                if this.sidebar_navigation.library_slide_generation != generation { return false; }
+                this.sidebar_navigation.library_slide_amount = if t >= 1. { to } else { from + (to - from) * eased };
+                cx.notify();
+                t < 1.
+            }).unwrap_or(false);
+            if !keep { break; }
+        }));
+    }
     pub(crate) fn open_library_spaces(&mut self, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() || self.browser.is_private() || self.browser.is_blank() {
             return;
@@ -197,6 +258,10 @@ impl BrowserWindow {
             return;
         }
         self.close_navigation_peers(cx);
+        let was_library = self.sidebar_navigation.controller.selected() == SidebarPage::Library;
+        if was_library != (page == SidebarPage::Library) {
+            self.animate_library_slide(page == SidebarPage::Library, cx);
+        }
         if page == SidebarPage::Library
             && self.sidebar_navigation.controller.selected() != SidebarPage::Library
         {
@@ -623,6 +688,7 @@ impl BrowserWindow {
             selected: hsla(0., 0., 0., 0.08),
         };
         let section = self.sidebar_navigation.library_section;
+        let preview_left = self.library_preview_left();
         let preview = (section == LibrarySection::Media).then(|| self.render_library_page_preview(cx));
         let mut empty = (section == LibrarySection::Media).then(|| {
             // Reuse existing host semantic surfaces; never change App appearance.
@@ -659,7 +725,7 @@ impl BrowserWindow {
             // LearnMoreRequested has no navigation subscriber until its exact
             // target is verified. The input retains a window-local query.
             div().relative().size_full().child(media)
-                .child(library::media::render_preview(media_colors.preview, preview))
+                .child(library::media::render_preview_at(media_colors.preview, preview, preview_left))
                 .into_any_element()
         });
         if section == LibrarySection::Downloads {
@@ -684,7 +750,7 @@ impl BrowserWindow {
     /// Bounds are GPUI layout coordinates, never rail/list arithmetic.
     pub(crate) fn render_library_page_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let scope = self.sidebar_navigation.preview_focus_scope.get_or_insert_with(|| cx.focus_handle()).clone();
-        let mut surface = div().relative().size_full().flex().flex_col().track_focus(&scope)
+        let mut surface = div().debug_selector(|| "library-page-canvas".into()).relative().flex_none().w(self.sidebar_navigation.normal_content_size.width).h(self.sidebar_navigation.normal_content_size.height).flex().flex_col().track_focus(&scope)
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                 // Bubble after the preview's own editor/control has selected its
                 // responder. CEF page clicks do not pass through this GPUI tree.

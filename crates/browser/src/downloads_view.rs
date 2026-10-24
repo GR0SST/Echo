@@ -22,7 +22,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
     ]);
 }
 
-pub(crate) const DOWNLOADS_COLUMN_WIDTH: f32 = 304.;
+pub(crate) const DOWNLOADS_COLUMN_WIDTH: f32 = 305.;
 pub(crate) const FILTERED_EMPTY_TITLE: &str = "Nothing here yet!";
 pub(crate) const FILTERED_EMPTY_BODY: &str =
     "Come back after you’ve found some\ncool stuff to save.";
@@ -112,11 +112,12 @@ pub(crate) type DownloadsArtwork<Token> =
     Rc<dyn Fn(&CompletedDownload<Token>, &mut Window, &mut App) -> AnyElement>;
 
 /// Lives in the existing Library route, immediately after the host's 112 px nav.
-/// The root's local x=0 is the list; the parent preview begins at local x=304.
+/// The root's local x=0 is the list; the parent preview begins at local x=305.
 pub(crate) struct DownloadsView<Token: Clone + Eq + 'static> {
     projection: DownloadsProjection<Token>,
     colors: DownloadsColors,
     preview: DownloadsPreview,
+    preview_left: f32,
     artwork: Option<DownloadsArtwork<Token>>,
     input: Entity<TextInput>,
     filter_visible: bool,
@@ -180,6 +181,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             projection,
             colors,
             preview,
+            preview_left: DOWNLOADS_COLUMN_WIDTH,
             artwork: None,
             input,
             filter_visible: false,
@@ -214,6 +216,9 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
         }
     }
 
+    pub(crate) fn set_preview_left(&mut self, left: f32, cx: &mut Context<Self>) {
+        if self.preview_left != left { self.preview_left = left; cx.notify(); }
+    }
     pub(crate) fn set_colors(&mut self, colors: DownloadsColors, cx: &mut Context<Self>) {
         self.colors = colors;
         cx.notify();
@@ -816,12 +821,12 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
                 div()
                     .debug_selector(|| "downloads-preview".into())
                     .absolute()
-                    .left(px(DOWNLOADS_COLUMN_WIDTH))
+                    .left(px(self.preview_left))
                     .right_0()
                     .top(px(10.))
                     .bottom(px(10.))
                     .bg(self.colors.preview)
-                    .rounded_l(px(12.))
+                    .rounded_l(px(6.))
                     .overflow_hidden()
                     .child(preview),
             )

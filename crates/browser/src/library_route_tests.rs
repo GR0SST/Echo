@@ -68,7 +68,7 @@ fn library_shortcut_menu_and_command_preserve_the_original_page_and_spaces(
             LibrarySection::Media
         );
         let calls = fake.take_calls();
-        assert!(calls.contains(&Call::Visible(raw(document), true)));
+        assert!(!calls.contains(&Call::Visible(raw(document), false)));
         assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))));
         assert_no_document_changes(&calls);
         assert_eq!(view.read_with(cx, |view, _| view.session_json()), before);
@@ -101,7 +101,7 @@ fn library_shortcut_from_cef_uses_the_registered_window_route(cx: &mut TestAppCo
     fake.send(cx, fake.shortcut(shortcut));
     assert_library(&view, cx);
     let calls = fake.take_calls();
-    assert!(calls.contains(&Call::Visible(raw(document), true)));
+    assert!(!calls.contains(&Call::Visible(raw(document), false)));
     assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))));
     assert_no_document_changes(&calls);
     return_to_origin(&view, cx);

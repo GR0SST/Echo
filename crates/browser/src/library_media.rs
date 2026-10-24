@@ -6,7 +6,7 @@ use gpui::{
 };
 
 /// Measured in the installed Arc at a 1000 × 760 logical-point window.
-pub(crate) const MEDIA_REFERENCE_COLUMN_WIDTH: f32 = 304.;
+pub(crate) const MEDIA_REFERENCE_COLUMN_WIDTH: f32 = 305.;
 pub(crate) const MEDIA_TITLE: &str = "Nothing here yet!";
 pub(crate) const MEDIA_BODY: &str = "Save media to your Documents, Desktop,\nand Download Folders to see them here,\nalongside your Captures in Echo.";
 
@@ -222,10 +222,14 @@ impl Render for MediaView {
 }
 
 /// The same measured surface serves the standalone presenter and the live host.
-/// Inventory content owns this rectangle; hidden browser tabs never occupy it.
+/// The parent clips the original-width page canvas at the window edge.
 pub(crate) fn render_preview(color: Hsla, content: Option<gpui::AnyElement>) -> gpui::AnyElement {
+    render_preview_at(color, content, MEDIA_REFERENCE_COLUMN_WIDTH)
+}
+
+pub(crate) fn render_preview_at(color: Hsla, content: Option<gpui::AnyElement>, left: f32) -> gpui::AnyElement {
     div().debug_selector(|| "library-media-preview".into())
-        .absolute().left(px(MEDIA_REFERENCE_COLUMN_WIDTH)).right_0()
+        .absolute().left(px(left)).right_0()
         .top(px(10.)).bottom(px(10.)).rounded(px(6.)).overflow_hidden()
         .bg(color).children(content).into_any_element()
 }

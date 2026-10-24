@@ -123,8 +123,8 @@ fn list_starts_after_navigation_and_preview_is_parent_owned(cx: &mut TestAppCont
     let parent = visual.debug_bounds("parent-download-preview").unwrap();
     assert_eq!(root.origin.x, px(112.));
     assert_eq!(column.origin.x, px(112.));
-    assert_eq!(column.size.width, px(304.));
-    assert_eq!(preview.origin.x, px(416.));
+    assert_eq!(column.size.width, px(305.));
+    assert_eq!(preview.origin.x, px(417.));
     assert_eq!(preview.right(), root.right());
     assert_eq!(parent.origin, preview.origin);
     assert!(
@@ -278,7 +278,7 @@ fn long_completed_names_and_wrapping_chips_preserve_small_window_geometry(cx: &m
     let title = visual.debug_bounds("downloads-title-0-0").unwrap();
     let subtitle = visual.debug_bounds("downloads-subtitle-0-0").unwrap();
     let artwork = visual.debug_bounds("downloads-artwork-0-0").unwrap();
-    assert_eq!(row.size, gpui::size(px(304.), px(56.)));
+    assert_eq!(row.size, gpui::size(px(305.), px(56.)));
     assert_eq!(artwork.size, gpui::size(px(36.), px(36.)));
     assert_eq!(title.size.height, px(18.));
     assert_eq!(subtitle.size.height, px(16.));
@@ -320,7 +320,7 @@ fn long_completed_names_and_wrapping_chips_preserve_small_window_geometry(cx: &m
             .debug_bounds("downloads-filter-done")
             .unwrap()
             .right()
-            <= px(416.)
+            <= px(417.)
     );
 }
 
@@ -492,7 +492,7 @@ fn completed_labels_paint_fresh_full_runs_at_final_row_width(cx: &mut TestAppCon
                     .rev()
                     .find(|record| &record.original == original)
                     .expect("the real completed row label must reach paint");
-                assert_eq!(painted.width, px(234.));
+                assert_eq!(painted.width, px(235.));
                 assert_eq!(painted.len, painted.text.len());
                 assert!(painted.shaped_width <= painted.width);
                 if index == 0 {

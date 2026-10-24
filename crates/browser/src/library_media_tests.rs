@@ -120,13 +120,13 @@ fn media_has_reference_width_list_after_shared_rail_and_separate_preview(cx: &mu
     let body = visual.debug_bounds("library-media-empty-body").unwrap();
     let learn_more = visual.debug_bounds("library-media-learn-more").unwrap();
     assert_eq!(list.origin.x, px(112.));
-    assert_eq!(list.size.width, px(304.));
+    assert_eq!(list.size.width, px(305.));
     assert_eq!(preview.origin.x, list.right());
     assert_eq!(preview.origin.y, px(10.));
     assert_eq!(preview.right(), px(707.));
     assert_eq!(search.origin.x - list.origin.x, px(8.));
     assert_eq!(search.origin.y, px(10.));
-    assert_eq!(search.size, gpui::size(px(288.), px(36.)));
+    assert_eq!(search.size, gpui::size(px(289.), px(36.)));
     assert_eq!(icon.size, gpui::size(px(56.), px(56.)));
     assert_eq!(title.origin.y - icon.bottom(), px(12.));
     assert_eq!(body.origin.y - title.bottom(), px(6.));
@@ -151,7 +151,7 @@ fn empty_stays_centered_in_list_at_ordinary_window_sizes(cx: &mut TestAppContext
         let empty = visual.debug_bounds("library-media-empty").unwrap();
         let icon = visual.debug_bounds("library-media-empty-icon").unwrap();
         let preview = visual.debug_bounds("library-media-preview").unwrap();
-        assert_eq!(body.size.width, px(304.));
+        assert_eq!(body.size.width, px(305.));
         assert!((empty.center().y - body.center().y).abs() <= px(1.));
         assert_eq!(icon.center().x, body.center().x);
         assert!(empty.right() <= preview.origin.x);

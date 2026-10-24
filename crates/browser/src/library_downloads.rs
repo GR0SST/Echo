@@ -67,6 +67,7 @@ impl BrowserWindow {
     }
     pub(crate) fn sync_library_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.downloads_route_active();
+        let preview_left = self.library_preview_left();
         let colors = self.downloads_colors();
         if active && self.sidebar_navigation.downloads.host.is_none() {
             let owner = cx.entity().downgrade();
@@ -90,6 +91,11 @@ impl BrowserWindow {
                 cx,
             );
             self.sidebar_navigation.downloads.dirty = true;
+        }
+        if active {
+            if let Some(host) = &self.sidebar_navigation.downloads.host {
+                host.view().update(cx, |view, cx| view.set_preview_left(preview_left, cx));
+            }
         }
         let changed = active != self.sidebar_navigation.downloads.active;
         if changed {

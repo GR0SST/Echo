@@ -14,7 +14,7 @@ fn enter(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
 }
 
 fn assert_preview(fake: &FakeEngine, document: ViewId, cx: &mut VisualTestContext) {
-    let preview = cx.debug_bounds("library-media-preview").unwrap();
+    let preview = cx.debug_bounds("library-page-canvas").unwrap();
     let actual = fake.0.borrow().bounds[&raw(document)];
     assert_eq!(actual, Bounds {
         x: f64::from(f32::from(preview.origin.x)),
@@ -638,4 +638,80 @@ fn library_from_an_empty_space_never_leaks_the_other_spaces_live_page(cx: &mut T
     let calls = fake.take_calls();
     unchanged(&calls);
     assert!(calls.contains(&Call::Visible(raw(document), true)));
+}
+
+#[gpui::test]
+fn library_slides_the_same_page_without_hiding_or_reflow_and_returns_it(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(760.)));
+    cx.run_until_parked();
+    let document = fake.0.borrow().focused_page.unwrap();
+    let original = fake.0.borrow().bounds[&raw(document)];
+    let session = view.read_with(cx, |view, _| view.session_json());
+    fake.take_calls();
+    enter(&view, cx);
+    let mut previous = original.x;
+    for millis in [32, 48, 80, 140] {
+        cx.executor().advance_clock(Duration::from_millis(millis));
+        cx.run_until_parked();
+        let frame = fake.0.borrow().bounds[&raw(document)];
+        assert_eq!((frame.width, frame.height), (original.width, original.height));
+        assert!(frame.x >= previous && frame.x <= 417.);
+        previous = frame.x;
+    }
+    assert_eq!(previous, 417.);
+    assert_preview(&fake, document, cx);
+    cx.simulate_keystrokes("ctrl-1");
+    cx.run_until_parked();
+    for millis in [32, 80, 120, 140] {
+        cx.executor().advance_clock(Duration::from_millis(millis));
+        cx.run_until_parked();
+        let frame = fake.0.borrow().bounds[&raw(document)];
+        assert_eq!((frame.width, frame.height), (original.width, original.height));
+        assert!(frame.x <= previous && frame.x >= original.x);
+        previous = frame.x;
+    }
+    assert_eq!(fake.0.borrow().bounds[&raw(document)], original);
+    let calls = fake.take_calls();
+    unchanged(&calls);
+    assert!(!calls.contains(&Call::Visible(raw(document), false)), "{calls:?}");
+    assert_eq!(view.read_with(cx, |view, _| view.session_json()), session);
+}
+
+#[gpui::test]
+fn library_keeps_the_hidden_sidebar_viewport_width_and_tracks_window_resize(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(760.)));
+    cx.simulate_keystrokes("cmd-s");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    let document = fake.0.borrow().focused_page.unwrap();
+    let original = fake.0.borrow().bounds[&raw(document)];
+    assert_eq!(original.width, 980.);
+    enter(&view, cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(fake.0.borrow().bounds[&raw(document)].width, original.width);
+    cx.simulate_resize(gpui::size(px(1100.), px(760.)));
+    cx.run_until_parked();
+    let frame = fake.0.borrow().bounds[&raw(document)];
+    assert_eq!((frame.x, frame.width, frame.height), (417., 1080., original.height));
+}
+
+#[gpui::test]
+fn opening_a_new_page_from_library_cancels_the_library_offset(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = fake.0.borrow().bounds[&raw(fake.0.borrow().focused_page.unwrap())];
+    enter(&view, cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://new.example/after-library");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.page_content_visible()));
+    let document = fake.0.borrow().focused_page.unwrap();
+    assert_eq!(fake.0.borrow().bounds[&raw(document)], original);
 }

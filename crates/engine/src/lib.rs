@@ -737,11 +737,12 @@ impl Engine {
         if view.frame == frame && !view.needs_layout {
             return;
         }
+        let resized = view.needs_layout || view.frame.width != frame.width || view.frame.height != frame.height;
         view.frame = frame;
         view.needs_layout = false;
         host::set_frame(view.host, view.parent, frame);
-        if let Some(host) = view.browser.host() {
-            host.was_resized();
+        if resized {
+            if let Some(host) = view.browser.host() { host.was_resized(); }
         }
     }
 
