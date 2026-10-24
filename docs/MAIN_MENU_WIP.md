@@ -1,0 +1,79 @@
+# Main menu parity validation
+
+The installed Arc 1.170.0 compiled `MainMenu.nib` is the source for menu order,
+labels, separators and default bindings. Evidence and the decoded, read-only
+catalog are under `target/parity/main-menu/` (ignored, no Arc assets shipped).
+
+## About and Essential Keyboard Shortcuts
+
+- Arc About: 360 × 262 px; standard 32 px titlebar, centered 50 px product icon,
+  13 px product title, 11 px version/engine/copyright/acknowledgement text.
+  Echo uses its own icon, Cargo package version and embedded CEF Chromium version.
+- Credits are generated from resolved host-platform Cargo dependencies and their
+  available upstream license/notice files, plus the existing Gemoji, Ionicons and
+  CEF/Chromium acknowledgements. This does not assign a source license to Echo.
+- Installed documents use an isolated resource-layout interface. Echo's own
+  privacy document describes local storage and direct website/provider requests.
+- Arc Help panel: 475 × 462 px; 30 px horizontal inset, 73 px row spacing,
+  28 px keycaps with 4 px gaps. View All dismisses the panel and opens Settings →
+  Shortcuts. Learn the Essential Shortcuts returns to the panel.
+- Arc's captured Add Split chord is customized to Shift+Command+E on this install.
+  Echo retains the nib's default Control+Shift+=. The reference's proprietary
+  title font is replaced by the platform rounded system font; no Arc fonts copied.
+- About and Help actions work with no browser window. Repeated actions reuse
+  their existing window. Escape/Command+W close the focused utility window.
+- Tests cover About/Help reuse and closing, the Help → Settings → Help round trip,
+  and cancellation of already queued Command Bar page-focus restoration. Native
+  acceptance checks physical Escape from a Command Bar-opened About, click View
+  All, click Learn the Essential Shortcuts, and closed-window identities. New
+  utility activation is reasserted on its first frame after native child teardown.
+- Accepted pairs: `arc-about/about.png` ↔ `echo-group1-final/about-1.png`, and
+  `arc-shortcuts-panel/shortcuts.png` ↔ `echo-group1-final/shortcuts-2.png` beneath
+  the evidence root. Magnified text/keycap crops are in `pairs/`. Native round-trip
+  screenshots and ownership assertions are in `echo-help-roundtrip/`.
+- Remaining optical differences: rounded system title font and keycap bevels;
+  About link tint. External OS opening of packaged legal documents remains
+  unvalidated. These rows remain partial rather than claiming exact parity.
+
+Local pre-rebase validation: `RUST_TEST_THREADS=4 cargo test` passed with 971
+browser, 198 core, 130 engine, six importer and 12 AI tests; one existing live
+provider test is ignored. The credits escaping test passed as well. Both native
+utility acceptance scripts exit with status zero after the CEF quit barrier.
+No snapshot/handoff test waiver is used.
+
+## Remaining section 1 audit
+
+This is an active implementation task, not a completion claim. Remaining rows
+retain their existing statuses in ARC_PARITY.md. The next groups are document
+saving/capture, native editing menus, appearance and site refresh actions,
+context exit, Recent Items MRU, Back history, Library routes, troubleshooting,
+Developer Mode and remaining in-scope menu integrations. Excluded accounts,
+cloud sharing, referral and update/telemetry features must not gain UI.
+
+## Reference ownership
+
+Use the shared Echo Test Space, standard/compact recorded header crops and the
+shared guard. Floating Help panels use CG layer 3, so the guard's layer-0 window
+inventory needs a supplementary exact-PID/all-layer ownership record. View All
+closes that panel before creating the separate Settings window; claim the new
+Settings window as the one click-created owned dialog, then close it. Never
+send cleanup input after an Arc process-ID change, and never use snapshot
+window differences from a previous process to close windows in a new process.
+
+
+## Recent Items reference (implementation next)
+
+`arc-mru-panel/` contains a three-tab forward-cycle/commit reference;
+`arc-mru-motion/` contains six disposable visited tabs and the resulting five-card
+limit. The active page remains on screen while the highlight cycles, and
+Control release commits the selection. All fixture tabs were archived; the
+cleaned Space image and post-animation window inventory confirm cleanup.
+
+For three entries the panel is approximately 578 × 190 px, centered in the
+parent. Each item is 182 × 158 px with 12 px padding, a 158 × 105 px preview and
+17 px label row separated by 12 px. Previews preserve viewport width and crop
+from the top. The card has a 24 px radius, 16 px outer padding, and a broad lower
+shadow; the selected item has an approximately 8 px radius. Five entries use
+approximately 942 px width. The transparent native overlay expands horizontally
+beyond its parent to accommodate the shadow. Rapid still captures started only
+after roughly 185 ms, so finer opening/closing motion measurement is pending.

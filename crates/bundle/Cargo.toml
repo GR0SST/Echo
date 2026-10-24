@@ -7,3 +7,4 @@ publish.workspace = true
 [dependencies]
 cef = { version = "=154.5.0", features = ["build-util"] }
 semver = "1"
+serde_json = "1"

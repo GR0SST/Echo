@@ -65,13 +65,13 @@ the menu but aren't shown; usually they are alternative shortcuts.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| About Arc | — | missing | About window with licenses (Arc's `Credits.html`) |
+| About Arc | — | partial | Own GPUI 360 × 262 px About window, actual package/Chromium versions and packaged dependency licenses; native close and Command Bar focus checked. Link tint and OS legal-document opening remain; see docs/MAIN_MENU_WIP.md |
 | Preferences… | ⌘, | partial | Separate GPUI Settings window from the app menu, Command Bar and page shortcut; General, Profiles, Links, Shortcuts, Icon and Advanced. Stored controls and remaining integrations are detailed below |
 | Share Arc (referral link) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Set as Default Browser | — | partial | Application-menu action and explicit first-run prompt use isolated macOS LaunchServices/NSWorkspace consent requests; duplicate requests serialized. Windows/Linux stubs; native OS consent and weekly prompts remain unvalidated. See docs/ONBOARDING_IMPORT_WIP.md |
 | Import from Another Browser… | — | partial | GPUI import flow in the app menu, matching the installed Arc menu location. Source picker geometry and fixture import checked natively; later-screen visual parity and unsupported formats remain. See "Onboarding and import" |
 | Check for Updates… | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
-| Privacy Policy | — | missing | — |
+| Privacy Policy | — | partial | Own local privacy document and app-menu route; packaged with the app. OS document-opening acceptance remains |
 | Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
 | Quit | ⌘Q | done | No "Warn before quitting" confirmation. Native captured-private-page and closed-private-tab cases assert actual zero-status process exit after the complete CEF barrier with `scripts/check-private-quit.sh`; the driver strict mode rejects timeouts and signals |
 
@@ -193,7 +193,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | View Library | ⇧⌘L | partial | Dock Home, the far-left sidebar page, Window → Open Library…, ⇧⌘L (including CEF focus), and Command Bar → Open Library open the existing Library route. Reopening retains its selected section. Spaces is interactive. Media and Downloads translate the selected page into the right preview without changing its viewport width, clipping it at the window edge; origin-only native moves do not send CEF resize notifications. Entry/return use the measured fast ease-out slide (approximately 0.28/0.35 s), with Reduce Motion respected; macOS checks preserve document identity and input through Command Bar/Find dismissal, and Reload works there. The six Library rail glyphs use reference-measured vector artwork, accent-filled selected panels, optically aligned bold labels and existing theme-owned tile surfaces. Downloads now reads canonical completed inventory; remaining behavioral/visual parity is incomplete |
 | View Downloads | ⇧⌘J | partial | Window → View Downloads…, Command Bar, Library rail and the shortcut open canonical completed records beside the retained page. Completed-file menu actions are connected; default download admission, active rows and remaining presentation parity are incomplete |
 | View Media / View Boosts | — | partial | Library has Media and Boosts routes; View Boosts is available in the Command Bar |
-| Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | missing | Relevant for us: "Essential Keyboard Shortcuts" (cheat sheet window) and "Restore Data" |
+| Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | — | partial | GPUI Essential Keyboard Shortcuts cheat sheet and Settings → Shortcuts round trip; own icon/wording and nib default Split shortcut. Restore Data and local help/export routes remain; see docs/MAIN_MENU_WIP.md |
 | Troubleshooting: Record Trace, Task Manager, Reveal Arc Data, Copy Arc Info | — | missing | — |
 
 ---

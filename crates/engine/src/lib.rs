@@ -2047,3 +2047,9 @@ mod popup_policy_tests {
         assert!(popup_event(String::new(),WindowOpenDisposition::NEW_FOREGROUND_TAB,true,false).is_none());
     }
 }
+
+/// The embedded Chromium version, available before CEF initialization.
+pub fn chromium_version() -> String {
+    format!("{}.{}.{}.{}", cef::sys::CHROME_VERSION_MAJOR, cef::sys::CHROME_VERSION_MINOR,
+        cef::sys::CHROME_VERSION_BUILD, cef::sys::CHROME_VERSION_PATCH)
+}

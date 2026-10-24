@@ -16,12 +16,28 @@ pub fn view_of(window: &gpui::Window) -> Option<*mut c_void> {
     }
 }
 
+/// GPUI's macOS Floating kind currently uses the normal window level. Keep
+/// utility-panel stacking at the native seam; other backends own their kind.
+pub(crate) fn float_utility_window(window: &gpui::Window) {
+    #[cfg(target_os = "macos")]
+    if let Some(view) = view_of(window) { mac::float_utility_window(view); }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use std::ffi::c_void;
 
     use objc2::runtime::{AnyObject, Bool, Sel};
     use objc2::{msg_send, sel};
+
+    pub fn float_utility_window(view: *mut c_void) {
+        unsafe {
+            let window = window(view);
+            let _: () = msg_send![window, setLevel: 3isize]; // NSFloatingWindowLevel
+        }
+    }
 
     #[repr(C)]
     struct SecTrust { _opaque: [u8; 0] }

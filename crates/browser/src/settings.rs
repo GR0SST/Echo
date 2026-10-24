@@ -941,7 +941,7 @@ impl SettingsWindow {
             query.is_empty() || format!("{label} {key}").to_lowercase().contains(&query)
         });
         div().w(px(556.)).flex().flex_col().gap(px(30.))
-            .child(div().flex().justify_center().child(div().flex().items_center().gap(px(10.)).p(px(6.)).rounded(px(6.)).bg(rgb(0x5b575f)).child("Start with the basics").child(button("Learn the Essential Shortcuts").bg(rgb(0x147bff)).opacity(0.5))))
+            .child(div().flex().justify_center().child(div().flex().items_center().gap(px(10.)).p(px(6.)).rounded(px(6.)).bg(rgb(0x5b575f)).child("Start with the basics").child(button("Learn the Essential Shortcuts").id("learn-essential-shortcuts").debug_selector(|| "learn-essential-shortcuts".into()).bg(rgb(0x147bff)).cursor_pointer().on_click(|_, _, cx| cx.defer(crate::essential_shortcuts::open)))))
             .child(div().flex().gap(px(16.)).h(px(450.))
                 .child(group().w(px(340.)).flex_none().px_0()
                     .child(div().h(px(40.)).flex_none().px(px(16.)).bg(rgb(0x3b3e3e)).flex().items_center().gap(px(6.)).text_color(rgb(0xa6a8a8)).child(icons::control_sized(Icon::Search, 14.)).child(self.shortcut_search.clone()))
@@ -1345,5 +1345,27 @@ impl Render for SettingsWindow {
             .when_some(self.atc.clone(), |s, panel| s.child(div().absolute().inset_0().bg(gpui::hsla(0., 0., 0., 0.35))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().absolute().top(px(88.)).left(gpui::relative(0.5)).ml(px(-255.)).child(panel))))
+    }
+}
+
+/// Help's View All opens the existing local Shortcuts settings section.
+pub(crate) fn open_shortcuts(cx: &mut App) {
+    let source = match crate::new_window::normal_source(cx) {
+        Ok(source) => source,
+        Err(error) => { crate::show_session_error(error, cx); return; }
+    };
+    let profile = source.profile;
+    open(profile.clone(), profile.default_user_profile_id(), None, false, cx);
+    for handle in cx.windows() {
+        if let Some(handle) = handle.downcast::<SettingsWindow>() {
+            let _ = handle.update(cx, |view, window, cx| {
+                if view.profile.same_workspace(&profile) {
+                    view.change_tab(Tab::Shortcuts, window, cx);
+                    window.activate_window();
+                    view.focus.focus(window);
+                    cx.notify();
+                }
+            });
+        }
     }
 }

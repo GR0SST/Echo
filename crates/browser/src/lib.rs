@@ -10,6 +10,9 @@ mod toast;
 mod archive;
 mod command_suggestions;
 mod menus;
+mod about;
+mod resources;
+mod essential_shortcuts;
 mod history;
 mod tab_menu;
 mod page_context;
@@ -110,6 +113,8 @@ pub fn init(cx: &mut App) {
     window::bind_keys(cx);
     find::bind_keys(cx);
     menus::init(cx);
+    about::init(cx);
+    essential_shortcuts::init(cx);
     setup::init(cx);
     settings::init(cx);
     transient::bind_keys(cx);

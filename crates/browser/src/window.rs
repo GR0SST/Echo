@@ -1573,6 +1573,12 @@ impl BrowserWindow {
         self.close_command_bar_with_focus(PopupFocus::Restore, cx);
     }
 
+    pub(crate) fn suspend_popup_focus_for_utility(&mut self) {
+        self.popup_focus_on_activation |= self.command_bar.is_some() || self.popup_focus_pending > 0;
+        self.invalidate_sidebar_focus();
+        self.invalidate_navigation_focus();
+    }
+
     pub(crate) fn close_command_bar_with_focus(&mut self, focus: PopupFocus, cx: &mut Context<Self>) {
         self.cancel_split_draft();
         let Some(bar) = self.command_bar.take() else { return; };
@@ -2208,6 +2214,8 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
+            .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::SetDefaultBrowser, _, cx| this.request_default_browser(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
@@ -4302,6 +4310,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
+            .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::SetDefaultBrowser, _, cx| this.request_default_browser(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this

@@ -24,6 +24,8 @@ mod space_context_tests;
 mod page_zoom_tests;
 #[path = "site_controls_tests.rs"]
 mod site_controls_tests;
+#[path = "main_menu_tests.rs"]
+mod main_menu_tests;
 
 fn open(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut VisualTestContext) {
     open_with(cx, None)
@@ -8208,7 +8210,7 @@ fn settings_toggles_persist_without_affecting_other_profiles(cx: &mut TestAppCon
 fn settings_menu_and_native_page_shortcut_open_the_same_window(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
-    dispatch_menu(cx, "Echo", "Settings…");
+    dispatch_menu(cx, "Echo", "Preferences…");
     let (settings, mut visual) = settings_window(cx);
     visual.simulate_keystrokes("cmd-w");
     fake.send(cx, fake.shortcut(Shortcut { cmd: true, key: ",".into(), ..Default::default() }));

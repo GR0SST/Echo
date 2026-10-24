@@ -5,6 +5,8 @@ use gpui::{actions, App, KeyBinding, Menu, MenuItem, OsAction};
 actions!(
     menu,
     [
+        About,
+        PrivacyPolicy,
         Settings,
         ImportFromBrowser,
         SetDefaultBrowser,
@@ -81,13 +83,15 @@ pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'stati
 
 pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None, false) }
 fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>, multiple: bool) -> Vec<Menu> {
-    let mut app = vec![MenuItem::action("Settings…", Settings),
+    let mut app = vec![MenuItem::action("About Echo", About), MenuItem::separator(), MenuItem::action("Preferences…", Settings),
         MenuItem::action("Set as Default Browser", SetDefaultBrowser), MenuItem::separator(),
         MenuItem::action("Import from Another Browser…", ImportFromBrowser), MenuItem::separator()];
+    app.extend([MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
+        MenuItem::action("Privacy Policy", PrivacyPolicy), MenuItem::separator()]);
     if native::supports_app_visibility() {
         app.extend([
             MenuItem::action("Hide Echo", HideApp),
-            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::action("Hide Other Windows", HideOthers),
             MenuItem::action("Show All", ShowAllApps),
             MenuItem::separator(),
         ]);
@@ -107,7 +111,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("New Profile", NewProfile),
                 MenuItem::action("Blank Window", BlankWindow),
                 MenuItem::action("New Incognito Window", NewIncognitoWindow),
-                MenuItem::action("Open Location…", window::EditCurrentUrl),
+                MenuItem::action("Open Command Bar", window::EditCurrentUrl),
                 MenuItem::action("Restore Last Closed Tab", window::RestoreTab),
                 MenuItem::separator(),
                 MenuItem::action("Close Window", CloseWindow),
@@ -130,7 +134,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::separator(),
                 MenuItem::action(if multiple { "Copy URLs" } else { "Copy URL" }, window::CopyUrl),
                 MenuItem::action(if multiple { "Copy URLs as Markdown" } else { "Copy URL as Markdown" }, window::CopyUrlAsMarkdown),
-                MenuItem::action("Copy Current URL as Quote", window::CopyUrlAsQuote),
+                MenuItem::action("Copy URL as Quote", window::CopyUrlAsQuote),
                 MenuItem::separator(),
                 MenuItem::action("Find…", find::FindPage),
                 MenuItem::action("Find Next", find::NextMatch),
@@ -239,6 +243,10 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("Bring All to Front", BringAllToFront),
             ],
         },
+        Menu {
+            name: "Help".into(),
+            items: vec![MenuItem::action("Essential Keyboard Shortcuts", crate::essential_shortcuts::EssentialShortcuts)],
+        },
     ]
 }
 
@@ -251,6 +259,12 @@ pub(crate) enum WindowOperation {
 }
 
 impl window::BrowserWindow {
+    pub(crate) fn open_menu_utility(&mut self, open: fn(&mut App), cx: &mut gpui::Context<Self>) {
+        self.suspend_popup_focus_for_utility();
+        self.close_command_bar_with_focus(crate::window::PopupFocus::OnActivation, cx);
+        cx.defer(open);
+    }
+
     pub(crate) fn perform_window_operation(
         &mut self,
         operation: WindowOperation,

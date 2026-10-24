@@ -4,6 +4,7 @@
 //! Usage: `cargo run -p bundle`, then `open target/bundle/Echo.app`.
 
 use std::path::Path;
+mod acknowledgements;
 
 use cef::build_util::mac::{build_bundle, BundleInfo};
 
@@ -25,6 +26,7 @@ fn main() {
         Ok(path) => {
             install_icon(&path);
             install_icon_notices(&path);
+            acknowledgements::install(&path);
             println!("Bundle: {}", path.display());
         }
         Err(error) => {
