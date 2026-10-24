@@ -254,17 +254,17 @@ Folder duplication follows the right-click action documented in the
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Popup over the page | ⌘T | done | Uses the full browser window bounds, including when opened from the floating sidebar |
-| Entering a URL or searching ("Search or Enter URL…") | — | done | The search engine is hardcoded (Google). Arc lets you pick it in profile settings |
+| Popup over the page | ⌘T | partial | Uses the full browser window bounds, including the floating sidebar. Installed-Arc comparison covers 764 px width, centered input anchor, 46 px rows, radius, padding and typography; material/blur and exact theme-color fidelity still need work |
+| Entering a URL or searching ("Search or Enter URL…") | — | done | Search routing follows the persisted profile engine; profile settings presentation is tracked in section 12 |
 | Editing the current URL | ⌘L | done | Enter on an unchanged URL reloads the page and preserves its title |
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | Repeating ⌘T or ⌘L dismisses its mode; switching between them replaces the input in the same overlay |
 | Switching to an open tab | — | partial | Lists matching tabs across all Spaces, identifies the destination Space and switches there. Split View results are deduplicated by group, match pane titles/URLs and focus the matching page |
-| Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | missing | Also needs the suggestions privacy screen |
+| Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | — | partial | Debounced, bounded, cookie-free completions from the profile engine; requests and late replies are guarded by input identity, generation, profile and preference. Disabled in private windows and for addresses. The information disclosure uses Arc's observed wording; its Search Settings route/privacy-policy link and complete Navigate Suggest ranking remain unfinished |
 | History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | — | partial | Local browsing history matches title/URL in ⌘T and ⌘L, with keyboard/click selection; open tabs match original page titles and suppress duplicate history rows. Bookmark/folder sources remain missing |
-| Calculator (Search Calculator Answer) | — | missing | — |
-| Popular domains (Popular Domains, ARC_TopDomains) | — | missing | — |
-| Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | missing | — |
-| Removing a suggestion ("Delete Suggestion") | — | partial | × removes a local history suggestion and its saved visit without opening it; the query and keyboard selection remain usable. Remote search suggestions are not implemented |
+| Calculator (Search Calculator Answer) | — | partial | Bounded local arithmetic, precedence/parentheses/percentages and copy-on-confirm. Answer-row presentation and confirmation behavior still require verification against an Arc profile that displays calculator answers |
+| Popular domains (Popular Domains, ARC_TopDomains) | — | partial | Local common-domain catalog and selected-suffix inline completion; typing replaces the suffix, Backspace removes it, Right accepts it. Full catalog and reference ranking remain incomplete |
+| Site Search: Tab or Space after a site's name searches that site; has a management menu | Tab / Space | partial | Observed Wikipedia Tab/Space flow, orange scope pill/highlight, scoped query and empty-field Backspace to leave the scope. Other providers, scope hint and management menu remain missing |
+| Removing a suggestion ("Delete Suggestion") | — | partial | × removes a local history suggestion and its saved visit without opening it; the query and keyboard selection remain usable. Removing remote engine suggestions remains unimplemented |
 | **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | — | partial | Implemented actions with names and synonyms: sidebar, pin/unpin, close/archive, clear Today, restore, reload/force reload, stop, zoom, Find in Page, back/forward, next/previous tab, window controls, Space/tab management and archive. Remaining menu actions follow their features |
 | Space actions: "Focus on <space>", "Switch to …" | — | done | Matches Space names and synonyms; Enter or click switches with the pager animation |
 | Moving a tab: "Move to Pinned in <space>", "Move to Today in <space>", "Move to Folder" | — | done | Search destinations by Space and full folder path; direct Pin to <folder> actions identify the Space when names overlap, and Pin to New Folder opens a name editor around the current item. Move to Folder creates a folder if none exist. Identity, custom name, selected Split View pane and loaded pages are preserved; destination is focused. Follows Arc's [organization actions](https://start.arc.net/command-bar-actions) |
@@ -275,7 +275,7 @@ Folder duplication follows the right-click action documented in the
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining actions need their features |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
-| Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | missing | — |
+| Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | partial | Five local tab suggestions with contextual Space/Switch to Tab hints. Feature/help links and Arc's complete recency/ranking policy remain missing. Arc-account, Max and ChatGPT promotion rows are excluded |
 | ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | missing | AI features, lower priority |
 
 ## 6. Context menus

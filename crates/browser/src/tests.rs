@@ -541,6 +541,94 @@ fn cmd_t_opens_command_bar_instead_of_a_tab(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn command_bar_domain_completion_can_be_overwritten_or_deleted(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("wiki");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("wikipedia.org"));
+    bar(&view, cx).simulate_input("x");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("wikix"));
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("wiki");
+    bar(&view, cx).simulate_keystrokes("backspace");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("wiki"));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.google.com/search?q=wiki"));
+}
+
+#[gpui::test]
+fn command_bar_tab_and_space_scope_wikipedia_and_backspace_unscopes(cx: &mut TestAppContext) {
+    for separator in ["tab", "space"] {
+        let (view, cx) = open(cx);
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input("wikipedia");
+        if separator == "space" { bar(&view, cx).simulate_input(" "); }
+        else { bar(&view, cx).simulate_keystrokes("tab"); }
+        assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+        assert!(view.read_with(cx, |view, _| view.command_bar.as_ref().unwrap().site_search.is_some()));
+        assert!(bar(&view, cx).debug_bounds("site-search-pill").is_some());
+        bar(&view, cx).simulate_input("rust language");
+        let rows = view.read_with(cx, |view, cx| view.suggestions(cx));
+        assert_eq!(rows.len(), 1);
+        bar(&view, cx).simulate_keystrokes("enter");
+        assert_eq!(active_url(&view, cx).as_deref(), Some("https://en.wikipedia.org/w/index.php?search=rust+language"));
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input("wikipedia ");
+        bar(&view, cx).simulate_keystrokes("backspace");
+        assert!(view.read_with(cx, |view, _| view.command_bar.as_ref().unwrap().site_search.is_none()));
+    }
+}
+
+#[gpui::test]
+fn command_bar_calculator_copies_answer_without_creating_a_tab(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = today_urls(&view, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("(2+3)*4");
+    assert!(view.read_with(cx, |view, cx| matches!(view.suggestions(cx).first(), Some(Suggestion::Calculator { answer }) if answer == "20")));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(today_urls(&view, cx), before);
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).as_deref(), Some("20"));
+    assert!(view.read_with(cx, |view, _| view.command_bar.is_none()));
+}
+
+#[gpui::test]
+fn command_bar_uses_profile_engine_and_remote_rows_are_selectable(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |view, _| view.edit_browser(|browser| {
+        browser.active_user_profile_mut().command_bar_search.engine = browser_core::omnibox::SearchEngine::DuckDuckGo;
+        browser.active_user_profile_mut().command_bar_search.suggestions = false;
+    }));
+    cx.simulate_keystrokes("cmd-l");
+    bar(&view, cx).simulate_input("rust language");
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| browser.active_user_profile_mut().command_bar_search.suggestions = true);
+        let bar = view.command_bar.as_mut().unwrap();
+        assert!(bar.remote_task.is_none());
+        bar.remote = vec!["rust language tutorial".into()];
+        cx.notify();
+    });
+    bar(&view, cx).simulate_keystrokes("down enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://duckduckgo.com/?q=rust+language+tutorial"));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("another query");
+    assert!(view.read_with(cx, |view, _| view.command_bar.as_ref().unwrap().remote.is_empty()));
+}
+
+#[gpui::test]
+fn command_bar_empty_field_shows_five_rows_and_privacy_disclosure_dismisses(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    assert_eq!(view.read_with(cx, |view, cx| view.suggestions(cx).len()), 5);
+    click(&mut bar(&view, cx), "suggestions-info");
+    assert!(bar(&view, cx).debug_bounds("suggestions-privacy").is_some());
+    click(&mut bar(&view, cx), "dismiss-suggestions-privacy");
+    assert!(!view.read_with(cx, |view, _| view.command_bar.as_ref().unwrap().suggestions_privacy));
+    assert!(view.read_with(cx, |view, _| view.browser.active_user_profile().command_bar_search.notice_dismissed));
+    assert!(bar_input_focused(&view, cx));
+}
+
+#[gpui::test]
 fn typing_an_address_and_enter_opens_it_in_a_new_tab(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let count = today_urls(&view, cx).len();

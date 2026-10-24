@@ -349,6 +349,7 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
     Load(Resolved),
+    Calculator { answer: String },
     SplitTab { id: TabId, title: String, space: String },
     History { title: String, url: String },
     SwitchToTab { id: TabId, title: String, url: String, space: String },
@@ -463,6 +464,11 @@ pub struct CommandBar {
     pub input: Entity<TextInput>,
     pub target: Target,
     pub selected: usize,
+    pub(crate) site_search: Option<omnibox::SiteSearch>,
+    pub(crate) remote: Vec<String>,
+    pub(crate) remote_generation: u64,
+    pub(crate) remote_task: Option<Task<()>>,
+    pub(crate) suggestions_privacy: bool,
     pub(crate) archive_reason: Option<browser_core::ArchiveReason>,
     pub(crate) archive_limit: usize,
     pub(crate) rows_scroll: gpui::ScrollHandle,
@@ -470,6 +476,7 @@ pub struct CommandBar {
     /// window, since pages are native views that cover anything drawn below.
     pub overlay: Option<WindowHandle<Overlay>>,
     _changed: Subscription,
+    _empty_backspace: Subscription,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1249,17 +1256,32 @@ impl BrowserWindow {
                 bar.rows_scroll.set_offset(point(px(0.), px(0.)));
                 bar.archive_limit = 8;
             }
+            this.update_command_suggestions(cx);
             cx.notify();
+        });
+        let empty_backspace = cx.subscribe(&input, |this, input, _: &text_input::EmptyBackspace, cx| {
+            if let Some(bar) = &mut this.command_bar {
+                if bar.site_search.take().is_some() {
+                    input.update(cx, |input, cx| input.set_placeholder("Search or Enter URL…", cx));
+                    cx.notify();
+                }
+            }
         });
         self.command_bar = Some(CommandBar {
             input: input.clone(),
             target,
             selected: 0,
+            site_search: None,
+            remote: Vec::new(),
+            remote_generation: 0,
+            remote_task: None,
+            suggestions_privacy: false,
             archive_reason: None,
             archive_limit: 8,
             rows_scroll: gpui::ScrollHandle::new(),
             overlay: None,
             _changed: changed,
+            _empty_backspace: empty_backspace,
         });
         cx.notify();
 
@@ -1470,6 +1492,12 @@ impl BrowserWindow {
         }
         let query = text.trim().to_lowercase();
         let mut suggestions = Vec::new();
+        if let Some(site) = bar.site_search {
+            return if query.is_empty() { Vec::new() } else { vec![Suggestion::Load(site.search(text.trim()))] };
+        }
+        if let Some(answer) = omnibox::calculator::answer(text) {
+            suggestions.push(Suggestion::Calculator { answer });
+        }
         // Commands are explicit suggestions: never interpret arbitrary prose as an action.
         if !query.is_empty() {
             let active = self.browser.active_tab();
@@ -1599,7 +1627,8 @@ impl BrowserWindow {
             matches.sort_by_key(|(score, _)| *score);
             suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
-        suggestions.extend(omnibox::resolve(text).map(Suggestion::Load));
+        let engine = self.browser.active_user_profile().command_bar_search.engine;
+        suggestions.extend(omnibox::resolve_with_engine(text, engine).map(Suggestion::Load));
         if bar.target == Target::NewTab {
             // Current Space first, then every other Space, keeping duplicate URLs distinct.
             let current = self.browser.active_space;
@@ -1614,7 +1643,7 @@ impl BrowserWindow {
             .filter(|(_, tab)| query.is_empty() || self.browser.item_title(tab.id).to_lowercase().contains(&query) || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
                 || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
                 .filter(|(_, tab)| seen.insert(self.browser.item_anchor(tab.id)))
-                .take(MAX_TAB_SUGGESTIONS)
+                .take(if query.is_empty() { 5 } else { MAX_TAB_SUGGESTIONS })
                 .map(|(space, tab)| Suggestion::SwitchToTab {
                     id: tab.id, title: self.browser.item_title(tab.id), url: tab.url.clone(), space: if self.browser.split_for(tab.id).is_some() { format!("{space} · Split View") } else { space.to_string() },
                 }));
@@ -1626,6 +1655,9 @@ impl BrowserWindow {
                 .filter(|entry| entry.title.to_lowercase().contains(&query) || entry.url.to_lowercase().contains(&query))
                 .take(MAX_HISTORY_SUGGESTIONS)
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
+        }
+        if self.browser.active_user_profile().command_bar_search.suggestions && !self.browser.is_private() {
+            suggestions.extend(bar.remote.iter().map(|query| Suggestion::Load(engine.search(query))));
         }
         suggestions.truncate(MAX_COMMAND_SUGGESTIONS);
         suggestions
@@ -1651,6 +1683,11 @@ impl BrowserWindow {
         };
         let now = SystemTime::now();
         match suggestion {
+            Suggestion::Calculator { answer } => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(answer));
+                self.close_command_bar(cx);
+                return;
+            }
             Suggestion::Load(resolved) => {
                 if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 if let Target::Tab(id) = target {
@@ -3440,10 +3477,12 @@ impl BrowserWindow {
         });
         let panel_width = region.map_or(COMMAND_BAR_WIDTH.min((width - 32.).max(0.)), |bounds| COMMAND_BAR_WIDTH.min((bounds.width as f32 - 32.).max(0.)));
         let archive = matches!(bar.target, Target::Archive(_));
-        let default_top = 140.0_f32.min(height * 0.2);
+        // Arc anchors the top to the center of a nominal 338px panel. Result
+        // changes grow down from that point instead of moving the input.
+        let default_top = ((height - 338.) * 0.5).max(16.);
         let rows_height = region.map_or((height - default_top - if archive { 150. } else { 90. } - 16.).max(40.), |bounds| (bounds.height as f32 - 96.).max(40.));
         let count = self.suggestions(cx).len() as f32;
-        let panel_height = COMMAND_BAR_HEADER + if count > 0. { 15. + (count * 50. - 4.).min(rows_height) } else { 0. };
+        let panel_height = COMMAND_BAR_HEADER + if count > 0. { 18. + (count * 50. - 4.).min(rows_height) } else { 0. };
         let top = region.map_or(default_top, |bounds| bounds.y as f32 + ((bounds.height as f32 - panel_height) * 0.5).max(8.));
         let mut previous_date = None;
         let rows: Vec<_> = self
@@ -3456,7 +3495,12 @@ impl BrowserWindow {
                     Suggestion::ArchivedTab { date, .. } if previous_date.as_ref() != Some(date) => { previous_date = Some(date.clone()); Some(date.clone()) }
                     _ => None,
                 };
+                let current_url_tab = match (&suggestion, bar.target) {
+                    (Suggestion::Load(Resolved::Url(url)), Target::Tab(id)) => self.browser.all_tabs().find(|tab| tab.id == id && tab.url == *url),
+                    _ => None,
+                };
                 let page = match &suggestion {
+                    Suggestion::Load(Resolved::Url(_)) if current_url_tab.is_some() => current_url_tab.map(|tab| self.render_favicon_on(tab, accent, !selected)),
                     Suggestion::SwitchToTab { id, .. } | Suggestion::SplitTab { id, .. } => self.browser.all_tabs().find(|tab| tab.id == *id).map(|tab| self.render_favicon_on(tab, accent, !selected)),
                     Suggestion::History { url, .. } => self.browser.favicon(self.browser.active_user_profile_id(), url).map(|png| self.favicon_styles.borrow_mut().get(png)).map(|style| gpui::img(if selected { style.image } else { style.on_dark })
                         .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain).into_any_element()),
@@ -3464,15 +3508,27 @@ impl BrowserWindow {
                 };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
+                let search_row = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }) | Suggestion::Calculator { .. });
                 let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
                     Suggestion::Load(Resolved::Search { query, .. }) => {
-                        (crate::icons::Icon::Search, query, "Google Search".into())
+                        (crate::icons::Icon::Search, query, String::new())
                     }
-                    Suggestion::Load(Resolved::Url(url)) => (crate::icons::Icon::External, display_url(&url), "Open".into()),
+                    Suggestion::Calculator { answer } => (crate::icons::Icon::Calculator, format!("= {answer}"), "Copy".into()),
+                    Suggestion::Load(Resolved::Url(url)) => {
+                        let display = display_url(&url);
+                        let label = current_url_tab.map(|tab| self.browser.item_title(tab.id)).unwrap_or_else(||
+                            omnibox::TOP_DOMAINS.iter().find(|(domain, _)| display.trim_end_matches('/') == *domain)
+                                .map_or(display.clone(), |(_, name)| format!("{name} — {display}")));
+                        (crate::icons::Icon::External, label, String::new())
+                    }
                     Suggestion::SplitTab { title, space, .. } => (crate::icons::Icon::Enter, title, space),
-                    Suggestion::History { title, url } => (crate::icons::Icon::History, title, format!("History · {}", display_url(&url))),
-                    Suggestion::SwitchToTab { title, .. } => (crate::icons::Icon::Enter, title, "Switch to Tab".into()),
-                    Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, "Action".into()),
+                    Suggestion::History { title, url } => (crate::icons::Icon::History, format!("{title} — {}", display_url(&url)), String::new()),
+                    Suggestion::SwitchToTab { title, space, .. } => {
+                        let hint = if space != self.browser.space().name { space }
+                            else { "Switch to Tab".into() };
+                        (crate::icons::Icon::Enter, title, hint)
+                    }
+                    Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, String::new()),
                     Suggestion::SaveFolderName { name } => (crate::icons::Icon::Folder, name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
                     Suggestion::FolderDestination { label, .. } => (crate::icons::Icon::Folder, label, "Move".into()),
                     Suggestion::SaveIcon { icon } => (crate::icons::Icon::Enter, icon.unwrap_or_else(|| "Reset Icon".into()), match bar.target { Target::Icon(crate::icons::IconTarget::Space(_)) => "Space Icon".into(), Target::Icon(crate::icons::IconTarget::Folder(_)) => "Folder Icon".into(), _ => "Tab Icon".into() }),
@@ -3486,8 +3542,8 @@ impl BrowserWindow {
                 // Pages show their favicon; commands a glyph on a faint tile.
                 // The selected row's tile turns white, as in the reference.
                 let tile = div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(6.0))
-                    .when(selected, |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
-                    .when(!selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
+                    .when(!search_row && selected && page.is_none(), |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
+                    .when(!search_row && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
                     .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
                 let row = div()
                     .id(("suggestion", index))
@@ -3500,7 +3556,7 @@ impl BrowserWindow {
                     .mx_2()
                     .rounded(px(8.0))
                     .text_color(hsla(0.0, 0.0, 1.0, if selected { 1.0 } else { 0.82 }))
-                    .when(selected, |this| this.bg(hsla(accent, 0.08, 0.255, 1.0)))
+                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(0xffa000).into() } else { hsla(accent, 0.67, 0.55, 1.0) }))
                     .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.04))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
@@ -3510,7 +3566,7 @@ impl BrowserWindow {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(label),
                     )
                     .child(
@@ -3520,7 +3576,7 @@ impl BrowserWindow {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(hsla(0.0, 0.0, 1.0, if selected { 0.95 } else { 0.4 }))
                             .child(detail),
                     )
@@ -3540,10 +3596,10 @@ impl BrowserWindow {
                             cx.stop_propagation();
                             this.delete_command_history_entry(history_owner, &url, cx);
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
-                    .child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
+                    .when(!search_row && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
                         .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, 1.0, 0.06) })
                         .text_color(if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, 1.0, 0.6) })
-                        .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0)));
+                        .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0))));
                 div().flex().flex_col().flex_none()
                     .children(date.map(|date| div().debug_selector(|| self.sidebar_debug_name((move || format!("archive-date-{index}"))())).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
                     .child(row).into_any_element()
@@ -3570,6 +3626,19 @@ impl BrowserWindow {
                     .id("command-bar")
                     .debug_selector(|| self.sidebar_debug_name((|| "command-bar".into())()))
                     .key_context(COMMAND_BAR_CONTEXT)
+                    .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "tab" && this.scope_site_search(cx) { cx.stop_propagation(); }
+                        if event.keystroke.key == "backspace" {
+                            if let Some(bar) = &mut this.command_bar {
+                                if bar.site_search.is_some() && bar.input.read(cx).text().is_empty() {
+                                    bar.site_search = None;
+                                    bar.input.update(cx, |input, cx| input.set_placeholder("Search or Enter URL…", cx));
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    }))
                     .on_action(cx.listener(|this, _: &OpenCommandBar, _, cx| { this.toggle_command_target(Target::NewTab, "", cx); }))
                     .on_action(cx.listener(|this, _: &EditCurrentUrl, _, cx| {
                         let (target, text) = this.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone())).unwrap_or((Target::NewTab, String::new()));
@@ -3603,14 +3672,30 @@ impl BrowserWindow {
                             .h(px(COMMAND_BAR_HEADER - 1.)).flex_none()
                             .flex().items_center().gap(px(13.0))
                             .pl(px(22.0)).pr(px(21.0))
-                            .child(div().text_color(hsla(0.0, 0.0, 1.0, 0.75)).child(crate::icons::control_sized(crate::icons::Icon::Search, 16.0)))
+                            .child(div().text_color(hsla(0.0, 0.0, 1.0, 0.75)).child(
+                                if let Target::Tab(id) = bar.target {
+                                    self.browser.all_tabs().find(|tab| tab.id == id)
+                                        .map(|tab| self.render_favicon_on(tab, accent, true))
+                                        .unwrap_or_else(|| crate::icons::control_sized(crate::icons::Icon::Search, 16.0))
+                                } else { crate::icons::control_sized(crate::icons::Icon::Search, 16.0) }))
+                            .when_some(bar.site_search, |this, site| this.child(div()
+                                .debug_selector(|| "site-search-pill".into())
+                                .rounded_full().px(px(10.)).h(px(24.)).flex().items_center()
+                                .bg(gpui::rgb(0xffa000)).text_color(gpui::white())
+                                .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(site.name())))
                             .child(div()
                                 .debug_selector(|| self.sidebar_debug_name((|| "command-bar-input".into())()))
                                 .flex_1().min_w_0()
                                 .text_size(px(18.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .line_height(px(28.0))
                                 .child(bar.input.clone()))
-                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)), |this| this.child(div()
+                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none(), |this| this.child(div()
+                                .id("suggestions-info").debug_selector(|| "suggestions-info".into())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = !bar.suggestions_privacy; }
+                                    cx.notify();
+                                }))
                                 .size(px(24.0)).flex_none().flex().items_center().justify_center().rounded_full()
                                 .bg(hsla(0.0, 0.0, 0.0, 0.8)).text_color(hsla(0.0, 0.0, 1.0, 0.55))
                                 .child(crate::icons::control_sized(crate::icons::Icon::Info, 17.0)))),
@@ -3623,8 +3708,23 @@ impl BrowserWindow {
                         this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, 1.0, 0.1)))
                             .text_size(px(14.0))
                             .child(div().id("command-suggestions").debug_selector(|| self.sidebar_debug_name((|| "command-suggestions".into())()))
-                                .flex().flex_col().gap_1().pt(px(6.0)).pb(px(8.0)).max_h(px(rows_height + 14.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
-                    }),
+                                .flex().flex_col().gap_1().pt(px(6.0)).pb(px(10.0)).max_h(px(rows_height + 16.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
+                    })
+                    .when(bar.suggestions_privacy, |this| this.child(div()
+                        .debug_selector(|| "suggestions-privacy".into())
+                        .flex().items_center().gap_3().px_4().py_3()
+                        .bg(gpui::black()).rounded_b(px(COMMAND_BAR_RADIUS))
+                        .child(crate::icons::control_sized(crate::icons::Icon::Info, 16.))
+                        .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM)
+                            .child("We talk to your search engine to help us suggest results."))
+                        .child(div().id("dismiss-suggestions-privacy").debug_selector(|| "dismiss-suggestions-privacy".into())
+                            .rounded(px(6.)).px_3().py_2().text_size(px(13.))
+                            .bg(hsla(accent, 0.3, 0.3, 1.))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.edit_browser(|browser| browser.active_user_profile_mut().command_bar_search.notice_dismissed = true);
+                                if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = false; }
+                                cx.notify();
+                            })).child("Dismiss")))),
             )
     }
 }

@@ -36,6 +36,8 @@ pub struct UserProfile {
     #[serde(default)]
     pub empty_favorites_dismissed: bool,
     #[serde(default)]
+    pub command_bar_search: crate::omnibox::CommandBarSearchPreferences,
+    #[serde(default)]
     pub favicon_cache: Vec<SiteIcon>,
     #[serde(default)]
     pub(crate) downloads: crate::downloads::CompletedDownloads,
@@ -64,6 +66,7 @@ impl UserProfile {
             history: Vec::new(),
             archive_after,
             empty_favorites_dismissed: false,
+            command_bar_search: crate::omnibox::CommandBarSearchPreferences::default(),
             favicon_cache: Vec::new(),
             downloads: crate::downloads::CompletedDownloads::default(),
         }

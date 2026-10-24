@@ -5,6 +5,7 @@ mod quit;
 mod find;
 mod toast;
 mod archive;
+mod command_suggestions;
 mod menus;
 mod history;
 mod tab_menu;

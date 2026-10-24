@@ -71,6 +71,8 @@ pub fn bind_keys(cx: &mut App) {
 
 /// Emitted whenever the text changes.
 pub struct Changed;
+/// Lets an owning scoped field remove its scope using the normal Backspace action.
+pub struct EmptyBackspace;
 
 #[derive(Clone)]
 struct EditState {
@@ -96,9 +98,11 @@ pub struct TextInput {
     /// IME updates replace one provisional range; only its final result is
     /// one undoable edit, never the individual conversion candidates.
     composition_before: Option<EditState>,
+    complete_after_edit: bool,
 }
 
 impl EventEmitter<Changed> for TextInput {}
+impl EventEmitter<EmptyBackspace> for TextInput {}
 
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -123,6 +127,7 @@ impl TextInput {
             undo_history: Vec::new(),
             redo_history: Vec::new(),
             composition_before: None,
+            complete_after_edit: false,
         }
     }
 
@@ -140,10 +145,30 @@ impl TextInput {
         &self.content
     }
 
+    /// Complete only a fresh insertion at the end, never a deletion, selection,
+    /// mid-string edit or provisional IME composition. Select the suffix so the
+    /// next character replaces it and Right accepts it using normal input rules.
+    pub(crate) fn complete_suffix(&mut self, completion: &str, cx: &mut Context<Self>) {
+        let length = self.content.len();
+        if !self.complete_after_edit || self.marked_range.is_some()
+            || self.selected_range != (length..length) || completion.len() <= length
+            || !completion[..length].eq_ignore_ascii_case(&self.content) { return; }
+        self.content = format!("{}{}", self.content, &completion[length..]).into();
+        self.selected_range = length..self.content.len();
+        self.complete_after_edit = false;
+        cx.notify();
+    }
+
+    pub(crate) fn set_caret_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.set_text(text.to_string(), cx);
+        self.move_to(self.content.len(), cx);
+    }
+
     /// Replaces the text and selects all of it, so typing overwrites it.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         let text = text.into();
         self.content = single_line_text(&text).into_owned().into();
+        self.complete_after_edit = false;
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
         self.marked_range = None;
@@ -196,6 +221,7 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() { cx.emit(EmptyBackspace); return; }
         let range = if self.selected_range.is_empty() {
             self.previous_boundary(self.cursor_offset())..self.cursor_offset()
         } else { self.selected_range.clone() };
@@ -466,6 +492,7 @@ impl EntityInputHandler for TextInput {
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        self.complete_after_edit = !new_text.is_empty();
         self.selection_reversed = false;
         self.marked_range.take();
         self.record_edit(before);
