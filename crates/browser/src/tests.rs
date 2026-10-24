@@ -12,6 +12,8 @@ use crate::pages::WebEngine;
 use crate::window::{BrowserWindow, Suggestion};
 use crate::{demo_browser, init};
 
+#[path = "max_chatgpt_tests.rs"]
+mod max_chatgpt_tests;
 #[path = "max_downloads_tests.rs"]
 mod max_downloads_tests;
 #[path = "toolbar_tests.rs"]

@@ -33,9 +33,11 @@ fn fetch(engine: SearchEngine, query: &str) -> Vec<String> {
 
 impl BrowserWindow {
     pub(crate) fn scope_site_search(&mut self, cx: &mut Context<Self>) -> bool {
+        let chatgpt_enabled = self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar));
         let Some(bar) = &mut self.command_bar else { return false; };
         if !matches!(bar.target, Target::NewTab | Target::Tab(_)) || bar.site_search.is_some() { return false; }
         let Some(site) = SiteSearch::from_keyword(bar.input.read(cx).text()) else { return false; };
+        if site == SiteSearch::ChatGpt && !chatgpt_enabled { return false; }
         bar.site_search = Some(site);
         bar.remote.clear();
         bar.remote_task.take();
@@ -43,7 +45,7 @@ impl BrowserWindow {
         bar.selected = 0;
         let input = bar.input.clone();
         input.update(cx, |input, cx| {
-            input.set_placeholder("Search…", cx);
+            input.set_placeholder(if site == SiteSearch::ChatGpt { "Send a Message…" } else { "Search…" }, cx);
             input.set_caret_text("", cx);
         });
         cx.notify();
@@ -58,7 +60,7 @@ impl BrowserWindow {
         let Some(bar) = &mut self.command_bar else { return; };
         if !matches!(bar.target, Target::NewTab | Target::Tab(_)) { return; }
         let text = bar.input.read(cx).text().to_string();
-        if bar.site_search.is_none() && text.ends_with(' ') && SiteSearch::from_keyword(&text).is_some() {
+        if bar.site_search.is_none() && text.ends_with(' ') && SiteSearch::from_keyword(&text) == Some(SiteSearch::Wikipedia) {
             self.scope_site_search(cx);
             return;
         }

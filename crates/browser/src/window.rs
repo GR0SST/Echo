@@ -1707,9 +1707,20 @@ impl BrowserWindow {
         }
         let query = text.trim().to_lowercase();
         let mut suggestions = Vec::new();
+        let chatgpt_enabled = self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar));
+        let chatgpt_keyword = chatgpt_enabled && query == "chatgpt";
         if let Some(site) = bar.site_search {
-            return if query.is_empty() { Vec::new() } else { vec![Suggestion::Load(site.search(text.trim()))] };
+            if site == omnibox::SiteSearch::ChatGpt && !chatgpt_enabled { return Vec::new(); }
+            if !query.is_empty() { return vec![Suggestion::Load(site.search(text.trim()))]; }
+            if site != omnibox::SiteSearch::ChatGpt { return Vec::new(); }
+            let mut rows = vec![Suggestion::Load(Resolved::Url("https://chatgpt.com/".into())),
+                Suggestion::Load(self.browser.active_user_profile().settings.search.engine.search("ChatGPT"))];
+            rows.extend(self.browser.active_user_profile().history.iter()
+                .filter(|entry| entry.title.to_lowercase().contains("chatgpt") || entry.url.contains("chatgpt.com") || entry.url.contains("chat.openai.com"))
+                .take(3).map(|entry| Suggestion::History {title:entry.title.clone(),url:entry.url.clone()}));
+            return rows;
         }
+        if chatgpt_keyword { suggestions.push(Suggestion::Load(Resolved::Url("https://chatgpt.com/".into()))); }
         if let Some(answer) = omnibox::calculator::answer(text) {
             suggestions.push(Suggestion::Calculator { answer });
         }
@@ -3941,6 +3952,10 @@ impl BrowserWindow {
         let page_parent = self.native_view.map(|view| view as usize);
         let panel_fill = self.command_bar_panel_fill(material_backdrop.get());
         let row_selection = self.command_bar_selection();
+        let chatgpt_keyword = matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none()
+            && self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar))
+            && bar.input.read(cx).text().trim().eq_ignore_ascii_case("chatgpt");
+        let scope_color = if bar.site_search == Some(omnibox::SiteSearch::ChatGpt) { 0x64ab9c } else { 0xffa000 };
         let accent = self.accent();
         // Arc's split draft uses the ordinary window-wide Command Bar, even
         // when its empty pane is only 220 px wide.
@@ -3984,7 +3999,7 @@ impl BrowserWindow {
                     Suggestion::Load(Resolved::Url(url)) => {
                         let display = display_url(&url);
                         let label = current_url_tab.map(|tab| self.browser.item_title(tab.id)).unwrap_or_else(||
-                            omnibox::TOP_DOMAINS.iter().find(|(domain, _)| display.trim_end_matches('/') == *domain)
+                            std::iter::once(&("chatgpt.com", "ChatGPT")).chain(omnibox::TOP_DOMAINS.iter()).find(|(domain, _)| display.trim_end_matches('/') == *domain)
                                 .map_or(display.clone(), |(_, name)| format!("{name} — {display}")));
                         (crate::icons::Icon::External, label, String::new())
                     }
@@ -4024,7 +4039,7 @@ impl BrowserWindow {
                     .mx_2()
                     .rounded(px(8.0))
                     .text_color(hsla(0.0, 0.0, if selected { 1. } else { ink }, if selected { 1.0 } else { 0.82 }))
-                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(0xffa000).into() } else { row_selection }))
+                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if chatgpt_keyword && index == 0 { gpui::rgb(0x4248d8).into() } else { row_selection }))
                     .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.04))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
@@ -4172,16 +4187,20 @@ impl BrowserWindow {
                             .when_some(bar.site_search, |this, site| this.child(div()
                                 .debug_selector(|| "site-search-pill".into())
                                 .rounded_full().px(px(10.)).h(px(24.)).flex().items_center()
-                                .bg(gpui::rgb(0xffa000)).text_color(gpui::white())
+                                .bg(gpui::rgb(scope_color)).text_color(gpui::white())
                                 .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(site.name())))
                             .child(div()
+                                .when(bar.site_search == Some(omnibox::SiteSearch::ChatGpt), |this| this.ml(px(-3.)))
                                 .debug_selector(|| self.sidebar_debug_name((|| "command-bar-input".into())()))
                                 .flex_1().min_w_0()
                                 .text_size(px(18.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .line_height(px(28.0))
                                 .child(bar.input.clone()))
-                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none(), |this| this.child(div()
+                            .when(chatgpt_keyword, |this| this.child(div().debug_selector(|| "chatgpt-tab-hint".into())
+                                .flex().items_center().gap(px(9.)).text_size(px(13.)).text_color(hsla(0.,0.,ink,0.4))
+                                .child("Ask ChatGPT").child(div().px(px(4.)).py(px(2.)).rounded(px(3.)).bg(hsla(0.,0.,ink,0.08)).child("Tab"))))
+                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_keyword, |this| this.child(div()
                                 .id("suggestions-info").debug_selector(|| "suggestions-info".into())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = !bar.suggestions_privacy; }

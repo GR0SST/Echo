@@ -83,15 +83,33 @@ pub fn top_domain(prefix: &str) -> Option<(&'static str, &'static str)> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SiteSearch { Wikipedia }
+pub enum SiteSearch { Wikipedia, ChatGpt }
 impl SiteSearch {
     pub fn from_keyword(keyword: &str) -> Option<Self> {
-        matches!(keyword.trim().to_ascii_lowercase().as_str(), "wikipedia" | "wikipedia.org" | "www.wikipedia.org")
-            .then_some(Self::Wikipedia)
+        match keyword.trim().to_ascii_lowercase().as_str() {
+            "wikipedia" | "wikipedia.org" | "www.wikipedia.org" => Some(Self::Wikipedia),
+            "chatgpt" => Some(Self::ChatGpt),
+            _ => None,
+        }
     }
-    pub fn name(self) -> &'static str { "Wikipedia" }
+    pub fn name(self) -> &'static str { match self { Self::Wikipedia => "Wikipedia", Self::ChatGpt => "ChatGPT" } }
     pub fn search(self, query: &str) -> Resolved {
-        Resolved::Search { query: query.into(), url: format!("https://en.wikipedia.org/w/index.php?search={}", encode_query(query)) }
+        let url = match self {
+            Self::Wikipedia => format!("https://en.wikipedia.org/w/index.php?search={}", encode_query(query)),
+            Self::ChatGpt => {
+                // Arc's native handoff opens this URL; the website prefills its
+                // composer and owns the user's explicit Send action.
+                let mut encoded = String::new();
+                for byte in query.bytes() {
+                    match byte {
+                        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'?' => encoded.push(byte as char),
+                        _ => encoded.push_str(&format!("%{byte:02X}")),
+                    }
+                }
+                format!("https://chat.openai.com/?q={encoded}")
+            }
+        };
+        Resolved::Search { query: query.into(), url }
     }
 }
 
@@ -246,5 +264,19 @@ mod tests {
         assert_eq!(url("v1.2"), "https://www.google.com/search?q=v1.2");
         assert_eq!(url("c++"), "https://www.google.com/search?q=c%2B%2B");
         assert_eq!(url("привет"), "https://www.google.com/search?q=%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82");
+    }
+}
+
+#[cfg(test)]
+mod chatgpt_tests {
+    use super::*;
+    #[test]
+    fn chatgpt_handoff_matches_arc_and_keeps_the_whole_question_in_one_parameter() {
+        assert_eq!(SiteSearch::from_keyword("ChatGPT"), Some(SiteSearch::ChatGpt));
+        assert_eq!(SiteSearch::ChatGpt.search("What is the Rust programming language?").url(), "https://chat.openai.com/?q=What%20is%20the%20Rust%20programming%20language?");
+        let resolved = SiteSearch::ChatGpt.search("a&b=#c+%? 日本語");
+        let url = url::Url::parse(resolved.url()).unwrap();
+        assert_eq!(url.query_pairs().collect::<Vec<_>>(), vec![("q".into(), "a&b=#c+%? 日本語".into())]);
+        assert!(url.fragment().is_none());
     }
 }

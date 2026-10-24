@@ -1499,3 +1499,49 @@ cover core name/metadata validation, filesystem collision/replacement/symlink
 handling, and GPUI completion/Undo/stale-response behavior. The full workspace
 suite passed (989 browser, 212 core, 13 AI, 135 engine, 6 importer; the native
 credential-store integration test remains opt-in).
+
+
+### ChatGPT in the Command Bar, 2026-10-25
+
+Installed Arc 1.170.0 was inspected in a guarded disposable window in the shared
+Echo Test Space, with Max settings unchanged. Typing ChatGPT shows the
+“Ask ChatGPT” / Tab hint; Tab adds a 24 px-high rounded green ChatGPT capsule
+and “Send a Message…” placeholder. Scope and selected row sample `(117,169,156)`
+in the captured Display P3 PNG (sRGB conversion: `(100,171,156)`). A typed question becomes a single search row. Empty
+scope retains ChatGPT website/search/history suggestions. Enter opens a website
+tab and prefills the question in ChatGPT's composer; the user still owns Send.
+It is not an in-popup API chat view. The test tab was closed and the window
+cleaned up without modifying any Max preferences or other tabs.
+
+The observed handoff is `https://chat.openai.com/?q=What%20is%20the%20Rust%20programming%20language?`.
+A read-only, in-memory query of only the fixture's recent ChatGPT history URLs
+confirmed that address, its chatgpt.com redirect and the final prompt route;
+`arc_chatgpt_fixture_history.json` retains only those fixture URLs. The browser
+uses the initial observed URL and percent-encodes query delimiters and Unicode
+into the single q parameter. The site performs its own redirect/composer setup;
+Echo never injects JavaScript or presses the website's Send button. In the
+isolated logged-out Echo session the same route automatically generated an
+answer, whereas the captured logged-in Arc session only prefilled its composer.
+This authentication-dependent website behavior remains a parity limitation. This route
+uses the user's website session, independently of the selected API provider.
+The other Max inference features continue to use the chosen direct provider.
+
+Reference evidence: `target/parity/arc-max/arc_chatgpt_commandbar.png`,
+`arc_chatgpt_scope.png`, `arc_chatgpt_query.png`, `arc_chatgpt_submitted.png` and
+`arc_chatgpt_submitted_url.txt`. These were visually inspected. Header favicon
+and website history suggestions vary with each profile; no OpenAI/Arc asset
+was copied into the repository.
+
+Echo native evidence uses the matching filenames with `echo_` prefixes for
+Command Bar, empty scope, question scope and destination. All frames are
+1000×760 and were visually compared. The isolated profile has fewer history
+rows/Favorites and a different sidebar width. The scoped fill was calibrated
+through the screenshot ICC profile: Arc and Echo final Display P3 samples both
+read `(117,169,156)` for green and `(67,72,208)` for the unscoped selected row.
+Panel/font metrics and the input's generic search icon versus Arc's ChatGPT
+favicon remain visual limitations. The native CEF run created one website tab
+and exited with status zero after its complete shutdown barrier. Core URL
+encoding plus three GPUI regressions cover Tab/Backspace, stale disabled scope
+and keeping ChatGPT text in a rename form. The full suite passed: 995 browser,
+213 core, 13 AI, 135 engine and 6 importer tests; the OS credential integration
+test remains opt-in.
