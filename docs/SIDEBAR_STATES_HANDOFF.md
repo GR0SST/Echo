@@ -91,3 +91,33 @@ starts 16 px from the panel edge and Today/Pinned menu height is 307 px. Native
 material installation defers refresh until after paint, fixing a submenu that
 otherwise stayed opaque until the next pointer event. A GPUI regression test
 checks overlap, height, fixed Edit width, left flipping and bottom-edge placement.
+
+
+## Round 2: folder rows
+
+Arc references `arc-r2-depth-two.png`, `arc-r2-folder-same-idle.png`,
+`arc-r2-folder-same-hover.png` and gutter/icon/text hover captures show 16 px
+nesting at each level, a 41 px row stride and an unchanged open/closed folder
+icon on hover. There are no inline add or ellipsis controls. Echo now follows
+those measurements and uses the ordinary sidebar hover opacity (0.10 in dark,
+0.30 in light) rather than 0.35. Creation and actions remain in the context menu.
+Inspected pairs: `pair-r2-folder-open-3x.png`,
+`pair-r2-folder-hover-3x.png`, `pair-r2-folder-closed-3x.png`. The nesting and
+hover controls now match; the existing catalog icon silhouettes remain smaller
+and less angled than Arc and need a separate vector correction.
+The existing 96 px deep-tree indentation cap and active-descendant treatment
+remain unverified. GPUI coverage checks two nesting levels, collapse/reopen,
+icon/title bounds on hover and context-menu invocation without toggling.
+
+Audio follow-up: CEF 154 exposes capture callbacks, but the capture loopback
+creator sets `mute_source = true`; installing that handler silences normal page
+output. A non-disruptive audibility signal is still required before wiring real
+playing indicators and Mute availability. Native playing references are
+`arc-r2-audio-playing.png`, `arc-r2-audio-hover.png`, `arc-r2-audio-menu.png`.
+Arc positions the playing indicator between favicon and title. No audio capture
+handler or fake playing-state detection was added.
+
+Motion references: `arc-r2-press.mov`, `arc-r2-reorder.mov`,
+`reorder-contact.png`. Reorder shows a lifted card, insertion marker, retained
+source slot and settling motion after release. These are measurement artifacts;
+Echo's row spring and reorder animation are not complete.

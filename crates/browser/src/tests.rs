@@ -4139,7 +4139,8 @@ fn folder_creation_and_nested_creation_keep_the_page_and_cancel_without_creating
     dispatch_menu(cx, "Spaces", "New Folder…");
     bar(&view, cx).simulate_input("Projects");
     bar(&view, cx).simulate_keystrokes("enter");
-    click(cx, "folder-new-9");
+    right_click(cx, "folder-9");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-new");
     bar(&view, cx).simulate_input("Research");
     bar(&view, cx).simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -6064,7 +6065,7 @@ fn split_sidebar_segments_fill_the_row_and_long_titles_stay_inside(cx: &mut Test
 }
 
 #[gpui::test]
-fn folder_hover_replaces_its_icon_without_shifting_the_title(cx: &mut TestAppContext) {
+fn folder_hover_keeps_its_icon_and_context_menu_does_not_toggle_it(cx: &mut TestAppContext) {
     let (view, cx, _) = open_folder_pages(cx);
     let folder = view.read_with(cx, |w, _| w.browser.space().folders[0].id);
     let key = folder.get();
@@ -6075,11 +6076,41 @@ fn folder_hover_replaces_its_icon_without_shifting_the_title(cx: &mut TestAppCon
     assert_eq!(icon.origin.x, row.origin.x + gpui::px(9.));
     assert_eq!(name.origin.x, icon.right() + gpui::px(9.));
     move_mouse(cx, f32::from(row.center().x), f32::from(row.center().y));
-    assert_eq!(cx.debug_bounds(test_selector(format!("folder-chevron-{key}"))).unwrap(), icon);
+    assert_eq!(cx.debug_bounds(test_selector(format!("folder-icon-{key}"))).unwrap(), icon);
+    for control in ["chevron", "new", "menu"] {
+        assert!(cx.debug_bounds(test_selector(format!("folder-{control}-{key}"))).is_none());
+    }
     assert_eq!(cx.debug_bounds(test_selector(format!("folder-name-{key}"))).unwrap(), name);
     let was_collapsed = view.read_with(cx, |w, _| w.browser.folder(folder).unwrap().collapsed);
-    click(cx, test_selector(format!("folder-menu-{key}")));
+    right_click(cx, test_selector(format!("folder-{key}")));
     assert_eq!(view.read_with(cx, |w, _| w.browser.folder(folder).unwrap().collapsed), was_collapsed);
+}
+
+#[gpui::test]
+fn nested_folder_rows_advance_sixteen_pixels_and_reopen_without_moving(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_folder_pages(cx);
+    let (root, child, grandchild) = view.update(cx, |w, cx| {
+        let root = w.browser.space().folders[0].id;
+        let child = w.browser.space().folders[1].id;
+        let space = w.browser.space().id;
+        let grandchild = w.edit_browser(|browser| browser.create_folder(space, Some(child), "Notes")).unwrap();
+        cx.notify();
+        (root.get(), child.get(), grandchild.get())
+    });
+    cx.run_until_parked();
+    let bounds = |cx: &mut VisualTestContext, id| cx.debug_bounds(test_selector(format!("folder-icon-{id}"))).unwrap();
+    let a = bounds(cx, root);
+    let b = bounds(cx, child);
+    let c = bounds(cx, grandchild);
+    assert_eq!(b.origin.x - a.origin.x, gpui::px(16.));
+    assert_eq!(c.origin.x - b.origin.x, gpui::px(16.));
+    click(cx, test_selector(format!("folder-{child}")));
+    view.read_with(cx, |w, _| {
+        assert!(w.browser.space().folders.iter().find(|folder| folder.id.get() == child).unwrap().collapsed);
+        assert!(!w.browser.pinned_rows(w.browser.space().id, false).iter().any(|row| matches!(row.item, browser_core::folders::PinnedItem::Folder(id) if id.get() == grandchild)));
+    });
+    click(cx, test_selector(format!("folder-{child}")));
+    assert_eq!(bounds(cx, grandchild), c);
 }
 
 #[gpui::test]
