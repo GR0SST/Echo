@@ -43,6 +43,8 @@ pub struct UserProfile {
     pub(crate) downloads: crate::downloads::CompletedDownloads,
     #[serde(default)]
     pub boosts: crate::boosts::Boosts,
+    #[serde(default)]
+    pub site_settings: crate::site_settings::SiteSettings,
 }
 impl UserProfile {
     pub fn id(&self) -> UserProfileId {
@@ -72,6 +74,7 @@ impl UserProfile {
             favicon_cache: Vec::new(),
             downloads: crate::downloads::CompletedDownloads::default(),
             boosts: crate::boosts::Boosts::default(),
+            site_settings: crate::site_settings::SiteSettings::default(),
         }
     }
 }
@@ -233,6 +236,7 @@ impl Browser {
         );
         blank.profiles.get_mut(&id).unwrap().settings = source.settings.clone();
         blank.profiles.get_mut(&id).unwrap().boosts = source.boosts.clone();
+        blank.profiles.get_mut(&id).unwrap().site_settings = source.site_settings.clone();
         blank.spaces[0].user_profile_id = id;
         blank.blank_source_user_profile_id = Some(id);
         blank.next_user_profile_id = self.next_user_profile_id;

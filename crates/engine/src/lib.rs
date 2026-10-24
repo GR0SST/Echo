@@ -21,6 +21,10 @@ mod audio;
 mod audio_clock;
 mod editing;
 mod boosts;
+mod site_info;
+mod site_data;
+pub use site_data::ClearSiteData;
+pub use site_info::{SiteInfo, SiteCertificate, SitePermission, PermissionKind, PermissionValue};
 mod boost_picker;
 mod quote;
 pub use boosts::SiteBoost;
@@ -170,6 +174,9 @@ thread_local! {
 }
 
 struct Runtime {
+    // Native views can move between pools; protocol IDs must not collide with
+    // replies still in flight from their previous pool.
+    message_ids: devtools::MessageIds,
     root: PathBuf,
     audio: Option<audio::Output>,
     persistent: storage::PersistentContexts<RequestContext>,
@@ -274,6 +281,7 @@ pub struct Engine {
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
     snapshots: snapshot::Snapshots,
+    site_data: site_data::SiteData,
     boosts: Vec<(std::rc::Weak<RequestContext>, Arc<Mutex<Vec<SiteBoost>>>)>,
     message_ids: devtools::MessageIds,
     inspectors: devtools::Inspectors,
@@ -355,6 +363,7 @@ impl Engine {
             }
 
             let runtime = std::rc::Rc::new(Runtime {
+                message_ids: devtools::MessageIds::default(),
                 root: root_cache,
                 audio: audio::Output::open(),
                 lifecycle: shutdown::Lifecycle::default(),
@@ -392,8 +401,9 @@ impl Engine {
             by_browser_id: HashMap::new(),
             next_id: 1,
             snapshots: snapshot::Snapshots::default(),
+            site_data: site_data::SiteData::default(),
             boosts: Vec::new(),
-            message_ids: devtools::MessageIds::default(),
+            message_ids: runtime.message_ids.clone(),
             inspectors: devtools::Inspectors::default(),
             _runtime: runtime,
             context,
@@ -536,6 +546,13 @@ impl Engine {
     }
 
     fn drain_events(&mut self, ordered_input: bool) -> Vec<Event> {
+        for result in self.site_data.take() {
+            let Some(view) = self.views.get(&result.view).filter(|view| view.role == ViewRole::Page) else { continue; };
+            let current = view.browser.main_frame().map(|frame| CefString::from(&frame.url()).to_string());
+            if result.success && site_data::document_epoch(view.browser.identifier()) == Some(result.epoch) && current.as_deref().and_then(site_info::web_origin).as_deref() == Some(result.origin.as_str()) {
+                view.browser.reload_ignore_cache();
+            }
+        }
         let raw = self.events.take();
         raw.into_iter()
             .filter_map(|(browser_id, event)| {
@@ -841,6 +858,7 @@ impl Engine {
         let next = target.next_id.checked_add(1)?;
         if !self.move_view(id, parent, frame) { return None; }
         self.snapshots.close(id);
+        self.site_data.close(id);
         let view = self.views.remove(&id)?;
         let browser = view.browser.identifier();
         view.callback_events.redirect(browser, &self.events, &target.events, transferable_metadata);
@@ -905,12 +923,14 @@ impl Engine {
     }
 
     pub fn navigate(&mut self, id: ViewId, url: &str) {
+        self.site_data.close(id);
         if let Some(frame) = self.views.get(&id).and_then(|view| view.browser.main_frame()) {
             frame.load_url(Some(&CefString::from(url)));
         }
     }
 
     pub fn go_back(&mut self, id: ViewId) {
+        self.site_data.close(id);
         if let Some(view) = self.views.get(&id) {
             view.browser.go_back();
         }
@@ -926,12 +946,14 @@ impl Engine {
     }
 
     pub fn go_forward(&mut self, id: ViewId) {
+        self.site_data.close(id);
         if let Some(view) = self.views.get(&id) {
             view.browser.go_forward();
         }
     }
 
     pub fn reload(&mut self, id: ViewId) {
+        self.site_data.close(id);
         if let Some(view) = self.views.get(&id) {
             view.browser.reload();
         }
@@ -939,10 +961,12 @@ impl Engine {
 
     /// Reloads from the network, bypassing the HTTP cache.
     pub fn force_reload(&mut self, id: ViewId) {
+        self.site_data.close(id);
         if let Some(view) = self.views.get(&id) { view.browser.reload_ignore_cache(); }
     }
 
     pub fn stop_loading(&mut self, id: ViewId) {
+        self.site_data.close(id);
         if let Some(view) = self.views.get(&id) { view.browser.stop_load(); }
     }
 
@@ -989,6 +1013,14 @@ impl Engine {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
             host.stop_finding(1);
         }
+    }
+
+    pub fn clear_site_data(&mut self, id: ViewId, origin: &str, kind: ClearSiteData) -> bool {
+        if self._runtime.lifecycle.require_running().is_err() { return false; }
+        let Some(page) = self.views.get(&id).filter(|page| page.role == ViewRole::Page) else { return false; };
+        let current = page.browser.main_frame().map(|frame| CefString::from(&frame.url()).to_string());
+        if current.as_deref().and_then(site_info::web_origin).as_deref() != Some(origin) { return false; }
+        self.site_data.request(id, origin, kind, &page.browser, &self.message_ids)
     }
 
     /// Captures the visible viewport of the same existing CEF browser without
@@ -1149,6 +1181,7 @@ impl Engine {
             .filter_map(|(&inspector, session)| (session.status.inspected == id || session.frontend == id).then_some(inspector)).collect();
         for inspector in inspectors { self.close_inspector(inspector); }
         self.snapshots.close(id);
+        self.site_data.close(id);
         if let Some(view) = self.views.remove(&id) {
             self.by_browser_id.remove(&view.browser.identifier());
             if let Some(audio) = &self._runtime.audio { audio.close(view.browser.identifier()); }
@@ -1331,7 +1364,10 @@ wrap_request_handler! {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return 0; };
             let Some(request) = request else { return 0; };
             let target = CefString::from(&request.url()).to_string();
-            if CefString::from(&request.method()).to_string() != "GET" || !peek_cross_domain(&CefString::from(&frame.url()).to_string(), &target, self.policy.lock().unwrap().pinned, gesture != 0, redirect != 0) { return 0; }
+            if CefString::from(&request.method()).to_string() != "GET" || !peek_cross_domain(&CefString::from(&frame.url()).to_string(), &target, self.policy.lock().unwrap().pinned, gesture != 0, redirect != 0) {
+                if let Some(browser) = browser.as_deref() { site_data::navigated(browser.identifier()); }
+                return 0;
+            }
             push(&self.events, browser, RawEvent::Peek(target));
             1
         }
@@ -1522,6 +1558,7 @@ wrap_life_span_handler! {
             if let Some(gate) = &self.download_gate { gate.seal(); }
             if let Some(browser) = browser {
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
+                site_data::destroyed(browser.identifier());
             }
         }
 

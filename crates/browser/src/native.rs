@@ -23,6 +23,65 @@ mod mac {
     use objc2::runtime::{AnyObject, Bool, Sel};
     use objc2::{msg_send, sel};
 
+    #[repr(C)]
+    struct SecTrust { _opaque: [u8; 0] }
+    unsafe impl objc2::RefEncode for SecTrust {
+        const ENCODING_REF: objc2::encode::Encoding = objc2::encode::Encoding::Pointer(
+            &objc2::encode::Encoding::Struct("__SecTrust", &[]));
+    }
+
+    // Native certificate presentation is an OS sheet, matching the reference.
+    // Its input is owned DER data; no CEF object escapes the engine crate.
+    #[link(name = "SecurityInterface", kind = "framework")]
+    unsafe extern "C" {}
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        fn SecCertificateCreateWithData(allocator: *const c_void, data: *const c_void) -> *const c_void;
+        fn SecPolicyCreateSSL(server: u8, hostname: *const c_void) -> *const c_void;
+        fn SecTrustCreateWithCertificates(certificates: *const c_void, policies: *const c_void, trust: *mut *const SecTrust) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" { fn CFRelease(value: *const c_void); }
+
+    pub fn show_certificate(view: *mut c_void, chain: &[Vec<u8>], host: &str) -> bool {
+        use objc2::runtime::AnyClass;
+        use objc2_foundation::NSString;
+        if chain.is_empty() || host.is_empty() { return false; }
+        unsafe {
+            let owner = window(view);
+            if owner.is_null() { return false; }
+            let Some(panel_class) = AnyClass::get(c"SFCertificatePanel") else { return false; };
+            let panel: *mut AnyObject = msg_send![panel_class, sharedCertificatePanel];
+            if panel.is_null() { return false; }
+            let attached: *mut AnyObject = msg_send![panel, sheetParent];
+            if !attached.is_null() { return false; }
+            let array: *mut AnyObject = msg_send![AnyClass::get(c"NSMutableArray").expect("Foundation is loaded"), array];
+            for der in chain {
+                let data: *mut AnyObject = msg_send![AnyClass::get(c"NSData").expect("Foundation is loaded"), dataWithBytes: der.as_ptr().cast::<c_void>() length: der.len()];
+                let certificate = SecCertificateCreateWithData(std::ptr::null(), data.cast());
+                if certificate.is_null() { return false; }
+                let _: () = msg_send![array, addObject: certificate as *mut AnyObject];
+                CFRelease(certificate);
+            }
+            let name = NSString::from_str(host);
+            let policy = SecPolicyCreateSSL(1, (&*name as *const NSString).cast());
+            if policy.is_null() { return false; }
+            let mut trust = std::ptr::null();
+            let result = SecTrustCreateWithCertificates(array.cast(), policy, &mut trust);
+            CFRelease(policy);
+            if result != 0 || trust.is_null() { return false; }
+            let _: () = msg_send![panel,
+                beginSheetForWindow: owner
+                modalDelegate: std::ptr::null_mut::<AnyObject>()
+                didEndSelector: None::<Sel>
+                contextInfo: std::ptr::null_mut::<c_void>()
+                trust: trust
+                showGroup: Bool::YES];
+            CFRelease(trust.cast());
+            true
+        }
+    }
+
     const CLOSE: usize = 0;
     const MINIATURIZE: usize = 1;
     const ZOOM: usize = 2;
@@ -134,7 +193,7 @@ mod mac {
     // AppKit raw enum values are isolated here, never in shared theme logic.
     fn effect_material(material: crate::material::EffectMaterial) -> isize {
         use crate::material::EffectMaterial::*;
-        match material { Hud => 13, Menu => 5, WindowBackground => 12,
+        match material { Hud => 13, Menu => 5, Popover => 6, WindowBackground => 12,
             ReferenceLight => 1, ReferenceDark => 2 }
     }
 
@@ -705,3 +764,10 @@ pub(crate) fn pointer_in_view(view: *mut c_void) -> Option<(f32, f32)> {
 pub(crate) mod sharing;
 
 pub(crate) mod link_source;
+/// Displays the platform certificate sheet without retaining engine handles.
+pub(crate) fn show_certificate(view: *mut c_void, chain: &[Vec<u8>], host: &str) -> bool {
+    #[cfg(all(target_os = "macos", not(test)))]
+    { mac::show_certificate(view, chain, host) }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { let _ = (view, chain, host); false }
+}

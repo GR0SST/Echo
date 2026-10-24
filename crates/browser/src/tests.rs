@@ -14,6 +14,8 @@ use crate::{demo_browser, init};
 
 #[path = "toolbar_tests.rs"]
 mod toolbar_tests;
+#[path = "site_controls_tests.rs"]
+mod site_controls_tests;
 
 fn open(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut VisualTestContext) {
     open_with(cx, None)
@@ -191,6 +193,8 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
     Quote(u64, u64),
+    SitePermission(u64,String,engine::PermissionKind,engine::PermissionValue),
+    ClearSiteData(u64,String,engine::ClearSiteData),
     Create(u64, String),
     MoveHost(u64, usize, Bounds),
     Visible(u64, bool),
@@ -257,6 +261,7 @@ struct FakeState {
     storage_attempts: Vec<crate::pages::StorageSelection>,
     identity_attempts: Vec<(crate::pages::PageIdentity, browser_core::SpaceId, crate::pages::StorageSelection, String)>,
     snapshots: Vec<engine::PageSnapshot>,
+    site_infos: std::collections::HashMap<u64,engine::SiteInfo>,
 }
 
 #[derive(Clone, Default)]
@@ -284,6 +289,16 @@ impl FakeEngine {
 
 impl WebEngine for FakeEngine {
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.call(Call::Quote(raw(view), request)); true }
+    fn site_info(&self, view:ViewId)->Option<engine::SiteInfo>{self.0.borrow().site_infos.get(&raw(view)).cloned()}
+    fn set_site_permission(&mut self,view:ViewId,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool{
+        {let mut state=self.0.borrow_mut();let Some(info)=state.site_infos.get_mut(&raw(view)).filter(|info|info.origin==origin) else{return false;};let Some(setting)=info.permissions.iter_mut().find(|setting|setting.kind==kind)else{return false;};setting.value=value;}
+        self.call(Call::SitePermission(raw(view),origin.into(),kind,value));true
+    }
+    fn clear_site_data(&mut self,view:ViewId,origin:&str,kind:engine::ClearSiteData)->bool{
+        if !self.0.borrow().site_infos.get(&raw(view)).is_some_and(|info|info.origin==origin){return false;}
+        self.call(Call::ClearSiteData(raw(view),origin.into(),kind));true
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
     fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut std::ffi::c_void, bounds: Bounds) -> Option<ViewId> {
         let target = target.as_any_mut()?.downcast_mut::<Self>()?;

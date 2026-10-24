@@ -61,6 +61,7 @@ pub(crate) enum EffectBlending {
 pub(crate) enum EffectMaterial {
     Hud,
     Menu,
+    Popover,
     WindowBackground,
     /// Explicit reference-only looks; deprecated by AppKit. Not theme modes.
     ReferenceLight,

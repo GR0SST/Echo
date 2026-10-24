@@ -67,6 +67,11 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 /// app and by a recording fake in tests.
 pub trait WebEngine {
     fn request_quote(&mut self, _view: ViewId, _request: u64) -> bool { false }
+    fn site_info(&self, _view: ViewId) -> Option<engine::SiteInfo> { None }
+    fn set_site_permission(&mut self, _view: ViewId, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
+    fn clear_site_data(&mut self, _view: ViewId, _origin: &str, _kind: engine::ClearSiteData) -> bool { false }
+    fn zoom_percent(&self, _view: ViewId) -> u16 { 100 }
+
     fn set_boost_picker(&mut self, _view: ViewId, _enabled: bool) {}
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
     fn transfer_view(&mut self, _view: ViewId, _target: &mut dyn WebEngine, _parent: *mut c_void, _bounds: Bounds) -> Option<ViewId> { None }
@@ -172,6 +177,11 @@ impl Chromium {
 
 impl WebEngine for Chromium {
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_quote(view, request) }
+    fn site_info(&self, view: ViewId) -> Option<engine::SiteInfo> { self.engine.site_info(view) }
+    fn set_site_permission(&mut self, view: ViewId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool { self.engine.set_site_permission(view, origin, kind, value) }
+    fn clear_site_data(&mut self, view: ViewId, origin: &str, kind: engine::ClearSiteData) -> bool { self.engine.clear_site_data(view, origin, kind) }
+    fn zoom_percent(&self, view: ViewId) -> u16 { self.engine.zoom_percent(view) }
+
     fn set_boost_picker(&mut self, view: ViewId, enabled: bool) { self.engine.set_boost_picker(view,enabled); }
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { Some(self) }
     fn transfer_view(&mut self, view: ViewId, target: &mut dyn WebEngine, parent: *mut c_void, bounds: Bounds) -> Option<ViewId> {
@@ -824,6 +834,26 @@ impl Pages {
         if store.active_host == self.host { store.active_host = destination.map_or(0, |(host, _)| host); }
         self.visible.clear();
         self.shown = None;
+    }
+
+    pub fn site_info(&self, tab: TabId) -> Option<engine::SiteInfo> {
+        let store = self.store.borrow();
+        let page = store.pages.get(&tab).filter(|page| page.owner == self.host)?;
+        store.engine.site_info(page.view)
+    }
+    pub fn set_site_permission(&mut self, tab: TabId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
+        let mut store = self.store.borrow_mut();
+        let Some(view) = store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page| page.view) else { return false; };
+        store.engine.set_site_permission(view, origin, kind, value)
+    }
+    pub fn clear_site_data(&mut self, tab: TabId, origin: &str, kind: engine::ClearSiteData) -> bool {
+        let mut store = self.store.borrow_mut();
+        let Some(view) = store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page| page.view) else { return false; };
+        store.engine.clear_site_data(view, origin, kind)
+    }
+    pub fn zoom_percent(&self, tab: TabId) -> u16 {
+        let store = self.store.borrow();
+        store.pages.get(&tab).filter(|page| page.owner == self.host).map(|page| store.engine.zoom_percent(page.view)).unwrap_or(100)
     }
 
     pub fn state(&self, tab: TabId) -> PageState {

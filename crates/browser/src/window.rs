@@ -1079,6 +1079,7 @@ impl BrowserWindow {
         self.discard_sidebar_resize();
         if let Some(bar) = &self.command_bar { bar.material_alive.set(false); }
         self.clear_command_bar_backdrop();
+        self.clear_site_controls_backdrop();
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
         let profile_child = self.take_user_profile_child(cx);
         let theme_child = self.take_theme_editor();
@@ -2166,6 +2167,7 @@ impl BrowserWindow {
                 else if this.command_bar.is_some() { this.close_command_bar(cx); }
                 else { this.close_focused_tab(cx); }
             }))
+            .on_action(cx.listener(|this, _: &ToggleToolbar, _, cx| this.toggle_toolbar(cx)))
             .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
