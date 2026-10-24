@@ -9083,3 +9083,34 @@ fn lookup_transfer_delivers_unclaimed_metadata_to_the_adopted_identity(cx: &mut 
     cx.executor().advance_clock(Duration::from_millis(10)); cx.run_until_parked();
     owner.read_with(cx, |view, _| assert_eq!(view.browser.active_tab().unwrap().title, "Pending renderer title"));
 }
+
+#[gpui::test]
+fn theme_noise_dial_starts_at_noon_and_intensity_thumb_follows_the_pointer(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-preset-2");
+    let noise = editor.debug_bounds("theme-noise").unwrap();
+    for (x, y, expected) in [(0., -32., 0.), (32., 0., 0.25), (0., 32., 0.5), (-32., 0., 0.75)] {
+        let p = noise.center() + gpui::point(gpui::px(x), gpui::px(y));
+        editor.simulate_mouse_move(p, None, Modifiers::none());
+        editor.simulate_mouse_down(p, gpui::MouseButton::Left, Modifiers::none());
+        editor.simulate_mouse_up(p, gpui::MouseButton::Left, Modifiers::none());
+        editor.run_until_parked();
+        assert!((view.read_with(cx, |w, _| w.theme_editor.as_ref().unwrap().draft.noise) - expected).abs() < 0.001);
+    }
+    let texture = view.read_with(cx, |w, _| w.theme_editor.as_ref().unwrap().draft.texture);
+    for _ in 0..5 { click(&mut editor, "theme-texture"); }
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.theme_editor.as_ref().unwrap().draft.texture, texture);
+        assert!((w.theme_editor.as_ref().unwrap().draft.noise - 0.75).abs() < 0.001);
+    });
+    let slider = editor.debug_bounds("theme-intensity").unwrap();
+    let p = gpui::point(slider.left() + gpui::px(6. + 212. * 0.25), slider.center().y);
+    editor.simulate_mouse_move(p, None, Modifiers::none());
+    editor.simulate_mouse_down(p, gpui::MouseButton::Left, Modifiers::none());
+    editor.simulate_mouse_up(p, gpui::MouseButton::Left, Modifiers::none());
+    editor.run_until_parked();
+    assert!((view.read_with(cx, |w, _| w.theme_editor.as_ref().unwrap().draft.intensity) - 0.25).abs() < 0.001);
+    assert!((f32::from(editor.debug_bounds("theme-intensity-thumb").unwrap().center().x - p.x)).abs() < 0.01);
+}

@@ -62,13 +62,36 @@ fn hash(x: u32, y: u32) -> f32 {
 }
 fn noise(texture: NoiseTexture, x: u32, y: u32) -> f32 {
     match texture {
+        NoiseTexture::None => 0.,
         NoiseTexture::Grain => hash(x, y),
-        NoiseTexture::Sand => hash(x / 2, y / 2) * 0.65 + hash(x, y) * 0.35,
+        NoiseTexture::Sand => hash(x, y) * 0.75
+            + hash((x + 99) % 100, y) * 0.125
+            + hash(x, (y + 99) % 100) * 0.125,
         NoiseTexture::Tweed => {
-            hash(x / 3, y / 3) * 0.5 + hash(x % 4, y) * 0.25 + hash(x, y % 4) * 0.25
+            let angle = std::f32::consts::TAU;
+            (angle * (0.4 * x as f32 - 0.44 * y as f32)).cos() * 0.7
+                + (angle * 0.4 * x as f32).cos() * 0.32 + hash(x, y) * 0.9
         }
-        NoiseTexture::Denim => hash(x / 5, y) * 0.4 + hash(x, y / 5) * 0.4 + hash(x, y) * 0.2,
+        NoiseTexture::Denim => {
+            let angle = std::f32::consts::TAU;
+            (angle * 0.375 * x as f32).cos() * (angle * 0.25 * y as f32).cos() * 0.12
+                + (hash(x, y) * 0.85 + hash(x, (y + 99) % 100) * 0.15) * 0.85
+        }
     }
+}
+
+// Native captures repeat at 100 logical pixels in both axes (the Metal
+// material family). This original field matches measured grain statistics.
+const NOISE_TILE: u32 = 100;
+fn noise_opacity(texture: NoiseTexture, x: u32, y: u32, strength: f32) -> f32 {
+    let (mean, amplitude) = match texture {
+        NoiseTexture::None => return 0.,
+        NoiseTexture::Grain => (0.039, 0.087),
+        NoiseTexture::Sand => (0.047, 0.108),
+        NoiseTexture::Tweed => (0.0634, 0.0344),
+        NoiseTexture::Denim => (0.10, 0.0634),
+    };
+    (mean + noise(texture, x, y) * amplitude).clamp(0., 0.2) * strength
 }
 
 #[derive(Clone, PartialEq)]
@@ -104,11 +127,12 @@ impl ThemePaintCache {
                 if key.translucent { 224 } else { 255 },
             ])
         });
-        let texture = image::RgbaImage::from_fn(128, 128, |x, y| {
-            let amount = |s: &Surface| noise(s.theme.texture, x, y) * s.theme.noise;
-            let n = amount(&key.from) * (1. - key.fraction) + amount(&key.to) * key.fraction;
-            let value = if n < 0. { 0 } else { 255 };
-            image::Rgba([value, value, value, (n.abs() * 60.) as u8])
+        let texture = image::RgbaImage::from_fn(NOISE_TILE, NOISE_TILE, |x, y| {
+            let amount = |s: &Surface| noise_opacity(s.theme.texture, x, y, s.theme.noise);
+            let alpha = amount(&key.from) * (1. - key.fraction) + amount(&key.to) * key.fraction;
+            // Match the native material's response through GPUI's translucent backing.
+            let backing_gain = if key.translucent { 0.82 } else { 1. };
+            image::Rgba([0, 0, 0, (alpha * backing_gain * 255.).round() as u8])
         });
         let gradient = Arc::new(RenderImage::new(vec![image::Frame::new(gradient)]));
         let texture = Arc::new(RenderImage::new(vec![image::Frame::new(texture)]));
@@ -312,14 +336,14 @@ impl BrowserWindow {
                 }
                 let _ = window.paint_image(bounds, Default::default(), gradient, 0, false);
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                    let cols = (f32::from(bounds.size.width) / 128.).ceil() as u32;
-                    let rows = (f32::from(bounds.size.height) / 128.).ceil() as u32;
+                    let cols = (f32::from(bounds.size.width) / NOISE_TILE as f32).ceil() as u32;
+                    let rows = (f32::from(bounds.size.height) / NOISE_TILE as f32).ceil() as u32;
                     for row in 0..rows {
                         for col in 0..cols {
                             let tile = Bounds::new(
                                 bounds.origin
-                                    + gpui::point(px(col as f32 * 128.), px(row as f32 * 128.)),
-                                gpui::size(px(128.), px(128.)),
+                                    + gpui::point(px(col as f32 * NOISE_TILE as f32), px(row as f32 * NOISE_TILE as f32)),
+                                gpui::size(px(NOISE_TILE as f32), px(NOISE_TILE as f32)),
                             );
                             if !tile.intersects(&window.content_mask().bounds) { continue; }
                             let _ = window.paint_image(
@@ -372,6 +396,18 @@ mod tests {
         s.picked = false;
         s.theme.intensity = 0.2;
         assert!((0.12..0.2).contains(&s.sample(0.5, 0.5).red));
+    }
+    #[test]
+    fn original_sand_matches_reference_mean_contrast_and_neighbour_correlation() {
+        let values: Vec<f32> = (0..100).flat_map(|y| (0..100).map(move |x| noise_opacity(NoiseTexture::Sand, x, y, 1.))).collect();
+        let mean = values.iter().sum::<f32>() / values.len() as f32;
+        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
+        let covariance = (0..100).flat_map(|y| (1..100).map(move |x| (y, x))).map(|(y, x)|
+            (values[y * 100 + x] - mean) * (values[y * 100 + x - 1] - mean)).sum::<f32>() / 9900.;
+        assert!((0.045..0.049).contains(&mean));
+        assert!((0.022..0.026).contains(&variance.sqrt()));
+        assert!((0.08..0.22).contains(&(covariance / variance)));
+        assert_eq!(noise_opacity(NoiseTexture::Grain, 10, 20, 0.), 0.);
     }
     #[test]
     fn textures_are_deterministic_and_distinct() {

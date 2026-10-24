@@ -289,17 +289,15 @@ impl BrowserWindow {
             Some(Drag::Intensity) => {
                 if let Some(b) = e.intensity_bounds.get() {
                     e.draft.intensity =
-                        (f32::from(position.x - b.left()) / f32::from(b.size.width)).clamp(0., 1.);
+                        ((f32::from(position.x - b.left()) - 6.) / 212.).clamp(0., 1.);
                 }
             }
             Some(Drag::Noise) => {
                 if let Some(b) = e.noise_bounds.get() {
                     let delta = position - b.center();
                     let angle = f32::from(delta.y).atan2(f32::from(delta.x));
-                    e.draft.noise = ((angle + std::f32::consts::PI * 0.75)
-                        .rem_euclid(std::f32::consts::TAU)
-                        / (std::f32::consts::PI * 1.5))
-                        .clamp(0., 1.);
+                    e.draft.noise = (angle + std::f32::consts::FRAC_PI_2)
+                        .rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
                 }
             }
             None => {}
@@ -726,17 +724,16 @@ impl BrowserWindow {
                                     hsla(0., 0., 1., 0.15),
                                     gpui::BorderStyle::Solid,
                                 ));
-                                let a = noise * std::f32::consts::PI * 1.5
-                                    - std::f32::consts::PI * 0.75;
-                                let p = b.center()
-                                    + point(px(a.cos() * 15. - 2.), px(a.sin() * 15. - 2.));
-                                w.paint_quad(
-                                    gpui::fill(
-                                        Bounds::new(p, gpui::size(px(4.), px(4.))),
-                                        hsla(0., 0., 1., 0.5),
-                                    )
-                                    .corner_radii(px(2.)),
-                                );
+                                let a = noise * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                                let direction = point(px(a.cos()), px(a.sin()));
+                                let start = b.center() + direction * 28.;
+                                let end = b.center() + direction * 36.;
+                                let mut path = gpui::PathBuilder::stroke(px(8.));
+                                path.move_to(start); path.line_to(end);
+                                if let Ok(path) = path.build() { w.paint_path(path, hsla(0., 0., 1., 0.95)); }
+                                for p in [start, end] {
+                                    w.paint_quad(gpui::fill(Bounds::new(p - point(px(4.), px(4.)), gpui::size(px(8.), px(8.))), hsla(0., 0., 1., 0.95)).corner_radii(px(4.)));
+                                }
                             },
                         )
                         .size_full(),

@@ -18,6 +18,7 @@ pub enum NoiseTexture {
     Sand,
     Tweed,
     Denim,
+    None,
 }
 impl NoiseTexture {
     pub fn next(self) -> Self {
@@ -25,7 +26,8 @@ impl NoiseTexture {
             Self::Grain => Self::Sand,
             Self::Sand => Self::Tweed,
             Self::Tweed => Self::Denim,
-            Self::Denim => Self::Grain,
+            Self::Denim => Self::None,
+            Self::None => Self::Grain,
         }
     }
 }
@@ -179,6 +181,14 @@ mod tests {
         let red = ThemeColor::from_display_p3([1., 0., 0.]);
         assert!((red.red - 1.).abs() < 0.000001);
         assert_eq!((red.green, red.blue), (0., 0.));
+    }
+    #[test]
+    fn texture_cycle_keeps_the_untextured_step_before_returning_to_grain() {
+        let mut texture = NoiseTexture::Grain;
+        for expected in [NoiseTexture::Sand, NoiseTexture::Tweed, NoiseTexture::Denim, NoiseTexture::None, NoiseTexture::Grain] {
+            texture = texture.next();
+            assert_eq!(texture, expected);
+        }
     }
     #[test]
     fn theme_roundtrip_and_legacy_hue_migration() {
