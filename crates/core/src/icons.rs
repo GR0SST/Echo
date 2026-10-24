@@ -2,8 +2,18 @@
 use crate::{Browser, SpaceId, TabId};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// Stable, portable names for the MIT-licensed symbol catalog. Store the name,
+/// rather than a font codepoint, so sessions render identically on every OS.
+pub static SYMBOL_NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(include_str!("icon_names.json")).expect("valid symbol catalog")
+});
+
 pub fn valid_icon(icon: &str) -> bool {
     let icon = icon.trim();
+    if icon == "shape:circle" { return true; }
+    if let Some(name) = icon.strip_prefix("ion:") {
+        return SYMBOL_NAMES.binary_search_by(|entry| entry.as_str().cmp(name)).is_ok();
+    }
     !icon.is_empty() && icon.len() <= 128 && icon.graphemes(true).count() == 1
         && !icon.chars().any(|character| character.is_control() || character.is_whitespace())
 }
@@ -55,6 +65,27 @@ mod tests {
     use crate::{session, splits::Placement};
     use std::time::SystemTime;
     const NOW: SystemTime = SystemTime::UNIX_EPOCH;
+
+    #[test]
+    fn named_symbols_round_trip_without_accepting_unknown_catalog_entries() {
+        let mut browser = Browser::new();
+        let space = browser.space().id;
+        let tab = browser.new_tab("https://example.com", NOW);
+        let folder = browser.create_folder(space, None, "Symbols").unwrap();
+        for symbol in ["ion:heart-outline", "ion:airplane", "ion:planet-outline", "shape:circle"] {
+            assert!(browser.set_space_icon(space, Some(symbol)));
+            assert!(browser.set_item_icon(tab, Some(symbol)));
+            assert!(browser.set_folder_icon(folder, Some(symbol)));
+            let restored = session::from_json(&session::to_json(&browser)).unwrap();
+            assert_eq!(restored.space().custom_icon.as_deref(), Some(symbol));
+            assert_eq!(restored.item_icon(tab), Some(symbol));
+            assert_eq!(restored.folder(folder).unwrap().custom_icon.as_deref(), Some(symbol));
+        }
+        assert!(!valid_icon("ion:logo-apple"));
+        assert!(!valid_icon("ion:unknown"));
+        assert!(!valid_icon("shape:unknown"));
+        assert!(!valid_icon("ion:"));
+    }
 
     #[test]
     fn icons_accept_one_grapheme_including_flags_skin_tones_and_families() {

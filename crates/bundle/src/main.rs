@@ -24,12 +24,24 @@ fn main() {
     match build_bundle(Path::new("target/bundle"), "Echo", info) {
         Ok(path) => {
             install_icon(&path);
+            install_icon_notices(&path);
             println!("Bundle: {}", path.display());
         }
         Err(error) => {
             eprintln!("Bundling failed: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+fn install_icon_notices(app: &Path) {
+    let notices = app.join("Contents/Resources/ThirdPartyNotices");
+    std::fs::create_dir_all(&notices).expect("cannot create third-party notices");
+    for (name, text) in [
+        ("Gemoji.txt", include_str!("../../browser/assets/emoji/LICENSE")),
+        ("Ionicons.txt", include_str!("../../browser/assets/ionicons/LICENSE")),
+    ] {
+        std::fs::write(notices.join(name), text).expect("cannot install icon catalog license");
     }
 }
 

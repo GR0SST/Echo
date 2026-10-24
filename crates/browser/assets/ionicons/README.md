@@ -22,6 +22,6 @@ To regenerate, with Python fontTools installed:
 python3 scripts/import-ionicons.py /path/to/ionicons.ttf crates/browser/assets/ionicons/paths.json
 ```
 
-The complete set is embedded for browser controls and future graphical icon
-selection. The current custom Space/tab/folder editor still accepts user
-symbols and emoji; importing this catalog does not replace that picker UI.
+The complete set is embedded for browser controls and graphical icon selection.
+The picker maps the reference's symbol grid to these portable named contours;
+sessions store `ion:<name>` independently of the font's codepoints.

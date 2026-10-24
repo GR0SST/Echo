@@ -1,12 +1,21 @@
-//! A focused Command Bar editor for tab/group and Space symbols.
+//! Portable browser controls and user-selected emoji/catalog symbols.
 use crate::window::{BrowserWindow, Target};
 use browser_core::{SpaceId, TabId};
 use gpui::{div, prelude::*, px, AnyElement, Context};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IconTarget { Tab(TabId), Space(SpaceId), Folder(browser_core::folders::FolderId) }
 
 pub(crate) fn glyph(icon: &str) -> AnyElement {
+    if icon == "shape:circle" {
+        return div().size(px(18.)).flex_none().flex().items_center().justify_center().child(gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
+            let mut dot = gpui::fill(gpui::Bounds::new(bounds.origin + gpui::point(px(2.), px(2.)), gpui::size(px(14.), px(14.))), window.text_style().color);
+            dot.corner_radii = px(7.).into(); window.paint_quad(dot);
+        }).size(px(18.))).into_any_element();
+    }
+    if let Some(name) = icon.strip_prefix("ion:") {
+        return ionicon(name, 18., 1.);
+    }
     div().size(px(18.)).flex_none().flex().items_center().justify_center().text_size(px(16.)).line_height(px(18.)).child(icon.to_string()).into_any_element()
 }
 
@@ -75,9 +84,10 @@ static IONICONS: std::sync::LazyLock<IconContours> = std::sync::LazyLock::new(||
     serde_json::from_str(include_str!("../assets/ionicons/paths.json")).expect("embedded Ionicons geometry is valid")
 });
 
-pub(crate) fn ionicon(name: &'static str, size: f32, zoom: f32) -> AnyElement {
+pub(crate) fn ionicon(name: &str, size: f32, zoom: f32) -> AnyElement {
+    let name = name.to_owned();
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
-        let Some(commands) = IONICONS.get(name) else { return; };
+        let Some(commands) = IONICONS.get(&name) else { return; };
         let scale = f32::from(bounds.size.width) / 512. * zoom;
         let center = bounds.center();
         let at = |x, y| center + gpui::point(px((x - 256.) * scale), px((255. - y) * scale));
@@ -286,22 +296,30 @@ mod catalog_tests {
     }
 }
 
-pub(crate) fn folder(custom: Option<&str>) -> AnyElement {
-    custom.map(glyph).unwrap_or_else(|| control(Icon::Folder))
+pub(crate) fn folder(custom: Option<&str>) -> AnyElement { folder_state(custom, false) }
+
+pub(crate) fn folder_state(custom: Option<&str>, open: bool) -> AnyElement {
+    let name = if open && custom.is_none() { "folder-open" } else { "folder" };
+    let folder = div().size(px(18.)).flex_none().relative()
+        .child(div().absolute().inset_0().text_color(gpui::white()).child(ionicon(name, 18., 1.)))
+        .child(div().absolute().top(px(1.)).left(px(1.)).text_color(gpui::rgb(0x343bfa)).child(ionicon(name, 16., 1.)));
+    folder.when_some(custom, |this, icon| this.child(div().absolute().inset_0().pt(px(2.)).flex().items_center().justify_center().text_color(gpui::white())
+        .child(if icon == "shape:circle" { div().size(px(7.)).rounded_full().bg(gpui::white()).into_any_element() }
+            else if let Some(name) = icon.strip_prefix("ion:") { ionicon(name, 10., 1.) }
+            else { div().text_size(px(11.)).line_height(px(12.)).child(icon.to_string()).into_any_element() })))
+        .into_any_element()
 }
 
 impl BrowserWindow {
     pub(crate) fn edit_icon(&mut self, target: IconTarget, cx: &mut Context<Self>) {
         if self.browser.is_blank() && !matches!(target, IconTarget::Tab(_)) { return; }
-        let icon = match target {
-            IconTarget::Folder(id) => self.browser.folder(id).and_then(|folder| folder.custom_icon.as_deref()),
-            IconTarget::Tab(id) => self.browser.item_icon(id),
-            IconTarget::Space(id) => self.browser.spaces.iter().find(|space| space.id == id).and_then(|space| space.custom_icon.as_deref()),
-        }.unwrap_or_default().to_string();
+        let anchor = self.icon_anchors.borrow().get(&target).copied();
         if let Some(bar) = &mut self.command_bar {
             bar.target = Target::Icon(target);
+            bar.icon_anchor = anchor;
+            bar.icon_picker = crate::icon_catalog::Picker { catalog: if matches!(target, IconTarget::Folder(_)) { crate::icon_catalog::Catalog::Symbols } else { self.last_icon_catalog }, folder: matches!(target, IconTarget::Folder(_)), ..Default::default() };
             bar.selected = 0;
-            bar.input.update(cx, |input, cx| { input.set_placeholder("Enter one symbol or emoji…", cx); input.set_text(icon, cx); });
+            bar.input.update(cx, |input, cx| { input.set_placeholder("Search", cx); input.set_text("", cx); });
         }
         cx.notify();
     }

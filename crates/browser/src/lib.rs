@@ -22,6 +22,8 @@ mod split_layout;
 mod sidebar_title;
 mod split;
 mod icons;
+mod icon_catalog;
+mod icon_picker;
 mod folders;
 mod space_menu;
 mod space_drag;
@@ -88,6 +90,7 @@ pub fn init(cx: &mut App) {
     settings::init(cx);
     history::bind_keys(cx);
     tab_menu::bind_keys(cx);
+    icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
     new_menu::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);

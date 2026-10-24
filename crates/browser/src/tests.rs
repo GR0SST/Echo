@@ -3929,7 +3929,7 @@ fn hidden_cycle_shortcuts_work_from_ui_and_native_page_focus_and_keep_split_grou
 }
 
 #[gpui::test]
-fn tab_icon_editor_accepts_complex_emoji_and_invalid_input_does_not_change_the_icon(cx: &mut TestAppContext) {
+fn tab_icon_picker_searches_complex_emoji_and_no_results_cannot_change_the_icon(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
     fake.take_calls();
@@ -3956,10 +3956,12 @@ fn context_icon_editor_targets_an_inactive_tab_and_reset_name_and_icon_restores_
     fake.take_calls();
     right_click(cx, "tab-4");
     click(&mut tab_menu(&view, cx), "tab-menu-icon");
-    bar(&view, cx).simulate_input("★");
-    bar(&view, cx).simulate_keystrokes("enter");
+    click(&mut bar(&view, cx), "icon-picker-symbols");
+    click(&mut bar(&view, cx), "icon-cell-0");
+    assert!(bar_text(&view, cx).is_some());
+    bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(active_url(&view, cx), active);
-    view.read_with(cx, |w, _| assert_eq!(w.browser.space().pinned[0].custom_icon.as_deref(), Some("★")));
+    view.read_with(cx, |w, _| assert_eq!(w.browser.space().pinned[0].custom_icon.as_deref(), Some("ion:star")));
     right_click(cx, "tab-4");
     click(&mut tab_menu(&view, cx), "tab-menu-reset-customization");
     assert_eq!(active_url(&view, cx), active);
@@ -3984,7 +3986,7 @@ fn split_group_icon_survives_favorite_and_separation_reveals_the_original_page_i
 }
 
 #[gpui::test]
-fn space_icon_picker_persists_symbols_and_blank_input_restores_the_default(cx: &mut TestAppContext) {
+fn space_icon_picker_searches_emoji_and_remove_restores_the_default(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     dispatch_menu(cx, "Spaces", "Change Space Icon…");
     bar(&view, cx).simulate_input("🧭");
@@ -4004,9 +4006,11 @@ fn space_icon_picker_persists_symbols_and_blank_input_restores_the_default(cx: &
     assert!(view.read_with(cx, |w, _| w.browser.space().custom_icon.is_none()));
     click(cx, "space-0");
     dispatch_menu(cx, "Spaces", "Change Space Icon…");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some("🧭"));
-    bar(&view, cx).simulate_keystrokes("backspace enter");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    click(&mut bar(&view, cx), "icon-picker-remove");
     assert!(view.read_with(cx, |w, _| w.browser.space().custom_icon.is_none()));
+    assert!(bar_text(&view, cx).is_some(), "removing an icon keeps the picker open");
+    bar(&view, cx).simulate_keystrokes("escape");
 }
 
 fn open_folder_pages(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut VisualTestContext, FakeEngine) {
@@ -4163,13 +4167,21 @@ fn folder_context_actions_rename_customize_and_copy_all_nested_page_links(cx: &m
     bar(&view, cx).simulate_keystrokes("enter");
     right_click(cx, "folder-3");
     click(&mut tab_menu(&view, cx), "tab-menu-folder-icon");
-    bar(&view, cx).simulate_input("📚");
-    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(bar(&view, cx).debug_bounds("icon-picker").unwrap().size, gpui::size(gpui::px(272.), gpui::px(144.)));
+    click(&mut bar(&view, cx), "icon-cell-0");
     view.read_with(cx, |w, _| {
         let folder = &w.browser.space().folders[1];
         assert_eq!(w.browser.folder_path(folder.id), "Projects / References");
-        assert_eq!(folder.custom_icon.as_deref(), Some("📚"));
+        assert_eq!(folder.custom_icon.as_deref(), Some("ion:star"));
     });
+    assert!(bar_text(&view, cx).is_some());
+    bar(&view, cx).simulate_keystrokes("escape");
+    right_click(cx, "folder-3");
+    click(&mut tab_menu(&view, cx), "tab-menu-folder-icon");
+    click(&mut bar(&view, cx), "icon-picker-remove");
+    assert!(view.read_with(cx, |w, _| w.browser.space().folders[1].custom_icon.is_none()));
+    assert!(bar_text(&view, cx).is_some());
+    bar(&view, cx).simulate_keystrokes("escape");
     right_click(cx, "folder-2");
     click(&mut tab_menu(&view, cx), "tab-menu-folder-copy-markdown");
     let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
@@ -7724,4 +7736,68 @@ fn theme_region_keeps_the_window_field_aligned_across_half_panes(cx: &mut TestAp
     let midpoint=browser.read_with(source,|w,_|w.theme_background());
     browser.update(source,|w,cx|{w.pager.position-=0.5;cx.notify();});
     assert!(browser.read_with(source,|w,_|w.theme_background())!=midpoint);
+}
+
+#[gpui::test]
+fn space_icon_popover_uses_catalog_cells_and_dismisses_without_navigating(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = active_url(&view, cx);
+    fake.take_calls();
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    let mut picker = bar(&view, cx);
+    assert!(picker.debug_bounds("command-bar").is_none());
+    let panel = picker.debug_bounds("icon-picker").unwrap();
+    assert_eq!(panel.size, gpui::size(gpui::px(272.), gpui::px(272.)));
+    assert!(picker.debug_bounds("icon-picker-search").is_some());
+    click(&mut picker, "icon-picker-symbols");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), 56);
+    assert!(picker.debug_bounds("icon-cell-55").is_some());
+    click(&mut picker, "icon-cell-2");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.space().custom_icon.as_deref(), Some("ion:heart")));
+    assert!(bar_text(&view, cx).is_some(), "pointer selection keeps the picker open");
+    bar(&view, cx).simulate_keystrokes("escape");
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    let mut picker = bar(&view, cx);
+    click(&mut picker, "icon-picker-emoji");
+    picker.simulate_input("compass");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx)), vec![Suggestion::SaveIcon { icon: Some("🧭".into()) }]);
+    picker.simulate_keystrokes("escape");
+    assert!(bar_text(&view, cx).is_none());
+    view.read_with(cx, |w, _| assert_eq!(w.browser.space().custom_icon.as_deref(), Some("ion:heart")));
+    assert_eq!(active_url(&view, cx), active);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn icon_picker_category_search_clear_and_keyboard_selection(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    let mut picker = bar(&view, cx);
+    click(&mut picker, "icon-category-7");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx).len()), crate::icon_catalog::EMOJI.len());
+    assert!(view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().rows_scroll.offset().y < gpui::px(0.)));
+    picker.simulate_input("compass");
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx)), vec![Suggestion::SaveIcon { icon: Some("🧭".into()) }]);
+    click(&mut picker, "icon-picker-clear");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    click(&mut picker, "icon-picker-symbols");
+    picker.simulate_keystrokes("down down right enter");
+    assert!(bar_text(&view, cx).is_none());
+    view.read_with(cx, |w, _| assert_eq!(w.browser.space().custom_icon.as_deref(), Some("ion:boat")));
+}
+
+#[gpui::test]
+fn command_shortcuts_replace_the_icon_popover_with_the_normal_command_window(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    bar(&view, cx).simulate_keystrokes("cmd-t");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().target), crate::window::Target::NewTab);
+    assert!(bar_input_focused(&view, cx));
+    assert!(bar(&view, cx).debug_bounds("command-bar").is_some());
+    bar(&view, cx).simulate_keystrokes("escape");
+    dispatch_menu(cx, "Spaces", "Change Space Icon…");
+    bar(&view, cx).simulate_keystrokes("cmd-l");
+    assert!(bar_input_focused(&view, cx));
+    assert!(view.read_with(cx, |w, _| matches!(w.command_bar.as_ref().unwrap().target, crate::window::Target::Tab(_))));
 }

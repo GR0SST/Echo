@@ -467,6 +467,8 @@ pub struct CommandBar {
     pub(crate) archive_reason: Option<browser_core::ArchiveReason>,
     pub(crate) archive_limit: usize,
     pub(crate) rows_scroll: gpui::ScrollHandle,
+    pub(crate) icon_picker: crate::icon_catalog::Picker,
+    pub(crate) icon_anchor: Option<Bounds<gpui::Pixels>>,
     /// The bar is drawn in its own transparent window above the browser
     /// window, since pages are native views that cover anything drawn below.
     pub overlay: Option<WindowHandle<Overlay>>,
@@ -573,6 +575,8 @@ pub struct BrowserWindow {
     pub(crate) sidebar_render_width: Option<f32>,
     sidebar_reveal: Option<PinnedReveal>,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
+    pub(crate) icon_anchors: Rc<RefCell<HashMap<crate::icons::IconTarget, Bounds<gpui::Pixels>>>>,
+    pub(crate) last_icon_catalog: crate::icon_catalog::Catalog,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
     pub(crate) tab_drag_active: bool,
@@ -795,6 +799,8 @@ impl BrowserWindow {
             sidebar_render_width: None,
             sidebar_reveal: None,
             sidebar_scrolls: HashMap::new(),
+            icon_anchors: Default::default(),
+            last_icon_catalog: Default::default(),
             pinned_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
             tab_drag_active: false,
@@ -1257,13 +1263,13 @@ impl BrowserWindow {
                 Target::NewSpace => "Name your Space…",
                 Target::RenameSpace(_) => "Rename Space…",
                 Target::RenameTab(_) => "Rename Tab…",
-                Target::Icon(_) => "Enter one symbol or emoji…",
+                Target::Icon(_) => "Search",
                 Target::Archive(_) => "Search Archive…",
                 Target::ConfirmClearArchive => "Type “Clear Archive” to confirm…",
                 _ => "Search or Enter URL…",
             };
             let mut input = TextInput::new(placeholder, cx);
-            input.set_text(text.to_string(), cx);
+            input.set_text(if matches!(target, Target::Icon(_)) { String::new() } else { text.to_string() }, cx);
             input
         });
         let changed = cx.subscribe(&input, |this, _, _: &text_input::Changed, cx| {
@@ -1271,6 +1277,7 @@ impl BrowserWindow {
                 bar.selected = 0;
                 bar.rows_scroll.set_offset(point(px(0.), px(0.)));
                 bar.archive_limit = 8;
+                bar.icon_picker.keyboard = false;
             }
             this.update_command_suggestions(cx);
             cx.notify();
@@ -1295,6 +1302,8 @@ impl BrowserWindow {
             archive_reason: None,
             archive_limit: 8,
             rows_scroll: gpui::ScrollHandle::new(),
+            icon_picker: crate::icon_catalog::Picker { catalog: if matches!(target, Target::Icon(crate::icons::IconTarget::Folder(_))) { crate::icon_catalog::Catalog::Symbols } else { self.last_icon_catalog }, folder: matches!(target, Target::Icon(crate::icons::IconTarget::Folder(_))), ..Default::default() },
+            icon_anchor: if let Target::Icon(target) = target { self.icon_anchors.borrow().get(&target).copied() } else { None },
             overlay: None,
             _changed: changed,
             _empty_backspace: empty_backspace,
@@ -1490,8 +1499,7 @@ impl BrowserWindow {
         }
         if matches!(bar.target, Target::MoveToFolder(_) | Target::MoveFolder(_)) { return self.folder_destinations(bar.target, text); }
         if matches!(bar.target, Target::Icon(_)) {
-            return if text.trim().is_empty() { vec![Suggestion::SaveIcon { icon: None }] }
-                else if browser_core::icons::valid_icon(text) { vec![Suggestion::SaveIcon { icon: Some(text.trim().to_string()) }] } else { Vec::new() };
+            return bar.icon_picker.entries(text).into_iter().map(|entry| Suggestion::SaveIcon { icon: Some(entry.value) }).collect();
         }
         if matches!(bar.target, Target::RenameTab(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveTabName { name: text.trim().to_string() }] };
@@ -2034,12 +2042,14 @@ impl BrowserWindow {
     }
 
     fn on_open_command_bar(&mut self, _: &OpenCommandBar, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_bar.as_ref().is_some_and(|bar| matches!(bar.target, Target::Icon(_))) { self.close_command_bar(cx); }
         if !self.toggle_command_target(Target::NewTab, "", cx) {
             self.open_command_bar(Target::NewTab, "", window, cx);
         }
     }
 
     fn on_edit_current_url(&mut self, _: &EditCurrentUrl, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_bar.as_ref().is_some_and(|bar| matches!(bar.target, Target::Icon(_))) { self.close_command_bar(cx); }
         let (target, text) = self.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone()))
             .unwrap_or((Target::NewTab, String::new()));
         if !self.toggle_command_target(target, &text, cx) {
@@ -2529,6 +2539,7 @@ impl BrowserWindow {
 
         div()
             .id(("tab", key))
+            .relative().child(self.track_icon_anchor(crate::icons::IconTarget::Tab(id)))
             .debug_selector(|| self.sidebar_debug_name((|| format!("tab-{key}"))()))
             .group(group.clone())
             .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
@@ -3059,6 +3070,7 @@ impl BrowserWindow {
         let today_actions = !space.today.is_empty() && self.sidebar_hovered;
         let line_end = TODAY_ACTIONS_WIDTH + 11.;
         let header_menu_open = self.tab_menu.as_ref().is_some_and(|menu| menu.target == crate::tab_menu::MenuTarget::Space(space_id));
+        let icon_picker_open = self.command_bar.as_ref().is_some_and(|bar| bar.target == Target::Icon(crate::icons::IconTarget::Space(space_id)));
 
         div()
             .id(("space-page", index))
@@ -3077,7 +3089,9 @@ impl BrowserWindow {
             }))
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(|| self.sidebar_debug_name((move || format!("space-header-{index}"))()))
-                    .group(header_group.clone())
+                    .group(header_group.clone()).relative()
+                    .child(div().absolute().left(px(if space.custom_icon.is_some() { 9. } else { 8. })).top(px(10.)).size(px(18.))
+                        .child(self.track_icon_anchor(crate::icons::IconTarget::Space(space_id))))
                     .flex().items_center().gap(px(9.)).h(px(SIDEBAR_ROW_HEIGHT)).pl(px(if space.custom_icon.is_some() { 9. } else { 8. })).pr(px(6.)).rounded(px(SIDEBAR_ROW_RADIUS))
                     .when(header_menu_open, |style| style.bg(hsla(0., 0., 1., 0.15)))
                     .on_click(cx.listener(move |this, _, _, cx| { if let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) { this.toggle_pinned_section(index, cx); } }))
@@ -3091,12 +3105,13 @@ impl BrowserWindow {
                     }))
                     .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(hsla(0., 0., 0., 0.5))
-                    .when(space.custom_icon.is_some(), |this| this.child(div().relative().size(px(18.)).flex_none()
+                    .when(space.custom_icon.is_some() || icon_picker_open, |this| this.child(div().relative().size(px(18.)).flex_none()
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-icon-{index}"))()))
                             .size_full().flex().items_center().justify_center()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.invisible())
                             .group_hover(header_group.clone(), |style| style.invisible())
-                            .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon))))
+                            .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon)))
+                            .when(space.custom_icon.is_none() && icon_picker_open, |this| this.child(div().size(px(18.)).rounded(px(3.)).border_1().border_dashed().border_color(hsla(0., 0., 0., 0.25)))))
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-chevron-{index}"))()))
                             .absolute().top_0().left_0().size_full().invisible()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.visible())
@@ -3224,7 +3239,7 @@ impl BrowserWindow {
                     .group(SharedString::from(format!("space-mark-{index}")))
                     .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
                     .hover(|s| s.bg(hsla(0., 0., 1., 0.3)))
-                    .when(space.custom_icon.is_none(), |this| this.child(div().size(px(if active { 8. } else { 7. })).rounded_full().bg(mark)
+                    .when(space.custom_icon.is_none(), |this| this.child(div().size(px(if active { 8. } else { 4. })).rounded_full().bg(mark)
                         .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., 0.1, if active { 0.8 } else { 0.5 })))))
                     .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
                         .when(!active, |this| this.opacity(0.5))
@@ -3453,6 +3468,7 @@ impl BrowserWindow {
 
     fn render_command_bar_overlay(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
         match &self.command_bar {
+            Some(bar) if matches!(bar.target, Target::Icon(_)) => self.render_icon_picker(bar, width, height, cx),
             Some(bar) => self.render_command_bar(bar, width, height, cx).into_any_element(),
             None => div().into_any_element(),
         }
@@ -3692,7 +3708,6 @@ impl BrowserWindow {
                                 .bg(hsla(0.0, 0.0, 0.0, 0.8)).text_color(hsla(0.0, 0.0, 1.0, 0.55))
                                 .child(crate::icons::control_sized(crate::icons::Icon::Info, 17.0)))),
                     )
-                    .when(matches!(bar.target, Target::Icon(_)), |this| this.child(div().px_4().pb_2().text_xs().child("Enter one symbol or emoji. Leave blank to restore the default icon.")))
                     .when(matches!(bar.target, Target::Archive(_)), |this| this.child(self.render_archive_controls(cx)))
                     .when(bar.target == Target::ConfirmClearArchive, |this| this.child(div().px_4().pb_2().text_sm().child("This action is permanent. Archived tabs from all Spaces will be deleted.")))
                     .when(!has_rows && matches!(bar.target, Target::Archive(_)), |this| this.child(div().px_4().py_3().text_sm().child("No archived tabs match your search.")))

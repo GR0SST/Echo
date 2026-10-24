@@ -25,9 +25,9 @@ Context for whoever picks this up:
 
 | # | Control | Where (code) | Ours | Arc |
 |---|---|---|---|---|
-| 1 | Change Icon… (tab / Favorite / Pinned / Split View row) | `tab_menu.rs` `Command::Icon` → `Target::Icon` | Command Bar text prompt: "Enter one symbol or emoji" | Icon picker popover next to the item: grid of emoji and symbols, search, reset. The choice applies immediately |
-| 2 | Change Space Icon… | `space_menu.rs` `Command::SpaceIcon` | Same Command Bar text prompt | Same icon picker, anchored to the Space header (check in Arc) |
-| 3 | Change Folder Icon… | `folders.rs` `FolderIcon` | Same Command Bar text prompt | Same icon picker, anchored to the folder row (check in Arc) |
+| 1 | Change Icon… (tab / Favorite / Pinned / Split View row) | `tab_menu.rs` `Command::Icon` → `Target::Icon` | Graphical 272 × 272 px emoji/symbol popover; search, categories, immediate selection and reset. Native opening animation remains unfinished | Icon picker popover next to the item: grid of emoji and symbols, search, reset. The choice applies immediately |
+| 2 | Change Space Icon… | `space_menu.rs` `Command::SpaceIcon` | Graphical emoji/symbol popover anchored below the header icon; removal keeps it open | 272 × 272 px popover with Emoji/Icon tabs, search, categories and a remove button; inspected in the installed app |
+| 3 | Change Icon… (folder) | `folders.rs` `FolderIcon` | Graphical 272 × 144 px panel with a dedicated 24-symbol catalog and removal | Compact Icon panel anchored to the folder row, without emoji tabs or search; inspected in the installed app |
 | 4 | Rename… (Favorite / Split View) | `tab_menu.rs` `Command::Rename`, `window.rs` and `split.rs` double-click handlers | Favorites and Split View groups still open the Command Bar. Today/Pinned single-page tabs now edit inline | Ordinary tab titles edit inline; Enter or blur commits, Esc cancels, and clearing restores the page title. Exact Favorite/Split View editor placement still needs direct verification |
 | 5 | Rename Space… | `space_menu.rs` `SpaceRename` | Command Bar prompt | Inline edit of the name in the Space header (check in Arc) |
 | 6 | Folder Rename… | `folders.rs` `FolderRename` | Command Bar prompt | Inline edit in the folder row |

@@ -267,7 +267,7 @@ impl BrowserWindow {
         };
         let mut rows: Vec<Entry> = vec![
             item("Rename…", MenuCommand::FolderRename).into(),
-            item("Change Folder Icon…", MenuCommand::FolderIcon).into(),
+            item("Change Icon…", MenuCommand::FolderIcon).into(),
             item("New Nested Folder…", MenuCommand::FolderNew).into(),
             item(if folder.collapsed { "Expand Folder" } else { "Collapse Folder" }, MenuCommand::FolderCollapse).into(),
             Entry::Separator,
@@ -378,6 +378,7 @@ impl BrowserWindow {
                     let active = focus.is_some();
                     let group = gpui::SharedString::from(format!("folder-{key}"));
                     Some(div().pl(px(indent)).flex_none().min_w_0().child(div().id(("folder", key)).debug_selector(|| self.sidebar_debug_name((move || format!("folder-{key}"))()))
+                        .relative().child(self.track_icon_anchor(IconTarget::Folder(id)))
                         .group(group.clone()).flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
                         .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(|this| this.bg(hsla(0., 0., 1., 0.35)))
@@ -395,7 +396,7 @@ impl BrowserWindow {
                         .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_folder(drag, id, cx)))
                         .child(div().relative().size(px(18.)).flex_none()
                             .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-icon-{key}"))())).size_full().group_hover(group.clone(), |style| style.invisible())
-                                .child(crate::icons::folder(folder.custom_icon.as_deref())))
+                                .child(crate::icons::folder_state(folder.custom_icon.as_deref(), !folder.collapsed)))
                             .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-chevron-{key}"))())).absolute().top_0().left_0().size_full().invisible().group_hover(group.clone(), |style| style.visible())
                                 .child(crate::icons::disclosure(folder.collapsed))))
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-name-{key}"))())).flex_1().min_w_0().truncate().child(folder.name.clone()))
