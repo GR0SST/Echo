@@ -343,9 +343,31 @@ These tests retain the source browser through the transfer. Source destruction
 during redirect, other redirect/failure combinations and other platforms still
 need acceptance work; this does not enable a complete fence or Rust adoption.
 
+Two additional native cases send a GET anchor and a POST form from the parent
+page to a named cross-site iframe. The test run enables strict site isolation;
+`Target.getTargets` must identify the initial child URL as an `iframe` target
+before the action. This exercises named remote-frame navigation rather than
+calling the child's `LoadRequest` directly.
+
+At the actual browser `OnBeforeBrowse` callback, each case requires one reserve
+and authorization, then begins unregister outside the policy callbacks and
+requires Pending at that callback. The original token must settle exactly
+once as NotDownload, then drain. Resource-request inspection checks the complete
+POST body; the named child must contain the target markup. The parent retains
+its Browser ID, URL and live renderer-generated UUID. The inserted anchor/form
+legitimately changes parent markup, so these cases compare that UUID while the
+previous direct-child tests retain their exact-markup assertions.
+
+All 167 selected C++ tests and 55 native cases pass once with the previous 53
+native TEST bodies preserved. Production sources are unchanged. This qualifies
+these named OOPIF routes after browser admission; it does not prove reservation
+before the asynchronous renderer/proxy send, source loss during retargeting,
+every proxy exit or an ordered public seal.
+
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining
-coverage includes retargeted subframes, request rewriting, duplicate suppression,
+coverage includes source-loss retargeting, other subframe routes, request rewriting,
+duplicate suppression,
 frame/context loss and endpoint disconnects. Further Service Worker failure and
 destruction paths, other early ingress/no-item exits, SavePackage/resume and
 ordered public seal/drain/failure semantics remain open. A timeout, first

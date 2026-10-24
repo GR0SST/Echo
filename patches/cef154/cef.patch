@@ -6016,7 +6016,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,4329 @@
+@@ -0,0 +1,4414 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -8812,10 +8812,10 @@ new file mode 100644
 +constexpr char kBoundaryChildName[] = "receipt-child";
 +constexpr char kBoundaryPostBody[] = "receipt=iframe-post";
 +constexpr char kBoundaryCrossTarget[] = "https://echo-frame-cross-origin.test/target";
-+class FrameCommandBoundaryHandler : public TestHandler {
++class FrameCommandBoundaryHandler : public TestHandler, public CefDevToolsMessageObserver {
 + public:
 +  enum Mode { kBeforeUnloadCancel, kSubframeGet, kSubframePost,
-+              kBeforeUnloadAllow, kSubframeCrossOriginGet, kSubframeCrossOriginPost };
++              kBeforeUnloadAllow, kSubframeCrossOriginGet, kSubframeCrossOriginPost, kNamedGet, kNamedPost };
 +  explicit FrameCommandBoundaryHandler(Mode mode) : mode_(mode) {}
 +  ~FrameCommandBoundaryHandler() override {
 +    if (probe_->registration) {
@@ -8841,10 +8841,10 @@ new file mode 100644
 +      page += "window.onbeforeunload=()=> 'retain original document';";
 +    page += "</script>";
 +    if (IsChild())
-+      page += "<iframe name='receipt-child' src='https://echo-frame-boundary.test/child'></iframe>";
++      page += "<iframe name='receipt-child' src='" + std::string(InitialChildUrl()) + "'></iframe>";
 +    page += "</body></html>";
 +    AddResource(kBoundarySource, page, "text/html");
-+    AddResource(kBoundaryChild, "<html><body>child source document</body></html>", "text/html");
++    AddResource(InitialChildUrl(), "<html><body>child source document</body></html>", "text/html");
 +    AddResource(TargetUrl(), "<html><body>child-target-document</body></html>", "text/html");
 +    CefRequestContextSettings settings;
 +    CreateBrowser(kBoundarySource, CefRequestContext::CreateContext(settings, nullptr));
@@ -8862,6 +8862,11 @@ new file mode 100644
 +  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int status) override {
 +    if (finished_) return;
 +    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    if (IsNamed() && !frame->IsMain() && frame->GetURL() == InitialChildUrl()) {
++      EXPECT_EQ(200, status);
++      EXPECT_EQ(kBoundaryChildName, frame->GetName().ToString());
++      named_child_ready_ = true;
++    }
 +    if (command_sent_ && frame->GetURL() == TargetUrl()) {
 +      if (mode_ == kBeforeUnloadCancel) {
 +        ADD_FAILURE() << "beforeunload cancellation replaced the document";
@@ -8902,7 +8907,7 @@ new file mode 100644
 +    auto observed = probe_->no_item_tokens;
 +    std::sort(expected.begin(), expected.end());
 +    std::sort(observed.begin(), observed.end());
-+    if (expected != observed) {
++    if (expected != observed || (IsNamed() && !named_child_ready_)) {
 +      if (++initial_polls_ <= 500) {
 +        CefPostDelayedTask(TID_UI, base::BindOnce(
 +            &FrameCommandBoundaryHandler::WaitForInitialOutcomes, this), 10);
@@ -8919,7 +8924,51 @@ new file mode 100644
 +    probe_->no_item_tokens.clear();
 +    probe_->no_item.clear();
 +    probe_->expected_method = IsPost() ? "POST" : "GET";
++    if (IsNamed()) {
++      observer_ = GetBrowser()->GetHost()->AddDevToolsMessageObserver(this);
++      ASSERT_TRUE(observer_);
++      EXPECT_EQ(700139, GetBrowser()->GetHost()->ExecuteDevToolsMethod(
++          700139, "Target.getTargets", nullptr));
++      return;
++    }
++    IssueCommand();
++  }
++  void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int id, bool success,
++      const void* result, size_t size) override {
++    if (id != 700139 || finished_) return;
++    EXPECT_TRUE(success);
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    auto value = result ? CefParseJSON(result, size, JSON_PARSER_RFC) : nullptr;
++    auto dict = value && value->GetType() == VTYPE_DICTIONARY ? value->GetDictionary() : nullptr;
++    auto targets = dict ? dict->GetList("targetInfos") : nullptr;
++    bool found = false;
++    if (targets) for (size_t i=0; i<targets->GetSize(); ++i) {
++      auto target = targets->GetDictionary(i);
++      if (target && target->GetString("type") == "iframe" &&
++          target->GetString("url") == InitialChildUrl()) found = true;
++    }
++    EXPECT_TRUE(found) << "named navigation must target a real OOPIF";
++    if (!found) { Finish(); return; }
++    oopif_seen_ = true;
++    IssueCommand();
++  }
++  void IssueCommand() {
 +    auto browser = GetBrowser();
++    if (IsNamed()) {
++      EXPECT_TRUE(oopif_seen_ && named_child_ready_);
++      command_sent_ = true;
++      std::string script;
++      if (IsPost()) {
++        script = "const f=document.createElement('form');f.method='POST';f.action='" +
++          std::string(TargetUrl()) + "';f.target='receipt-child';const i=document.createElement('input');"
++          "i.name='receipt';i.value='iframe-post';f.appendChild(i);document.body.appendChild(f);f.submit();";
++      } else {
++        script = "const a=document.createElement('a');a.href='" + std::string(TargetUrl()) +
++          "';a.target='receipt-child';document.body.appendChild(a);a.click();";
++      }
++      browser->GetMainFrame()->ExecuteJavaScript(script, kBoundarySource, 1);
++      return;  // Reservation is observed at the actual browser ingress.
++    }
 +    auto frame = IsChild() ? browser->GetFrameByName(kBoundaryChildName)
 +                           : browser->GetMainFrame();
 +    ASSERT_TRUE(frame);
@@ -8950,6 +8999,16 @@ new file mode 100644
 +    EXPECT_EQ(!IsChild(), frame->IsMain());
 +    EXPECT_EQ(probe_->expected_method, request->GetMethod().ToString());
 +    target_browse_seen_ = true;
++    if (IsNamed()) {
++      EXPECT_TRUE(oopif_seen_);
++      EXPECT_EQ(1, probe_->reserves);
++      EXPECT_EQ(1, probe_->authorizations);
++      EXPECT_EQ(1u, probe_->navigation_tokens.size());
++      EXPECT_TRUE(probe_->no_item.empty());
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++      EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, probe_->api.unregister_poll(probe_->registration));
++      CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::Poll, this));
++    }
 +    return false;
 +  }
 +  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
@@ -9054,7 +9113,15 @@ new file mode 100644
 +      Finish();
 +      return;
 +    }
-+    EXPECT_EQ(original_source_, source.ToString());
++    if (IsNamed()) {
++      const auto original = original_source_.find("data-receipt-nonce=\"");
++      ASSERT_NE(std::string::npos, original);
++      const auto begin = original + std::string("data-receipt-nonce=\"").size();
++      const auto nonce = original_source_.substr(begin, 36);
++      EXPECT_EQ(36u, nonce.size());
++      EXPECT_NE(std::string::npos, source.ToString().find("data-receipt-nonce=\"" + nonce + "\""));
++      EXPECT_TRUE(oopif_seen_ && named_child_ready_ && target_loaded_);
++    } else EXPECT_EQ(original_source_, source.ToString());
 +    EXPECT_EQ(kBoundarySource, GetBrowser()->GetMainFrame()->GetURL().ToString());
 +    if (IsChild()) {
 +      auto child = GetBrowser()->GetFrameByName(kBoundaryChildName);
@@ -9076,6 +9143,7 @@ new file mode 100644
 +  void Finish() {
 +    if (finished_) return;
 +    finished_ = true;
++    observer_ = nullptr;
 +    if (probe_->registration)
 +      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
 +    DestroyTest();
@@ -9108,9 +9176,11 @@ new file mode 100644
 + private:
 +  bool IsChild() const { return mode_ != kBeforeUnloadCancel && mode_ != kBeforeUnloadAllow; }
 +  bool IsBeforeUnload() const { return !IsChild(); }
-+  bool IsPost() const { return mode_ == kSubframePost || mode_ == kSubframeCrossOriginPost; }
++  bool IsNamed() const { return mode_ == kNamedGet || mode_ == kNamedPost; }
++  const char* InitialChildUrl() const { return IsNamed() ? "https://echo-frame-cross-origin.test/child" : kBoundaryChild; }
++  bool IsPost() const { return mode_ == kSubframePost || mode_ == kSubframeCrossOriginPost || mode_ == kNamedPost; }
 +  const char* TargetUrl() const {
-+    return mode_ == kSubframeCrossOriginGet || mode_ == kSubframeCrossOriginPost
++    return mode_ == kSubframeCrossOriginGet || mode_ == kSubframeCrossOriginPost || IsNamed()
 +        ? kBoundaryCrossTarget : kBoundaryTarget;
 +  }
 +  const Mode mode_;
@@ -9120,6 +9190,8 @@ new file mode 100644
 +  bool started_ = false, command_sent_ = false, finished_ = false;
 +  bool target_loaded_ = false, target_browse_seen_ = false, dialog_seen_ = false;
 +  bool decision_completed_ = false, final_source_requested_ = false, extra_signaled_ = false;
++  CefRefPtr<CefRegistration> observer_;
++  bool named_child_ready_ = false, oopif_seen_ = false;
 +  bool post_body_seen_ = false;
 +  IMPLEMENT_REFCOUNTING(FrameCommandBoundaryHandler);
 +};
@@ -9161,6 +9233,19 @@ new file mode 100644
 +  ReleaseAndWaitForDestructor(handler);
 +}
 +
++
++TEST(EchoDownloadBridge, NamedOopifGetPreservesOriginalIngressAndParentAfterClosing) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kNamedGet);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, NamedOopifPostPreservesBodyIngressAndParentAfterClosing) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kNamedPost);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
 +
 +class SavePageReceiptHandler : public TestHandler {
 + public:

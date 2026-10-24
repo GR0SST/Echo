@@ -180,7 +180,7 @@
     "state_binary_sha256": "792e2f79bf44f3f125ea008afd49e5dd5fdae941eb32049bc66ac13360a10ccb"
   },
   "native": {
-    "count": 53,
+    "count": 55,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -217,6 +217,8 @@
       "EchoDownloadBridge.BeforeUnloadAllowRetainsOriginalAdmissionThroughCommit",
       "EchoDownloadBridge.CrossOriginSubframeGetRetainsParentAndOriginalAdmission",
       "EchoDownloadBridge.CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission",
+      "EchoDownloadBridge.NamedOopifGetPreservesOriginalIngressAndParentAfterClosing",
+      "EchoDownloadBridge.NamedOopifPostPreservesBodyIngressAndParentAfterClosing",
       "EchoDownloadBridge.SavePageSerializesOriginalLiveDocumentAfterClosing",
       "EchoDownloadBridge.ClosedSavePageRefusesWithoutFileOrDocumentReplacement",
       "EchoDownloadBridge.SavePageOnlyHtmlCopiesNetworkDocumentAfterClosing",
@@ -237,14 +239,15 @@
       "EchoDownloadBridge.DeniedHttpDirectRedirectCannotDispatchTargetOrCreateItem"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "da628177ab608598a1ab8bd33dea7abfe0872ca1efb0cb96fb5ed1650d00a9fe",
+    "test_source_sha256": "2b1a28f709ef351b9d069e1d12ebdadc68ed44924b0d350c75a36a43879e98e6",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
       "--disable-features=SkipExtraBfcacheNavigationRequest",
       "--gtest_repeat=1",
       "--enable-features=ServiceWorkerInterceptDownloads",
-      "--use-test-http-server"
+      "--use-test-http-server",
+      "--site-per-process"
     ]
   },
   "download_outputs": [
@@ -283,7 +286,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "0b46f989db06f2bbb235557523194420006d2d55d14f2dcc004eb120b6f066a1",
+  "native_xml_sha256": "ddab928e7ba5255d1f7d37f7b4e9bd3fd43487a34e13b23f96cddd92884fffc3",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -359,7 +362,9 @@
     "queued_history_identity": "source observer reports Shutdown before queued action release; stale entry, POST identity and changed frame plan reject before mutation; scroll state changes remain allowed; two-subframe distinct receipts retained",
     "queued_history_fixture": "first fixture incorrectly required every accepted command to replace the pending network request; native/source evidence established duplicate NORMAL reload suppression and BFCache history bypass. Corrected constraints require actual queued Abandoned before releasing original reload, and status0 plus zero new OnBeforeBrowse for Back/Forward; all 46 native TEST bodies unchanged from red",
     "http_redirects": "seven real loopback cases: UI navigation 302/303/307, StartDownload and renderer download-attribute redirects, UI and IO policy denials after Closing. Original token, actual method/body/Host, original/final URL, exact bytes and live source DOM UUID checked",
-    "http_redirect_scope": "macOS Alloy with source browsers alive; only native test source changed and original 46 test bodies remain. No general all-exit, source-loss, other-platform, public seal or full-fence acceptance. Earlier syntax checks reused for unchanged production sources"
+    "http_redirect_scope": "macOS Alloy with source browsers alive; only native test source changed and original 46 test bodies remain. No general all-exit, source-loss, other-platform, public seal or full-fence acceptance. Earlier syntax checks reused for unchanged production sources",
+    "named_oopif": "parent anchor GET and form POST target a named cross-site iframe, verified with Target.getTargets under site-per-process. Closing begins after actual browser admission in OnBeforeBrowse, before dispatch. Exact body, original token/drain, parent live DOM UUID and child final markup checked",
+    "named_oopif_scope": "macOS Alloy with parent/child alive; does not prove reservation before the renderer proxy send, source-loss retargeting, every proxy exit or a complete seal/fence"
   },
   "native_save_page": {
     "formats": {
@@ -467,5 +472,19 @@
     "capabilities": 17,
     "full_fence": false,
     "one_original_reserve_and_two_authorizations_per_transfer_attempt": true
+  },
+  "native_named_oopif": {
+    "strict_site_isolation": true,
+    "initial_target_discovered_as_iframe": true,
+    "get_anchor_and_post_form_target_named_child": true,
+    "post_body_checked_at_resource_request": true,
+    "one_reserve_authorization_and_original_not_download_outcome": true,
+    "unregister_pending_at_before_browse": true,
+    "parent_live_dom_uuid_and_browser_preserved": true,
+    "named_child_final_markup_checked": true,
+    "prior_53_test_bodies_unchanged": true,
+    "source_loss_during_retarget_qualified": false,
+    "pre_proxy_async_admission_fence_qualified": false,
+    "production_changed": false
   }
 }
