@@ -9,6 +9,7 @@ pub mod omnibox;
 pub mod links;
 pub mod history;
 pub mod import;
+pub mod onboarding;
 pub mod favorites;
 pub mod favicons;
 pub mod audio;
@@ -173,6 +174,8 @@ pub enum Closed {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Browser {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onboarding: Option<onboarding::SetupStep>,
     #[serde(default)]
     pub settings: settings::Settings,
     pub spaces: Vec<Space>,
@@ -214,6 +217,7 @@ impl Browser {
 
     fn with_initial_space(name: &str, show_header: bool, blank: bool) -> Self {
         let mut browser = Self {
+            onboarding: None,
             settings: settings::Settings::default(),
             spaces: Vec::new(),
             active_space: 0,
