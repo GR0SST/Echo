@@ -516,6 +516,7 @@ pub enum OverlayKind {
     Find,
     Toast(u64),
     LinkStatus,
+    PageZoom,
     SplitDrop,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
@@ -575,6 +576,7 @@ impl Render for Overlay {
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast(_) => unreachable!("passive toast renders above"),
                     OverlayKind::LinkStatus => browser.render_link_status(window),
+                    OverlayKind::PageZoom => browser.render_page_zoom(),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
@@ -669,6 +671,10 @@ pub struct BrowserWindow {
     pub(crate) share_picker: Option<crate::native::sharing::SharePicker>,
     pub(crate) link_status: Option<crate::link_status::LinkStatus>,
     pub(crate) link_status_generation: u64,
+    pub(crate) page_zoom: Option<crate::page_zoom::PageZoom>,
+    pub(crate) page_zoom_observed: Vec<(browser_core::UserProfileId, TabId, String, u16)>,
+    pub(crate) page_zoom_generation: u64,
+    pub(crate) page_zoom_refresh: bool,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
@@ -930,6 +936,10 @@ impl BrowserWindow {
             share_picker: None,
             link_status: None,
             link_status_generation: 0,
+            page_zoom: None,
+            page_zoom_observed: Vec::new(),
+            page_zoom_generation: 0,
+            page_zoom_refresh: false,
             history_page: crate::history::HistoryPage::new(cx),
             pages,
             pending_engine_events: Default::default(),
@@ -1113,6 +1123,7 @@ impl BrowserWindow {
             self.new_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
             self.toast.take().and_then(|toast| toast.overlay).map(|handle| handle.into()),
             self.link_status.take().and_then(|status| status.overlay).map(|handle| handle.into()),
+            self.page_zoom.take().and_then(|state| state.overlay).map(|handle| handle.into()),
             self.split_drop.take().and_then(|preview| preview.overlay).map(|handle| handle.into()),
             self.floating_sidebar.take().and_then(|sidebar| sidebar.overlay).map(|handle| handle.into()),
         ];
@@ -1334,6 +1345,12 @@ impl BrowserWindow {
         if let (Some(pages), Some(tab)) = (&self.pages, self.browser.space().active_tab) {
             f(&mut pages.borrow_mut(), tab);
         }
+    }
+
+    fn change_page_zoom(&mut self, direction: i32, cx: &mut Context<Self>) {
+        self.page_zoom_refresh = true;
+        self.with_active_page(|pages, tab| pages.zoom(tab, direction));
+        cx.notify();
     }
 
     fn edit_undo(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -2119,9 +2136,9 @@ impl BrowserWindow {
             Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
             Command::ForceReload => self.with_active_page(|pages, tab| pages.force_reload(tab)),
             Command::StopLoading => self.with_active_page(|pages, tab| pages.stop_loading(tab)),
-            Command::ZoomIn => self.with_active_page(|pages, tab| pages.zoom(tab, 1)),
-            Command::ZoomOut => self.with_active_page(|pages, tab| pages.zoom(tab, -1)),
-            Command::ResetZoom => self.with_active_page(|pages, tab| pages.zoom(tab, 0)),
+            Command::ZoomIn => self.change_page_zoom(1, cx),
+            Command::ZoomOut => self.change_page_zoom(-1, cx),
+            Command::ResetZoom => self.change_page_zoom(0, cx),
             Command::EnterFullscreen => self.perform_window_operation(crate::menus::WindowOperation::Fullscreen(true), cx),
             Command::ExitFullscreen => self.perform_window_operation(crate::menus::WindowOperation::Fullscreen(false), cx),
             Command::MinimizeWindow => self.perform_window_operation(crate::menus::WindowOperation::Minimize, cx),
@@ -2176,9 +2193,9 @@ impl BrowserWindow {
                 .on_action(cx.listener(Self::on_reload))
                 .on_action(cx.listener(Self::on_open_command_bar))
                 .on_action(cx.listener(Self::on_edit_current_url))
-                .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
-                .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
-                .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0)))))
+                .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.change_page_zoom(1, cx)))
+                .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.change_page_zoom(-1, cx)))
+                .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.change_page_zoom(0, cx))))
             .on_action(cx.listener(|this, _: &crate::peek::ExitPeek, _, cx| this.exit_peek(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
@@ -4243,6 +4260,7 @@ impl Render for BrowserWindow {
         }
         if self.split_drop.is_some() && !cx.has_active_drag() { self.close_split_drop(cx); }
         self.sync_link_status(window, cx);
+        self.sync_page_zoom(window, cx);
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
         let window_controls_offset = self.window_controls_offset();
@@ -4330,9 +4348,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(Self::on_reload))
             .on_action(cx.listener(|this, _: &ForceReload, _, _| this.with_active_page(|pages, tab| pages.force_reload(tab))))
             .on_action(cx.listener(|this, _: &StopLoading, _, _| this.with_active_page(|pages, tab| pages.stop_loading(tab))))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
-            .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0))))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.change_page_zoom(1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.change_page_zoom(-1, cx)))
+            .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.change_page_zoom(0, cx)))
             .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))

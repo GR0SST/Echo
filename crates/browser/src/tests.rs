@@ -16,6 +16,8 @@ use crate::{demo_browser, init};
 mod toolbar_tests;
 #[path = "space_context_tests.rs"]
 mod space_context_tests;
+#[path = "page_zoom_tests.rs"]
+mod page_zoom_tests;
 #[path = "site_controls_tests.rs"]
 mod site_controls_tests;
 
@@ -306,6 +308,7 @@ impl WebEngine for FakeEngine {
         if removed {self.call(Call::PermissionResponse(raw(view),request,decision));} removed
     }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.call(Call::Quote(raw(view), request)); true }
+    fn zoom_percent(&self, view: ViewId) -> u16 { self.0.borrow().site_infos.get(&raw(view)).map_or(100, |info| info.zoom_percent) }
     fn site_info(&self, view:ViewId)->Option<engine::SiteInfo>{self.0.borrow().site_infos.get(&raw(view)).cloned()}
     fn set_site_permission(&mut self,view:ViewId,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool{
         {let mut state=self.0.borrow_mut();let Some(info)=state.site_infos.get_mut(&raw(view)).filter(|info|info.origin==origin) else{return false;};let Some(setting)=info.permissions.iter_mut().find(|setting|setting.kind==kind)else{return false;};setting.value=value;}
