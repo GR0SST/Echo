@@ -1561,9 +1561,10 @@ Reference and private native acceptance evidence are under
 `native-archive-only.json` records 24/12-hour profile intervals after Escape;
 `native-archive-all.json` records seven days in both profiles after Return.
 The Arc test used only the unused “Echo Profile Reference 20261023” profile;
-All Profiles was never confirmed in live Arc. Its seven-day interval was
-restored through the selector; the restoration's Only this Profile dismissal
-remains guarded because another Arc window moved ahead of the recorded alert.
+All Profiles was never confirmed in live Arc. The initial restoration alert was covered before final readback. A complete
+CG inventory later confirmed those windows were gone. A fresh guarded session
+observed the unused profile at 12 hours, preserved that current value, and
+verified its return to 12 hours after the follow-up capture.
 No live Space was created/deleted and no tabs were opened in Echo Test.
 
 Three GPUI regressions cover pointer and keyboard scope choices, unchanged
@@ -1571,3 +1572,22 @@ selection, persistence, blocked background clicks and rejection of a prompt
 superseded by a newer selected-profile interval. GPUI 0.2.2 retains removed
 selector bounds in its debug-frame map, so dismissal assertions inspect modal
 state alongside the canonical profile data, rather than stale selector bounds.
+
+
+Follow-up `arc-archive-opening.mov` measures about a 133 ms fade and a 300 ms
+32 px downward settle with an ease-in-out shape. `arc-archive-motion-sheet.png`
+and extracted frames retain the observation. Idle/hover colors were converted
+from their embedded ICC profile to sRGB: Only this Profile `#302f63` →
+`#454473`; All Profiles `#3239fb` → `#2c33e2`. Follow-up captures are
+`arc-archive-hover-only.png` and `arc-archive-hover-all.png`.
+
+
+`arc-archive-opening-closing.mov` and `echo-archive-opening-closing.mov`
+also check the 200 ms, 32 px upward exit. A closing card blocks background
+input until its exit ends; generation checks prevent an older exit timer from
+removing a newer dialog. Reduce Motion skips entry and exit travel. Paired
+idle/Only-hover/All-hover crops and their zooms were inspected. Native samples
+are retained in `archive-motion-samples.json`; the separate profile-list layout
+and general settings popup behavior are outside this question's scope. The
+fresh Arc session verified the unused profile's original 12-hour value after
+restoration and closed its preferences and test window without opening tabs.

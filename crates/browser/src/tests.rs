@@ -8258,6 +8258,8 @@ fn archive_scope_return_applies_to_all_profiles_and_persists(cx: &mut TestAppCon
     let saved = view.read_with(cx, |w, _| w.profile.session_json(&w.split_draft));
     let restored = browser_core::session::from_json(&saved).unwrap();
     assert!(restored.user_profiles().all(|p| p.archive_after == Some(Duration::from_secs(604800))));
+    settings.executor().advance_clock(Duration::from_millis(240));
+    settings.run_until_parked();
     click(&mut settings, "settings-popup-Archive tabs after");
     click(&mut settings, "settings-choice-2");
     assert!(!settings_view.read_with(&settings, |s, _| s.archive_scope_is_open()));

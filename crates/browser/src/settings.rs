@@ -79,6 +79,8 @@ pub(crate) struct SettingsWindow {
     popup: Option<Popup>,
     popup_selection: usize,
     archive_scope: Option<archive::ArchiveScope>,
+    archive_closing: Option<archive::ArchiveScope>,
+    archive_generation: u64,
     previews: bool,
     pub(crate) atc: Option<Entity<crate::atc::AtcPanel>>,
     atc_return_focus: bool,
@@ -215,6 +217,8 @@ fn open(
                     popup: None,
                     popup_selection: 0,
                     archive_scope: None,
+                    archive_closing: None,
+                    archive_generation: 0,
                     previews: false,
                     atc: None,
                     atc_return_focus: false,
@@ -1215,7 +1219,7 @@ impl Render for SettingsWindow {
             .on_action(cx.listener(|this, _: &archive::AllProfiles, _, cx| this.finish_archive_scope(true, cx)))
             .on_action(cx.listener(|this, _: &archive::OnlyThisProfile, _, cx| this.finish_archive_scope(false, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if this.archive_scope.is_some() {
+                if this.archive_scope.is_some() || this.archive_closing.is_some() {
                     match event.keystroke.key.as_str() {
                         "enter" => this.finish_archive_scope(true, cx),
                         "escape" => this.finish_archive_scope(false, cx),
@@ -1363,7 +1367,7 @@ impl Render for SettingsWindow {
                 )
             })
             .when(self.previews, |s| s.child(self.previews_panel(cx)))
-            .when(self.archive_scope.is_some(), |s| s.child(self.archive_scope_panel(cx)))
+            .when(self.archive_scope.is_some() || self.archive_closing.is_some(), |s| s.child(self.archive_scope_panel(cx)))
             .when_some(self.atc.clone(), |s, panel| s.child(div().absolute().inset_0().bg(gpui::hsla(0., 0., 0., 0.35))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().absolute().top(px(88.)).left(gpui::relative(0.5)).ml(px(-255.)).child(panel))))
