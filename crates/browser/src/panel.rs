@@ -4,7 +4,7 @@
 use gpui::{canvas, div, hsla, prelude::*, px, Bounds, Div, Hsla, Pixels, Window};
 
 pub(crate) const RADIUS: f32 = 14.0;
-pub(crate) const MENU_RADIUS: f32 = 10.0;
+pub(crate) const MENU_RADIUS: f32 = 12.0;
 
 /// The panel fill over the native blur; opaque where there is none.
 pub(crate) fn fill() -> Hsla {

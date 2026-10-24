@@ -162,7 +162,7 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
+enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
@@ -177,6 +177,18 @@ impl SidebarEdit {
             Self::Pin(edit) => if redo { edit.after.apply(&edit.before, browser) } else { edit.before.apply(&edit.after, browser) },
             Self::Archive(edit) => edit.apply(redo, browser, now),
             Self::Pane(edit) => edit.apply(redo, browser, now),
+            Self::RemovePin { pin, archive } => {
+                if redo {
+                    if !pin.after.apply(&pin.before, browser) { return false; }
+                    if archive.apply(true, browser, now) { return true; }
+                    pin.before.apply(&pin.after, browser);
+                } else {
+                    if !archive.apply(false, browser, now) { return false; }
+                    if pin.before.apply(&pin.after, browser) { return true; }
+                    archive.apply(true, browser, now);
+                }
+                false
+            }
         }
     }
 }
@@ -207,6 +219,22 @@ impl Browser {
     pub fn sidebar_redo_action(&self) -> Option<&'static str> {
         match self.sidebar_history.redo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), _ => None }
     }
+
+    /// Arc's context-menu Remove Pin archives a pin; its minus button only unloads it.
+    /// Retain the original pin and folder placement in one sidebar Undo transaction.
+    pub fn remove_pin(&mut self, id: TabId, now: std::time::SystemTime) -> Option<crate::Closed> {
+        if !self.can_edit_persistent_sidebar() || self.split_for(id).is_some()
+            || !self.space().pinned.iter().any(|tab| tab.id == id) { return None; }
+        let before = PinState::capture(self, id)?;
+        self.toggle_pin_unrecorded(id);
+        let after = PinState::capture(self, id)?;
+        let capture = ArchiveCapture::new(self);
+        let closed = self.close_tab_unrecorded(id, now)?;
+        let archive = capture.finish(self)?;
+        self.sidebar_history.record(SidebarEdit::RemovePin { pin: PinEdit { before, after }, archive });
+        Some(closed)
+    }
+
     /// Initial profile seeding is not a user action.
     pub fn clear_sidebar_history(&mut self) { self.sidebar_history = SidebarHistory::default(); }
 
@@ -241,6 +269,45 @@ mod tests {
     const NOW: SystemTime = SystemTime::UNIX_EPOCH;
 
     fn ids(tabs: &[Tab]) -> Vec<TabId> { tabs.iter().map(|tab| tab.id).collect() }
+
+    #[test]
+    fn remove_pin_archives_and_one_undo_restores_original_url_and_folder_slot() {
+        let mut browser = Browser::new();
+        let target = browser.new_tab("https://target", NOW);
+        browser.toggle_pin(target);
+        let folder = browser.create_folder(browser.space().id, None, "Reading").unwrap();
+        browser.move_item_to_folder(target, folder);
+        browser.navigate(target, "https://target/next");
+        let active = browser.new_tab("https://active", NOW);
+        browser.clear_sidebar_history();
+        assert_eq!(browser.remove_pin(target, NOW), Some(crate::Closed::Archived));
+        assert_eq!(browser.active_tab().unwrap().id, active);
+        assert!(!browser.all_tabs().any(|tab| tab.id == target));
+        for _ in 0..3 {
+            assert!(browser.undo_sidebar(NOW));
+            let restored = browser.all_tabs().find(|tab| tab.id == target).unwrap();
+            assert_eq!(restored.url, "https://target/next");
+            assert_eq!(restored.pinned_url.as_deref(), Some("https://target"));
+            assert_eq!(browser.folder_ancestors(target), vec![folder]);
+            assert_eq!(browser.active_tab().unwrap().id, active);
+            assert!(browser.redo_sidebar(NOW));
+            assert!(!browser.all_tabs().any(|tab| tab.id == target));
+            assert_eq!(browser.archive.len(), 1);
+        }
+    }
+
+    #[test]
+    fn remove_pin_rejects_today_and_favorites_without_creating_history() {
+        let mut browser = Browser::new();
+        let today = browser.new_tab("https://today", NOW);
+        let favorite = browser.new_tab("https://favorite", NOW);
+        browser.favorite_tab(favorite);
+        browser.clear_sidebar_history();
+        assert_eq!(browser.remove_pin(today, NOW), None);
+        assert_eq!(browser.remove_pin(favorite, NOW), None);
+        assert_eq!(browser.all_tabs().count(), 2);
+        assert!(!browser.undo_sidebar(NOW));
+    }
 
     #[test]
     fn pin_undo_preserves_navigation_titles_new_pages_and_original_order() {

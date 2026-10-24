@@ -266,25 +266,22 @@ impl BrowserWindow {
             return Vec::new();
         };
         let mut rows: Vec<Entry> = vec![
-            item("Rename…", MenuCommand::FolderRename).into(),
-            item("Change Icon…", MenuCommand::FolderIcon).into(),
-            item("New Nested Folder…", MenuCommand::FolderNew).into(),
-            item(if folder.collapsed { "Expand Folder" } else { "Collapse Folder" }, MenuCommand::FolderCollapse).into(),
+            crate::tab_menu::pending("Share Folder…").into(),
             Entry::Separator,
-            item("Move to…", MenuCommand::FolderMove).into(),
+            item("New Nested Folder…", MenuCommand::FolderNew).into(),
+            item(format!("Turn \"{}\" into Space", folder.name), MenuCommand::FolderIntoSpace).into(),
+            Entry::Separator,
+            item("Change Icon…", MenuCommand::FolderIcon).into(),
+            item("Rename…", MenuCommand::FolderRename).into(),
+            Entry::Separator,
             item("Duplicate", MenuCommand::FolderDuplicate).into(),
-            item("Turn into Space", MenuCommand::FolderIntoSpace).into(),
+            item("Move to", MenuCommand::FolderMove).into(),
             Entry::Separator,
         ];
-        if !self.browser.folder_tabs(id).is_empty() {
-            rows.extend([
-                item("Copy All Links", MenuCommand::FolderCopy).into(),
-                item("Copy All Links as Markdown", MenuCommand::FolderCopyMarkdown).into(),
-                Entry::Separator,
-            ]);
-        }
         if folder.items.is_empty() {
-            rows.push(item("Delete Empty Folder", MenuCommand::FolderDelete).into());
+            rows.push(item("Delete", MenuCommand::FolderDelete).into());
+        } else {
+            rows.push(crate::tab_menu::pending("Archive Folder").into());
         }
         rows
     }

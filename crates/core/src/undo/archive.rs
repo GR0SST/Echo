@@ -32,13 +32,17 @@ impl ArchiveCapture {
     }
 
     pub(crate) fn record(self, browser: &mut Browser) {
+        if let Some(edit) = self.finish(browser) { browser.sidebar_history.record(SidebarEdit::Archive(edit)); }
+    }
+
+    pub(super) fn finish(self, browser: &Browser) -> Option<ArchiveEdit> {
         let items: Vec<_> = browser.archive[self.archive_start..].iter()
             .filter(|entry| entry.space == self.space && entry.reason == ArchiveReason::Manual)
             .map(|entry| ArchivedItem { anchor: entry.tab.id, panes: archived_ids(entry) }).collect();
-        if items.is_empty() { return; }
-        browser.sidebar_history.record(SidebarEdit::Archive(ArchiveEdit {
+        if items.is_empty() { return None; }
+        Some(ArchiveEdit {
             space: self.space, user_profile_id: self.user_profile_id, order: self.order, active: self.active, items,
-        }));
+        })
     }
 }
 

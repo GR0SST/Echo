@@ -2067,9 +2067,17 @@ impl BrowserWindow {
 
     /// Archives a Today tab or unloads a pinned one, as in Arc.
     pub(crate) fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
+        self.close_sidebar_item(id, false, cx);
+    }
+
+    pub(crate) fn remove_pin(&mut self, id: TabId, cx: &mut Context<Self>) {
+        self.close_sidebar_item(id, true, cx);
+    }
+
+    fn close_sidebar_item(&mut self, id: TabId, remove_pin: bool, cx: &mut Context<Self>) {
         self.finish_tab_rename(true, cx);
         let related = self.browser.related_tabs(id);
-        if self.edit_browser(|browser| browser.close_tab(id, SystemTime::now())).is_some() {
+        if self.edit_browser(|browser| if remove_pin { browser.remove_pin(id, SystemTime::now()) } else { browser.close_tab(id, SystemTime::now()) }).is_some() {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 for id in related { pages.discard(id); }
@@ -2586,11 +2594,10 @@ impl BrowserWindow {
                 div()
                     .id(("close", key))
                     .debug_selector(|| self.sidebar_debug_name((|| format!("close-{key}"))()))
-                    .absolute().top(px(10.)).right(px(if segmented { 4. } else { 6. }))
+                    .absolute().top(px(if segmented { 10. } else { (SIDEBAR_ROW_HEIGHT - 24.) / 2. })).right(px(if segmented { 4. } else { 6. }))
                     .flex_none()
-                    .px_1()
-                    .rounded_sm()
-                    .text_sm()
+                    .when(segmented, |this| this.px_1().rounded_sm().text_sm())
+                    .when(!segmented, |this| this.size(px(24.)).flex().items_center().justify_center().rounded(px(5.)))
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .when(private, |this| this.text_color(hsla(0., 0., 1., 0.6)))
                     .invisible()
@@ -2601,10 +2608,10 @@ impl BrowserWindow {
                         if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                         this.close_tab(id, cx);
                     }))
-                    .child(crate::icons::control(match section {
+                    .child(crate::icons::control_sized(match section {
                         Section::Pinned => crate::icons::Icon::Minus,
                         Section::Today => crate::icons::Icon::Close,
-                    })),
+                    }, if !segmented && matches!(section, Section::Today) { 22. } else { 18. })),
             )
     }
 
@@ -3234,7 +3241,7 @@ impl BrowserWindow {
                     .group(SharedString::from(format!("space-mark-{index}")))
                     .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
                     .hover(|s| s.bg(hsla(0., 0., 1., 0.3)))
-                    .when(space.custom_icon.is_none(), |this| this.child(div().size(px(if active { 8. } else { 4. })).rounded_full().bg(mark)
+                    .when(space.custom_icon.is_none(), |this| this.child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-dot-{index}"))())).size(px(if active { 8. } else { 4. })).rounded_full().bg(mark)
                         .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., 0.1, if active { 0.8 } else { 0.5 })))))
                     .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
                         .when(!active, |this| this.opacity(0.5))

@@ -329,7 +329,7 @@ impl BrowserWindow {
         let favorite = self.browser.is_favorite(tab.id);
         let pinned = tab.pinned_url.is_some();
         let mut rows: Vec<Entry> = vec![
-            item("Copy Link", Command::Copy).shortcut("⇧⌘C").into(),
+            Item { shortcut: (!favorite).then_some("⇧⌘C"), ..item("Copy Link", Command::Copy) }.into(),
             pending("Share").submenu(vec![item("Copy Link as Markdown", Command::CopyMarkdown).into()]).into(),
             Entry::Separator,
         ];
@@ -337,22 +337,27 @@ impl BrowserWindow {
         rows.extend([item("Change Icon…", Command::Icon).into(), item("Rename…", Command::Rename).into()]);
         if self.browser.item_has_custom_name(tab.id) || self.browser.item_icon(tab.id).is_some() { rows.push(item("Reset Name and Icon", Command::ResetCustomization).into()); }
         rows.push(item(if tab.muted { "Unmute" } else { "Mute" }, Command::Mute).enabled(!internal).into());
-        rows.push(pending("Customize Page…").into());
+        if !favorite { rows.push(pending("Customize Page…").into()); }
         if pinned {
             let moved = tab.pinned_url.as_ref().is_some_and(|url| *url != tab.url);
             rows.push(pending("Edit Pinned Page").submenu(vec![
-                item("Reset to Original URL", Command::Reset).enabled(moved).into(),
-                item("Replace with Current URL", Command::Replace).enabled(moved).into(),
+                item("Replace Pinned URL with Current", Command::Replace).enabled(moved).into(),
+                pending("Edit…").into(),
             ]).into());
         }
         rows.push(Entry::Separator);
-        if !internal { rows.push(item("Add Split View", Command::Add(Placement::Right)).into()); }
+        if !internal { rows.push(item(if self.browser.space().active_tab == Some(id) { "Add Split View" } else { "Open in Split View" }, Command::Add(Placement::Right)).into()); }
         rows.extend([item("Duplicate", Command::Duplicate).shortcut("⌥D").into(), pending("Move to").submenu(self.move_to_entries()).into(), Entry::Separator]);
-        archive_relative(&mut rows);
-        rows.push(Entry::Separator);
-        rows.push(item(if pinned { "Close Tab" } else { "Archive Tab" }, Command::Close).shortcut("⌘W").into());
-        if !favorite { rows.push(item(if pinned { "Unpin Tab" } else { "Pin Tab" }, Command::Pin).enabled(!self.browser.is_blank()).into()); }
-        rows.push(item(if favorite { "Remove Favorite" } else { "Add to Favorites" }, Command::Favorite).enabled(!self.browser.is_blank()).into());
+        if favorite {
+            rows.push(item("Remove Favorite", Command::Favorite).into());
+        } else if pinned {
+            rows.push(item("Remove Pin", Command::Pin).into());
+        } else {
+            rows.push(item("Archive Tab", Command::Close).into());
+            let below = browser_core::bulk_archive::Relative::Below;
+            rows.push(item("Archive Tabs Below", Command::ArchiveRelative(below))
+                .enabled(!self.browser.tabs_to_archive(tab.id, below).is_empty()).into());
+        }
         rows
     }
 
@@ -448,7 +453,7 @@ impl BrowserWindow {
             Command::Duplicate => self.duplicate_tab(id, cx),
             Command::Copy => self.copy_tab_url(id, false, cx),
             Command::CopyMarkdown => self.copy_tab_url(id, true, cx),
-            Command::Pin => self.edit_browser(|browser| browser.toggle_pin(id)),
+            Command::Pin => self.remove_pin(id, cx),
             Command::Favorite => {
                 let active = self.browser.space().active_tab;
                 if self.browser.is_favorite(id) { self.edit_browser(|browser| browser.unfavorite_tab(id)); }
