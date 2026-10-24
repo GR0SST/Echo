@@ -7360,3 +7360,48 @@ fn app_download_fixture_status_survives_source_entity_drop_with_retained_canonic
 mod printing_tests;
 #[path = "paste_style_tests.rs"]
 mod paste_style_tests;
+
+#[gpui::test]
+fn sidebar_labels_and_unknown_site_tiles_keep_reference_metrics(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    crate::sidebar_title::take_painted_titles();
+    // A page without a downloaded favicon uses the same quiet placeholder
+    // before and after activation, rather than a title initial/accent tile.
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://unknown.example/geometry");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let titles = crate::sidebar_title::take_painted_titles();
+    assert!(!titles.is_empty());
+    assert!(titles.iter().all(|title| title.font_size == gpui::px(13.)));
+    let placeholder = cx.debug_bounds("favicon-placeholder").unwrap();
+    assert_eq!(placeholder.size, gpui::size(gpui::px(14.), gpui::px(14.)));
+    let address = cx.debug_bounds("address").unwrap();
+    assert_eq!(address.left(), gpui::px(8.));
+    assert_eq!(address.top(), gpui::px(46.));
+    assert_eq!(address.size.height, gpui::px(36.));
+    let row = cx.debug_bounds("new-tab").unwrap();
+    assert_eq!(row.size.height, gpui::px(38.));
+    let sidebar = cx.debug_bounds("sidebar").unwrap();
+    let dock_mark = cx.debug_bounds("space-0").unwrap();
+    assert_eq!(dock_mark.center().y, sidebar.bottom() - gpui::px(25.));
+    click(cx, "new-tab");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    bar(&view, cx).simulate_keystrokes("escape");
+    click(cx, "address");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("https://unknown.example/geometry"));
+}
+
+#[gpui::test]
+fn plain_space_heading_has_no_invented_dot_or_reserved_icon_slot(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let name = cx.debug_bounds("space-header-name-0").unwrap();
+    assert_eq!(name.left(), gpui::px(16.));
+    assert!(cx.debug_bounds("space-header-icon-0").is_none());
+    let header = cx.debug_bounds("space-header-0").unwrap();
+    cx.simulate_mouse_move(header.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("space-header-name-0").unwrap(), name);
+    click(cx, "space-header-more-0");
+    assert!(view.read_with(cx, |w, _| w.tab_menu.is_some()));
+}

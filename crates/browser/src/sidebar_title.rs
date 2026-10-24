@@ -70,6 +70,7 @@ impl Element for SidebarTitle {
         #[cfg(test)]
         PAINTED.with(|records| {
             records.borrow_mut().push(PaintedSidebarTitle {
+                font_size: window.text_style().font_size.to_pixels(window.rem_size()),
                 original: self.0.to_string(),
                 text: line.text.to_string(),
                 len: line.len(),
@@ -133,6 +134,7 @@ fn shape_title(original: &str, width: Pixels, window: &Window) -> ShapedLine {
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct PaintedSidebarTitle {
+    pub font_size: Pixels,
     pub original: String,
     pub text: String,
     pub len: usize,

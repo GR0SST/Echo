@@ -186,7 +186,7 @@ Folder duplication follows the right-click action documented in the
 
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
-| Vertical sidebar with tabs | — | done | CEF site favicons are cached for unloaded/restored tabs, with letter fallback. |
+| Vertical sidebar with tabs | — | partial | CEF site favicons are cached for unloaded/restored tabs. Unknown or failed icons use a neutral 14 px page tile (3 px radius), without title initials or Space accents. Tab labels, address text and New Tab use 13 px type with 8 px sidebar gutters. Fresh window-relative Arc captures confirm the 46 px address top and 90 px Favorites top; the earlier audit included a 5 px window-origin offset. Plain Space headings start at x=16 without an invented dot/icon slot or hover fill; custom icons retain their disclosure controls. The 50 px bottom dock puts Space marks 25 px above the window bottom. Remaining differences include selected-row fill height (Arc 36 px, Echo 38 px), Favorites tile height (Arc 47 px, Echo 46 px), and other interaction states. |
 | Resize sidebar | Drag edge; double-click to reset | partial | Window-local live width, 164–500 bounds, 228 reset and all-left collapse; native docked/floating checks preserve the CEF document and input across width changes. Exact hit area, snapping/haptics, persistence, new-window inheritance and remaining platform parity are unverified |
 | Window buttons (traffic lights) inside the sidebar | — | done | Native buttons aligned with the toolbar row; idle as neutral dots with tinted rims and show their colors only while hovered |
 | Reopen after closing the last window | Dock | done | Restores the saved session in a new window; keeps CEF initialized across window lifetimes |

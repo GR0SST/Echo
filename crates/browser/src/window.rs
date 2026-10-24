@@ -29,7 +29,7 @@ pub(crate) mod download_probe;
 
 pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
 /// Sidebar metrics measured from the reference at 1x.
-const SIDEBAR_INSET: f32 = 7.0;
+const SIDEBAR_INSET: f32 = 8.0;
 const SIDEBAR_TOOLBAR_HEIGHT: f32 = 47.0;
 pub(crate) const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
 pub(crate) const SIDEBAR_ROW_GAP: f32 = 3.0;
@@ -39,7 +39,7 @@ const FAVORITE_GAP: f32 = 8.0;
 const FAVORITE_COLUMNS: usize = 4;
 /// Room for "Tidy | Clear" at the right of the Today divider.
 const TODAY_ACTIONS_WIDTH: f32 = 96.0;
-const SPACE_BAR_HEIGHT: f32 = 42.0;
+const SPACE_BAR_HEIGHT: f32 = 50.0;
 const COMMAND_BAR_WIDTH: f32 = 764.0;
 /// The search field's band, separator included.
 const COMMAND_BAR_HEADER: f32 = 64.0;
@@ -2515,7 +2515,7 @@ impl BrowserWindow {
             // hover. A mute control keeps its place left of it.
             // Hover alone only repaints, so the padding follows hover state.
             .pr(px(if tab.muted || (reserve_close && self.hovered_row == Some(id)) { 34. } else { 6. }))
-            .text_size(px(14.))
+            .text_size(px(13.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered { this.hovered_row = Some(id); }
@@ -2639,18 +2639,17 @@ impl BrowserWindow {
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, self.browser.is_private()) }
 
     /// `tab`'s favicon for a light surface, or a dark one when `dark`.
-    pub(crate) fn render_favicon_on(&self, tab: &Tab, hue: f32, dark: bool) -> AnyElement {
+    pub(crate) fn render_favicon_on(&self, tab: &Tab, _hue: f32, dark: bool) -> AnyElement {
         if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
         let icon = match self.browser.favicon(self.browser.active_user_profile_id(), &tab.url) {
             Some(png) => {
-                let title = tab.title.clone();
                 let style = self.favicon_styles.borrow_mut().get(png);
                 gpui::img(if dark { style.on_dark } else { style.image })
                     .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain)
-                    .with_fallback(move || favicon(&title, hue).into_any_element())
+                    .with_fallback(move || favicon_placeholder(dark).into_any_element())
                     .into_any_element()
             }
-            None => favicon(&tab.title, hue).into_any_element(),
+            None => favicon_placeholder(dark).into_any_element(),
         };
         // Favicons are 16 px, centered in the 18 px slot shared with symbols.
         div().size(px(18.)).flex_none().flex().items_center().justify_center().child(icon).into_any_element()
@@ -2739,7 +2738,7 @@ impl BrowserWindow {
             .text_color(hsla(0.0, 0.0, 0.1, 1.0))
             .child(div().absolute().top_0().left_0().right(px(8.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).flex().items_center().gap(px(6.))
                 .child(div().flex_none().w(px(74.)).h_full())
-                .child(control("toggle-sidebar").ml(px(-2.))
+                .child(control("toggle-sidebar").ml(px(-1.))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
                     .child(crate::icons::control(crate::icons::Icon::Sidebar)))
                 .child(div().flex_1())
@@ -2768,7 +2767,7 @@ impl BrowserWindow {
                         .rounded(px(SIDEBAR_ROW_RADIUS))
                         .bg(hsla(0.0, 0.0, 1.0, 0.35))
                         .hover(move |s| s.bg(hsla(0.0, 0.0, 1.0, if private { 0.2 } else { 0.5 })))
-                        .text_size(px(14.))
+                        .text_size(px(13.))
                         .text_color(hsla(0.0, 0.0, 0.0, 0.6))
                         .when(private, |this| this.bg(hsla(0., 0., 1., 0.14)).text_color(hsla(0., 0., 1., 0.65)))
                         .whitespace_nowrap()
@@ -3044,9 +3043,8 @@ impl BrowserWindow {
             .when(space.show_header, |this| this.child(
                 div().id(("space-header", index)).debug_selector(|| self.sidebar_debug_name((move || format!("space-header-{index}"))()))
                     .group(header_group.clone())
-                    .flex().items_center().gap(px(9.)).h(px(SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).rounded(px(SIDEBAR_ROW_RADIUS))
+                    .flex().items_center().gap(px(9.)).h(px(SIDEBAR_ROW_HEIGHT)).pl(px(if space.custom_icon.is_some() { 9. } else { 8. })).pr(px(6.)).rounded(px(SIDEBAR_ROW_RADIUS))
                     .when(header_menu_open, |style| style.bg(hsla(0., 0., 1., 0.15)))
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.15)))
                     .on_click(cx.listener(move |this, _, _, cx| { if let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) { this.toggle_pinned_section(index, cx); } }))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Pinned, cx)))
@@ -3058,18 +3056,17 @@ impl BrowserWindow {
                     }))
                     .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(hsla(0., 0., 0., 0.5))
-                    .child(div().relative().size(px(18.)).flex_none()
+                    .when(space.custom_icon.is_some(), |this| this.child(div().relative().size(px(18.)).flex_none()
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-icon-{index}"))()))
                             .size_full().flex().items_center().justify_center()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.invisible())
                             .group_hover(header_group.clone(), |style| style.invisible())
-                            .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon)))
-                            .when(space.custom_icon.is_none(), |this| this.child(div().size(px(7.)).rounded_full().bg(hsla(0., 0., 0.1, 0.5)))))
+                            .when_some(space.custom_icon.as_deref(), |this, icon| this.child(crate::icons::glyph(icon))))
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-chevron-{index}"))()))
                             .absolute().top_0().left_0().size_full().invisible()
                             .when(space.pinned_collapsed || header_menu_open, |this| this.visible())
                             .group_hover(header_group.clone(), |style| style.visible())
-                            .child(crate::icons::disclosure(space.pinned_collapsed))))
+                            .child(crate::icons::disclosure(space.pinned_collapsed)))))
                     .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-header-name-{index}"))()))
                         .flex_1().min_w_0().truncate().child(space.name.clone()))
                     .child(div().id(("space-header-more", index)).debug_selector(|| self.sidebar_debug_name((move || format!("space-header-more-{index}"))()))
@@ -3132,7 +3129,7 @@ impl BrowserWindow {
                     .h(px(SIDEBAR_ROW_HEIGHT))
                     .pl(px(9.))
                     .rounded(px(SIDEBAR_ROW_RADIUS))
-                    .text_size(px(14.))
+                    .text_size(px(13.))
                     .text_color(hsla(0.0, 0.0, 0.0, 0.45))
                     .hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -3811,19 +3808,17 @@ impl Render for TabTooltip {
     }
 }
 
-fn favicon(title: &str, hue: f32) -> impl IntoElement {
-    let initial: String = title.chars().next().unwrap_or('•').to_uppercase().collect();
+/// Arc leaves unknown sites as a quiet, neutral page tile. The placeholder
+/// carries no title initial or Space accent; a cached site icon replaces it.
+fn favicon_placeholder(dark: bool) -> impl IntoElement {
     div()
-        .flex()
+        .debug_selector(|| "favicon-placeholder".into())
         .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(16.0))
-        .rounded_sm()
-        .bg(hsla(hue, 0.5, 0.45, 1.0))
-        .text_color(gpui::white())
-        .text_xs()
-        .child(initial)
+        .size(px(14.))
+        .child(canvas(|_, _, _| (), move |bounds, _, window, _| {
+            let foreground = if dark { gpui::white() } else { window.text_style().color };
+            window.paint_quad(gpui::quad(bounds, px(3.), foreground.opacity(0.25), px(0.), gpui::transparent_black(), gpui::BorderStyle::Solid));
+        }).size_full())
 }
 
 pub(crate) fn tint(hue: f32, lightness: f32) -> Hsla {
