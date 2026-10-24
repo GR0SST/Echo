@@ -9759,3 +9759,30 @@ fn air_traffic_routes_define_little_window_promotion_defaults(cx: &mut TestAppCo
         assert_eq!(view.browser.active_tab().unwrap().url, "https://promote.example/page");
     });
 }
+
+#[gpui::test]
+fn little_address_click_edits_the_full_url_without_changing_normal_tabs(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    let before = owner.read_with(cx, |view, _| view.browser.all_tabs().count());
+    cx.simulate_keystrokes("cmd-alt-n"); cx.run_until_parked();
+    let (little, mut compact) = little_root(cx);
+    let initial = "https://www.example.com/path?q=full#fragment";
+    bar(&little, &mut compact).simulate_input(initial);
+    bar(&little, &mut compact).simulate_keystrokes("enter"); compact.run_until_parked();
+    let tab = little.read_with(&compact, |view, _| view.browser.active_tab().unwrap().id);
+    let engine = fake.0.borrow().forks.last().unwrap().clone(); engine.take_calls();
+    let center = compact.update(|window, _| gpui::point(window.viewport_size().width / 2., gpui::px(23.)));
+    compact.simulate_mouse_move(center, None, Modifiers::none());
+    compact.simulate_mouse_down(center, gpui::MouseButton::Left, Modifiers::none());
+    compact.simulate_mouse_up(center, gpui::MouseButton::Left, Modifiers::none()); compact.run_until_parked();
+    assert_eq!(bar_text(&little, &mut compact).as_deref(), Some(initial));
+    let mut address = bar(&little, &mut compact);
+    address.simulate_keystrokes("cmd-a"); address.simulate_input("https://edited.example/complete?value=1");
+    address.simulate_keystrokes("enter"); compact.run_until_parked();
+    little.read_with(&compact, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().id, tab);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://edited.example/complete?value=1");
+    });
+    assert_eq!(owner.read_with(cx, |view, _| view.browser.all_tabs().count()), before);
+    assert!(engine.take_calls().contains(&Call::Navigate(1, "https://edited.example/complete?value=1".into())));
+}

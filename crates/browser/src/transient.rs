@@ -146,12 +146,12 @@ impl BrowserWindow {
                     .bg(gpui::hsla(0., 0., 1., 0.13)).flex().items_center().px(px(8.))
                     .child(div().id("little-profile").debug_selector(|| "little-profile".into()).flex_none()
                         .h(px(20.)).px(px(5.)).rounded_full().flex().items_center().gap(px(4.))
-                        .bg(gpui::hsla(0., 0., 1., 0.07)).hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.15)))
+                        .bg(gpui::hsla(0., 0., 0., 0.1)).hover(|style| style.bg(gpui::hsla(0., 0., 0., 0.15)))
                         .text_size(px(11.)).font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(profile_avatar()).child(self.browser.active_user_profile().name().to_owned())
                         .on_click(cx.listener(|this, _, window, cx| this.toggle_lookup_picker(PickerKind::Profiles, window, cx))))
                     .child(div().id("little-address").debug_selector(|| "little-address".into()).flex_1().min_w_0()
-                        .text_size(px(13.)).text_center().truncate().child(title)
+                        .h_full().text_size(px(13.)).text_center().truncate().child(title)
                         .on_click(cx.listener(|this, _, window, cx| {
                             let target = this.browser.active_tab().map(|tab| (Target::Tab(tab.id), tab.url.clone()));
                             if let Some((target, url)) = target { this.open_command_bar(target, &url, window, cx); }
@@ -332,7 +332,7 @@ impl BrowserWindow {
                         .on_hover(cx.listener(move |this, hovered, _, cx| {
                             if *hovered { if let Some(picker) = this.transient.as_mut().and_then(|state| state.picker.as_mut()) { picker.selected = index; } cx.notify(); }
                         }))
-                        .child(div().size(px(12.)).flex_none().when(id == active, |check| check.child(icons::control_sized(Icon::Check, 12.))))
+                        .child(div().size(px(12.)).flex_none().when(id == active, |check| check.child(profile_check())))
                         .child(div().min_w_0().truncate().child(name))
                         .on_click(cx.listener(move |this, _, _, cx| this.change_lookup_profile(id, cx)))
                 })))
@@ -424,4 +424,14 @@ fn profile_avatar() -> AnyElement {
         smile.curve_to(bounds.origin + point(px(10.), px(8.5)), bounds.origin + point(px(7.), px(12.)));
         if let Ok(path) = smile.build() { window.paint_path(path, color); }
     }).size(px(14.)).flex_none().into_any_element()
+}
+
+fn profile_check() -> AnyElement {
+    gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
+        let mut path = gpui::PathBuilder::stroke(px(1.5));
+        path.move_to(bounds.origin + point(px(3.), px(6.)));
+        path.line_to(bounds.origin + point(px(6.), px(10.)));
+        path.line_to(bounds.origin + point(px(11.), px(2.)));
+        if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+    }).size(px(12.)).flex_none().into_any_element()
 }
