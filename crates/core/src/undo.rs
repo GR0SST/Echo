@@ -162,11 +162,21 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
+enum SidebarEdit { Batch(Vec<SidebarEdit>), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
         match self {
+            Self::Batch(edits) => {
+                let apply = |edits: &mut Vec<SidebarEdit>, browser: &mut Browser| {
+                    if redo { edits.iter_mut().all(|edit| edit.apply(true, browser, now)) }
+                    else { edits.iter_mut().rev().all(|edit| edit.apply(false, browser, now)) }
+                };
+                // Validate every identity before changing the live model. Never
+                // restore a snapshot over navigation or unrelated later tabs.
+                if !apply(&mut edits.clone(), &mut browser.clone()) { return false; }
+                apply(edits, browser)
+            }
             Self::PeekClose(_) => false,
             Self::Theme { space, before, after } => {
                 let (source, target) = if redo { (&*before, &*after) } else { (&*after, &*before) };
@@ -214,13 +224,37 @@ impl SidebarHistory {
 }
 
 impl Browser {
+    /// Archive a sidebar selection as one Undo transaction. Split groups are
+    /// atomic; stale, foreign-Space and duplicate identities are ignored.
+    pub fn archive_sidebar_items(&mut self, items: &[TabId], now: std::time::SystemTime) -> usize {
+        let mut ids = Vec::new();
+        for id in items.iter().map(|id| self.item_anchor(*id)) {
+            if !ids.contains(&id) && self.space().pinned.iter().chain(&self.space().today).any(|tab| tab.id == id) { ids.push(id); }
+        }
+        let history = std::mem::take(&mut self.sidebar_history);
+        let mut count = 0;
+        for id in ids {
+            let pinned = self.space().pinned.iter().any(|tab| tab.id == id);
+            let closed = if pinned { self.remove_pin(id, now) } else { self.close_tab(id, now) };
+            if closed == Some(crate::Closed::Archived) { count += 1; }
+        }
+        let edits = std::mem::take(&mut self.sidebar_history.undo);
+        self.sidebar_history = history;
+        if !edits.is_empty() { self.sidebar_history.record(SidebarEdit::Batch(edits)); }
+        count
+    }
+
     /// Opaque identities for an archive accessory; other edits must never be
     /// undone accidentally by a still-visible archive notification.
     pub fn archive_undo_items(&self) -> Option<Vec<TabId>> {
-        match self.sidebar_history.undo.last()? {
-            SidebarEdit::Archive(edit) | SidebarEdit::RemovePin { archive: edit, .. } => Some(edit.anchors()),
-            _ => None,
+        fn anchors(edit: &SidebarEdit) -> Option<Vec<TabId>> {
+            match edit {
+                SidebarEdit::Archive(edit) | SidebarEdit::RemovePin { archive: edit, .. } => Some(edit.anchors()),
+                SidebarEdit::Batch(edits) => Some(edits.iter().map(anchors).collect::<Option<Vec<_>>>()?.into_iter().flatten().collect()),
+                _ => None,
+            }
         }
+        anchors(self.sidebar_history.undo.last()?)
     }
     pub fn undo_archive_items(&mut self, expected: &[TabId], now: std::time::SystemTime) -> bool {
         if self.archive_undo_items().as_deref() != Some(expected) { return false; }
@@ -522,5 +556,46 @@ mod tests {
         assert!(!browser.undo_sidebar(NOW));
         assert_eq!(browser.favorite_count(), crate::favorites::MAX_FAVORITES);
         assert!(browser.space().today.iter().any(|tab| tab.id == target));
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    const NOW: std::time::SystemTime = std::time::SystemTime::UNIX_EPOCH;
+    #[test]
+    fn selection_archive_undo_is_atomic_for_pins_and_split_groups() {
+        let mut browser = Browser::new();
+        let a = browser.new_tab("https://a.example", NOW);
+        browser.toggle_pin(a);
+        let b = browser.new_tab("https://b.example", NOW);
+        let c = browser.new_tab("https://c.example", NOW);
+        browser.add_split(b, c, crate::splits::Placement::Right, NOW).unwrap();
+        assert_eq!(browser.archive_sidebar_items(&[a,b,c,a], NOW), 2);
+        let tokens = browser.archive_undo_items().unwrap();
+        let later = browser.new_tab("https://later.example", NOW);
+        assert!(browser.undo_archive_items(&tokens, NOW));
+        assert_eq!(browser.space().pinned[0].id, a);
+        assert_eq!(browser.split_for(b).unwrap().panes, vec![b,c]);
+        assert!(browser.all_tabs().any(|tab| tab.id == later));
+        assert!(browser.redo_sidebar(NOW));
+        assert!(browser.all_tabs().any(|tab| tab.id == later));
+        assert!(!browser.all_tabs().any(|tab| tab.id == a || tab.id == b || tab.id == c));
+    }
+    #[test]
+    fn stale_selection_redo_does_not_partially_archive_surviving_items() {
+        let mut browser = Browser::new();
+        let a = browser.new_tab("https://a.example", NOW);
+        let b = browser.new_tab("https://b.example", NOW);
+        assert_eq!(browser.archive_sidebar_items(&[a,b], NOW), 2);
+        assert!(browser.undo_sidebar(NOW));
+        // A structural edit outside sidebar history invalidates only one item.
+        browser.spaces[0].today.iter_mut().find(|tab| tab.id == b).unwrap().pinned_url = Some("https://changed.example".into());
+        let pin = browser.spaces[0].today.iter().find(|tab| tab.id == b).unwrap().clone();
+        browser.spaces[0].pinned.push(pin);
+        browser.spaces[0].today.retain(|tab| tab.id != b);
+        assert!(!browser.redo_sidebar(NOW));
+        assert!(browser.all_tabs().any(|tab| tab.id == a));
+        assert!(browser.all_tabs().any(|tab| tab.id == b));
     }
 }

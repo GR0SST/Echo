@@ -10254,3 +10254,123 @@ fn max_anthropic_workspace_survives_provider_switches(cx: &mut TestAppContext) {
         assert_eq!(browser_core::session::from_json(&saved).unwrap().settings.max.provider.anthropic_workspace_id, "wrkspc_01Example");
     });
 }
+
+fn modifier_click(cx: &mut VisualTestContext, selector: &'static str, modifiers: Modifiers) {
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds(selector).unwrap();
+    cx.simulate_mouse_move(bounds.center(), None, modifiers);
+    cx.simulate_click(bounds.center(), modifiers);
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn sidebar_multi_selection_modifiers_preserve_the_active_page_and_follow_visible_order(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let (a,b,c) = view.update(cx, |view, _| view.edit_browser(|browser| {
+        let a = browser.new_tab("https://a.example", std::time::SystemTime::now());
+        let b = browser.new_tab("https://b.example", std::time::SystemTime::now());
+        let c = browser.new_tab("https://c.example", std::time::SystemTime::now());
+        (a,b,c)
+    }));
+    cx.run_until_parked();
+    click(cx, test_selector(format!("tab-{}", a.get())));
+    fake.take_calls();
+    modifier_click(cx, test_selector(format!("tab-{}", b.get())), Modifiers { platform: true, ..Modifiers::none() });
+    assert_eq!(view.read_with(cx, |view, _| view.sidebar_selection_items()), vec![b,a]);
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().active_tab), Some(a));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+    modifier_click(cx, test_selector(format!("tab-{}", c.get())), Modifiers { shift: true, ..Modifiers::none() });
+    assert_eq!(view.read_with(cx, |view, _| view.sidebar_selection_items()), vec![c,b,a]);
+    click(cx, test_selector(format!("tab-{}", b.get())));
+    assert!(view.read_with(cx, |view, _| view.sidebar_selection_items().is_empty()));
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().active_tab), Some(b));
+}
+
+#[gpui::test]
+fn sidebar_multi_selection_menu_copies_in_sidebar_order_and_archives_with_one_undo(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let ids = view.read_with(cx, |view, _| view.browser.space().today.iter().map(|tab| tab.id).collect::<Vec<_>>());
+    click(cx, test_selector(format!("tab-{}", ids[0].get())));
+    modifier_click(cx, test_selector(format!("tab-{}", ids[1].get())), Modifiers { platform: true, ..Modifiers::none() });
+    let pos = cx.debug_bounds(test_selector(format!("tab-{}", ids[1].get()))).unwrap().center();
+    cx.simulate_mouse_down(pos, gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    let mut popup = tab_menu(&view, cx);
+    click(&mut popup, "tab-menu-copy");
+    let expected = view.read_with(cx, |view, _| view.sidebar_selection_items().iter().map(|id| browser_core::links::clean_url(&view.browser.all_tabs().find(|tab| tab.id == *id).unwrap().url)).collect::<Vec<_>>().join("\n"));
+    assert_eq!(cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())), Some(expected));
+    cx.simulate_mouse_down(pos, gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    let mut popup = tab_menu(&view, cx);
+    click(&mut popup, "tab-menu-close");
+    assert!(view.read_with(cx, |view, _| ids[..2].iter().all(|id| !view.browser.all_tabs().any(|tab| tab.id == *id))));
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| ids[..2].iter().all(|id| view.browser.all_tabs().any(|tab| tab.id == *id))));
+}
+
+#[gpui::test]
+fn sidebar_multi_selection_folder_action_moves_every_item_and_space_switch_clears_selection(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let ids = view.read_with(cx, |view, _| view.browser.space().today.iter().take(2).map(|tab| tab.id).collect::<Vec<_>>());
+    click(cx, test_selector(format!("tab-{}", ids[0].get())));
+    modifier_click(cx, test_selector(format!("tab-{}", ids[1].get())), Modifiers { platform: true, ..Modifiers::none() });
+    let pos = cx.debug_bounds(test_selector(format!("tab-{}", ids[1].get()))).unwrap().center();
+    cx.simulate_mouse_down(pos, gpui::MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    let mut popup = tab_menu(&view, cx);
+    click(&mut popup, "tab-menu-new-folder-with-tab");
+    bar(&view, cx).simulate_input("Selected pages");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let folder = view.browser.space().folders.iter().find(|folder| folder.name == "Selected pages").unwrap();
+        let tabs = view.browser.folder_tabs(folder.id);
+        assert!(ids.iter().all(|id| tabs.contains(id)));
+    });
+    cx.simulate_keystrokes("ctrl-2");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.sidebar_selection_items().is_empty()));
+}
+
+#[gpui::test]
+fn sidebar_multi_selection_markdown_and_split_actions_use_all_selected_tabs(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let ids = view.read_with(cx, |view, _| view.browser.space().today.iter().take(2).map(|tab| tab.id).collect::<Vec<_>>());
+    click(cx, test_selector(format!("tab-{}", ids[0].get())));
+    modifier_click(cx, test_selector(format!("tab-{}", ids[1].get())), Modifiers { platform: true, ..Modifiers::none() });
+    cx.simulate_keystrokes("cmd-alt-shift-c");
+    cx.run_until_parked();
+    let text = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())).unwrap();
+    assert_eq!(text.lines().count(), 2);
+    assert!(text.lines().all(|line| line.starts_with("- [") && line.ends_with(')')));
+    right_click(cx, test_selector(format!("tab-{}", ids[1].get())));
+    let mut popup = tab_menu(&view, cx);
+    click(&mut popup, "tab-menu-selection-split");
+    view.read_with(cx, |view, _| {
+        let split = view.browser.split_for(ids[0]).unwrap();
+        assert!(ids.iter().all(|id| split.panes.contains(id)));
+    });
+}
+
+#[gpui::test]
+fn sidebar_multi_selection_move_keeps_the_source_space_and_moves_every_item(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let (ids, work, source) = view.read_with(cx, |view, _| (view.browser.space().today.iter().take(2).map(|tab| tab.id).collect::<Vec<_>>(), view.browser.spaces[1].id, view.browser.space().id));
+    click(cx, test_selector(format!("tab-{}", ids[0].get())));
+    modifier_click(cx, test_selector(format!("tab-{}", ids[1].get())), Modifiers { platform: true, ..Modifiers::none() });
+    right_click(cx, test_selector(format!("tab-{}", ids[1].get())));
+    let mut popup = tab_menu(&view, cx);
+    popup.simulate_keystrokes("down down down down down right");
+    popup.run_until_parked();
+    // Native pointer hover opens the same destination submenu as the keyboard.
+    let parent = popup.debug_bounds("tab-menu-move-to").unwrap();
+    popup.simulate_mouse_move(parent.center(), None, Modifiers::none());
+    popup.run_until_parked();
+    click(&mut popup, test_selector(format!("tab-menu-selection-move-{work:?}")));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.browser.space().id, source);
+        let destination = view.browser.spaces.iter().find(|space| space.id == work).unwrap();
+        assert!(ids.iter().all(|id| destination.today.iter().any(|tab| tab.id == *id)));
+    });
+}

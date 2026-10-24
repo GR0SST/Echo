@@ -86,6 +86,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
+        if self.copy_sidebar_selection(markdown, cx) { return; }
         let Some(id) = self.browser.space().active_tab else { return; };
         self.copy_tab_url(id, markdown, cx);
     }

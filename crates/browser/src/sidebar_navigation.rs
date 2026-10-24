@@ -295,6 +295,7 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn begin_space_creation(&mut self, origin: SpaceId, cx: &mut Context<Self>) {
+        self.sidebar_selection.new_space_items.clear();
         if crate::quit::is_quitting() {
             return;
         }
@@ -405,7 +406,11 @@ impl BrowserWindow {
             return;
         };
         match self.commit_space_creation_request(&request) {
-            Ok(_) => {
+            Ok(space) => {
+                let selected = std::mem::take(&mut self.sidebar_selection.new_space_items);
+                if request.user_profile_id == self.browser.active_user_profile_id() {
+                    self.edit_browser(|browser| { for id in selected { let pinned = browser.all_tabs().find(|tab| tab.id == id).is_some_and(|tab| tab.pinned_url.is_some()); browser.move_tab(id, space, if pinned { browser_core::Section::Pinned } else { browser_core::Section::Today }); } });
+                }
                 self.sidebar_navigation.form = None;
                 self.sidebar_navigation.events = None;
                 self.sync_navigation_visibility();

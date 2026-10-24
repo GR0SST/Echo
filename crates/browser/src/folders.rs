@@ -20,6 +20,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         if self.browser.is_blank() { return; }
+        self.sidebar_selection.folder_items.clear();
         let space = parent
             .and_then(|id| self.browser.folder_space(id))
             .unwrap_or(self.browser.space().id);
@@ -86,6 +87,10 @@ impl BrowserWindow {
                 };
                 if let Some(tab) = tab {
                     self.edit_browser(|browser| browser.move_item_to_folder(tab, folder));
+                    let selected = std::mem::take(&mut self.sidebar_selection.folder_items);
+                    if selected.first() == Some(&tab) {
+                        self.edit_browser(|browser| { for id in selected.into_iter().skip(1) { browser.move_item_to_folder(id, folder); } });
+                    }
                     self.show_folder_pin(folder, cx);
                 }
                 if let Some(index) = self

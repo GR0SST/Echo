@@ -640,6 +640,7 @@ pub struct BrowserWindow {
     pub(crate) split_drop_generation: u64,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub(crate) hovered_row: Option<TabId>,
+    pub(crate) sidebar_selection: crate::multi_selection::SidebarSelection,
     /// Layout that changes on sidebar hover (Today actions) needs state:
     /// hover styles alone repaint without a new layout.
     pub(crate) sidebar_hovered: bool,
@@ -899,6 +900,7 @@ impl BrowserWindow {
             split_drop_generation: 0,
             split_draft: None,
             hovered_row: None,
+            sidebar_selection: Default::default(),
             sidebar_hovered: false,
             traffic_lights_hovered: false,
             favicon_styles: Default::default(),
@@ -2853,6 +2855,7 @@ impl BrowserWindow {
             // Arc eases ordinary rows into a one-pixel inset at each edge while held.
             .mx(px(press_inset))
             .when(active, |this| this.bg(self.theme_tab_selection_for(painted_space)))
+            .when(!active && self.sidebar_item_selected(id), |this| this.bg(hsla(0., 0., 1., if private { 0.1 } else { 0.3 })))
             .when(active && segmented && self.theme_uses_light_ink_for(painted_space), |this| this.bg(hsla(0.,0.,1.,0.2)))
             .text_color(self.theme_foreground_for(painted_space))
             .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
@@ -2864,6 +2867,7 @@ impl BrowserWindow {
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                 if this.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library { this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Space(painted_space), cx); }
+                if this.select_sidebar_item(id, event.modifiers(), cx) { return; }
                 if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {
@@ -2932,6 +2936,7 @@ impl BrowserWindow {
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                 if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
                 if this.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library { this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Space(painted_space), cx); }
+                if this.select_sidebar_item(id, event.modifiers(), cx) { return; }
                 if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
                 if event.click_count() == 2 {

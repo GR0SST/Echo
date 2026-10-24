@@ -22,6 +22,7 @@ mod blank_window;
 mod transient;
 mod link_routing;
 mod atc;
+mod multi_selection;
 mod global_little;
 mod peek;
 mod peek_history;

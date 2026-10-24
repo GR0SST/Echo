@@ -34,7 +34,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
+pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
 
 pub(crate) struct TabMenu {
     pub target: MenuTarget,
@@ -59,12 +59,14 @@ pub(crate) struct TabMenu {
 #[derive(Clone, Copy)]
 pub(crate) enum Command { ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
+    Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
 
 impl Command {
     fn selector(self) -> &'static str {
         match self {
+            Self::Share => "share", Self::SelectionSplit => "selection-split", Self::SelectionMove(_) => "selection-move", Self::SelectionNewSpace => "selection-new-space", Self::SelectionArchiveBelow => "selection-archive-below",
             Self::ToggleToolbar => "toggle-toolbar",
             Self::Download(action) => action.selector(),
             Self::CustomizePage => "customize-page",
@@ -125,6 +127,7 @@ impl Item {
     fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
     fn selector(&self) -> String {
         match (self.command, self.submenu.is_empty()) {
+            (Some(Command::SelectionMove(id)), true) => format!("tab-menu-selection-move-{id:?}"),
             (Some(command), true) => format!("tab-menu-{}", command.selector()),
             _ => format!("tab-menu-{}", slug(&self.label)),
         }
@@ -179,7 +182,8 @@ pub(crate) fn short_title(title: &str) -> String {
 
 impl BrowserWindow {
     pub(crate) fn open_tab_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_sidebar_menu(MenuTarget::Tab(tab), position, window, cx);
+        let target = if self.sidebar_item_selected(tab) && self.sidebar_selection_items().len() > 1 { MenuTarget::Selection(self.browser.space().id) } else { MenuTarget::Tab(tab) };
+        self.open_sidebar_menu(target, position, window, cx);
     }
 
     pub(crate) fn open_folder_menu(&mut self, folder: FolderId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -190,6 +194,7 @@ impl BrowserWindow {
         match target {
             MenuTarget::Tab(tab) => self.browser.active_user_profile().favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
+            MenuTarget::Selection(id) => self.browser.space().id == id && self.sidebar_selection_items().len() > 1,
             MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Address => self.browser.active_tab().is_some(),
             MenuTarget::Download(id, owner) => self.download_menu_record(id,owner).is_some(),
@@ -240,7 +245,9 @@ impl BrowserWindow {
 
     pub(crate) fn open_pane_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if self.browser.split_for(tab).is_none() { return; }
-        self.open_tab_menu(tab, position, window, cx);
+        // Pane controls always address the clicked pane, independently of a
+        // sidebar multi-selection containing its group.
+        self.open_sidebar_menu(MenuTarget::Tab(tab), position, window, cx);
         if let Some(menu) = &mut self.tab_menu { menu.pane = true; }
         let width = self.menu_level_width(&self.menu_entries(), false, window);
         if let Some(menu) = &mut self.tab_menu { menu.width = width; }
@@ -261,6 +268,7 @@ impl BrowserWindow {
     pub(crate) fn menu_entries(&self) -> Vec<Entry> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
         tidy(match menu.target {
+            MenuTarget::Selection(_) => self.selection_menu_commands(),
             MenuTarget::Space(id) => self.space_menu_commands(id),
             MenuTarget::Download(id, owner) => self.download_menu_commands(id,owner),
             MenuTarget::Folder(id) => self.folder_menu_commands(id),
@@ -436,6 +444,7 @@ impl BrowserWindow {
                 if let Command::Download(action) = command { self.confirm_download_menu(id,owner,action,window,cx); }
                 return;
             }
+            MenuTarget::Selection(_) => { self.confirm_selection_menu(command, window, cx); return; }
             MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
             MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }
             MenuTarget::Address => {
@@ -549,6 +558,7 @@ impl BrowserWindow {
             self.tab_menu.as_ref().and_then(|menu| match menu.target {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
+                MenuTarget::Selection(_) => Some(224.),
                 MenuTarget::Download(..) => Some(120.),
                 MenuTarget::Address => Some(204.),
                 _ => None,
