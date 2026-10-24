@@ -1714,7 +1714,7 @@ diff --git a/content/browser/download/download_navigation_receipt.cc b/content/b
 new file mode 100644
 --- /dev/null
 +++ b/content/browser/download/download_navigation_receipt.cc
-@@ -0,0 +1,425 @@
+@@ -0,0 +1,446 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1868,25 +1868,31 @@ new file mode 100644
 +
 +class NavigationAdmissionTransfer::Impl : public WebContentsObserver {
 + public:
-+  Impl(RenderFrameHost* frame, NavigationReceiptAdmission admission)
++  Impl(RenderFrameHost* frame, NavigationReceiptAdmission admission, bool controller_root)
 +      : WebContentsObserver(WebContents::FromRenderFrameHost(frame)),
 +        owner_(web_contents()->GetWeakPtr()), frame_(frame->GetGlobalFrameToken()),
++        frame_tree_node_(frame->GetFrameTreeNodeId()), controller_root_(controller_root),
 +        admission_(std::move(admission)) {}
 +  ~Impl() override { Settle(CommandReason::kAbandoned); }
 +  NavigationReceiptAdmission Take(RenderFrameHost* target) {
 +    NavigationReceiptAdmission rejected;
 +    rejected.handled = true;
 +    rejected.allowed = false;
-+    if (!owner_ || !target || WebContents::FromRenderFrameHost(target) != owner_.get() ||
-+        target->GetGlobalFrameToken() != frame_ || !admission_.receipt)
-+      return rejected;
++    if (consumed_ || !owner_ || !target ||
++        WebContents::FromRenderFrameHost(target) != owner_.get()) return rejected;
++    if (controller_root_) {
++      if (target != owner_->GetPrimaryMainFrame() ||
++          target->GetFrameTreeNodeId() != frame_tree_node_) return rejected;
++    } else if (target->GetGlobalFrameToken() != frame_) return rejected;
++    consumed_ = true;
 +    auto admission = std::move(admission_);
 +    admission_ = NavigationReceiptAdmission();
-+    admission.allowed = admission.allowed && admission.receipt->is_pending();
++    admission.allowed = admission.allowed && (!admission.handled ||
++        (admission.receipt && admission.receipt->is_pending()));
 +    return admission;
 +  }
 +  void RenderFrameDeleted(RenderFrameHost* frame) override {
-+    if (frame->GetGlobalFrameToken() == frame_) Settle(CommandReason::kShutdown);
++    if (!controller_root_ && frame->GetGlobalFrameToken() == frame_) Settle(CommandReason::kShutdown);
 +  }
 +  void WebContentsDestroyed() override {
 +    Settle(CommandReason::kShutdown);
@@ -1894,6 +1900,7 @@ new file mode 100644
 +  }
 + private:
 +  void Settle(CommandReason reason) {
++    consumed_ = true;
 +    auto admission = std::move(admission_);
 +    admission_ = NavigationReceiptAdmission();
 +    if (admission.receipt && admission.receipt->is_pending())
@@ -1901,17 +1908,31 @@ new file mode 100644
 +  }
 +  const base::WeakPtr<WebContents> owner_;
 +  const GlobalRenderFrameHostToken frame_;
++  const FrameTreeNodeId frame_tree_node_;
++  const bool controller_root_;
++  bool consumed_ = false;
 +  NavigationReceiptAdmission admission_;
 +};
 +NavigationAdmissionTransfer::NavigationAdmissionTransfer(
-+    RenderFrameHost* frame, NavigationReceiptAdmission admission)
++    RenderFrameHost* frame, NavigationReceiptAdmission admission, bool controller_root)
 +    : base::RefCountedDeleteOnSequence<NavigationAdmissionTransfer>(
 +          base::SequencedTaskRunner::GetCurrentDefault()),
-+      impl_(std::make_unique<Impl>(frame, std::move(admission))) {}
++      impl_(std::make_unique<Impl>(frame, std::move(admission), controller_root)) {}
 +NavigationAdmissionTransfer::~NavigationAdmissionTransfer() = default;
 +NavigationReceiptAdmission NavigationAdmissionTransfer::Take(RenderFrameHost* target) {
 +  DCHECK_CURRENTLY_ON(BrowserThread::UI);
 +  return impl_->Take(target);
++}
++scoped_refptr<NavigationAdmissionTransfer>
++DownloadRequestUtils::PrepareControllerNavigationCommand(
++    RenderFrameHost* frame, const GURL& url, const std::string& method) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  auto* owner = frame ? WebContents::FromRenderFrameHost(frame) : nullptr;
++  if (!owner || owner->GetPrimaryMainFrame() != frame) return nullptr;
++  auto admission = PrepareNavigationReceipt(owner, url, method);
++  if (!admission.allowed) return nullptr;
++  return base::WrapRefCounted(new NavigationAdmissionTransfer(
++      frame, std::move(admission), true));
 +}
 +scoped_refptr<NavigationAdmissionTransfer>
 +DownloadRequestUtils::ShareNavigationCommand(RenderFrameHost* frame,
@@ -4715,7 +4736,7 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
  #include "components/download/public/common/download_url_parameters.h"
  #include "content/common/content_export.h"
  #include "net/traffic_annotation/network_traffic_annotation.h"
-@@ -14,10 +23,127 @@
+@@ -14,10 +23,134 @@
  namespace content {
  
  class WebContents;
@@ -4763,8 +4784,9 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
 +  bool sent_ = false;
 +};
 +
-+// Shared only across browser-side OpenURL parameter copies. One exact target
-+// can consume the original admission once; drop or target loss settles it.
++// Shared across browser-side OpenURL parameter copies. Renderer relays bind an
++// exact RFH; controller commands bind the same contents and primary root node.
++// One consumer takes the original admission; drop or owner loss settles it.
 +class CONTENT_EXPORT NavigationAdmissionTransfer
 +    : public base::RefCountedDeleteOnSequence<NavigationAdmissionTransfer> {
 + public:
@@ -4773,7 +4795,8 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
 +  friend class DownloadRequestUtils;
 +  friend class base::RefCountedDeleteOnSequence<NavigationAdmissionTransfer>;
 +  friend class base::DeleteHelper<NavigationAdmissionTransfer>;
-+  NavigationAdmissionTransfer(RenderFrameHost* frame, NavigationReceiptAdmission admission);
++  NavigationAdmissionTransfer(RenderFrameHost* frame, NavigationReceiptAdmission admission,
++                              bool controller_root = false);
 +  ~NavigationAdmissionTransfer();
 +  class Impl;
 +  std::unique_ptr<Impl> impl_;
@@ -4796,6 +4819,11 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
 +  static void AbandonNavigationCommand(
 +      RenderFrameHost* frame, const base::UnguessableToken& nonce);
 +
++  // Browser/controller command: reserve before queueing, freeze legacy absence,
++  // and bind to this contents' primary root node across renderer replacement.
++  // Null rejects. The caller cannot supply another source's prepared receipt.
++  static scoped_refptr<NavigationAdmissionTransfer> PrepareControllerNavigationCommand(
++      RenderFrameHost* primary_frame, const GURL& url, const std::string& method);
 +  static scoped_refptr<NavigationAdmissionTransfer> ShareNavigationCommand(
 +      RenderFrameHost* frame, const base::UnguessableToken& nonce);
 +  static bool RefreshNavigationAdmission(NavigationReceiptAdmission& admission,
@@ -4843,7 +4871,7 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
    // Construct download::DownloadUrlParameters for downloading the resource at
    // |url| and associating the download with the main frame of the given
    // WebContents.
-@@ -26,6 +152,14 @@
+@@ -26,6 +159,14 @@
        WebContents* web_contents,
        const GURL& url,
        const net::NetworkTrafficAnnotationTag& traffic_annotation);

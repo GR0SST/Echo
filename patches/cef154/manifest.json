@@ -35,11 +35,11 @@
   "patch_files": [
     {
       "path": "chromium.patch",
-      "sha256": "e2f405706460ea77e9c3b690684b6ecfd8900340d4f9985da0468bdf1f596e62"
+      "sha256": "81a0a92beab2c5ba84eec32863f4bcd3f27cc47bb372b7f4d8d01869733ab97e"
     },
     {
       "path": "cef.patch",
-      "sha256": "38f21bed3225e41c26e1812cdacc53303c827e3e7f7e5f011481fb251867b2c4"
+      "sha256": "d6154127f69b055ea6b50bb03a027e9f31fadafa326da68075f51ffe67e854e4"
     }
   ],
   "standard_patch_files": [
@@ -2448,7 +2448,7 @@
     {
       "path": "content/browser/download/download_navigation_receipt.cc",
       "base_sha256": null,
-      "result_sha256": "543a39658192779c900bc2fb866137de31b3b167bbf75c7fa7d2206fa5c30c06",
+      "result_sha256": "35662322cf88949df52d3e4fec1ce5ee469ab488ab25f452d50e8dd9f7fb7656",
       "mode": "100644"
     },
     {
@@ -2580,7 +2580,7 @@
     {
       "path": "content/public/browser/download_request_utils.h",
       "base_sha256": "527633edbfdb5a22a59875556e7f0d0bf7fc6ad26ecaad9d2f31a7c946b3c9a6",
-      "result_sha256": "d9ada30c47faa432bfe9d12a4839a2a97bdaed833a17e28afd949690616fc667",
+      "result_sha256": "c3f614c0fa860ce81ad3535c46b4f9710c14b6401c82e607f6ea6078a5487166",
       "mode": "100644"
     },
     {
@@ -2742,7 +2742,7 @@
     {
       "path": "cef/libcef/browser/browser_host_base.cc",
       "base_sha256": "d593c15c931ffa7de4eeb9d1b54ac04b82db9abe2d89c8144089ebed0888b06c",
-      "result_sha256": "d1b854a9181aa91586810299d63ff1fe15a437d1a449367340e2d561e36d20a1",
+      "result_sha256": "a1a4e1df3a04e11dabe40c7faac27a7ae4752d2290055d85792a03a7e3d0bf85",
       "mode": "100644"
     },
     {
@@ -2760,7 +2760,7 @@
     {
       "path": "cef/libcef/browser/download_bridge_deferred_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "043e45bb12fa8f411e31a0729610b1fe237f63bc9fc422fce9f29e6608a0f536",
+      "result_sha256": "a5e71e37333a3495447c6f13037aeac7c0948107d5f7e646a39514d073156152",
       "mode": "100644"
     },
     {
@@ -2844,7 +2844,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "2d08a5837ad46982fb96edbd0de9a8b1320cccb91601750f2918cdbc7cac6e9f",
+      "result_sha256": "e36839d4d49a00d12325a6c168add5253ec834d7adc4b28166bbe4ee412ee09f",
       "mode": "100644"
     },
     {

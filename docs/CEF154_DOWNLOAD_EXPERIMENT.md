@@ -97,7 +97,7 @@ Run each selection once, with no automatic retries:
 The exact executed test names and counts are recorded in
 [qualification.json](../patches/cef154/qualification.json). Review the listed
 suite names against that record before using a selection from another revision.
-The checkpoint passed 18 IO tests and 113 State/deferred tests exactly once.
+The checkpoint passed 18 IO tests and 135 State/deferred tests exactly once.
 
 On macOS, run the native selection from a separate copy of the completed bundle:
 
@@ -115,7 +115,8 @@ ditto "$out/ceftests.app" "$owned/ceftests.app"
   > "$owned/native-tests.log" 2>&1
 ```
 
-Require a successful process exit and all 35 cases with no skips or failures.
+Require a successful process exit and every recorded native case with no skips
+or failures.
 The BFCache flag selects the legacy request-replacement path covered by these
 tests; it is not an Echo application default. Retain the owned log/XML and check
 that its helper processes have exited. A failed copy is evidence of that attempt;
@@ -177,7 +178,7 @@ no Echo default. Use the test HTTP server: the legacy CefServer's 1 MiB queued
 write limit rejected the first fallback body. The same 35 tests passed with
 CefTestServer, without reducing the payload or relaxing assertions.
 
-The 148 selected C++ tests also cover exact-target nonce consumption, failed RPC
+The 153 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
 BeginNavigation through deferred Init. A public-value assignment guard covers
 the out-of-line OpenURLParams copy assignment required by opaque receipt types.
@@ -245,7 +246,8 @@ Cancel initially failed: CEF's `DoCancel` accepted only `IN_PROGRESS`, ignored
 the Interrupted item and retained its 64 KiB partial file. It now also accepts
 `INTERRUPTED`. The unchanged test queues a check after Cancel on the same UI
 runner and requires the genuine Canceled notification. It independently checks
-that the output directory is empty after exit. All 41 native tests pass.
+that the output directory is empty after exit. All 41 native tests passed at
+that checkpoint.
 The three relevant task-runner source prerequisites are included in qualification
 inputs. The first fixture's context-scheme handler could not serve Chromium's
 no-renderer resume loader; it was replaced with actual socket HTTP, and its
@@ -255,6 +257,25 @@ Failed runs and the original partial bytes are retained in the local archive.
 This proves the tested macOS Alloy known-item path with its source browser still
 alive at about:blank. Source destruction, other transport errors, multiple
 profiles and other platforms require further acceptance work.
+
+Registered Alloy main-frame `LoadURL` now reserves its admission before CEF's
+`NavigationLock` can queue the command. Copies share one opaque transfer and
+consume it once.
+The transfer follows its captured WebContents primary root across renderer
+replacement; renderer-originated relays retain their stricter exact-RFH binding.
+Unregistered legacy CEF keeps its existing path. A newly requested command after
+Closing is rejected before pending navigation changes.
+
+The native regression calls `LoadURL` inside the real `OnBeforeBrowse` lock,
+begins unregister, then drains the queue. It failed against the previous source
+and passes unchanged with early capture: the original token reaches genuine
+download association and the exact expected 1 MiB attachment. Existing 41 native
+TEST bodies are preserved; their shared LoadURL fixture now distinguishes an
+accepted pre-Closing call from an API call first made after Closing. Five new
+C++ tests cover POST/copies/one-shot use, foreign/child rejection, actual primary
+RFH replacement, frozen legacy absence and rejection without replacing a pending
+request. All 153 selected C++ tests and 42 native tests pass once. Queued Reload
+and History commands still need their own capture and acceptance work.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

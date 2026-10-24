@@ -3,7 +3,7 @@
   "chromium_commit": "b859317bf11f6be47f9b7799ec690a0a42a1fb33",
   "cef_commit": "14c5a089e8452874cb1a556dc3fde26ed2d87723",
   "selected_units": {
-    "count": 148,
+    "count": 153,
     "io": [
       "DownloadResponseHandlerTest.BlobRequestRejectsManualRedirect",
       "DownloadResponseHandlerTest.BlobRequestRejectsRedirect",
@@ -39,6 +39,11 @@
       "DeferredNavigationReceiptTest.ClosedRendererIngressPreservesEarlierRequestAndPendingEntry",
       "DeferredNavigationReceiptTest.ClosedSaveInfoDoesNotQueryDirectoriesCreateFoldersOrShowPicker",
       "DeferredNavigationReceiptTest.ContextOptInDuringIdAllocationCannotInventAnItemOwner",
+      "DeferredNavigationReceiptTest.ControllerQueueAfterClosingCannotReplaceAnAcceptedRequest",
+      "DeferredNavigationReceiptTest.ControllerQueueCannotRetargetChildOrForeignContents",
+      "DeferredNavigationReceiptTest.ControllerQueueKeepsOriginalOwnerAcrossPrimaryRfhReplacement",
+      "DeferredNavigationReceiptTest.ControllerQueueLegacyAbsenceCannotAdoptLaterFactory",
+      "DeferredNavigationReceiptTest.ControllerQueuePostCopiesReachControllerOnceAfterClosing",
       "DeferredNavigationReceiptTest.ControllerRewriteClosingRetainsItsAlreadyAuthorizedReceipt",
       "DeferredNavigationReceiptTest.DeletingCommandTargetFrameSettlesOnlyItsOriginalReceipt",
       "DeferredNavigationReceiptTest.DenyAfterAbortCloseAndBeginKeepsFinalLease",
@@ -158,10 +163,10 @@
     ],
     "all_once_successful": true,
     "io_binary_sha256": "2e8e6ed6d76159e2114d41000ddf30344aae6f8c1a553ff2e08074bb7d062eec",
-    "state_binary_sha256": "cc071f94ed060f8712ff1011bf91305ead399451f729303c6a9c054d3fc037ad"
+    "state_binary_sha256": "c0ea862715ac7051a0cd8afd2dbc27ede93ca8f60584c6e3b8365782dae57678"
   },
   "native": {
-    "count": 41,
+    "count": 42,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -203,10 +208,11 @@
       "EchoDownloadBridge.SavePageOnlyHtmlCopiesNetworkDocumentAfterClosing",
       "EchoDownloadBridge.SavePageNetworkFailureCannotReportPhantomCompletion",
       "EchoDownloadBridge.InterruptedKnownItemResumesAfterUnregisterAndBlank",
-      "EchoDownloadBridge.InterruptedKnownItemCancelsAfterUnregisterAndBlank"
+      "EchoDownloadBridge.InterruptedKnownItemCancelsAfterUnregisterAndBlank",
+      "EchoDownloadBridge.MainFrameLoadUrlKeepsAdmissionAcrossNavigationLockAndClosing"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "2d08a5837ad46982fb96edbd0de9a8b1320cccb91601750f2918cdbc7cac6e9f",
+    "test_source_sha256": "e36839d4d49a00d12325a6c168add5253ec834d7adc4b28166bbe4ee412ee09f",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -252,7 +258,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "192383c395c0abefc91f55706f95f3e99a1605b57b43ee99b909efdda061b744",
+  "native_xml_sha256": "6eb316979d279d35fc9254f927714faa80e9c45571f2b70bd2e3d55834bb7893",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -307,7 +313,11 @@
     "interrupted_controls": "same 1 MiB native item resumes with nonzero Range/If-Range after unregister and blanking, without new admission or association; Cancel now accepts INTERRUPTED as well as IN_PROGRESS and produces actual Canceled notification plus partial-file deletion",
     "interrupted_controls_red": "real-socket Resume and 39 prior native cases passed; Cancel alone failed its shared-UI-runner notification barrier and retained 64 KiB; entire native test source unchanged after DoCancel fix",
     "interrupted_controls_scope": "macOS Alloy loopback HTTP truncation with source browser alive at about:blank; source destruction, other failure classes, multiple profiles and other platforms remain unqualified; no full-fence or production adoption claim",
-    "interrupted_fixture_corrections": "initial context-scheme fixture could not serve Chromium no-renderer resume; replaced by real socket HTTP. Failure teardown detaches temp directory on FILE, and server continuations use CefCreateClosureTask. Failed artifacts retained."
+    "interrupted_fixture_corrections": "initial context-scheme fixture could not serve Chromium no-renderer resume; replaced by real socket HTTP. Failure teardown detaches temp directory on FILE, and server continuations use CefCreateClosureTask. Failed artifacts retained.",
+    "queued_controller": "LoadURL reserves before real CEF NavigationLock; original opaque admission follows queued parameter copies after Closing into genuine item association and exact 1 MiB output",
+    "queued_controller_red": "native test failed early-capture assertion on old source; identical native source passes after production fix; existing 41 TEST bodies retained, shared LoadURL fixture timing distinguishes before-Closing admission from a genuinely later API request",
+    "queued_controller_identity": "five added C++ regressions: POST/copy/one-shot consumption, child/foreign owner rejection, primary RFH replacement within same root, frozen legacy absence and no pending-navigation mutation on late rejection; renderer transfers remain exact-RFH-bound",
+    "queued_controller_scope": "normal registered macOS Alloy main-frame LoadURL only; unregistered legacy route unchanged; queued Reload/History and complete public fence remain unqualified"
   },
   "native_save_page": {
     "formats": {
@@ -319,7 +329,7 @@
       },
       "MHTML": {
         "size": 894,
-        "sha256": "704ff061a803076b4ad4966ddc4181edec92a486e728078dadbce0be55728298",
+        "sha256": "d5c2bb917998d1b82c506cb2591af8b0d93b8070a2145f58f9636c15cf8d6bcf",
         "verified": true,
         "verification": "live DOM/title markers"
       }
@@ -342,5 +352,16 @@
     "cancel_verified_after_same_ui_runner_effect_barrier": true,
     "cancel_directory_empty_after_exit": true,
     "red_cancel_left_partial_bytes": 65536
+  },
+  "native_queued_controller": {
+    "output": {
+      "size": 1048576,
+      "sha256": "4eb483f4132666193f7e96d15da374713d0cd1c835af9634ce0d4b2f257ac161",
+      "expected_sha256": "4eb483f4132666193f7e96d15da374713d0cd1c835af9634ce0d4b2f257ac161"
+    },
+    "navigation_lock_and_closing_observed": true,
+    "original_token_association": true,
+    "native_source_unchanged_from_red": true,
+    "scope": "normal registered macOS Alloy main-frame LoadURL; queued Reload and History remain open"
   }
 }
