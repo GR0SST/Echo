@@ -18,6 +18,7 @@ mod native_requests;
 pub use retirement::{DownloadRetirementPreparation, DownloadRetirementStatus};
 pub use downloads::{DownloadControl, DownloadDestination, DownloadError, DownloadEvent, DownloadInfo, DownloadOwner, DownloadPhase, DownloadProvenance, DownloadSnapshot, DownloadToken};
 mod audio;
+mod audio_clock;
 mod editing;
 mod boosts;
 mod boost_picker;
@@ -511,6 +512,11 @@ impl Engine {
             }
             SKIPS.set(0);
         }
+        RUNTIME.with(|slot| {
+            if let Some(runtime) = slot.borrow().as_ref() {
+                if let Some(audio) = &runtime.audio { audio.poll(); }
+            }
+        });
         shutdown::pump_once();
     }
 
