@@ -2622,7 +2622,7 @@ impl BrowserWindow {
         let painted_space = self.browser.space().id;
         let painted_profile = self.browser.active_user_profile_id();
         let key = id.get() as usize;
-        let private = self.theme_is_dark();
+        let private = self.theme_uses_light_ink_for(self.browser.space().id);
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
         let renaming = self.tab_rename.as_ref().is_some_and(|editor| editor.tab == id);
         let reserve_close = !segmented && !tab.muted && !renaming;
@@ -2677,7 +2677,7 @@ impl BrowserWindow {
             .when(segmented, |this| this.px_1().gap_0().h(px(36.)))
             .rounded(px(SIDEBAR_ROW_RADIUS))
             .when(active, |this| this.bg(self.theme_tab_selection_for(painted_space)))
-            .when(active && segmented && self.theme_is_dark_for(painted_space), |this| this.bg(hsla(0.,0.,1.,0.2)))
+            .when(active && segmented && self.theme_uses_light_ink_for(painted_space), |this| this.bg(hsla(0.,0.,1.,0.2)))
             .text_color(self.theme_foreground_for(painted_space))
             .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
@@ -2855,7 +2855,7 @@ impl BrowserWindow {
         let url = self.peek_child.and_then(|child| child.read(cx).ok().and_then(|view|
             view.browser.active_tab().map(|tab| crate::transient::lookup_host(&tab.url)))).unwrap_or(url);
         let private = self.browser.is_private();
-        let dark = self.theme_is_dark();
+        let dark = self.theme_uses_light_ink_for(self.browser.space().id);
         let blank = self.browser.is_blank();
         let (pages, offset) = pager_pages.unwrap_or_else(|| (vec![if blank { self.render_blank_tabs(cx).into_any_element() } else if private { self.render_private_tabs(cx).into_any_element() } else { self.render_space_page(self.browser.active_space, cx).into_any_element() }], 0.));
         let browser = cx.entity().downgrade();
@@ -3158,7 +3158,7 @@ impl BrowserWindow {
 
     fn render_space_page(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let space = &self.browser.spaces[index];
-        let ink = if self.theme_is_dark_for(space.id) {1.} else {0.};
+        let ink = if self.theme_uses_light_ink_for(space.id) {1.} else {0.};
         let space_id = space.id;
         let hue = space.accent_hue() / 360.0;
         let current = index == self.browser.active_space;
@@ -3312,7 +3312,7 @@ impl BrowserWindow {
     }
 
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let ink = if self.theme_is_dark() {1.} else {0.};
+        let ink = if self.theme_uses_light_ink_for(self.browser.space().id) {1.} else {0.};
         // Layout the stationary marks first, then paint the active dot between
         // their actual centers. The reference moves one dot along the rail.
         let dot_centers = Rc::new(RefCell::new(Vec::new()));

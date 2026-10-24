@@ -9,6 +9,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 pub(crate) struct Surface {
     pub theme: SpaceTheme,
     pub dark: bool,
+    pub picked: bool,
 }
 impl Surface {
     pub(crate) fn sample(&self, x: f32, y: f32) -> ThemeColor {
@@ -18,6 +19,13 @@ impl Surface {
         let a = position.floor() as usize;
         let b = position.ceil() as usize;
         let color = mix(colors[a], colors[b], position.fract());
+        if self.picked {
+            // Reference intensity fades the pigment toward a pale neutral in
+            // both appearances. Dark mode does not multiply the chosen RGB.
+            let (neutral, strength, exponent) = if self.dark { (0.85, 0.58, 0.65) } else { (0.84, 0.75, 1.4) };
+            return mix(ThemeColor { red: neutral, green: neutral, blue: neutral },
+                color, 0.12 + self.theme.intensity.powf(exponent) * strength);
+        }
         // Keep chroma in the pigment, with intensity controlling its mix into
         // the appearance's neutral ground, independently of texture strength.
         let (h, s, v) = color.hsv();
@@ -26,7 +34,7 @@ impl Surface {
             if self.dark { s } else { s * 0.22 },
             if self.dark { v * 0.34 } else { v * 0.65 + 0.3 },
         );
-        let neutral = if self.dark { 0.035 } else { 0.91 };
+        let neutral = if self.dark { 0.13 } else { 0.91 };
         mix(
             ThemeColor {
                 red: neutral,
@@ -148,32 +156,41 @@ pub(crate) fn rounded_theme_mask(bounds: Bounds<gpui::Pixels>, radius: f32, scal
 impl BrowserWindow {
     /// Arc keeps an empty document panel over the continuous Space field.
     pub(crate) fn theme_empty_panel_fill(&self) -> gpui::Hsla {
-        gpui::hsla(0., 0., 1., if self.theme_is_dark() { 0.10 } else { 2. / 3. })
+        // The masked field is opaque; compensate for the native window
+        // material already included in Arc's underlying translucent field.
+        if self.theme_is_dark() { gpui::hsla(0., 0., 0.5, 0.21) }
+        else { gpui::hsla(0., 0., 1., 0.70) }
     }
     /// Keep the shadow outside the translucent panel. Nested outlines leave
     /// its interior untouched, including the six-pixel corner cutouts.
     pub(crate) fn theme_empty_panel_shadow(&self) -> AnyElement {
-        canvas(|_, _, _| (), |bounds, _, window, _| {
+        self.theme_surface_shadow(crate::pages::CONTENT_CORNER_RADIUS)
+    }
+    pub(crate) fn theme_surface_shadow(&self, radius: f32) -> AnyElement {
+        canvas(|_, _, _| (), move |bounds, _, window, _| {
             for distance in (1..=8).rev() {
                 let spread = distance as f32;
                 let alpha = 0.05 * (-0.5 * ((spread - 0.5) / 1.5).powi(2)).exp();
                 window.paint_quad(gpui::outline(bounds.dilate(px(spread)),
                     gpui::hsla(0., 0., 0., alpha), Default::default())
-                    .corner_radii(px(crate::pages::CONTENT_CORNER_RADIUS + spread)));
+                    .corner_radii(px(radius + spread)));
             }
         }).size_full().into_any_element()
     }
     pub(crate) fn theme_tab_selection_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
-        gpui::hsla(0., 0., 1., if self.theme_is_dark_for(space) { 0.16 } else { 0.55 })
+        gpui::hsla(0., 0., 1., if self.theme_uses_light_ink_for(space) { 0.16 } else { 0.80 })
     }
     pub(crate) fn command_bar_selection(&self) -> gpui::Hsla {
-        gpui::hsla(0., 0., 1., 0.10)
+        let surface = self.theme_surface_for(self.browser.space());
+        if !surface.picked { return gpui::hsla(0., 0., 1., 0.10); }
+        let color = surface.theme.colors[0];
+        gpui::Rgba { r: color.red, g: color.green, b: color.blue, a: 0.65 }.into()
     }
     pub(crate) fn command_bar_panel_fill(&self, blurred: bool) -> gpui::Hsla {
         gpui::hsla(self.accent(), 0.08, 0.16, if blurred { 0.22 } else { 1. })
     }
     pub(crate) fn theme_colors(&self) -> ChromeColors {
-        let dark = self.theme_is_dark();
+        let dark = self.theme_uses_light_ink_for(self.browser.space().id);
         let ink = if dark { 1. } else { 0. };
         let foreground = self.theme_foreground_for(self.browser.space().id);
         ChromeColors {
@@ -205,34 +222,38 @@ impl BrowserWindow {
         }
     }
     pub(crate) fn theme_foreground_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
-        let dark = self.theme_is_dark_for(space);
+        let dark = self.theme_uses_light_ink_for(space);
         let hue = self.browser.spaces.iter().find(|s| s.id == space).map_or(self.accent(), |s| s.accent_hue() / 360.);
         gpui::hsla(hue, if dark { 0.12 } else { 0. }, if dark { 0.92 } else { 0.1 }, 1.)
     }
-    pub(crate) fn theme_surface(&self, translucent: bool) -> AnyElement {
-        use crate::sidebar_pages::SidebarPage;
-        let surface = |space: &browser_core::Space| {
-            let mut theme = self
+    fn theme_surface_for(&self, space: &browser_core::Space) -> Surface {
+        let mut theme = self
+            .theme_editor
+            .as_ref()
+            .filter(|e| e.space == space.id)
+            .map_or_else(|| space.theme(), |e| e.draft.clone());
+        let picked = space.theme.is_some() || self.theme_editor.as_ref()
+            .is_some_and(|e| e.space == space.id && e.picked);
+        if space.theme.is_none()
+            && !self
                 .theme_editor
                 .as_ref()
-                .filter(|e| e.space == space.id)
-                .map_or_else(|| space.theme(), |e| e.draft.clone());
-            if space.theme.is_none()
-                && !self
-                    .theme_editor
-                    .as_ref()
-                    .is_some_and(|e| e.space == space.id && e.picked)
-            {
-                theme.intensity = 0.2;
-                theme.noise = 0.12;
-            }
-            let dark = match theme.appearance {
-                ThemeAppearance::Automatic => self.theme_system_dark,
-                ThemeAppearance::Light => false,
-                ThemeAppearance::Dark => true,
-            };
-            Surface { theme, dark }
-        };
+                .is_some_and(|e| e.space == space.id && e.picked)
+        {
+            theme.intensity = 0.2;
+            theme.noise = 0.12;
+        }
+        let dark = self.theme_is_dark_for(space.id);
+        Surface { theme, dark, picked }
+    }
+    pub(crate) fn theme_uses_light_ink_for(&self, space: browser_core::SpaceId) -> bool {
+        let Some(target) = self.browser.spaces.iter().find(|s| s.id == space) else { return self.theme_is_dark_for(space); };
+        let sample = self.theme_surface_for(target).sample(0.25, 0.5);
+        sample.red * 0.2126 + sample.green * 0.7152 + sample.blue * 0.0722 < 0.5
+    }
+    pub(crate) fn theme_surface(&self, translucent: bool) -> AnyElement {
+        use crate::sidebar_pages::SidebarPage;
+        let surface = |space: &browser_core::Space| self.theme_surface_for(space);
         let fallback = surface(self.browser.space());
         let surfaces: Vec<_> = if self.browser.is_blank() || self.browser.is_private() {
             self.browser.spaces.iter().map(surface).collect()
@@ -256,6 +277,7 @@ impl BrowserWindow {
                         .map(|draft| Surface {
                             theme: SpaceTheme::from_hue(draft.hue),
                             dark: false,
+                            picked: false,
                         })
                         .unwrap_or_else(|| fallback.clone()),
                     SidebarPage::Library => fallback.clone(),
@@ -326,15 +348,30 @@ mod tests {
         let mut s = Surface {
             theme: SpaceTheme::from_hue(0.),
             dark: false,
+            picked: true,
         };
         s.theme.colors.push(ThemeColor::from_hsv(120., 0.8, 1.));
         s.theme.colors.push(ThemeColor::from_hsv(240., 0.8, 1.));
         assert_ne!(s.sample(0., 0.), s.sample(1., 1.));
         let light = s.sample(0., 0.);
         s.dark = true;
-        assert!(s.sample(0., 0.).red < light.red);
+        assert_ne!(s.sample(0., 0.), light);
         s.theme.intensity = 0.;
-        assert_eq!(s.sample(0., 0.), s.sample(1., 1.));
+        assert_ne!(s.sample(0., 0.), s.sample(1., 1.));
+        assert!(s.sample(0., 0.).red > 0.7);
+    }
+    #[test]
+    fn picked_dark_themes_keep_bright_pigments_and_unpicked_chrome_stays_dark() {
+        let mut s = Surface { theme: SpaceTheme::from_hue(280.), dark: true, picked: true };
+        s.theme.colors = vec![ThemeColor { red: 0.651, green: 0.447, blue: 0.616 }];
+        let picked = s.sample(0.5, 0.5);
+        assert!(picked.red > 0.6 && picked.green > 0.5 && picked.blue > 0.6);
+        s.theme.intensity = 0.;
+        let faint = s.sample(0.5, 0.5);
+        assert!(faint.hsv().1 < picked.hsv().1);
+        s.picked = false;
+        s.theme.intensity = 0.2;
+        assert!((0.12..0.2).contains(&s.sample(0.5, 0.5).red));
     }
     #[test]
     fn textures_are_deterministic_and_distinct() {

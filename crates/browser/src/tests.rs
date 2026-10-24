@@ -8092,12 +8092,12 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
             let input=w.command_bar.as_ref().unwrap();
             assert_eq!(input.input.read(cx).text(),"new");
             assert_eq!(input.selected,1);
-            assert!(w.theme_tab_selection_for(w.browser.space().id).a<0.6);
+            assert!(w.theme_tab_selection_for(w.browser.space().id).a<1.);
             assert_eq!(w.theme_tab_selection_for(w.browser.space().id).l,1.);
             assert_ne!(w.theme_is_dark(),w.theme_is_dark_for(other));
-            assert_ne!(w.theme_foreground_for(w.browser.space().id),w.theme_foreground_for(other));
-            assert!(w.command_bar_selection().a<0.2);
-            assert_eq!(w.command_bar_selection().s,0.);
+            assert_eq!(w.theme_foreground_for(w.browser.space().id),w.theme_foreground_for(other));
+            assert!(w.command_bar_selection().a<1.);
+            assert!((w.command_bar_selection().h - w.accent()).abs() < 0.001);
             assert_eq!(w.command_bar_panel_fill(false).a,1.);
             assert!(w.command_bar_panel_fill(true).a<0.3);
         });
@@ -8700,4 +8700,34 @@ fn closing_a_peek_owner_retires_both_native_page_hosts(cx: &mut TestAppContext) 
     // Retaining the child Entity must not retain its native browser host.
     assert!(child.read_with(cx, |view, _| view.peek_owner.is_some()));
     assert!(fake.0.borrow().forks.last().unwrap().take_calls().iter().any(|call| matches!(call, Call::Close(_))));
+}
+
+#[gpui::test]
+fn dark_appearance_uses_dark_ink_for_bright_pigments_and_light_ink_for_black(cx: &mut TestAppContext) {
+    use browser_core::themes::{SpaceTheme, ThemeAppearance, ThemeColor};
+    let (view, cx) = open(cx);
+    view.update(cx, |w, cx| {
+        let id = w.browser.space().id;
+        let mut theme = SpaceTheme::from_hue(280.);
+        theme.appearance = ThemeAppearance::Dark;
+        theme.colors = vec![ThemeColor { red: 0.651, green: 0.447, blue: 0.616 }];
+        w.edit_profile(|b| { b.update_space_theme(id, theme); });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.theme_is_dark());
+        assert!(w.theme_colors().foreground.l < 0.2);
+    });
+    view.update(cx, |w, cx| {
+        let id = w.browser.space().id;
+        let mut theme = w.browser.space().theme();
+        theme.colors = vec![ThemeColor { red: 0., green: 0., blue: 0. }];
+        theme.intensity = 1.;
+        w.edit_profile(|b| { b.update_space_theme(id, theme); });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| assert!(w.theme_colors().foreground.l > 0.9));
+
 }

@@ -795,7 +795,7 @@ impl BrowserWindow {
                         if dark { 0.20 } else { 0.91 },
                         if e.backdrop { 0.35 } else { 0.98 },
                     ))
-                    .shadow_lg()
+                    .child(div().absolute().inset_0().child(self.theme_surface_shadow(16.)))
                     .text_color(ink)
                     .p(px(7.))
                     .flex()
