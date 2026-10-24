@@ -3743,6 +3743,7 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
+        self.ensure_split_window_extent(window);
         self.sync_library_geometry(window.viewport_size(), cx);
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);

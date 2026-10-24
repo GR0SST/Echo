@@ -1206,7 +1206,7 @@ in `/tmp/echo-download-destination-search-native-20261024.md`.
 
 Inspected the installed Arc in a dedicated `Echo Split Reference` test Space,
 with a fixed window frame `{100,100,1000,760}`. Only pages opened for this
-inspection were split. Reference captures are in `/tmp/parity/split-view/`.
+inspection were split. Reference captures are retained in `target/parity/split-view/` (originally `/tmp/parity/split-view/`).
 The installed shortcut is customized to Shift+Command+E (the View menu's
 AX command character is `E`, modifiers `1`); Control+Shift+= did not invoke it.
 
@@ -1235,8 +1235,13 @@ still visual acceptance work; these observations do not establish full parity.
 Additional captures: `arc-vertical-menu.png` confirms stacked menu order
 Move Up, Move Down, Add Top Split, Add Bottom Split (with the same separator,
 Separate/Convert/Share grouping). Adding a fourth stacked pane expands Arc's
-window beyond the requested 760 px height to retain 220 px pane frames; Echo's
-constrained-window fallback does not yet reproduce that window behavior.
+window beyond the requested 760 px height to retain 220 px pane frames. Echo
+now grows its root through GPUI's portable resize API. Native four-pane checks
+produce 1160×760 horizontally (240 px sidebar) and 1000×930 vertically, retaining
+220 px frames and 10 px gaps. Evidence: `echo-four-horizontal.png`,
+`echo-four-vertical.png`, `window-extent-native.log`; six GPUI cases exercise
+2–4 panes in both axes without replacing loaded pages. The narrow draft
+Command Bar still clips (`echo-four-empty.png`) and remains separate work.
 `arc-drop-preview.png` shows an outlined theme-filled half-pane and clipping
 of the existing page; `arc-drop-result.png` shows the committed split.
 

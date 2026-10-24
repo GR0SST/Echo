@@ -48,6 +48,24 @@ impl SplitDraft {
 }
 
 impl BrowserWindow {
+    /// Arc grows the root when an added pane cannot retain its 220 px frame.
+    /// Use GPUI's portable window API; native pages keep their existing views.
+    pub(crate) fn ensure_split_window_extent(&self, window: &mut gpui::Window) {
+        if !self.page_content_visible() || window.is_fullscreen() { return; }
+        let Some(split) = self.browser.active_split() else { return; };
+        let extent = crate::split_layout::minimum_extent(split.panes.len()) as f32;
+        let current = window.bounds().size;
+        let mut wanted = current;
+        if split.axis == Axis::Horizontal {
+            let sidebar = self.sidebar_amount();
+            wanted.width = wanted.width.max(px(extent + self.sidebar_width() * sidebar
+                + crate::pages::CONTENT_INSET * (2. - sidebar)));
+        } else {
+            wanted.height = wanted.height.max(px(extent + 2. * crate::pages::CONTENT_INSET));
+        }
+        if wanted != current { window.resize(wanted); }
+    }
+
     pub(crate) fn expand_current_split(&mut self, cx: &mut Context<Self>) {
         if self.split_draft.is_some() { return; }
         let Some(split) = self.browser.active_split() else { return; };
@@ -325,7 +343,7 @@ impl BrowserWindow {
                 if available <= 0. { return; }
                 let before: f32 = drag.weights[..drag.index].iter().sum();
                 let pair = available * (drag.weights[drag.index] + drag.weights[drag.index + 1]);
-                let minimum = 220_f32.min(pair / 2.);
+                let minimum = (crate::split_layout::MIN_PANE_EXTENT as f32).min(pair / 2.);
                 let left = (pointer - drag.offset.get() - before * available - crate::split_layout::GAP as f32 * drag.index as f32).clamp(minimum, pair - minimum);
                 let anchor = split.anchor;
                 let mut weights = drag.weights.clone();
