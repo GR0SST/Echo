@@ -58,7 +58,7 @@ pub(crate) fn layout(card: Bounds, axis: Axis, weights: &[f32], split: bool) -> 
         let inset_y = if split { BORDER.min(frame.height / 2.) } else { 0. };
         let inner = Bounds { x: frame.x + inset_x, y: frame.y + inset_y,
             width: (frame.width - 2. * inset_x).max(0.), height: (frame.height - 2. * inset_y).max(0.) };
-        let header_height = if split { HEADER_HEIGHT.min(inner.height) } else { 0. };
+        let header_height = if split { (HEADER_HEIGHT - BORDER).min(inner.height) } else { 0. };
         PaneBounds {
             frame,
             header: Bounds { height: header_height, ..inner },
@@ -77,8 +77,8 @@ mod tests {
         let panes = layout(card, Axis::Horizontal, &[0.25, 0.75], true);
         assert_eq!(panes[0].frame.width, 233.5);
         assert_eq!(panes[1].frame.x, 491.5);
-        assert_eq!(panes[0].page.y, 41.);
-        assert_eq!(panes[0].page.height, 750.);
+        assert_eq!(panes[0].page.y, 40.);
+        assert_eq!(panes[0].page.height, 751.);
         assert_eq!(panes[1].frame.x + panes[1].frame.width, card.x + card.width);
         assert_eq!(layout(card, Axis::Horizontal, &[1.], false)[0].page, card);
     }

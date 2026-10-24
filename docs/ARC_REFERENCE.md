@@ -1292,3 +1292,28 @@ The copied Pinned/Favorite source remains intact, while ordinary tabs reuse thei
 identity and engine. Four GPUI tests cover committing, cancellation and protected
 originals. The retained half's rounded clipping, the floating drag card and exact
 activation thresholds/animation remain different; this is partial parity.
+
+
+## Joined split sidebar item — 2026-10-24
+
+Owned-window Arc captures `guard-session/arc-row-selected-idle.png` and
+`arc-row-selected-hover.png` show a 36 px joined row with equal 28 px inner
+pane targets. Both selected segments have the same treatment regardless of
+which pane owns page focus. Hover reveals a close button in each segment and
+shortens its title without resizing the segment. An inactive group retains
+hairline separators. The ordinary whole-row close target is absent from an
+unnamed split item; Archive Item in its context menu still archives the group.
+Echo now follows this structure, with a regression closing an inactive pane
+without switching focus or replacing survivor pages. Dark selected fill was
+measured against the captured Space; exact light-theme and Favorite-group
+presentation remain partial.
+
+
+Pane header placement was checked in `guard-session/arc-pane-top-hover.png`
+and `arc-pane-controls-hover.png`. The current Arc exposes a Split View Options
+vector button beside Close; hovering the inactive header reveals Reload and
+Options. No additional top-center ellipsis appeared in this inspected flow.
+Echo's outer header now measures 32 px including its contour (previously 33),
+and its address group centers over the complete pane instead of the unequal
+left/right controls. Inactive Reload/Options reveal on header hover. Header
+material and narrow active-pane address truncation still need comparison.

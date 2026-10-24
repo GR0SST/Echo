@@ -223,16 +223,18 @@ impl BrowserWindow {
         let painted_profile = self.browser.active_user_profile_id();
         if let Some(split) = self.browser.split_for(tab.id).filter(|split| split.title.is_none()) {
             let count = split.panes.len();
-            return div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-split-{anchor}"))())).flex_1().min_w_0().flex().items_center().children(split.panes.iter().enumerate().filter_map(|(index, id)| {
+            let selected = self.browser.active_split().is_some_and(|active| active.id == split.id);
+            let dark = self.theme_is_dark_for(painted_space);
+            let hovered = self.hovered_row == Some(self.browser.item_anchor(tab.id));
+            return div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-split-{anchor}"))())).flex_1().min_w_0().flex().items_center().gap(px(4.)).children(split.panes.iter().enumerate().filter_map(|(index, id)| {
                 let tab = self.browser.all_tabs().find(|tab| tab.id == *id)?;
                 let id = *id;
-                let active = self.browser.space().active_tab == Some(id);
-                let close_visible = split.panes.last() == Some(&id) && self.hovered_row == Some(self.browser.item_anchor(id));
+                let close_visible = hovered;
                 Some(div().id(("sidebar-pane", id.get() as usize)).debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-{}", id.get()))()))
-                    .relative().flex_1().flex_basis(px(0.)).min_w_0().h(px(30.)).pl(px(7.)).pr(px(4.)).rounded(px(8.)).flex().items_center().gap(px(11.))
+                    .relative().flex_1().flex_basis(px(0.)).min_w_0().h(px(28.)).pl(px(7.)).pr(px(4.)).rounded(px(8.)).flex().items_center().gap(px(11.))
                     .overflow_hidden()
-                    .when(active, |this| this.bg(hsla(0., 0., 1., 0.65)))
-                    .hover(|style| style.bg(hsla(0., 0., 1., 0.45)))
+                    .when(selected, |this| this.bg(hsla(0., 0., 1., if dark { 0.075 } else { 0.12 })))
+                    .hover(move |style| style.bg(hsla(0., 0., 1., if dark { 0.12 } else { 0.2 })))
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                         cx.stop_propagation();
                         if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
@@ -244,10 +246,19 @@ impl BrowserWindow {
                         if event.click_count() == 2 { this.open_command_bar(Target::RenameTab(id), &this.browser.item_title(id), window, cx); }
                         cx.notify();
                     }))
-                    // Panes are separated by a hairline, not by individual pills.
-                    .when(index + 1 < count, |this| this.child(div().absolute().right_0().top(px(6.)).h(px(18.)).w(px(1.)).bg(hsla(0., 0., 0., 0.15))))
+                    // The inactive item has hairlines; the selected item has equal pills.
+                    .when(!selected && index + 1 < count, |this| this.child(div().absolute().right_0().top(px(6.)).h(px(18.)).w(px(1.)).bg(hsla(0., 0., 0., 0.15))))
                     .child(self.render_favicon(tab, hue))
-                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-title-{}", id.get()))())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(24.))).overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(tab.title.clone()))))
+                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-title-{}", id.get()))())).flex_1().min_w_0().when(close_visible, |this| this.mr(px(22.))).overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
+                    .when(close_visible, |this| this.child(div().id(("sidebar-pane-close",id.get() as usize))
+                        .debug_selector(|| self.sidebar_debug_name((move || format!("sidebar-pane-close-{}",id.get()))()))
+                        .absolute().right(px(2.)).top(px(5.)).size(px(18.)).flex().items_center().justify_center().rounded(px(4.))
+                        .hover(|style| style.bg(hsla(0.,0.,1.,0.1)))
+                        .on_click(cx.listener(move |this,_,_,cx| {
+                            cx.stop_propagation();
+                            if !this.prepare_sidebar_target(painted_space,painted_profile) { return; }
+                            this.close_split_pane(id,cx);
+                        })).child(crate::icons::control_sized(crate::icons::Icon::Close,14.)))))
             })).into_any_element();
         }
         div().flex_1().min_w_0().flex().items_center().gap(px(9.))
@@ -265,6 +276,7 @@ impl BrowserWindow {
                 let id = *id;
                 let key = id.get() as usize;
                 let active = self.browser.space().active_tab == Some(id);
+                let header_group = gpui::SharedString::from(format!("pane-header-{key}"));
                 let mut pane = div().id(("pane", key)).debug_selector(|| self.sidebar_debug_name((move || format!("split-pane-{key}"))()))
                     .min_w_0().min_h_0().flex_basis(px(0.)).flex().flex_col()
                     .relative()
@@ -277,7 +289,7 @@ impl BrowserWindow {
                     .child(div().id(("pane-header", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-header-{key}"))()))
                         .mx(px(crate::split_layout::BORDER as f32)).mt(px(crate::split_layout::BORDER as f32))
                         .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
-                        .h(px(crate::split_layout::HEADER_HEIGHT as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs()
+                        .h(px((crate::split_layout::HEADER_HEIGHT - crate::split_layout::BORDER) as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs().relative().group(header_group.clone())
                         .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -292,10 +304,15 @@ impl BrowserWindow {
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_back(id); } })))
                         .child(div().id(("pane-forward", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Forward))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_forward(id); } })))
-                        .child(div().id(("pane-reload", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Reload))
+                        .child(div().id(("pane-reload", key)).px_1().rounded_sm()
+                            .when(!active, |this| this.invisible().group_hover(header_group.clone(), |style| style.visible())).child(crate::icons::control(crate::icons::Icon::Reload))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().reload(id); } })))
                         .child(div().id(("pane-address", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-address-{key}"))()))
-                            .flex_1().min_w_0().text_center().truncate().child(if tab.url == EMPTY_PANE_URL { "Search or Enter URL…".into() } else { crate::window::display_url(&tab.url) })
+                            .absolute().left(px(if active { 94. } else { 56. })).right(px(if active { 94. } else { 56. })).top_0().h_full()
+                            .when(!active, |this| this.group_hover(header_group.clone(), |style| style.left(px(94.)).right(px(94.))))
+                            .flex().items_center().justify_center().gap(px(6.)).text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
+                            .when(tab.url != EMPTY_PANE_URL, |this| this.child(crate::icons::control_sized(crate::icons::Icon::Link,14.)))
+                            .child(div().min_w_0().truncate().child(if tab.url == EMPTY_PANE_URL { "Search…".into() } else { crate::window::display_url(&tab.url) }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 if this.page_content_visible() {
@@ -306,7 +323,8 @@ impl BrowserWindow {
                                 let url = this.browser.active_tab().unwrap().url.clone();
                                 this.open_command_bar(Target::Tab(id), &url, window, cx);
                             })))
-                        .child(div().id(("pane-menu", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-menu-{key}"))())).px_1().rounded_sm()
+                        .child(div().id(("pane-menu", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-menu-{key}"))())).ml_auto().px_1().rounded_sm()
+                            .when(!active, |this| this.invisible().group_hover(header_group.clone(), |style| style.visible()))
                             .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child(crate::icons::control(crate::icons::Icon::Split)))
                         .child(div().id(("pane-close", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-close-{key}"))())).px_1().rounded_sm()

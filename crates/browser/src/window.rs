@@ -2575,9 +2575,10 @@ impl BrowserWindow {
                 else if this.hovered_row == Some(id) { this.hovered_row = None; }
                 cx.notify();
             }))
-            .when(segmented, |this| this.px_1().gap_0())
+            .when(segmented, |this| this.px_1().gap_0().h(px(36.)))
             .rounded(px(SIDEBAR_ROW_RADIUS))
             .when(active, |this| this.bg(self.theme_tab_selection_for(painted_space)))
+            .when(active && segmented && self.theme_is_dark_for(painted_space), |this| this.bg(hsla(0.,0.,1.,0.2)))
             .text_color(self.theme_foreground_for(painted_space))
             .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
@@ -2597,7 +2598,7 @@ impl BrowserWindow {
             }))
             .child(self.render_sidebar_item_contents(tab, hue, cx))
             .when(tab.muted, |this| this.child(self.render_mute_control(tab, false, cx)))
-            .child(
+            .when(!segmented, |this| this.child(
                 div()
                     .id(("close", key))
                     .debug_selector(|| self.sidebar_debug_name((|| format!("close-{key}"))()))
@@ -2608,7 +2609,7 @@ impl BrowserWindow {
                     .text_color(hsla(0.0, 0.0, 0.0, 0.5))
                     .when(private, |this| this.text_color(hsla(0., 0., 1., 0.6)))
                     .invisible()
-                    .when(!renaming, |this| this.group_hover(group, |s| s.visible()))
+                    .when(!renaming && !segmented, |this| this.group_hover(group, |s| s.visible()))
                     .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.08)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -2619,7 +2620,7 @@ impl BrowserWindow {
                         Section::Pinned => crate::icons::Icon::Minus,
                         Section::Today => crate::icons::Icon::Close,
                     }, if !segmented && matches!(section, Section::Today) { 22. } else { 18. })),
-            )
+            ))
     }
 
     pub(crate) fn render_favorite(&self, tab: &Tab, width: f32, cx: &mut Context<Self>) -> impl IntoElement {

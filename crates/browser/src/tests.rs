@@ -3181,7 +3181,8 @@ fn closing_and_restoring_a_split_closes_and_recreates_all_its_engine_views(cx: &
     let (view, cx, fake) = open_split_pages(cx, 2);
     fake.take_calls();
     let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor.get());
-    click(cx, test_selector(format!("close-{anchor}")));
+    right_click(cx, test_selector(format!("tab-{anchor}")));
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Close(1)) && calls.contains(&Call::Close(2)));
     assert_eq!(view.read_with(cx, |w, _| w.browser.archive.len()), 1);
@@ -3357,7 +3358,7 @@ fn expanding_a_split_from_the_menu_and_command_bar_keeps_panes_loaded(cx: &mut T
         for (_, bounds) in surfaces.iter().filter(|(id, _)| id.get() != 2) {
             let (large, small) = if vertical { (active.height, bounds.height) } else { (active.width, bounds.width) };
             assert!(large >= small, "active pane should expand: {surfaces:?}");
-            assert!((small - if vertical { 220. - crate::split_layout::HEADER_HEIGHT - 2. * crate::split_layout::BORDER } else { 220. - 2. * crate::split_layout::BORDER }).abs() < 1.);
+            assert!((small - if vertical { 220. - crate::split_layout::HEADER_HEIGHT - crate::split_layout::BORDER } else { 220. - 2. * crate::split_layout::BORDER }).abs() < 1.);
         }
         view.read_with(cx, |w, _| {
             let split = w.browser.active_split().unwrap();
@@ -3413,7 +3414,8 @@ fn command_search_and_archive_search_preserve_group_name_and_match_secondary_url
     assert!(rows.iter().any(|row| matches!(row, Suggestion::SwitchToTab { title, .. } if title == "Comparison")));
     bar(&view, cx).simulate_keystrokes("escape");
     let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor.get());
-    click(cx, test_selector(format!("close-{anchor}")));
+    right_click(cx, test_selector(format!("tab-{anchor}")));
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
     open_archive(&view, cx);
     bar(&view, cx).simulate_input("pane1");
     assert!(view.read_with(cx, |w, cx| matches!(w.suggestions(cx).first(), Some(Suggestion::ArchivedTab { title, .. }) if title == "Comparison")));
@@ -3586,7 +3588,8 @@ fn duplicate_menu_copies_the_whole_split_and_closing_it_keeps_original_pages(cx:
     });
     assert_eq!(fake.take_calls().iter().filter(|call| matches!(call, Call::Create(..))).count(), 3);
     let anchor = view.read_with(cx, |w, _| w.browser.active_split().unwrap().anchor.get());
-    click(cx, test_selector(format!("close-{anchor}")));
+    right_click(cx, test_selector(format!("tab-{anchor}")));
+    click(&mut tab_menu(&view, cx), "tab-menu-close");
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.active_split().unwrap().id, source.id);
@@ -5689,7 +5692,8 @@ fn splitting_a_pin_or_favorite_keeps_the_original_and_creates_independent_today_
             assert!(w.browser.split_for(source.id).is_none());
             split.anchor
         });
-        click(cx, test_selector(format!("close-{}", anchor.get())));
+        right_click(cx, test_selector(format!("tab-{}", anchor.get())));
+        click(&mut tab_menu(&view,cx), "tab-menu-close");
         if favorite { click(cx, "favorite-4"); } else { click(cx, "tab-4"); }
     }
 }
@@ -5781,6 +5785,9 @@ fn split_headers_and_pages_share_one_outer_corner_contour_without_recreating_vie
         let body = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
         assert_eq!(frame.origin + gpui::point(gpui::px(1.), gpui::px(1.)), header.origin);
         assert_eq!(header.bottom(), body.origin.y);
+        assert_eq!(body.origin.y - frame.origin.y, gpui::px(32.));
+        let address = cx.debug_bounds(test_selector(format!("pane-address-{}",pane.get()))).unwrap();
+        assert!((f32::from(address.center().x - frame.center().x)).abs() < 0.1);
         assert_eq!(frame.bottom() - gpui::px(1.), body.bottom());
         assert_eq!(frame.size.width - gpui::px(2.), header.size.width);
         assert_eq!(frame.size.width - gpui::px(2.), body.size.width);
@@ -5959,7 +5966,7 @@ fn split_sidebar_segments_fill_the_row_and_long_titles_stay_inside(cx: &mut Test
     assert_eq!(last.right(), contents.right());
     move_mouse(cx, f32::from(row.center().x), f32::from(row.center().y));
     assert_eq!(cx.debug_bounds("sidebar-pane-3").unwrap(), last, "hover close must not shrink a segment");
-    let close = cx.debug_bounds("close-2").unwrap();
+    let close = cx.debug_bounds("sidebar-pane-close-3").unwrap();
     assert!(close.origin.x >= last.origin.x && close.right() <= last.right());
     let title = cx.debug_bounds("sidebar-pane-title-3").unwrap();
     assert!(title.right() <= close.origin.x, "the hover close must not cover the title");
@@ -5967,7 +5974,7 @@ fn split_sidebar_segments_fill_the_row_and_long_titles_stay_inside(cx: &mut Test
     click(cx, "sidebar-pane-3");
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://pane1.example"));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
-    click(cx, "close-2");
+    click(cx, "sidebar-pane-close-3");
     assert!(view.read_with(cx, |w, _| w.browser.active_split().is_none()));
 }
 
@@ -8182,3 +8189,28 @@ fn assert_edge_drop_keeps_protected_original(cx: &mut TestAppContext, favorite: 
 fn edge_drop_copies_a_pin_and_retains_its_original(cx: &mut TestAppContext) {assert_edge_drop_keeps_protected_original(cx,false);}
 #[gpui::test]
 fn edge_drop_copies_a_favorite_and_retains_its_original(cx: &mut TestAppContext) {assert_edge_drop_keeps_protected_original(cx,true);}
+
+#[gpui::test]
+fn hovering_a_split_row_reveals_independent_pane_close_targets(cx: &mut TestAppContext) {
+    let (view,cx,fake)=open_split_pages(cx,3);
+    let before=view.read_with(cx,|w,_|w.browser.active_split().unwrap().clone());
+    let row=cx.debug_bounds(test_selector(format!("tab-{}",before.anchor.get()))).unwrap();
+    cx.simulate_mouse_move(row.center(),None,Modifiers::none());
+    cx.run_until_parked();
+    for pane in &before.panes {
+        assert!(cx.debug_bounds(test_selector(format!("sidebar-pane-close-{}",pane.get()))).is_some());
+    }
+    let inactive=*before.panes.iter().find(|id|**id!=before.active).unwrap();
+    fake.take_calls();
+    let close=cx.debug_bounds(test_selector(format!("sidebar-pane-close-{}",inactive.get()))).unwrap().center();
+    cx.simulate_click(close,Modifiers::none());cx.run_until_parked();
+    view.read_with(cx,|w,_| {
+        let after=w.browser.active_split().unwrap();
+        assert_eq!(after.panes.len(),2);assert_eq!(after.active,before.active);
+        assert!(!after.panes.contains(&inactive));
+        assert_eq!(w.browser.archive.len(),1);
+    });
+    let calls=fake.take_calls();
+    assert_eq!(calls.iter().filter(|c|matches!(c,Call::Close(..))).count(),1);
+    assert!(!calls.iter().any(|c|matches!(c,Call::Navigate(..)|Call::Create(..)|Call::Reload(..))));
+}
