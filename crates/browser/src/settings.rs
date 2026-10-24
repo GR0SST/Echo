@@ -70,6 +70,7 @@ enum Popup {
 
 mod archive;
 mod previews;
+mod profiles;
 
 pub(crate) struct SettingsWindow {
     profile: ProfileHandle,
@@ -83,6 +84,7 @@ pub(crate) struct SettingsWindow {
     archive_closing: Option<archive::ArchiveScope>,
     archive_generation: u64,
     previews: bool,
+    profile_editor: Option<profiles::Editor>,
     pub(crate) atc: Option<Entity<crate::atc::AtcPanel>>,
     atc_return_focus: bool,
     _atc_dismiss: Option<Subscription>,
@@ -99,6 +101,7 @@ impl Focusable for SettingsWindow {
 
 pub(crate) fn init(cx: &mut App) {
     archive::init(cx);
+    profiles::init(cx);
     cx.on_action(|_: &crate::menus::Settings, cx| {
         cx.defer(|cx| {
             if crate::quit::is_quitting() {
@@ -221,6 +224,7 @@ fn open(
                     archive_closing: None,
                     archive_generation: 0,
                     previews: false,
+                    profile_editor: None,
                     atc: None,
                     atc_return_focus: false,
                     _atc_dismiss: None,
@@ -390,6 +394,7 @@ impl SettingsWindow {
         self.tab = tab;
         self.popup = None;
         self.previews = false;
+        if self.profile_editor.take().is_some() { self.focus.focus(window); }
         window.set_window_title(tab.label());
         cx.notify();
     }
@@ -524,6 +529,7 @@ impl SettingsWindow {
             .user_profile(self.selected_profile)
             .unwrap_or(browser.active_user_profile());
         let selected = profile.id();
+        let can_delete = selected != browser.default_user_profile_id() && !browser.spaces.iter().any(|space| space.user_profile_id == selected);
         let list = group()
             .w(px(206.))
             .px_0()
@@ -573,7 +579,7 @@ impl SettingsWindow {
                             .child(
                                 div()
                                     .flex_1()
-                                    .overflow_hidden()
+                                    .truncate()
                                     .child(profile.name().to_string()),
                             )
                             .child(
@@ -590,30 +596,17 @@ impl SettingsWindow {
                             }))
                     })),
             )
-            .child(
-                div()
-                    .h(px(31.))
-                    .border_t_1()
-                    .border_color(rgb(0x3e3f41))
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .px(px(8.))
-                    .child(
-                        div()
-                            .id("add-profile")
-                            .debug_selector(|| "settings-add-profile".into())
-                            .child(icons::control(Icon::Plus))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.begin_profile_creation(window, cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(0x777979))
-                            .child(icons::control(Icon::Minus)),
-                    ),
-            );
+            .child(div().h(px(31.)).border_t_1().border_color(rgb(0x3e3f41)).flex().items_center()
+                .child(div().id("add-profile").debug_selector(|| "settings-add-profile".into()).w(px(31.)).h(px(30.)).flex().items_center().justify_center().cursor_pointer()
+                    .child(icons::control_sized(Icon::Plus,13.)).on_click(cx.listener(|this,_,window,cx| this.begin_profile_creation(window,cx))))
+                .child(div().w(px(1.)).h(px(14.)).bg(rgb(0x3e3f41)))
+                .child(div().id("delete-profile").debug_selector(|| "settings-delete-profile".into()).w(px(31.)).h(px(30.)).flex().items_center().justify_center()
+                    .when(!can_delete,|s|s.opacity(0.35)).when(can_delete,|s|s.cursor_pointer())
+                    .child(icons::control_sized(Icon::Minus,13.)).on_click(cx.listener(move|this,_,window,cx|{if can_delete {this.begin_profile_editor(profiles::Operation::Delete,window,cx);}})))
+                .child(div().w(px(1.)).h(px(14.)).bg(rgb(0x3e3f41)))
+                .child(div().id("rename-profile").debug_selector(|| "settings-rename-profile".into()).w(px(36.)).h(px(30.)).flex().items_center().justify_center().cursor_pointer()
+                    .child(profiles::rename_control()).on_click(cx.listener(|this,_,window,cx|this.begin_profile_editor(profiles::Operation::Rename,window,cx)))));
+
         let fields = div()
             .flex_1()
             .flex()
@@ -1177,6 +1170,7 @@ fn archive_label(duration: Option<Duration>) -> &'static str {
 }
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.validate_profile_editor(window, cx);
         if self.atc_return_focus { self.atc_return_focus = false; self.focus.focus(window); }
         let browser = self.profile.settings_snapshot();
         if browser.user_profile(self.selected_profile).is_none() {
@@ -1205,10 +1199,18 @@ impl Render for SettingsWindow {
             .text_size(px(13.))
             .line_height(px(16.))
             .track_focus(&self.focus)
-            .key_context(if self.archive_scope.is_some() { "ArchiveScope" } else { "SettingsWindow" })
+            .key_context(if self.profile_editor.is_some() { "ProfileSettingsEditor" } else if self.archive_scope.is_some() { "ArchiveScope" } else { "SettingsWindow" })
+            .on_action(cx.listener(|this, _: &profiles::Accept, window, cx| this.accept_profile_editor(window,cx)))
+            .on_action(cx.listener(|this, _: &profiles::Cancel, window, cx| this.cancel_profile_editor(window,cx)))
+            .on_action(cx.listener(|this, _: &profiles::Next, window, cx| this.move_profile_editor_focus(false,window,cx)))
+            .on_action(cx.listener(|this, _: &profiles::Previous, window, cx| this.move_profile_editor_focus(true,window,cx)))
             .on_action(cx.listener(|this, _: &archive::AllProfiles, _, cx| this.finish_archive_scope(true, cx)))
             .on_action(cx.listener(|this, _: &archive::OnlyThisProfile, _, cx| this.finish_archive_scope(false, cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.profile_editor.is_some() {
+                    if event.keystroke.key == "w" && event.keystroke.modifiers.platform { window.remove_window(); cx.stop_propagation(); }
+                    return;
+                }
                 if this.archive_scope.is_some() || this.archive_closing.is_some() {
                     match event.keystroke.key.as_str() {
                         "enter" => this.finish_archive_scope(true, cx),
@@ -1356,6 +1358,7 @@ impl Render for SettingsWindow {
                         .child(self.popup_menu(popup, cx)),
                 )
             })
+            .when(self.profile_editor.is_some(), |s| s.child(self.profile_editor_panel(cx)))
             .when(self.previews, |s| s.child(self.previews_panel(cx)))
             .when(self.archive_scope.is_some() || self.archive_closing.is_some(), |s| s.child(self.archive_scope_panel(cx)))
             .when_some(self.atc.clone(), |s, panel| s.child(div().absolute().inset_0().bg(gpui::hsla(0., 0., 0., 0.35))

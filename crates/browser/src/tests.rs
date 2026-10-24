@@ -22,6 +22,8 @@ mod max_preview_tests;
 mod toolbar_tests;
 #[path = "page_context_tests.rs"]
 mod page_context_tests;
+#[path = "profile_settings_tests.rs"]
+mod profile_settings_tests;
 #[path = "context_followup_tests.rs"]
 mod context_followup_tests;
 #[path = "space_context_tests.rs"]

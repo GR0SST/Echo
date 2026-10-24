@@ -72,3 +72,27 @@ It was cancelled without typing or deleting. The Default profile's minus
 button is disabled and exposes “The Default Profile cannot be deleted.”
 Both references retain their owned Settings/main window identities before
 input. No owner profile was renamed, deleted or reassigned.
+
+Implementation: Settings now opens measured Rename and Delete sheets. Rename
+retains the profile ID, storage key, pages, Space assignments and preferences.
+Delete requires an exact case-sensitive name; Default and assigned profiles
+are protected. Both sheets invalidate a captured target after rename, deletion
+or reassignment, trap keyboard focus, and block underlying controls. Bulk
+unused-profile deletion is atomic in the model; no uncaptured bulk UI is added.
+Registry deletion does not reclaim CEF directories while other context users
+may retain leases. Storage IDs are never reused.
+
+Five GPUI regressions cover text entry, confirmation, keyboard focus, backdrop
+isolation, cancellation and stale targets; two core regressions cover atomic
+deletion and private-window projection protection. `profile-full-tests-2.log`:
+1041 browser, 224 core, 13 AI, 136 engine, 2 bundle and 4 importer tests passed;
+one AI test ignored. The canonical native fixture run is
+`profile-manager-native-run.qHpVtJ/drive.log` (strict CEF shutdown, exit 0).
+It renamed the same profile and deleted only the exact-name unused fixture;
+assignments and the next ID remained intact.
+
+Inspected pairs: `pair-profile-rename-3x.png` and
+`pair-profile-delete-3x.png`, under `target/parity/profiles-settings/`.
+Sheet geometry matches the captured reference. Shared font wrapping, borders
+and keycaps still differ; illustrations use original Echo geometry instead of
+Arc artwork. Source inspection never saved a profile or assignment change.

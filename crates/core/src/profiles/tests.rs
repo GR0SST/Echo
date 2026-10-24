@@ -554,3 +554,37 @@ fn split_id_collision_with_foreign_favorite_preserves_pinned_folder_and_root_pos
         assert_eq!(session::to_json(&roundtrip), session::to_json(&loaded));
     }
 }
+
+#[test]
+fn unused_profile_deletion_is_atomic_and_preserves_storage_identity_watermarks() {
+    let mut browser = Browser::new();
+    let a = browser.create_user_profile("First unused").unwrap();
+    let b = browser.create_user_profile("Second unused").unwrap();
+    let default = browser.default_user_profile_id();
+    let space = browser.space().id;
+    browser.assign_space_user_profile(space, b).unwrap();
+    let before = session::to_json(&browser);
+    assert_eq!(browser.delete_unused_user_profiles(&[a,b]), Err(UserProfileError::AssignedProfile));
+    assert_eq!(session::to_json(&browser), before);
+    assert_eq!(browser.delete_unused_user_profiles(&[a,default]), Err(UserProfileError::DefaultProfile));
+    assert_eq!(session::to_json(&browser), before);
+    browser.assign_space_user_profile(space, default).unwrap();
+    assert_eq!(browser.delete_unused_user_profiles(&[a,b,a]), Ok(2));
+    let mut loaded = session::from_json(&session::to_json(&browser)).unwrap();
+    let c = loaded.create_user_profile("First unused").unwrap();
+    assert_ne!(c.storage_key(), a.storage_key());
+    assert_ne!(c.storage_key(), b.storage_key());
+    assert_eq!(loaded.user_profiles().count(), 2);
+}
+
+#[test]
+fn profile_management_never_edits_private_or_blank_projections() {
+    for mut browser in [Browser::new_private(), Browser::new_blank()] {
+        let id=browser.default_user_profile_id();
+        let before=session::to_json(&browser);
+        assert_eq!(browser.rename_user_profile(id,"Changed"),Err(UserProfileError::WindowLocalModel));
+        assert_eq!(browser.delete_user_profile(id),Err(UserProfileError::WindowLocalModel));
+        assert_eq!(browser.delete_unused_user_profiles(&[id]),Err(UserProfileError::WindowLocalModel));
+        assert_eq!(session::to_json(&browser),before);
+    }
+}

@@ -160,6 +160,7 @@ impl Browser {
         id: UserProfileId,
         name: &str,
     ) -> Result<(), UserProfileError> {
+        if self.is_blank() || self.is_private() { return Err(UserProfileError::WindowLocalModel); }
         let name = name.trim();
         if name.is_empty() {
             return Err(UserProfileError::EmptyName);
@@ -171,6 +172,7 @@ impl Browser {
         Ok(())
     }
     pub fn delete_user_profile(&mut self, id: UserProfileId) -> Result<(), UserProfileError> {
+        if self.is_blank() || self.is_private() { return Err(UserProfileError::WindowLocalModel); }
         if !self.profiles.contains_key(&id) {
             return Err(UserProfileError::UnknownProfile);
         }
@@ -185,6 +187,21 @@ impl Browser {
         // Disk cleanup belongs to the future storage adapter. Never decrement the allocator.
         Ok(())
     }
+    /// Delete only the captured unused inventory. A newly assigned, missing or
+    /// default profile invalidates the whole operation before any removal.
+    pub fn delete_unused_user_profiles(&mut self, ids: &[UserProfileId]) -> Result<usize, UserProfileError> {
+        if self.is_blank() || self.is_private() { return Err(UserProfileError::WindowLocalModel); }
+        let ids: std::collections::BTreeSet<_> = ids.iter().copied().collect();
+        for id in &ids {
+            if !self.profiles.contains_key(id) { return Err(UserProfileError::UnknownProfile); }
+            if *id == self.default_user_profile_id { return Err(UserProfileError::DefaultProfile); }
+            if self.spaces.iter().any(|space| space.user_profile_id == *id) { return Err(UserProfileError::AssignedProfile); }
+        }
+        for id in &ids { self.profiles.remove(id); }
+        if !ids.is_empty() { self.clear_sidebar_history(); }
+        Ok(ids.len())
+    }
+
     pub fn assign_space_user_profile(
         &mut self,
         space: SpaceId,
