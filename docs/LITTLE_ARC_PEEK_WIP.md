@@ -20,7 +20,9 @@ Closing now requests a fresh page photograph, bounded to 100 ms, hides native co
 
 Round 2 guarded evidence: `round2-reference-valid/` contains idle/sidebar/address hover and Cmd+Escape/plain Escape states; `round2-global-little/` proves Option+Command+N opens Little Arc while Finder is frontmost. Its prompt is 490×329 before becoming the page window. `round2-resize/resized.png` shows a 1200×800 parent and an updated 778×776 card at x325/y12.
 
-Remaining: exact spring/close timing and shadow, resize synchronization, nested Peek/Little links, Undo Close Peek, live page/history transfer, and a dedicated Peek Space picker. Native Arc Cmd+Escape was rechecked with a visibly open card and leaves it open; plain Escape dismisses it.
+Peek now observes owner bounds and resizes its child viewport while preserving the live document. A GPUI regression checks the resize request, card layout and absence of create/navigate/close calls. Native pair: `round2-resize/resized.png` / `round2-echo-resized.png`; zooms: `round2-resize-{arc,echo}-zoom.png`. Both place the 778×776 card at x325/y12 in a 1200×800 owner. Page zoom/profile/theme still differ.
+
+Remaining: exact spring/close timing and shadow, nested Peek/Little links, Undo Close Peek, live page/history transfer, and a dedicated Peek Space picker. Native Arc Cmd+Escape was rechecked with a visibly open card and leaves it open; plain Escape dismisses it.
 
 ## Native inspection safety
 

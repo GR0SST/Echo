@@ -756,6 +756,9 @@ impl BrowserWindow {
             let _ = closing_root.update(cx, |this, cx| this.close_window(cx));
             false
         });
+        cx.observe_window_bounds(window, |this, window, cx| {
+            this.resize_peek(window, cx);
+        }).detach();
         cx.observe_window_appearance(window, |this, window, cx| {
             this.theme_system_dark = matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark);
             cx.notify();

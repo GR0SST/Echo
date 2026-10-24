@@ -8914,3 +8914,27 @@ fn peek_exit_does_not_wait_indefinitely_for_a_missing_snapshot(cx: &mut TestAppC
     peek.executor().advance_clock(Duration::from_millis(200)); peek.run_until_parked(); cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
 }
+
+
+#[gpui::test]
+fn peek_tracks_its_owner_resize_without_recreating_or_navigating_pages(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&view, cx);
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    fake.take_calls(); child.take_calls();
+    cx.simulate_resize(gpui::size(gpui::px(1200.), gpui::px(800.))); cx.run_until_parked(); peek.run_until_parked();
+    let requested = peek.update(|window, _| window.bounds().size);
+    assert_eq!(requested, gpui::size(gpui::px(1200.), gpui::px(800.)));
+    // The test platform records programmatic resize without emitting the OS
+    // resize callback. Deliver that acknowledgement before checking layout.
+    peek.simulate_resize(requested); peek.run_until_parked();
+    let bounds = peek.debug_bounds("peek-card").unwrap();
+    let sidebar = view.read_with(cx, |view, _| view.sidebar_width());
+    assert!((f32::from(bounds.size.width) - (1200. - sidebar) * 0.8).abs() < 1.);
+    assert_eq!(bounds.origin.y, gpui::px(12.));
+    assert_eq!(bounds.size.height, gpui::px(776.));
+    for calls in [fake.take_calls(), child.take_calls()] {
+        assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+    }
+}

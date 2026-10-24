@@ -75,6 +75,20 @@ impl BrowserWindow {
         });
     }
 
+    pub(crate) fn resize_peek(&self, window: &Window, cx: &mut Context<Self>) {
+        let Some(child) = self.peek_child else { return; };
+        let size = window.viewport_size();
+        let sidebar = self.sidebar_width() * self.sidebar_amount();
+        cx.defer(move |cx| {
+            let _ = child.update(cx, |view, window, cx| {
+                let Some(state) = &mut view.peek_owner else { return; };
+                state.sidebar = sidebar;
+                if window.viewport_size() != size { window.resize(size); }
+                cx.notify();
+            });
+        });
+    }
+
     pub(crate) fn exit_peek(&mut self, cx: &mut Context<Self>) {
         if let Some(state) = &mut self.peek_owner {
             if state.close_requested { return; }
