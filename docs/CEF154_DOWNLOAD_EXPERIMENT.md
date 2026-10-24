@@ -35,8 +35,8 @@ bun scripts/cef154-patches.ts base /path/to/cef154/chromium/src
 
 `base` checks 538 distinct selected paths, including absent files that the custom
 patches will create. After applying the diffs, `patched` checks their postimages.
-`qualified-inputs` also checks eleven recorded generated/read prerequisites, for
-549 selected paths. The modes verify seven repository pins. They do not attest
+`qualified-inputs` also checks twelve recorded generated/read prerequisites, for
+550 selected paths. The modes verify seven repository pins. They do not attest
 the entire checkout, SDK, all generated outputs, a compiled binary or a loaded
 framework. Keep the source tree stable while checking it.
 
@@ -364,11 +364,34 @@ these named OOPIF routes after browser admission; it does not prove reservation
 before the asynchronous renderer/proxy send, source loss during retargeting,
 every proxy exit or an ordered public seal.
 
+Two further native cases close the owned browser during an uncommitted named
+OOPIF HTML navigation, after admission has entered Closing. GET and POST requests
+are held in the real `OnBeforeResourceLoad`; the POST case verifies the actual
+request bytes before closing. The successful fixture never calls Continue or
+Cancel on that held continuation.
+
+The test joins native `OnBeforeClose`, the real `OnResourceLoadComplete` event
+with `UR_FAILED`, `CefResponse::GetError() == ERR_ABORTED` and zero received
+bytes, exactly the original receipt's Abandoned outcome, and unregister drainage. It also requires zero item
+associations, target resource handlers and target commits. Only after actual
+cancellation is the held callback released. All previous 55 native TEST bodies
+and all 167 selected unit sources remain unchanged; the complete 57-case native
+suite and 167 selected C++ tests pass once on macOS Alloy.
+
+This is intentional destruction of an uncommitted HTML navigation, not proof of
+continuing a request before download classification. Production must retain or
+park the initiator until a complete admission fence is established. Context-only
+loss, earlier proxy IPC loss and other no-item exits remain open. Production
+behavior required no correction for these teardown cases. The first native run
+incorrectly expected UR_CANCELED; the corrected assertion follows the pinned CEF
+completion wrapper, which maps every nonzero network error to UR_FAILED while
+preserving ERR_ABORTED on the response. The source wrapper is now included in
+the qualified-input verification image set.
+
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining
-coverage includes source-loss retargeting, other subframe routes, request rewriting,
-duplicate suppression,
-frame/context loss and endpoint disconnects. Further Service Worker failure and
+coverage includes earlier source-loss retargeting, other subframe routes, request
+rewriting, duplicate suppression, frame/context loss and endpoint disconnects. Further Service Worker failure and
 destruction paths, other early ingress/no-item exits, SavePackage/resume and
 ordered public seal/drain/failure semantics remain open. A timeout, first
 association or nonloading source is not an admission fence.

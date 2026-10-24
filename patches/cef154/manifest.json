@@ -39,7 +39,7 @@
     },
     {
       "path": "cef.patch",
-      "sha256": "8e0f4d6f330cdbfa61f93d058ce6bab65126c59eba2f154f918d29ff22b6719e"
+      "sha256": "90cd1a5227ffff089c97ab8cfacbdc6709af7b0ca4f8f0f588eb24d47246c8da"
     }
   ],
   "standard_patch_files": [
@@ -2844,7 +2844,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "2b1a28f709ef351b9d069e1d12ebdadc68ed44924b0d350c75a36a43879e98e6",
+      "result_sha256": "a96fbdcbdd03ffce4e00a9eba612a93e6a5066964c824ff683a04fd6cd892272",
       "mode": "100644"
     },
     {
@@ -2910,6 +2910,10 @@
     {
       "path": "cef/libcef/common/task_impl.cc",
       "sha256": "37edadf881b22ec3e90a948c15e9ab7ab803043e92e978fe92bba6948c0878cd"
+    },
+    {
+      "path": "cef/libcef/browser/net_service/resource_request_handler_wrapper.cc",
+      "sha256": "ef1527f29da7d5f11aa35722f43ec5f9032e68ec7878232e47995a3259643a99"
     }
   ],
   "capabilities": 17,

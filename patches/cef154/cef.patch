@@ -6016,7 +6016,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,4414 @@
+@@ -0,0 +1,4520 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -8815,7 +8815,7 @@ new file mode 100644
 +class FrameCommandBoundaryHandler : public TestHandler, public CefDevToolsMessageObserver {
 + public:
 +  enum Mode { kBeforeUnloadCancel, kSubframeGet, kSubframePost,
-+              kBeforeUnloadAllow, kSubframeCrossOriginGet, kSubframeCrossOriginPost, kNamedGet, kNamedPost };
++              kBeforeUnloadAllow, kSubframeCrossOriginGet, kSubframeCrossOriginPost, kNamedGet, kNamedPost, kNamedCloseGet, kNamedClosePost };
 +  explicit FrameCommandBoundaryHandler(Mode mode) : mode_(mode) {}
 +  ~FrameCommandBoundaryHandler() override {
 +    if (probe_->registration) {
@@ -8868,6 +8868,10 @@ new file mode 100644
 +      named_child_ready_ = true;
 +    }
 +    if (command_sent_ && frame->GetURL() == TargetUrl()) {
++      if (ClosesSource()) {
++        ADD_FAILURE() << "source-close navigation unexpectedly committed";
++        Finish(); return;
++      }
 +      if (mode_ == kBeforeUnloadCancel) {
 +        ADD_FAILURE() << "beforeunload cancellation replaced the document";
 +        Finish();
@@ -9007,12 +9011,90 @@ new file mode 100644
 +      EXPECT_TRUE(probe_->no_item.empty());
 +      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
 +      EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, probe_->api.unregister_poll(probe_->registration));
-+      CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::Poll, this));
++      if (!ClosesSource())
++        CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::Poll, this));
 +    }
 +    return false;
 +  }
++  cef_return_value_t OnBeforeResourceLoad(CefRefPtr<CefBrowser>,
++      CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request,
++      CefRefPtr<CefCallback> callback) override {
++    EXPECT_TRUE(CefCurrentlyOn(TID_IO));
++    if (!ClosesSource() || request->GetURL() != TargetUrl()) return RV_CONTINUE;
++    EXPECT_EQ(RT_SUB_FRAME, request->GetResourceType());
++    EXPECT_EQ(IsPost() ? "POST" : "GET", request->GetMethod().ToString());
++    if (IsPost()) {
++      auto post = request->GetPostData();
++      CefPostData::ElementVector elements;
++      if (post) post->GetElements(elements);
++      const bool bytes = elements.size()==1 && elements[0]->GetType()==PDE_TYPE_BYTES;
++      const auto count = bytes ? elements[0]->GetBytesCount() : 0;
++      std::string body(count, '\0');
++      const auto copied = bytes ? elements[0]->GetBytes(body.size(),body.data()) : 0;
++      CefPostTask(TID_UI,base::BindOnce(&FrameCommandBoundaryHandler::PostBodyObserved,
++          this,request->GetMethod().ToString(),!!post,elements.size(),bytes,count,copied,std::move(body)));
++    }
++    CefPostTask(TID_UI,base::BindOnce(&FrameCommandBoundaryHandler::HoldBeforeSourceClose,this,callback));
++    return RV_CONTINUE_ASYNC;
++  }
++  void HoldBeforeSourceClose(CefRefPtr<CefCallback> callback) {
++    if (finished_) { callback->Cancel(); return; }
++    ASSERT_TRUE(ClosesSource() && oopif_seen_ && target_browse_seen_);
++    EXPECT_FALSE(held_resource_);
++    held_resource_ = callback;
++    EXPECT_EQ(1,probe_->reserves); EXPECT_EQ(1,probe_->authorizations);
++    EXPECT_TRUE(probe_->no_item.empty());
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING,probe_->api.unregister_poll(probe_->registration));
++    if (IsPost()) EXPECT_TRUE(post_body_seen_);
++    source_close_requested_ = true;
++    observer_ = nullptr;
++    GetBrowser()->GetHost()->CloseBrowser(true);
++    DestroyTest();
++  }
++  void OnResourceLoadComplete(CefRefPtr<CefBrowser>,CefRefPtr<CefFrame>,
++      CefRefPtr<CefRequest> request,CefRefPtr<CefResponse> response,
++      URLRequestStatus status,int64_t length) override {
++    if (!ClosesSource() || request->GetURL()!=TargetUrl()) return;
++    CefPostTask(TID_UI,base::BindOnce(&FrameCommandBoundaryHandler::SourceRequestCompleted,this,status,
++        response ? response->GetError() : ERR_UNEXPECTED,length));
++  }
++  void SourceRequestCompleted(URLRequestStatus status,cef_errorcode_t error,int64_t length) {
++    EXPECT_TRUE(source_close_requested_);
++    EXPECT_FALSE(resource_canceled_);
++    // CEF maps every nonzero network completion to UR_FAILED; the response
++    // preserves the actual net error, including teardown ERR_ABORTED.
++    EXPECT_EQ(UR_FAILED,status); EXPECT_EQ(ERR_ABORTED,error); EXPECT_EQ(0,length);
++    resource_canceled_ = true;
++    // The fixture never continues or cancels this callback. Native teardown
++    // must cancel the request before its continuation is released.
++    held_resource_ = nullptr;
++  }
++  void PollClosedSource() {
++    if (finished_) return;
++    EXPECT_TRUE(source_close_requested_ && source_closed_);
++    EXPECT_FALSE(GetBrowser());
++    if (probe_->registration) {
++      const auto status=probe_->api.unregister_poll(probe_->registration);
++      if(status==ECHO_CEF_DOWNLOAD_OK) probe_->registration=0;
++      else if(status!=ECHO_CEF_DOWNLOAD_PENDING) { ADD_FAILURE()<<"closed source drain "<<status; Finish(); return; }
++    }
++    if(probe_->registration || !resource_canceled_) {
++      if(++cleanup_polls_<=500) { CefPostDelayedTask(TID_UI,base::BindOnce(&FrameCommandBoundaryHandler::PollClosedSource,this),10); return; }
++      ADD_FAILURE()<<"source close did not join request cancellation and receipt drain"; Finish(); return;
++    }
++    EXPECT_EQ(1,probe_->reserves); EXPECT_EQ(1,probe_->authorizations);
++    EXPECT_EQ(1u,probe_->navigation_tokens.size());
++    EXPECT_EQ(probe_->navigation_tokens,probe_->no_item_tokens);
++    EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED},probe_->no_item);
++    EXPECT_EQ(0,probe_->associated);
++    EXPECT_EQ(0,target_resource_handlers_.load());
++    EXPECT_FALSE(target_loaded_); EXPECT_FALSE(held_resource_);
++    finished_=true;
++    SignalExtraOnce();
++  }
 +  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
 +      CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request) override {
++    if (ClosesSource() && request->GetURL()==TargetUrl()) ++target_resource_handlers_;
 +    if (IsPost() && request->GetURL() == TargetUrl()) {
 +      // NavigationHandle-backed OnBeforeBrowse metadata omits POST data.
 +      // Copy the actual resource request's bytes on IO, then assert on UI.
@@ -9144,6 +9226,7 @@ new file mode 100644
 +    if (finished_) return;
 +    finished_ = true;
 +    observer_ = nullptr;
++    if (held_resource_) { held_resource_->Cancel(); held_resource_=nullptr; }
 +    if (probe_->registration)
 +      EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
 +    DestroyTest();
@@ -9151,6 +9234,12 @@ new file mode 100644
 +  }
 +  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
 +    TestHandler::OnBeforeClose(browser);
++    if (ClosesSource() && source_close_requested_ && !finished_) {
++      source_closed_=true;
++      EXPECT_FALSE(GetBrowser());
++      CefPostTask(TID_UI,base::BindOnce(&FrameCommandBoundaryHandler::PollClosedSource,this));
++      return;
++    }
 +    if (finished_ && probe_->registration)
 +      CefPostTask(TID_UI, base::BindOnce(&FrameCommandBoundaryHandler::PollAfterClose, this));
 +  }
@@ -9176,9 +9265,10 @@ new file mode 100644
 + private:
 +  bool IsChild() const { return mode_ != kBeforeUnloadCancel && mode_ != kBeforeUnloadAllow; }
 +  bool IsBeforeUnload() const { return !IsChild(); }
-+  bool IsNamed() const { return mode_ == kNamedGet || mode_ == kNamedPost; }
++  bool ClosesSource() const { return mode_ == kNamedCloseGet || mode_ == kNamedClosePost; }
++  bool IsNamed() const { return mode_ == kNamedGet || mode_ == kNamedPost || ClosesSource(); }
 +  const char* InitialChildUrl() const { return IsNamed() ? "https://echo-frame-cross-origin.test/child" : kBoundaryChild; }
-+  bool IsPost() const { return mode_ == kSubframePost || mode_ == kSubframeCrossOriginPost || mode_ == kNamedPost; }
++  bool IsPost() const { return mode_ == kSubframePost || mode_ == kSubframeCrossOriginPost || mode_ == kNamedPost || mode_ == kNamedClosePost; }
 +  const char* TargetUrl() const {
 +    return mode_ == kSubframeCrossOriginGet || mode_ == kSubframeCrossOriginPost || IsNamed()
 +        ? kBoundaryCrossTarget : kBoundaryTarget;
@@ -9191,6 +9281,9 @@ new file mode 100644
 +  bool target_loaded_ = false, target_browse_seen_ = false, dialog_seen_ = false;
 +  bool decision_completed_ = false, final_source_requested_ = false, extra_signaled_ = false;
 +  CefRefPtr<CefRegistration> observer_;
++  CefRefPtr<CefCallback> held_resource_;
++  std::atomic<int> target_resource_handlers_{0};
++  bool source_close_requested_=false,source_closed_=false,resource_canceled_=false;
 +  bool named_child_ready_ = false, oopif_seen_ = false;
 +  bool post_body_seen_ = false;
 +  IMPLEMENT_REFCOUNTING(FrameCommandBoundaryHandler);
@@ -9243,6 +9336,19 @@ new file mode 100644
 +TEST(EchoDownloadBridge, NamedOopifPostPreservesBodyIngressAndParentAfterClosing) {
 +  CefRefPtr<FrameCommandBoundaryHandler> handler =
 +      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kNamedPost);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, NamedOopifGetSourceCloseJoinsCanceledResourceAndOriginalReceipt) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kNamedCloseGet);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, NamedOopifPostSourceCloseJoinsCanceledResourceAndOriginalReceipt) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kNamedClosePost);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
 +}

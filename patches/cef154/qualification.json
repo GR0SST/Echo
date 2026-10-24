@@ -180,7 +180,7 @@
     "state_binary_sha256": "792e2f79bf44f3f125ea008afd49e5dd5fdae941eb32049bc66ac13360a10ccb"
   },
   "native": {
-    "count": 55,
+    "count": 57,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -219,6 +219,8 @@
       "EchoDownloadBridge.CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission",
       "EchoDownloadBridge.NamedOopifGetPreservesOriginalIngressAndParentAfterClosing",
       "EchoDownloadBridge.NamedOopifPostPreservesBodyIngressAndParentAfterClosing",
+      "EchoDownloadBridge.NamedOopifGetSourceCloseJoinsCanceledResourceAndOriginalReceipt",
+      "EchoDownloadBridge.NamedOopifPostSourceCloseJoinsCanceledResourceAndOriginalReceipt",
       "EchoDownloadBridge.SavePageSerializesOriginalLiveDocumentAfterClosing",
       "EchoDownloadBridge.ClosedSavePageRefusesWithoutFileOrDocumentReplacement",
       "EchoDownloadBridge.SavePageOnlyHtmlCopiesNetworkDocumentAfterClosing",
@@ -239,7 +241,7 @@
       "EchoDownloadBridge.DeniedHttpDirectRedirectCannotDispatchTargetOrCreateItem"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "2b1a28f709ef351b9d069e1d12ebdadc68ed44924b0d350c75a36a43879e98e6",
+    "test_source_sha256": "a96fbdcbdd03ffce4e00a9eba612a93e6a5066964c824ff683a04fd6cd892272",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
@@ -281,12 +283,12 @@
     "unit_source_paths": 84,
     "authored_custom_paths": 87,
     "framework_named_inputs": 92,
-    "archived_source_union": 98,
+    "archived_source_union": 99,
     "full_checkout_attestation": false,
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "ddab928e7ba5255d1f7d37f7b4e9bd3fd43487a34e13b23f96cddd92884fffc3",
+  "native_xml_sha256": "2a6172d2a0c125939479f10c9e4e5673d95533810e3a5d8de75da53d26344eb9",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -323,7 +325,7 @@
     "zero_fuzz": true,
     "base_selected_images": 538,
     "patched_selected_images": 538,
-    "qualified_selected_images": 549,
+    "qualified_selected_images": 550,
     "repositories": 7,
     "selected_fixture_only": true,
     "new_build_performed_for_replay": false
@@ -364,7 +366,9 @@
     "http_redirects": "seven real loopback cases: UI navigation 302/303/307, StartDownload and renderer download-attribute redirects, UI and IO policy denials after Closing. Original token, actual method/body/Host, original/final URL, exact bytes and live source DOM UUID checked",
     "http_redirect_scope": "macOS Alloy with source browsers alive; only native test source changed and original 46 test bodies remain. No general all-exit, source-loss, other-platform, public seal or full-fence acceptance. Earlier syntax checks reused for unchanged production sources",
     "named_oopif": "parent anchor GET and form POST target a named cross-site iframe, verified with Target.getTargets under site-per-process. Closing begins after actual browser admission in OnBeforeBrowse, before dispatch. Exact body, original token/drain, parent live DOM UUID and child final markup checked",
-    "named_oopif_scope": "macOS Alloy with parent/child alive; does not prove reservation before the renderer proxy send, source-loss retargeting, every proxy exit or a complete seal/fence"
+    "named_oopif_scope": "macOS Alloy with parent/child alive; does not prove reservation before the renderer proxy send, source-loss retargeting, every proxy exit or a complete seal/fence",
+    "named_oopif_source_loss": "GET/POST named OOPIF HTML navigation held in real OnBeforeResourceLoad after admission/Closing. Owned browser destruction causes genuine zero-byte UR_FAILED with ERR_ABORTED, exact original Abandoned outcome, no target handler or commit, and drain; the successful fixture never continues/cancels the held callback",
+    "named_oopif_source_loss_scope": "intentional native destruction of uncommitted HTML navigation, not preservation of a request before download classification. Production must retain/park the initiator until a proved fence; context-only/earlier proxy loss and all-exit/public-seal acceptance remain open"
   },
   "native_save_page": {
     "formats": {
@@ -485,6 +489,25 @@
     "prior_53_test_bodies_unchanged": true,
     "source_loss_during_retarget_qualified": false,
     "pre_proxy_async_admission_fence_qualified": false,
+    "production_changed": false
+  },
+  "native_named_oopif_source_loss": {
+    "strict_site_isolation": true,
+    "get_and_post": true,
+    "actual_resource_continuation_held": true,
+    "continuation_never_called_by_successful_fixture": true,
+    "actual_native_on_before_close": true,
+    "resource_complete_status": "UR_FAILED",
+    "resource_net_error": "ERR_ABORTED",
+    "received_bytes": 0,
+    "original_receipt_outcome": "Abandoned",
+    "outcome_count": 1,
+    "associations": 0,
+    "target_resource_handlers": 0,
+    "target_commits": 0,
+    "drain_and_request_cancellation_both_joined": true,
+    "prior_55_test_bodies_unchanged": true,
+    "download_continuation_before_classification_qualified": false,
     "production_changed": false
   }
 }
