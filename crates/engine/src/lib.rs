@@ -21,6 +21,8 @@ mod audio;
 mod audio_clock;
 mod media;
 pub use media::{MediaState, MediaAction};
+mod capture;
+pub use capture::MediaCaptureState;
 mod editing;
 mod boosts;
 mod site_info;
@@ -92,6 +94,7 @@ pub enum Event {
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     AudioStateChanged { view: ViewId, audible: bool },
+    MediaCaptureChanged { view: ViewId, state: MediaCaptureState },
     MediaStateChanged { view: ViewId, state: MediaState },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
     Focused { view: ViewId },
@@ -130,6 +133,7 @@ enum RawEvent {
     Progress(u16),
     BoostZap(String),
     Audio(bool),
+    Capture(MediaCaptureState),
     Media(MediaState),
     Title(String),
     Favicon(String, Vec<u8>),
@@ -905,6 +909,7 @@ impl Engine {
         if let Some(audible) = self._runtime.audio.as_ref().and_then(|output| output.audible(browser)) {
             target.events.push((browser, RawEvent::Audio(audible)));
         }
+        target.events.push((browser, RawEvent::Capture(capture::current(browser))));
         Some(imported)
     }
 
@@ -1311,7 +1316,7 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
 }
 
 fn transferable_metadata(event: &RawEvent) -> bool {
-    matches!(event, RawEvent::Audio(_) | RawEvent::Media(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
+    matches!(event, RawEvent::Audio(_) | RawEvent::Capture(_) | RawEvent::Media(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
         | RawEvent::EditFocus(_) | RawEvent::Find(..) | RawEvent::Url(_)
         | RawEvent::Progress(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
 }
@@ -1330,6 +1335,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::LoadError(_, _, _) => return None,
         RawEvent::Media(state) => Event::MediaStateChanged { view, state },
         RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
+        RawEvent::Capture(state) => Event::MediaCaptureChanged { view, state },
         RawEvent::Title(title) => Event::TitleChanged { view, title },
         RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
         RawEvent::Focused => Event::Focused { view },
@@ -1359,6 +1365,10 @@ fn push(events: &EventQueue, browser: Option<&mut Browser>, event: RawEvent) {
     if let Some(browser) = browser {
         events.push((browser.identifier(), event));
     }
+}
+
+fn report_media_capture(events: &EventQueue, browser: i32, state: MediaCaptureState) {
+    if capture::changed(browser, state) { events.push((browser, RawEvent::Capture(state))); }
 }
 
 wrap_client! {
@@ -1465,6 +1475,9 @@ fn peek_cross_domain(current: &str, target: &str, pinned: bool, gesture: bool, r
 wrap_request_handler! {
     struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>>, boosts: Arc<Mutex<Vec<SiteBoost>>> }
     impl RequestHandler {
+        fn on_render_process_terminated(&self, browser: Option<&mut Browser>, _status: TerminationStatus, _error_code: i32, _error_string: Option<&CefString>) {
+            if let Some(browser) = browser { report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); }
+        }
         fn on_render_view_ready(&self,browser:Option<&mut Browser>) {
             if let Some(browser)=browser { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
         }
@@ -1517,6 +1530,11 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_media_access_change(&self, browser: Option<&mut Browser>, has_video_access: i32, has_audio_access: i32) {
+            if let Some(browser) = browser {
+                report_media_capture(&self.events, browser.identifier(), MediaCaptureState { video: has_video_access != 0, audio: has_audio_access != 0 });
+            }
+        }
         fn on_loading_progress_change(&self, browser: Option<&mut Browser>, progress: f64) {
             push(&self.events, browser, RawEvent::Progress((progress.clamp(0., 1.) * 1000.).round() as u16));
         }
@@ -1673,6 +1691,7 @@ wrap_life_span_handler! {
 
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             if let Some(browser) = browser {
+                capture::created(browser.identifier());
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Created(browser.identifier()));
             }
         }
@@ -1683,6 +1702,7 @@ wrap_life_span_handler! {
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
                 site_data::destroyed(browser.identifier());
                 permissions::destroyed(browser.identifier());
+                capture::destroyed(browser.identifier());
             }
         }
 
@@ -1833,6 +1853,7 @@ mod tests {
         let view = ViewId::from_raw(8);
         let role = ViewRole::Inspector(InspectorId(3));
         for event in [
+            RawEvent::Capture(MediaCaptureState { video: true, audio: true }),
             RawEvent::Audio(true), RawEvent::Title("DevTools".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()),
             RawEvent::Loading(false, false, false), RawEvent::Focused, RawEvent::PipReturn,
             RawEvent::EditFocus(true), RawEvent::Status("internal".into()),
@@ -1841,6 +1862,23 @@ mod tests {
             RawEvent::LoadError(INSPECTOR_FRONTEND_URL.into(), -302, "Unknown scheme".into()),
         ] { assert!(page_event(view, role, event).is_none()); }
         assert_eq!(page_event(view, ViewRole::Page, RawEvent::Title("Page".into())), Some(Event::TitleChanged { view, title: "Page".into() }));
+    }
+
+    #[test]
+    fn capture_callbacks_follow_live_transfers_without_becoming_input() {
+        let source = EventQueue::default();
+        let target = EventQueue::default();
+        let state = MediaCaptureState { video: false, audio: true };
+        source.push((7, RawEvent::Capture(state)));
+        source.push((7, RawEvent::Focused));
+        source.redirect(7, &source, &target, transferable_metadata);
+        assert!(source.take().is_empty());
+        let queued = target.take();
+        assert!(matches!(&queued[..], [(7, RawEvent::Capture(found))] if *found == state));
+        let view = ViewId::from_raw(9);
+        assert_eq!(page_event(view, ViewRole::Page, RawEvent::Capture(state)), Some(Event::MediaCaptureChanged { view, state }));
+        assert_eq!(browser_input(view, ViewRole::Page, &RawEvent::Capture(state)), None);
+        assert_eq!(inspector_input(InspectorId(1), &RawEvent::Capture(state)), None);
     }
 
     #[test]

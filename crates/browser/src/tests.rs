@@ -3475,6 +3475,54 @@ fn silence_clears_an_unmuted_indicator_and_unknown_audio_cannot_mark_active_tab(
 }
 
 #[gpui::test]
+fn capture_access_updates_only_its_background_page_without_playback_or_activation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-7");
+    click(cx, "tab-8");
+    let before = active_url(&view, cx);
+    fake.take_calls();
+    for state in [
+        engine::MediaCaptureState { audio: true, video: false },
+        engine::MediaCaptureState { audio: false, video: true },
+        engine::MediaCaptureState { audio: true, video: true },
+        engine::MediaCaptureState::default(),
+    ] {
+        fake.send(cx, Event::MediaCaptureChanged { view: page(2), state });
+        view.read_with(cx, |w, _| {
+            let pages = w.pages.as_ref().unwrap().borrow();
+            let background = w.browser.all_tabs().find(|tab| tab.id.get() == 7).unwrap().id;
+            assert_eq!(pages.state(background).capture, state);
+            assert_eq!(pages.state(w.browser.active_tab().unwrap().id).capture, engine::MediaCaptureState::default());
+            assert!(!pages.state(background).audible);
+            assert!(!pages.state(background).media.active);
+        });
+        assert_eq!(active_url(&view, cx), before);
+    }
+    fake.send(cx, Event::MediaCaptureChanged { view: page(999), state: engine::MediaCaptureState { video: true, audio: true } });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(2) | Call::Navigate(..) | Call::Create(..))));
+    view.read_with(cx, |w, _| assert_eq!(w.pages.as_ref().unwrap().borrow().state(w.browser.active_tab().unwrap().id).capture, engine::MediaCaptureState::default()));
+}
+
+#[gpui::test]
+fn capture_access_metadata_keeps_its_document_when_a_peek_is_promoted(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://capture.example/metadata".into() });
+    let (child, mut peek) = peek_window(&owner, cx);
+    let state = engine::MediaCaptureState { video: true, audio: true };
+    child.update(&mut peek, |view, _| {
+        view.pages.as_ref().unwrap().borrow().capture_event(Event::MediaCaptureChanged { view: page(1), state }).unwrap();
+    });
+    click(&mut peek, "peek-expand");
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    owner.read_with(cx, |w, _| {
+        let tab = w.browser.active_tab().unwrap();
+        assert_eq!(tab.url, "https://capture.example/metadata");
+        assert_eq!(w.pages.as_ref().unwrap().borrow().state(tab.id).capture, state);
+    });
+}
+
+#[gpui::test]
 fn mute_command_and_sidebar_button_control_the_current_page(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let original = active_url(&view, cx);

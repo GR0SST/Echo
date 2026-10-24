@@ -26,6 +26,7 @@ impl StorageSelection {
 fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) -> bool {
     let view = match event {
         Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::EditFocusChanged { view, .. }
+        | Event::MediaCaptureChanged { view, .. }
         | Event::FindResult { view, .. } | Event::UrlChanged { view, .. } | Event::StatusChanged { view, .. }
         | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => view,
         _ => return false,
@@ -40,7 +41,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::MediaCaptureChanged { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -367,6 +368,7 @@ pub struct PageState {
     pub status: String,
     pub editable: bool,
     pub audible: bool,
+    pub capture: engine::MediaCaptureState,
     pub media: engine::MediaState,
 }
 
@@ -438,7 +440,7 @@ pub(crate) struct PageEvent {
 impl PageEvent {
     pub(crate) fn is_metadata(&self) -> bool {
         matches!(self.event, Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
-            | Event::MediaStateChanged { .. } | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
+            | Event::MediaCaptureChanged { .. } | Event::MediaStateChanged { .. } | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
     }
 }
 
@@ -1760,6 +1762,9 @@ impl Pages {
             }
             Event::AudioStateChanged { view, audible } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.audible = *audible; }
+            }
+            Event::MediaCaptureChanged { view, state } => {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.capture = *state; }
             }
             Event::EditFocusChanged { view, editable } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.editable = *editable; }

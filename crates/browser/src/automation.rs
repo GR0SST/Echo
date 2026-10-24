@@ -725,7 +725,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 .map(|pages| pages.borrow().state(tab.id))
                 .unwrap_or_default();
             out += &format!(
-                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?} audible={} visible={} media_pip={} media_position={}\n",
+                "[dump] {section:6} {}{} {:?} {} loading={} back={} icon_bytes={} muted={} engine_muted={:?} audible={} visible={} media_pip={} media_position={} capture_video={} capture_audio={}\n",
                 if active { "*" } else { " " },
                 if shown == Some(tab.id) { "shown" } else { "     " },
                 tab.title,
@@ -738,6 +738,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
                 this.tab_audible(tab.id),
                 this.pages.as_ref().is_some_and(|pages| pages.borrow().is_visible(tab.id)),
                 state.media.picture_in_picture, state.media.position,
+                state.capture.video, state.capture.audio,
             );
         }
     }

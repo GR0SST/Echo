@@ -1591,3 +1591,38 @@ are retained in `archive-motion-samples.json`; the separate profile-list layout
 and general settings popup behavior are outside this question's scope. The
 fresh Arc session verified the unused profile's original 12-hour value after
 restoration and closed its preferences and test window without opening tabs.
+
+## Camera and microphone source state — 2026-10-25
+
+The owned Echo Test window was inspected with a loopback-only getUserMedia
+fixture. It never records or uploads media, and every stream automatically stops
+after 30 seconds. Combined camera/microphone capture displayed an 8 px circle
+before the favicon: a 1 px white rim and sRGB `#ff736d` fill, adding 14 px to the
+label/favicons' horizontal origin. Reference screenshots and enlarged row crops
+are in `target/parity/capture-indicator/`. Early single-source captures did not
+show this dot, so they do not establish its full activation policy or latency.
+A later session's guard rejected foreign front Arc window 21869 ahead of the
+recorded test window 21328; no input was sent to the foreign window. Test-tab,
+site-permission restoration and owned-window cleanup remain blocked by that
+guard. Streams have auto-stopped. No Space was created or deleted.
+
+CEF `DisplayHandler::on_media_access_change` now supplies separate live video
+and audio flags. These are document metadata, not audible playback or remembered
+permission decisions. State survives backgrounding, Peek promotion and live view
+transfers; renderer termination resets it, and destroyed browser IDs reject late
+callbacks. The sidebar row remains partial: no unverified single-source condition
+or indicator animation has been invented. Five regressions cover transitions,
+deduplication, late callbacks, view transfer and Peek promotion. The full run
+passes 1022 browser, 213 core and 139 engine tests (plus the other workspace
+suites).
+
+Native CEF verification used virtual capture devices in a fresh private profile,
+with loopback-only permission entries. Microphone-only, camera-only, combined and
+each stop transition produced the exact expected flags; CEF reached Complete
+and exited 0. `target/parity/capture-indicator/native-states.json` contains the
+asserted sequence. The inspected pair and enlarged crop are
+`target/parity/media-pip/sweep/pair-capture-state.png` and
+`pair-capture-row-zoom.png`; they explicitly show the remaining indicator gap,
+not visual parity. Archive scope, hover and Space-menu pairs are copied to the
+same evidence directory. A final guarded retry again rejected 21869/21328 and
+performed no Arc input.

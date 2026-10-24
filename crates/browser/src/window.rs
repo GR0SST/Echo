@@ -1230,7 +1230,7 @@ impl BrowserWindow {
                     if let Some(identity)=identity { self.mini_player.record(identity.tab,&state); }
                     cx.notify();
                 }
-                Event::AudioStateChanged { .. } => { cx.notify(); }
+                Event::AudioStateChanged { .. } | Event::MediaCaptureChanged { .. } => { cx.notify(); }
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = identity.map(|identity| identity.tab) {
                         if !title.is_empty() {
