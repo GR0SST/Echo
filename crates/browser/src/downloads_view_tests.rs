@@ -948,3 +948,14 @@ fn open_file_menu_retains_row_layout_after_pointer_enters_overlay(cx: &mut TestA
     assert_eq!(visual.debug_bounds("downloads-title-0-0").unwrap().size.width,px(217.));
     assert!(log.borrow().is_empty());
 }
+
+#[gpui::test]
+fn verified_context_actions_do_not_enable_unverified_file_activation(cx: &mut TestAppContext) {
+    let (view,visual,log,_subscription) = open(cx,fixture());
+    view.update(visual,|view,cx|view.set_row_actions_enabled(true,cx));visual.run_until_parked();
+    click(visual,"downloads-row-0-0");
+    assert!(log.borrow().is_empty());
+    click(visual,"downloads-overflow-0-0");
+    assert_eq!(log.borrow().len(),1);
+    assert!(matches!(log.borrow()[0],DownloadsIntent::RowMenuRequested {token:101,..}));
+}

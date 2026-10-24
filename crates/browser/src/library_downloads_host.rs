@@ -77,7 +77,7 @@ impl LibraryDownloadsHost {
         let render_artwork = artwork.clone();
         view.update(cx, |view, cx| {
             view.observe_control_focus(window, cx);
-            view.set_row_selection_enabled(true, cx);
+            view.set_row_actions_enabled(true, cx);
             view.set_row_artwork(Rc::new(move |row, _, cx| render_artwork.borrow_mut().render(row.token, cx)), cx);
         });
         Some(Self {

@@ -133,6 +133,7 @@ pub(crate) struct DownloadsView<Token: Clone + Eq + 'static> {
     row_keys: Vec<(Token, UserProfileId, usize)>,
     next_item_key: usize,
     row_selection_enabled: bool,
+    row_actions_enabled: bool,
     selected_row: Option<(Token, UserProfileId)>,
     hovered_row: Option<(Token, UserProfileId)>,
     menu_row: Option<(Token, UserProfileId)>,
@@ -188,6 +189,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             input,
             filter_visible: false,
             row_selection_enabled: false,
+            row_actions_enabled: false,
             selected_row: None,
             hovered_row: None,
             menu_row: None,
@@ -332,6 +334,12 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
     /// Host-owned effects are emitted with the exact opaque row identity.
     pub(crate) fn set_row_selection_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.row_selection_enabled = enabled;
+        cx.notify();
+    }
+
+    /// Context-menu affordances are independent of unverified row activation.
+    pub(crate) fn set_row_actions_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.row_actions_enabled = enabled;
         cx.notify();
     }
 
@@ -593,8 +601,9 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
         let menu_token = token.clone();
         let right_token = token.clone();
         let hover_token = token.clone();
+        let row_actions = self.row_actions_enabled || self.row_selection_enabled;
         let menu_open = self.menu_row.as_ref().is_some_and(|(token,owner)| token == &row.token && *owner == profile);
-        let hovered = self.row_selection_enabled && (menu_open || self.hovered_row.as_ref().is_some_and(|(token,owner)| token == &row.token && *owner == profile));
+        let hovered = row_actions && (menu_open || self.hovered_row.as_ref().is_some_and(|(token,owner)| token == &row.token && *owner == profile));
         let artwork = self.artwork.as_ref().map_or_else(file_icon, |render| render(row, window, cx));
         div().id(("downloads-row", key))
             .debug_selector(move || format!("downloads-row-{group}-{index}"))
@@ -604,12 +613,12 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             .hover(|style| style.bg(self.colors.hover))
             .when(menu_open, |el| el.bg(self.colors.selected))
             .when(self.selected_row.as_ref().is_some_and(|(token, owner)| token == &row.token && *owner == profile), |el| el.bg(self.colors.selected))
-            .when(self.row_selection_enabled, |el| {
+            .when(row_actions, |el| {
                 el.on_hover(cx.listener(move |this, active: &bool, _, cx| {
                     let target = (hover_token.clone(),profile);
                     let next = if *active { Some(target.clone()) } else if this.hovered_row.as_ref() == Some(&target) { None } else { this.hovered_row.clone() };
                     if this.hovered_row != next { this.hovered_row = next; cx.notify(); }
-                })).on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                })).when(self.row_selection_enabled, |el| el.on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.selected_row = Some((token.clone(),profile));
                     if event.click_count() == 2 {
@@ -618,7 +627,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                         cx.emit(DownloadsIntent::RowPressed { token: token.clone(), profile });
                     }
                     cx.notify();
-                })).on_mouse_down(gpui::MouseButton::Right, cx.listener(move |_, event: &gpui::MouseDownEvent, _, cx| {
+                }))).on_mouse_down(gpui::MouseButton::Right, cx.listener(move |_, event: &gpui::MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     cx.emit(DownloadsIntent::RowMenuRequested { token: right_token.clone(), profile, position: event.position });
                 }))
@@ -632,7 +641,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
                 .child(div().debug_selector(move || format!("downloads-subtitle-{group}-{index}"))
                     .min_w_0().overflow_hidden().text_size(px(12.)).line_height(px(16.))
                     .text_color(self.colors.muted).child(SidebarTitle::new(row.subtitle.clone()))))
-            .when(self.row_selection_enabled, |el| el.child(div()
+            .when(row_actions, |el| el.child(div()
                 .id(("download-overflow",key)).debug_selector(move || format!("downloads-overflow-{group}-{index}"))
                 .absolute().right(px(12.)).top(px(12.)).size(px(32.)).rounded(px(8.))
                 .invisible().group_hover(group_name, |s| s.visible())
