@@ -1256,6 +1256,18 @@ impl BrowserWindow {
             .into_any_element()
     }
 
+    /// Paint the continuous field through window-relative rectangular masks.
+    /// The caller positions this region; masks can describe rounded or inverse
+    /// corner strips without affecting document layout or its native view.
+    pub(crate) fn theme_surface_mask(&self, bounds: Bounds<gpui::Pixels>, viewport: gpui::Size<gpui::Pixels>, masks: Vec<Bounds<gpui::Pixels>>) -> AnyElement {
+        div().relative().w(bounds.size.width).h(bounds.size.height).overflow_hidden()
+            .children(masks.into_iter().map(|mask| div().absolute()
+                .left(mask.left() - bounds.left()).top(mask.top() - bounds.top())
+                .w(mask.size.width).h(mask.size.height)
+                .child(self.theme_region(mask, viewport))))
+            .into_any_element()
+    }
+
     // Command bar.
 
     pub fn open_command_bar(
@@ -3444,10 +3456,16 @@ impl BrowserWindow {
         })
     }
 
-    fn render_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let virtual_page = !self.page_content_visible();
         let split_open = !virtual_page && self.browser.active_split().is_some();
         let has_page = !virtual_page && self.browser.active_tab().is_some();
+        let empty_canvas = !virtual_page && !has_page;
+        let viewport = window.viewport_size();
+        let left = self.sidebar_width() * self.sidebar_amount() + CONTENT_INSET * (1. - self.sidebar_amount());
+        let panel_bounds = Bounds::new(point(px(left), px(CONTENT_INSET)),
+            size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
+        let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
         let history_open = !virtual_page && self.history_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
@@ -3465,6 +3483,12 @@ impl BrowserWindow {
             .py(px(CONTENT_INSET))
             .pr(px(CONTENT_INSET))
             .pl(px(CONTENT_INSET * (1. - self.sidebar_amount())))
+            .relative()
+            .when(empty_canvas, |this| this.child(div()
+                .debug_selector(|| "empty-space-panel-shadow".into())
+                .absolute().top(px(CONTENT_INSET)).bottom(px(CONTENT_INSET))
+                .right(px(CONTENT_INSET)).left(px(CONTENT_INSET * (1. - self.sidebar_amount())))
+                .child(self.theme_empty_panel_shadow())))
             .child(
                 div()
                     .debug_selector(|| "page-surface".into())
@@ -3480,8 +3504,12 @@ impl BrowserWindow {
                     .when(!split_open, |this| this.overflow_hidden())
                     .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).bg(gpui::white()).shadow_md())
                     .when(self.browser.is_private() && has_page && !split_open, |this| this.bg(hsla(210. / 360., 0.035, 0.15, 1.)))
+                    .when(empty_canvas, |this| this.rounded(px(CONTENT_CORNER_RADIUS)))
                     .relative()
-                    .when(!has_page, |this| this.child(div().debug_selector(|| "empty-space-canvas".into()).absolute().inset_0()))
+                    .when(!has_page, |this| this.child(div().debug_selector(|| "empty-space-canvas".into()).absolute().inset_0()
+                        .when(empty_canvas, |canvas| canvas
+                            .child(self.theme_surface_mask(panel_bounds, viewport, panel_mask))
+                            .child(div().absolute().inset_0().rounded(px(CONTENT_CORNER_RADIUS)).bg(self.theme_empty_panel_fill())))))
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .children(placeholder.map(|(title, url)| {
@@ -3899,7 +3927,7 @@ impl Render for BrowserWindow {
         let sidebar = (!library_open && sidebar_amount > 0.).then(|| self.render_sidebar(cx));
         let library = library_open.then(|| self.render_library_host(cx));
         let compact = self.transient.is_some();
-        let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(cx).into_any_element() };
+        let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(window, cx).into_any_element() };
         div()
             .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))

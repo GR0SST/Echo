@@ -125,7 +125,44 @@ pub(crate) struct ChromeColors {
     pub border: gpui::Hsla,
 }
 
+/// Device-pixel strips approximate the rounded boundary without repainting or
+/// stretching the theme field. All coordinates stay relative to the window.
+pub(crate) fn rounded_theme_mask(bounds: Bounds<gpui::Pixels>, radius: f32, scale: f32) -> Vec<Bounds<gpui::Pixels>> {
+    let r = radius.min(f32::from(bounds.size.width) / 2.).min(f32::from(bounds.size.height) / 2.).max(0.);
+    if r == 0. { return vec![bounds]; }
+    let count = (r * scale.max(1.)).ceil() as usize;
+    let step = r / count as f32;
+    let mut mask = vec![Bounds::new(bounds.origin + gpui::point(px(0.), px(r)),
+        gpui::size(bounds.size.width, bounds.size.height - px(r * 2.)))];
+    for row in 0..count {
+        let y = row as f32 * step;
+        let dy = r - y - step / 2.;
+        let inset = r - (r * r - dy * dy).max(0.).sqrt();
+        let width = bounds.size.width - px(inset * 2.);
+        mask.push(Bounds::new(bounds.origin + gpui::point(px(inset), px(y)), gpui::size(width, px(step))));
+        mask.push(Bounds::new(gpui::point(bounds.left() + px(inset), bounds.bottom() - px(y + step)), gpui::size(width, px(step))));
+    }
+    mask
+}
+
 impl BrowserWindow {
+    /// Arc keeps an empty document panel over the continuous Space field.
+    pub(crate) fn theme_empty_panel_fill(&self) -> gpui::Hsla {
+        gpui::hsla(0., 0., 1., if self.theme_is_dark() { 0.10 } else { 2. / 3. })
+    }
+    /// Keep the shadow outside the translucent panel. Nested outlines leave
+    /// its interior untouched, including the six-pixel corner cutouts.
+    pub(crate) fn theme_empty_panel_shadow(&self) -> AnyElement {
+        canvas(|_, _, _| (), |bounds, _, window, _| {
+            for distance in (1..=8).rev() {
+                let spread = distance as f32;
+                let alpha = 0.05 * (-0.5 * ((spread - 0.5) / 1.5).powi(2)).exp();
+                window.paint_quad(gpui::outline(bounds.dilate(px(spread)),
+                    gpui::hsla(0., 0., 0., alpha), Default::default())
+                    .corner_radii(px(crate::pages::CONTENT_CORNER_RADIUS + spread)));
+            }
+        }).size_full().into_any_element()
+    }
     pub(crate) fn theme_tab_selection_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
         gpui::hsla(0., 0., 1., if self.theme_is_dark_for(space) { 0.16 } else { 0.55 })
     }
@@ -262,6 +299,7 @@ impl BrowserWindow {
                                     + gpui::point(px(col as f32 * 128.), px(row as f32 * 128.)),
                                 gpui::size(px(128.), px(128.)),
                             );
+                            if !tile.intersects(&window.content_mask().bounds) { continue; }
                             let _ = window.paint_image(
                                 tile,
                                 Default::default(),
