@@ -188,7 +188,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Add Extension… / Manage Extensions… | — | missing | No Chrome extensions |
+| Add Extension… / Manage Extensions… | — | missing | CEF 154 feasibility and approval-gated bridge plan: [extensions investigation](CEF154_EXTENSIONS.md). Unpacked MV3 workers/content scripts work in Alloy; complete Web Store installation and action/management APIs are not exposed for the GPUI embedding |
 | Minimize Window / Zoom / Bring All to Front | ⌘M | partial | Window menu and Command Bar target the main window. Bundled macOS checks verified minimization from page, Command Bar, Find and the Minimize Window command, plus restored document/input and History/DevTools responder retention. Popup teardown cancels deferred activation that would undo minimization. Native Zoom/Bring All ordering and remaining platforms still need verification |
 | View Library | ⇧⌘L | partial | Dock Home, the far-left sidebar page, Window → Open Library…, ⇧⌘L (including CEF focus), and Command Bar → Open Library open the existing Library route. Reopening retains its selected section. Spaces is interactive. Media and Downloads translate the selected page into the right preview without changing its viewport width, clipping it at the window edge; origin-only native moves do not send CEF resize notifications. Entry/return use the measured fast ease-out slide (approximately 0.28/0.35 s), with Reduce Motion respected; macOS checks preserve document identity and input through Command Bar/Find dismissal, and Reload works there. The six Library rail glyphs use reference-measured vector artwork, accent-filled selected panels, optically aligned bold labels and existing theme-owned tile surfaces. Downloads now reads canonical completed inventory; remaining behavioral/visual parity is incomplete |
 | View Downloads | ⇧⌘J | partial | Window → View Downloads…, Command Bar, Library rail and the shortcut open canonical completed records beside the retained page. Completed-file menu actions are connected; default download admission, active rows and remaining presentation parity are incomplete |
@@ -296,7 +296,7 @@ Folder duplication follows the right-click action documented in the
 | Folders: Create New Folder, Collapse/Expand All Folders | — | done | Name editor, current-Space collapse/expand, named Expand Folder / Rename Folder, Pin to <folder> and Pin to New Folder actions |
 | Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | — | partial | Rename Current Tab, Reset Tab Name and Mute/Unmute All are implemented; Reset Tab and Replace Pin with Current Page work for modified pins. Duplicate works for ordinary tabs, Pinned, Favorites and entire Split Views, creating independent page identities |
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar and Air Traffic Control are available; remaining local actions need their features. Check for Updates via Arc's feed is out of scope |
-| Running an extension by name ("Extension …") | — | missing | — |
+| Running an extension by name ("Extension …") | — | missing | Requires an engine action catalog/invocation bridge; see [CEF 154 findings](CEF154_EXTENSIONS.md) |
 | Join next video call / Zoom | — | missing | — |
 | Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | partial | Five local tab suggestions with contextual Space/Switch to Tab hints. Feature/help links, Max/ChatGPT suggestions and Arc's complete recency/ranking policy remain missing. Arc-account promotion rows remain excluded |
 | ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | missing | AI-only user-provider integration and Command Bar flow |
@@ -480,7 +480,7 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | Pointer lock: "Your cursor is hidden. Press 'esc'…" toast | missing | — |
 | Page full screen: "To exit full screen, press …" toast | missing | — |
 | Developer mode for a site, DevTools | partial | Focused live-page DevTools commands are implemented through the original embedded CEF frontend; see View → Developer above. Per-site Developer Mode is still missing |
-| Chrome extensions (icons, "Open pinned extensions picker") | missing | — |
+| Chrome extensions (icons, "Open pinned extensions picker") | missing | Arc grid inspected (four columns of 48×32 tiles); Alloy action popup/pinning bridge remains approval-gated. See [CEF 154 findings](CEF154_EXTENSIONS.md) |
 | Built-in ad and tracker blocker | missing | — |
 | Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | missing | — |
 
