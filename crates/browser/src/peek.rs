@@ -262,8 +262,10 @@ impl BrowserWindow {
             .child(div().absolute().size_0().track_focus(&self.native_action_focus))
             .child(div().id("peek-backdrop").absolute().top(px(19.)).bottom(px(19.)).left(px(sidebar + 9.)).right(px(19.))
                 .rounded(px(8.)).opacity(0.6 * amount.clamp(0., 1.)).child(self.theme_surface(false)).on_click(cx.listener(|view, _, _, cx| view.exit_peek(cx))))
+            .child(div().absolute().left(px(left)).top(px(top)).w(px(width)).h(px(height))
+                .opacity(amount.clamp(0., 1.)).child(card_shadow()))
             .child(div().debug_selector(|| "peek-card".into()).absolute().left(px(left)).top(px(top))
-                .w(px(width)).h(px(height)).rounded(px(8.)).bg(gpui::white()).shadow_xl()
+                .w(px(width)).h(px(height)).rounded(px(8.)).bg(gpui::white())
                 .when(self.pages.is_none(), |view| view.child(self.browser.active_tab().map(|tab| tab.url.clone()).unwrap_or_default()))
                 .overflow_hidden()
                 .when_some(close_image.clone(), |card, image| card.child(div().debug_selector(|| "peek-closing-image".into()).w(px(width)).h(px(height)).child(gpui::img(image).w(px(width)).h(px(height)).object_fit(gpui::ObjectFit::Fill))))
@@ -276,6 +278,20 @@ impl BrowserWindow {
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, close_image.is_none()); }
         self.render_overlay_shell(content, cx)
     }
+}
+
+/// Measured over the reference's flat backdrop: 13% at one pixel, 3.4%
+/// at five and below 1% by eight. Keep this narrow falloff independent of
+/// the Space palette and of GPUI's much wider preset shadows.
+fn card_shadow() -> AnyElement {
+    gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
+        let alpha = [0.059, 0.046, 0.0345, 0.0255, 0.0155, 0.0115, 0.007, 0.0027, 0.0023];
+        for (index, alpha) in alpha.into_iter().enumerate().rev() {
+            let spread = index as f32 + 1.;
+            window.paint_quad(gpui::outline(bounds.dilate(px(spread)),
+                gpui::hsla(0., 0., 0., alpha), Default::default()).corner_radii(px(8. + spread)));
+        }
+    }).size_full().into_any_element()
 }
 
 fn expand_icon() -> AnyElement {

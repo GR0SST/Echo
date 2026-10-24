@@ -76,6 +76,7 @@ impl Document {
 
 impl BrowserWindow {
     pub(crate) fn retain_closed_peek(&mut self, cx: &mut Context<Self>) {
+        if crate::quit::is_quitting() { return; }
         let Some(state) = self.peek_owner.as_mut() else { return; };
         if state.detached { return; }
         let owner = state.owner.clone();
@@ -83,6 +84,7 @@ impl BrowserWindow {
         let origin = state.origin;
         let Ok((parent, history, owner_window)) = owner.update(cx, |owner, _| (owner.native_view, owner.profile.handle.clone(), owner.main_window.window_id())) else { return; };
         let parent = parent.unwrap_or(std::ptr::null_mut());
+        if parent.is_null() && !cfg!(test) { return; }
         #[cfg(test)]
         let parent = if parent.is_null() { std::ptr::dangling_mut::<std::ffi::c_void>() } else { parent };
         let Some(transient) = &self.transient else { return; };
