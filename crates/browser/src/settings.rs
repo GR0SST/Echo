@@ -256,7 +256,7 @@ fn switch(enabled: bool) -> AnyElement {
                 .top(px(1.))
                 .size(px(14.))
                 .rounded_full()
-                .bg(rgb(0xc9dafa)),
+                .bg(rgb(if enabled { 0xc9dafa } else { 0xdfdfdf })),
         )
         .into_any_element()
 }
@@ -353,6 +353,17 @@ impl SettingsWindow {
     ) -> AnyElement {
         let enabled = self.profile.read_settings(|b| b.settings.enabled(toggle));
         row()
+            .when(
+                matches!(
+                    toggle,
+                    Toggle::LittleWindowShortcut
+                        | Toggle::LittleWindowLinks
+                        | Toggle::LittleWindowCommandClick
+                        | Toggle::PeekPinned
+                        | Toggle::PeekCommandShiftClick
+                ),
+                |s| s.min_h(px(37.)),
+            )
             .id(SharedString::from(format!("toggle-{toggle:?}")))
             .debug_selector(|| format!("settings-toggle-{toggle:?}"))
             .focusable()
@@ -420,7 +431,7 @@ impl SettingsWindow {
                 Popup::Search => 42.,
                 Popup::Archive | Popup::Downloads => 43.,
                 Popup::Documents => 44.,
-                Popup::LittleArchive => 37.,
+                Popup::LittleArchive => 39.,
             }))
             .child(div().flex_1().min_w_0().child(label))
             .child(
@@ -664,13 +675,13 @@ impl SettingsWindow {
                 .child(div().h(px(130.)).rounded_t(px(8.)).bg(rgb(0xe6d1cc)).border_1().border_color(rgb(0xbcb7bd))
                     .child(div().h(px(25.)).bg(rgb(0xbab9c5)).rounded_t(px(8.)).flex().items_center().justify_between().px(px(10.)).text_size(px(10.)).text_color(rgb(0x555761)).child("Work").child("echo.local").child("Open in Work"))))
             .child(div().px(px(64.)).py(px(24.)).flex().flex_col().gap(px(24.))
-                .child("Little Echo is a smaller, simpler Echo window. It’s perfect for quick lookups and reading funny tweets your friends send you.")
+                .child(div().px(px(10.)).child("Little Echo is a smaller, simpler Echo window. It’s perfect for quick lookups and reading funny tweets your friends send you."))
                 .child(group().child(self.toggle_row("Open Little Echo when I press ⌥⌘N in any app", Toggle::LittleWindowShortcut, cx)).child(rule())
                     .child(self.toggle_row("Open Little Echo when clicking on links with ⌥⌘ held", Toggle::LittleWindowCommandClick, cx)).child(rule())
                     .child(self.toggle_row("Links from other apps open in Little Echo", Toggle::LittleWindowLinks, cx)).child(rule())
                     .child(self.popup_row("Archive Little Echos after:", archive, Popup::LittleArchive, 150., cx)))
                 .child(rule())
-                .child("Peek is a way to preview a link without opening a new tab. It’s perfect for quickly looking at a link from an email, news article, or tweet.")
+                .child(div().px(px(10.)).child("Peek is a way to preview a link without opening a new tab. It’s perfect for quickly looking at a link from an email, news article, or tweet."))
                 .child(group().child(self.toggle_row("Open a Peek window when clicking on links with Shift held", Toggle::PeekCommandShiftClick, cx)).child(rule())
                     .child(self.toggle_row("Open a Peek window when clicking on links to other sites", Toggle::PeekPinned, cx))
                     .child(div().pb(px(6.)).italic().text_color(rgb(0x929494)).child("Note: This only affects Favorites and Pinned tabs.")))
@@ -894,7 +905,7 @@ impl SettingsWindow {
                 .child(div().w(px(200.)).min_w_0().flex_none().flex().flex_col().gap(px(10.))
                     .child(div().flex().gap(px(4.)).text_color(rgb(0x1686ff)).child(div().size(px(64.)).rounded(px(12.)).bg(rgb(0x75acff)).border_2().border_color(rgb(0x0788ff)).flex().items_center().justify_center().child(icons::control_sized(Icon::Command, 40.))).child(div().size(px(64.)).rounded(px(12.)).bg(rgb(0x75acff)).border_2().border_color(rgb(0x0788ff)).flex().items_center().justify_center().child(icons::ionicon("happy-outline", 42., 1.))))
                     .child(div().mt(px(12.)).font_weight(gpui::FontWeight::BOLD).child("Custom Shortcuts"))
-                    .child(div().text_color(rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
+                    .child(div().text_size(px(11.)).line_height(px(14.)).text_color(rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
                     .child(div().flex_1()).child(div().flex().gap(px(4.)).child(button("Reset All Shortcuts").px(px(8.)).opacity(0.5)).child(div().size(px(24.)).rounded_full().bg(rgb(0x393b3d)).child(icons::more()).opacity(0.5)))))
             .into_any_element()
     }
@@ -1138,6 +1149,7 @@ impl Render for SettingsWindow {
             .bg(rgb(0x292b2d))
             .text_color(rgb(0xc4c5c5))
             .font_family(".SystemUIFont")
+            .font_weight(gpui::FontWeight::MEDIUM)
             .text_size(px(13.))
             .line_height(px(16.))
             .track_focus(&self.focus)

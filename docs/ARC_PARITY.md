@@ -391,7 +391,7 @@ Account, synchronization and Max are intentionally excluded. Arc artwork and
 referral icon unlocks are not distributed. Controls for features without an
 implementation persist intent only; action-only routes without backing behavior
 remain unavailable. The installed release puts Auto-Archive in Profiles, not
-General. Screenshots are recorded under `/tmp/parity/settings/`.
+General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.png` and `echo_<Tab>.png`. Visual parity remains partial: toolbar vector shapes, the Links illustration, materials and unavailable-action appearance still differ. Native inspection covers dark macOS only; Windows, Linux and light appearance are unverified. The post-reboot check verified all six tab windows, native Cmd+W, and the persisted 7-day archive policy; the full four-thread test suite passed.
 
 | Tab → option | Status |
 |---|---|
