@@ -60,3 +60,20 @@ Favorite and folder still need fresh reproduction.
 Five GPUI regression tests cover menu ordering, Remove Pin/Undo, Favorite and folder
 menus, dock geometry and close targets. Two core tests cover atomic pin removal,
 original URL/folder restoration, Redo and rejected Today/Favorite requests.
+
+## Round 2: menu material and width
+
+Today and Pinned menus now have measured minimum widths of 208 and 200 px,
+respectively. GPUI tests verify real menu bounds after right-clicking each row.
+The bounded native effect uses the shared BackdropConfig API and records actual
+installation; failed/unsupported effects render an opaque fallback. Menu tint is
+HSL(accent, 0.08, 0.17) at 0.5 alpha over the dark active Menu effect. Text is
+white at 0.85 alpha, sampled to match Arc's approximately 226/255 peak text.
+The initial flat gray tint and heavy black rim were removed. Space palette and
+Split View menu geometry are unchanged.
+
+Inspected pairs: `pair-r2-menu-material-3x.png`,
+`pair-r2-pinned-material-3x.png`. Neutral body samples are approximately RGB
+(48, 47, 50) in Echo; Arc varies with its underlying Space/page from neutral
+(48, 48, 48) to tinted (51, 48, 60). The sample profiles use different underlying
+Space materials, so exact blur/color parity remains partial.

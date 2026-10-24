@@ -11,8 +11,8 @@ pub(crate) fn fill() -> Hsla {
     hsla(240. / 360., 0.04, 0.13, if crate::native::HAS_BACKDROP { 0.55 } else { 0.96 })
 }
 
-pub(crate) fn menu_fill() -> Hsla {
-    hsla(210. / 360., 0.04, 0.34, if crate::native::HAS_BACKDROP { 0.4 } else { 0.97 })
+pub(crate) fn menu_fill(hue: f32, blurred: bool) -> Hsla {
+    hsla(hue, 0.08, 0.17, if blurred { 0.5 } else { 1. })
 }
 
 /// Places (or with `None` removes) the blur named `key` in `window`.
@@ -33,11 +33,24 @@ pub(crate) fn shell(id: &'static str) -> gpui::Stateful<Div> {
 }
 
 /// A context menu shell drawn like a native menu; `key` names its blur.
-pub(crate) fn menu_shell(id: impl Into<gpui::ElementId>, key: &'static str) -> gpui::Stateful<Div> {
+pub(crate) fn menu_shell(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>) -> gpui::Stateful<Div> {
     div().id(id)
-        .relative().rounded(px(MENU_RADIUS)).bg(menu_fill())
-        .border_1().border_color(hsla(0., 0., 0., 0.55)).shadow_lg()
-        .text_color(hsla(0., 0., 1., 0.9)).font_family(".SystemUIFont").text_size(px(13.))
-        .child(div().absolute().inset_0().rounded(px(MENU_RADIUS - 1.)).border_1().border_color(hsla(0., 0., 1., 0.14)))
-        .child(canvas(|_, _, _| (), move |bounds, _, window, _| backdrop(window, key, Some(bounds), MENU_RADIUS, crate::native::Material::Menu)).absolute().inset_0())
+        .relative().rounded(px(MENU_RADIUS)).bg(menu_fill(hue, installed.get()))
+        .border_1().border_color(hsla(0., 0., 0., 0.15)).shadow_lg()
+        .text_color(hsla(0., 0., 1., 0.85)).font_family(".SystemUIFont").text_size(px(13.))
+        .child(div().absolute().inset_0().rounded(px(MENU_RADIUS - 1.)).border_1().border_color(hsla(0., 0., 1., 0.10)))
+        .child(canvas(|_, _, _| (), move |bounds, _, window, _| {
+            use crate::material::*;
+            let blurred = crate::native::view_of(window).is_some_and(|view| {
+                crate::native::set_backdrop_configured(view, key,
+                    Some([f32::from(bounds.origin.x) as f64, f32::from(bounds.origin.y) as f64,
+                        f32::from(bounds.size.width) as f64, f32::from(bounds.size.height) as f64]),
+                    MENU_RADIUS as f64, BackdropConfig {
+                        appearance: EffectAppearance::Dark, state: EffectState::Active,
+                        blending: EffectBlending::BehindWindow, emphasized: false,
+                        effect_alpha: 1., material: EffectMaterial::Menu,
+                    }) == BackdropInstallation::Installed
+            });
+            if installed.replace(blurred) != blurred { window.refresh(); }
+        }).absolute().inset_0())
 }

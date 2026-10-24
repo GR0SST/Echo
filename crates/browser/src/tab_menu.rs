@@ -49,6 +49,7 @@ pub(crate) struct TabMenu {
     window_width: Pixels,
     scroll: gpui::ScrollHandle,
     pane: bool,
+    backdrop: [Rc<Cell<bool>>; 2],
     position: Point<Pixels>,
     focus: FocusHandle,
     pub overlay: Option<WindowHandle<Overlay>>,
@@ -195,7 +196,7 @@ impl BrowserWindow {
         self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { target, selected: None, submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), window_width: window.bounds().size.width, scroll: gpui::ScrollHandle::new(), pane: false, position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        self.tab_menu = Some(TabMenu { target, selected: None, submenu: None, sub_selected: None, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), window_width: window.bounds().size.width, scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -575,8 +576,16 @@ impl BrowserWindow {
             }
         });
         let id = if nested { "tab-context-submenu" } else { "tab-context-menu" };
-        crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }).debug_selector(move || id.into())
-            .min_w(px(MIN_WIDTH)).py(px(PADDING)).flex().flex_col().children(rows)
+        let width = if nested { MIN_WIDTH } else {
+            self.tab_menu.as_ref().and_then(|menu| match menu.target {
+                MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
+                    self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
+                _ => None,
+            }).unwrap_or(MIN_WIDTH)
+        };
+        let backdrop = self.tab_menu.as_ref().map(|menu| menu.backdrop[usize::from(nested)].clone()).unwrap_or_default();
+        crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop).debug_selector(move || id.into())
+            .min_w(px(width)).py(px(PADDING)).flex().flex_col().children(rows)
     }
 }
 

@@ -7979,6 +7979,19 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
     assert!(view.read_with(cx,|w,_|w.command_bar.is_none()));
 }
 
+
+#[gpui::test]
+fn ordinary_sidebar_menu_widths_match_arc_today_and_pinned(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    right_click(cx, "tab-8");
+    let mut menu = tab_menu(&view, cx);
+    assert_eq!(menu.debug_bounds("tab-context-menu").unwrap().size.width, gpui::px(208.));
+    menu.simulate_keystrokes("escape");
+    right_click(cx, "tab-4");
+    let mut menu = tab_menu(&view, cx);
+    assert_eq!(menu.debug_bounds("tab-context-menu").unwrap().size.width, gpui::px(200.));
+}
+
 /// Captured from Arc's sidebar context menus at 1000 × 760 on 2026-10-24.
 fn sidebar_menu_labels(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Vec<String> {
     view.read_with(cx, |w, _| w.menu_entries().iter().map(|entry| match entry {
