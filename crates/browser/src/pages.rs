@@ -25,7 +25,7 @@ impl StorageSelection {
 
 pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     match event {
-        Event::OpenInNewTab { opener, .. } => Some(*opener),
+        Event::OpenInNewTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
@@ -99,6 +99,8 @@ pub trait WebEngine {
     fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
+    fn set_peek_policy(&mut self, _view: ViewId, _policy: engine::PeekPolicy) {}
+    fn set_corner_radius(&mut self, _view: ViewId, _radius: f64) {}
     fn set_visible(&mut self, view: ViewId, visible: bool);
     /// Keyboard focus to the page.
     fn focus_page(&mut self, view: ViewId);
@@ -151,6 +153,8 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
+    fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<NativePaste> {
         let mut request = self.engine.prepare_paste_and_match_style(view)?;
         Some(Box::new(move || request.try_dispatch()))
@@ -479,6 +483,7 @@ pub struct Pages {
     axis: browser_core::splits::Axis,
     split: bool,
     square_top: bool,
+    pub(crate) peek_mode: bool,
     visible: HashSet<TabId>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
@@ -560,7 +565,7 @@ impl Pages {
             wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
-            square_top: false,
+            square_top: false, peek_mode: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -651,7 +656,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, peek_mode: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -825,6 +830,10 @@ impl Pages {
         }
         self.apply_with_navigation(true);
         self.sync_audio(browser);
+        let mut store = self.store.borrow_mut();
+        let policies: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(id, page)|
+            (page.view, !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::PeekPinned) && (browser.is_favorite(*id) || browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == *id))))).collect();
+        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
     /// Applies mute intent even when an occluded window is not rendering.
@@ -1514,7 +1523,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }

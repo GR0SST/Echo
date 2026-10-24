@@ -219,6 +219,7 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
     paste_busy: usize,
     paste_hook: Option<Box<dyn FnOnce()>>,
     print_busy: usize,
@@ -275,6 +276,7 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.0.borrow_mut().peek_policies.insert(raw(view), policy); }
     fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<crate::pages::NativePaste> {
         let fake = self.clone();
         Some(Box::new(move || {
@@ -8471,4 +8473,121 @@ fn external_web_url_opens_lookup_without_modifying_regular_tabs(cx: &mut TestApp
         assert_eq!(view.browser.active_tab().unwrap().url, "HTTPS://external.example/path");
     });
     assert_eq!(source.read_with(visual, |view, _| view.browser.all_tabs().count()), before);
+}
+
+fn peek_window(source: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> (Entity<BrowserWindow>, VisualTestContext) {
+    let handle = source.read_with(cx, |view, _| view.peek_child.expect("Peek child"));
+    let child = cx.cx.update(|cx| handle.root(cx).unwrap());
+    let visual = VisualTestContext::from_window(handle.into(), &cx.cx);
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(360));
+    visual.run_until_parked();
+    (child, visual)
+}
+
+#[gpui::test]
+fn peek_link_leaves_source_tabs_untouched_and_escape_restores_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = view.read_with(cx, |view, _| (view.browser.all_tabs().count(), view.browser.space().active_tab, view.browser.active_tab().unwrap().url.clone()));
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/path".into() });
+    let (child, mut peek) = peek_window(&view, cx);
+    child.read_with(&peek, |view, _| assert_eq!(view.browser.active_tab().unwrap().url, "https://peek.example/path"));
+    assert!(peek.debug_bounds("peek-card").is_some());
+    for id in ["peek-close", "peek-expand", "peek-split"] {
+        let bounds = peek.debug_bounds(id).unwrap();
+        assert_eq!(bounds.size, gpui::size(gpui::px(34.), gpui::px(34.)));
+    }
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::Navigate(..) | Call::Close(..))));
+    peek.simulate_keystrokes("escape"); peek.run_until_parked(); peek.executor().advance_clock(Duration::from_millis(210)); peek.run_until_parked(); cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(view.peek_child.is_none());
+        assert_eq!((view.browser.all_tabs().count(), view.browser.space().active_tab, view.browser.active_tab().unwrap().url.clone()), before);
+    });
+}
+
+#[gpui::test]
+fn peek_native_escape_and_command_escape_close_only_the_card(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    for cmd in [false, true] {
+        fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+        let (_, mut peek) = peek_window(&view, cx);
+        let child = fake.0.borrow().forks.last().unwrap().clone();
+        child.send(&mut peek, child.shortcut(Shortcut { cmd, key: "escape".into(), ..Default::default() }));
+        peek.run_until_parked(); peek.executor().advance_clock(Duration::from_millis(210)); peek.run_until_parked(); cx.run_until_parked();
+        assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
+        assert!(view.read_with(cx, |view, _| view.browser.active_tab().is_some()));
+    }
+}
+
+#[gpui::test]
+fn peek_expansion_creates_a_today_tab_and_preserves_the_source(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = view.read_with(cx, |view, _| view.browser.all_tabs().count());
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&view, cx);
+    let bounds = peek.debug_bounds("peek-expand").unwrap();
+    peek.simulate_click(bounds.center(), Modifiers::none()); peek.run_until_parked(); cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(view.peek_child.is_none());
+        assert_eq!(view.browser.all_tabs().count(), before + 1);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://peek.example/");
+    });
+}
+
+#[gpui::test]
+fn peek_split_fills_a_new_pane_and_keeps_pinned_original(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id);
+    view.update(cx, |view, _| view.edit_browser(|browser| browser.toggle_pin(original)));
+    cx.run_until_parked();
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/split".into() });
+    let (_, mut peek) = peek_window(&view, cx);
+    let bounds = peek.debug_bounds("peek-split").unwrap();
+    peek.simulate_click(bounds.center(), Modifiers::none()); peek.run_until_parked(); cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(view.peek_child.is_none()); assert!(view.split_draft.is_none());
+        assert!(view.browser.space().pinned.iter().any(|tab| tab.id == original));
+        assert_eq!(view.browser.active_split().unwrap().panes.len(), 2);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://peek.example/split");
+    });
+}
+
+#[gpui::test]
+fn peek_rejects_background_stale_and_non_web_link_callbacks(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    for (opener,url) in [(page(999),"https://peek.example"),(page(1),"javascript:alert(1)"),(page(1),"file:///tmp/a")] {
+        fake.send(cx, Event::OpenPeek { opener, url: url.into() });
+        assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
+    }
+}
+
+#[gpui::test]
+fn peek_engine_policy_tracks_the_pin_and_both_settings(cx: &mut TestAppContext) {
+    use browser_core::settings::Toggle;
+    let (view, cx, fake) = open_pages(cx);
+    assert_eq!(fake.0.borrow().peek_policies[&1], engine::PeekPolicy { pinned: false, shift_click: true, capture_escape: false });
+    cx.simulate_keystrokes("cmd-d"); cx.run_until_parked();
+    assert!(fake.0.borrow().peek_policies[&1].pinned);
+    view.update(cx, |view, cx| {
+        view.edit_profile(|browser| { browser.settings.set_enabled(Toggle::PeekPinned, false); browser.settings.set_enabled(Toggle::PeekCommandShiftClick, false); });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(fake.0.borrow().peek_policies[&1], engine::PeekPolicy::default());
+}
+
+#[gpui::test]
+fn peek_native_page_zoom_targets_the_card_and_cmd_w_leaves_the_source(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&view, cx);
+    let child = fake.0.borrow().forks.last().unwrap().clone();
+    child.take_calls(); fake.take_calls();
+    child.send(&mut peek, child.shortcut(Shortcut { cmd: true, key: "+".into(), ..Default::default() }));
+    assert!(child.take_calls().contains(&Call::Zoom(1,1)));
+    assert!(fake.take_calls().is_empty());
+    peek.simulate_keystrokes("cmd-w"); peek.run_until_parked(); cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.peek_child.is_none()));
+    assert!(view.read_with(cx, |view, _| view.browser.active_tab().is_some()));
 }

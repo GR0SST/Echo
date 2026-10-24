@@ -756,6 +756,7 @@ dependencies = [
  "tempfile",
  "unicode-segmentation",
  "ureq",
+ "url",
  "windows-sys 0.61.2",
 ]
 
@@ -1820,6 +1821,7 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "serde_json",
+ "url",
 ]
 
 [[package]]

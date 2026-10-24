@@ -23,7 +23,7 @@ pub(crate) struct Picker {
 }
 
 /// Little's resting address shows the hostname; editing/copying retains the URL.
-fn lookup_host(url: &str) -> String {
+pub(crate) fn lookup_host(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else { return crate::window::display_url(url); };
     if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") { return crate::window::display_url(url); }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);

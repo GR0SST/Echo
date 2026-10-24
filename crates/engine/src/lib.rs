@@ -86,6 +86,7 @@ pub enum Event {
     },
     /// The page asked for a new window (target=_blank, window.open, ⌘-click).
     OpenInNewTab { opener: ViewId, url: String },
+    OpenPeek { opener: ViewId, url: String },
     /// A browser shortcut pressed while this exact page had focus. Preserve
     /// the callback view through queues; the current active page may change.
     Shortcut { view: ViewId, shortcut: Shortcut },
@@ -107,11 +108,19 @@ enum RawEvent {
     Loading(bool, bool, bool),
     LoadError(String, i32, String),
     Popup(String),
+    Peek(String),
     Shortcut(Shortcut),
 }
 
 type EventQueue = Arc<Mutex<Vec<(i32, RawEvent)>>>;
 type Shortcuts = Arc<Vec<Shortcut>>;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PeekPolicy {
+    pub pinned: bool,
+    pub shift_click: bool,
+    pub capture_escape: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewRole { Page, Inspector(InspectorId) }
@@ -134,6 +143,7 @@ struct View<B = Browser, C = RequestContext> {
     /// The native view has not been positioned yet.
     needs_layout: bool,
     rounded_top: bool,
+    link_policy: Arc<Mutex<PeekPolicy>>,
 }
 
 // CEF is initialized once per process, including across closed/reopened windows.
@@ -239,7 +249,6 @@ impl Runtime {
 }
 
 pub struct Engine {
-    client: Client,
     shortcuts: Shortcuts,
     events: EventQueue,
     views: HashMap<ViewId, View>,
@@ -356,7 +365,6 @@ impl Engine {
         runtime.lifecycle.require_running().expect("Cannot fork an engine during shutdown");
         let events = EventQueue::default();
         Self {
-            client: EngineClient::new(events.clone(), shortcuts.clone(), None, runtime.lifecycle.queue.clone(), None, None),
             shortcuts,
             events,
             views: HashMap::new(),
@@ -634,12 +642,13 @@ impl Engine {
         }
         .set_as_child(page_parent as _, &bounds);
         let mut extra = None;
-        let mut client = self.client.clone();
+        let policy = Arc::new(Mutex::new(PeekPolicy::default()));
+        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone());
         if let ViewRole::Inspector(id) = role {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None);
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default());
         }
         let prepared_downloads = if role == ViewRole::Page {
             if let Some(owner) = download_owner {
@@ -658,7 +667,7 @@ impl Engine {
         if let Some(prepared) = &prepared_downloads {
             client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None,
                 runtime.lifecycle.queue.clone(), Some(prepared.registration.handler()),
-                Some(prepared.registration.gate()));
+                Some(prepared.registration.gate()), policy.clone());
         }
         let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
@@ -719,6 +728,7 @@ impl Engine {
                 frame,
                 needs_layout: true,
                 rounded_top: true,
+                link_policy: policy,
             },
         );
         drop(creation);
@@ -762,6 +772,18 @@ impl Engine {
         }
         self.set_frame(id, frame);
         true
+    }
+
+    /// Per-document link intent; only Peek pages capture unmodified Escape.
+    pub fn set_peek_policy(&mut self, id: ViewId, policy: PeekPolicy) {
+        if let Some(view) = self.views.get(&id) { *view.link_policy.lock().unwrap() = policy; }
+    }
+
+    pub fn set_corner_radius(&mut self, id: ViewId, radius: f64) {
+        #[cfg(target_os = "macos")]
+        if let Some(view) = self.views.get(&id) { mac::set_corner_radius(view.host, radius.max(0.)); }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (id, radius);
     }
 
     /// Split headers own the pane's top corners; the page below joins them squarely.
@@ -1094,6 +1116,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
             }
         }
         RawEvent::Popup(url) => Event::OpenInNewTab { opener: view, url },
+        RawEvent::Peek(url) => Event::OpenPeek { opener: view, url },
     })
 }
 
@@ -1111,6 +1134,7 @@ wrap_client! {
         lifecycle: shutdown::Queue,
         downloads: Option<DownloadHandler>,
         download_gate: Option<downloads::DownloadGate>,
+        policy: Arc<Mutex<PeekPolicy>>,
     }
 
     impl Client {
@@ -1125,13 +1149,14 @@ wrap_client! {
             1
         }
         fn request_handler(&self) -> Option<RequestHandler> {
-            self.inspector.as_ref().map(|(id, queue)| devtools::InspectorRequestHandler::new(*id, queue.clone()))
+            if let Some((id, queue)) = &self.inspector { Some(devtools::InspectorRequestHandler::new(*id, queue.clone())) }
+            else { Some(PeekRequestHandler::new(self.events.clone(), self.policy.clone())) }
         }
         fn download_handler(&self) -> Option<DownloadHandler> {
             Some(self.downloads.clone().unwrap_or_else(downloads::denied_handler))
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
-            Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone()))
+            Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone(), self.policy.clone()))
         }
 
         fn display_handler(&self) -> Option<DisplayHandler> {
@@ -1150,7 +1175,34 @@ wrap_client! {
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(EngineLifeSpanHandler::new(self.events.clone(), self.lifecycle.clone(), self.download_gate.clone()))
+            Some(EngineLifeSpanHandler::new(self.events.clone(), self.policy.clone(), self.lifecycle.clone(), self.download_gate.clone()))
+        }
+    }
+}
+
+fn peek_cross_domain(current: &str, target: &str, pinned: bool, gesture: bool, redirect: bool) -> bool {
+    if !pinned || !gesture || redirect { return false; }
+    let (Ok(current), Ok(target)) = (url::Url::parse(current), url::Url::parse(target)) else { return false; };
+    matches!(current.scheme(), "http" | "https") && matches!(target.scheme(), "http" | "https")
+        && current.host_str().is_some() && target.host_str().is_some() && current.host_str() != target.host_str()
+}
+
+wrap_request_handler! {
+    struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>> }
+    impl RequestHandler {
+        fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, gesture: i32, redirect: i32) -> i32 {
+            let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return 0; };
+            let Some(request) = request else { return 0; };
+            let target = CefString::from(&request.url()).to_string();
+            if CefString::from(&request.method()).to_string() != "GET" || !peek_cross_domain(&CefString::from(&frame.url()).to_string(), &target, self.policy.lock().unwrap().pinned, gesture != 0, redirect != 0) { return 0; }
+            push(&self.events, browser, RawEvent::Peek(target));
+            1
+        }
+        fn on_open_urlfrom_tab(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, target: Option<&CefString>, disposition: WindowOpenDisposition, gesture: i32) -> i32 {
+            if gesture == 0 || !self.policy.lock().unwrap().shift_click || disposition != WindowOpenDisposition::NEW_WINDOW { return 0; }
+            let Some(target) = target else { return 0; };
+            push(&self.events, browser, RawEvent::Peek(target.to_string()));
+            1
         }
     }
 }
@@ -1290,6 +1342,7 @@ wrap_load_handler! {
 wrap_life_span_handler! {
     struct EngineLifeSpanHandler {
         events: EventQueue,
+        policy: Arc<Mutex<PeekPolicy>>,
         lifecycle: shutdown::Queue,
         download_gate: Option<downloads::DownloadGate>,
     }
@@ -1303,8 +1356,8 @@ wrap_life_span_handler! {
             _popup_id: ::std::os::raw::c_int,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
-            _target_disposition: WindowOpenDisposition,
-            _user_gesture: ::std::os::raw::c_int,
+            target_disposition: WindowOpenDisposition,
+            user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
             _client: Option<&mut Option<Client>>,
@@ -1314,7 +1367,7 @@ wrap_life_span_handler! {
         ) -> ::std::os::raw::c_int {
             let url = target_url.map(CefString::to_string).unwrap_or_default();
             if !url.is_empty() {
-                push(&self.events, browser, RawEvent::Popup(url));
+                push(&self.events, browser, if user_gesture != 0 && self.policy.lock().unwrap().shift_click && target_disposition == WindowOpenDisposition::NEW_WINDOW { RawEvent::Peek(url) } else { RawEvent::Popup(url) });
             }
             1
         }
@@ -1363,6 +1416,7 @@ fn shortcut_for(event: &KeyEvent) -> Shortcut {
     let flags = event.modifiers;
     let has = |flag: sys::cef_event_flags_t| flags & flag.0 != 0;
     let key = match event.windows_key_code {
+        0x1b => "escape".to_string(),
         VKEY_TAB => "tab".to_string(),
         VKEY_LEFT => "left".to_string(),
         VKEY_UP => "up".to_string(),
@@ -1395,6 +1449,7 @@ wrap_keyboard_handler! {
     struct EngineKeyboardHandler {
         events: EventQueue,
         shortcuts: Shortcuts,
+        policy: Arc<Mutex<PeekPolicy>>,
     }
 
     impl KeyboardHandler {
@@ -1408,7 +1463,9 @@ wrap_keyboard_handler! {
             let Some(event) = event else {
                 return 0;
             };
-            let Some(shortcut) = intercepted_shortcut(event, &self.shortcuts) else { return 0; };
+            let escape = shortcut_for(event);
+            let peek_escape = self.policy.lock().unwrap().capture_escape && event.type_ == KeyEventType::RAWKEYDOWN && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
+            let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts)) else { return 0; };
             if shortcut.key == "z" {
                 if let Some(browser) = browser.as_ref() { self.events.lock().unwrap().push((browser.identifier(), RawEvent::EditFocus(false))); }
             }
@@ -1547,6 +1604,7 @@ mod view_storage_lifetime_tests {
             frame: Bounds::default(),
             needs_layout: false,
             rounded_top: true,
+            link_policy: Arc::default(),
         }
     }
 
@@ -1623,5 +1681,27 @@ mod ordered_input_tests {
             assert_eq!(events, expected);
         }
         assert!(browser_input(frontend, ViewRole::Inspector(inspector), &RawEvent::Title("DevTools".into())).is_none());
+    }
+}
+
+#[cfg(test)]
+mod peek_tests {
+    use super::*;
+    #[test]
+    fn pinned_links_only_peek_on_user_cross_host_navigation() {
+        let a = "https://a.example/path";
+        assert!(peek_cross_domain(a,"https://b.example/path",true,true,false));
+        for (url,pinned,gesture,redirect) in [
+            ("https://a.example/other",true,true,false), ("https://a.example/#hash",true,true,false),
+            ("https://b.example",false,true,false), ("https://b.example",true,false,false),
+            ("https://b.example",true,true,true), ("javascript:alert(1)",true,true,false),
+            ("file:///tmp/a",true,true,false), ("mailto:a@example.com",true,true,false),
+        ] { assert!(!peek_cross_domain(a,url,pinned,gesture,redirect),"{url}"); }
+    }
+    #[test]
+    fn escape_has_a_named_shortcut_instead_of_a_control_character() {
+        let event = KeyEvent { windows_key_code: 0x1b, unmodified_character: 0x1b, ..Default::default() };
+        assert_eq!(shortcut_for(&event).key,"escape");
+        assert!(intercepted_shortcut(&event,&[]).is_none());
     }
 }

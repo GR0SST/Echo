@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 base64 = "0.22"
 serde_json = "1"
+url = "2"
 cef = { version = "=154.5.0", default-features = false, features = ["sandbox"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

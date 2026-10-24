@@ -203,6 +203,13 @@ pub fn move_clip_view(view: *mut c_void, parent: *mut c_void) {
     }
 }
 
+pub fn set_corner_radius(view: *mut c_void, radius: f64) {
+    unsafe {
+        let layer: *mut AnyObject = msg_send![view as *mut AnyObject, layer];
+        if !layer.is_null() { let _: () = msg_send![layer, setCornerRadius: radius]; }
+    }
+}
+
 /// The clip host is an unflipped NSView: minimum-Y corners are its bottom edge.
 /// Keep those rounded when the page joins a GPUI split header along its top edge.
 pub fn set_top_corners_rounded(view: *mut c_void, rounded: bool) {

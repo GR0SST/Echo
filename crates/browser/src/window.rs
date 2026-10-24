@@ -179,6 +179,7 @@ window_shortcuts! {
     "ctrl-cmd-n" => crate::menus::BlankWindow,
     "cmd-n" => crate::menus::NewWindow,
     "cmd-alt-n" => crate::transient::NewLittleWindow,
+    "cmd-escape" => crate::peek::ExitPeek,
     "cmd-o" => crate::transient::OpenInSpace,
     "cmd-shift-n" => crate::menus::NewIncognitoWindow,
     "ctrl-shift-=" => AddSplit,
@@ -597,6 +598,8 @@ pub struct BrowserWindow {
     pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
     pub(crate) transient: Option<crate::transient::Transient>,
+    pub(crate) peek_child: Option<WindowHandle<BrowserWindow>>,
+    pub(crate) peek_owner: Option<crate::peek::PeekOwner>,
     sidebar_width: f32,
     sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
     sidebar_resize_generation: u64,
@@ -661,7 +664,7 @@ pub struct BrowserWindow {
     mouse_tracking: Rc<RefCell<MouseTracking>>,
     pub pager: Pager,
     pub(crate) focus_handle: FocusHandle,
-    native_action_focus: FocusHandle,
+    pub(crate) native_action_focus: FocusHandle,
     print_generation: u64,
     popup_focus_generation: u64,
     popup_focus_pending: usize,
@@ -833,7 +836,7 @@ impl BrowserWindow {
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
-            transient: None,
+            transient: None, peek_child: None, peek_owner: None,
             sidebar_width: SIDEBAR_WIDTH,
             sidebar_resize: None,
             sidebar_resize_generation: 0,
@@ -917,6 +920,7 @@ impl BrowserWindow {
 
     /// Closing a window keeps its tabs in the session, unlike Archive Tab.
     pub(crate) fn close_window(&mut self, cx: &mut Context<Self>) {
+        self.detach_peek(cx);
         self.close_theme_editor_with_focus(PopupFocus::OnActivation, cx);
         if crate::quit::is_quitting() || crate::quit::last_window_close(cx) { return; }
         if !window_close::claim(self.main_window, cx) { return; }
@@ -1023,6 +1027,7 @@ impl BrowserWindow {
         let profile_child = self.take_user_profile_child(cx);
         let theme_child = self.take_theme_editor();
         let children = [
+            self.peek_child.take().map(|handle| handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),
@@ -1132,6 +1137,12 @@ impl BrowserWindow {
                 }
                 Event::StatusChanged { view, text } => self.update_link_status(view, text, window, cx),
                 Event::EditFocusChanged { .. } => {},
+                Event::OpenPeek { url, .. } => {
+                    if identity.is_some_and(|identity| Some(identity.tab) == self.browser.space().active_tab)
+                        && source_space == Some(self.browser.space().id) {
+                        self.open_peek(url, window, cx);
+                    }
+                }
                 Event::OpenInNewTab { url, .. } => {
                     let Some(source) = source_space.and_then(|id| self.browser.spaces.iter().position(|space| space.id == id && Some(space.user_profile_id) == page_profile)) else { continue; };
                     let id = self.edit_browser(|browser| {
@@ -2015,10 +2026,20 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
+            .when(self.peek_owner.is_some(), |this| this
+                .on_action(cx.listener(Self::on_go_back))
+                .on_action(cx.listener(Self::on_go_forward))
+                .on_action(cx.listener(Self::on_reload))
+                .on_action(cx.listener(Self::on_open_command_bar))
+                .on_action(cx.listener(Self::on_edit_current_url))
+                .on_action(cx.listener(|this, _: &ZoomIn, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 1))))
+                .on_action(cx.listener(|this, _: &ZoomOut, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, -1))))
+                .on_action(cx.listener(|this, _: &ResetZoom, _, _| this.with_active_page(|pages, tab| pages.zoom(tab, 0)))))
+            .on_action(cx.listener(|this, _: &crate::peek::ExitPeek, _, cx| this.exit_peek(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
@@ -2029,7 +2050,8 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::EditTheme, window, cx| { let space = this.browser.space().id; this.open_theme_editor(space, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
-                if this.theme_editor.is_some() { this.close_theme_editor(cx); }
+                if this.peek_owner.is_some() { this.close_window(cx); }
+                else if this.theme_editor.is_some() { this.close_theme_editor(cx); }
                 else if this.user_profile_dialog.is_some() { this.close_user_profile_dialog(cx); }
                 else if this.command_bar.is_some() { this.close_command_bar(cx); }
                 else { this.close_focused_tab(cx); }
@@ -2827,6 +2849,8 @@ impl BrowserWindow {
             .active_tab()
             .map(|t| if t.url == crate::split::EMPTY_PANE_URL || self.has_frozen_active_page() { "Search or Enter URL…".into() } else { address_host(&t.url) })
             .unwrap_or_else(|| if self.browser.is_private() { "Search or Enter URL…".into() } else { String::new() });
+        let url = self.peek_child.and_then(|child| child.read(cx).ok().and_then(|view|
+            view.browser.active_tab().map(|tab| crate::transient::lookup_host(&tab.url)))).unwrap_or(url);
         let private = self.browser.is_private();
         let dark = self.theme_is_dark();
         let blank = self.browser.is_blank();
@@ -3414,6 +3438,7 @@ impl BrowserWindow {
     pub(crate) fn render_page_viewport_canvas(&self) -> Option<AnyElement> {
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
+        let peek_inset = if self.peek_child.is_some() { 9. } else { 0. };
         self.pages.clone().and_then(|pages| {
                         let generation = pages.try_borrow().ok()?.viewport_generation();
                         let divider_pages = pages.clone();
@@ -3421,10 +3446,10 @@ impl BrowserWindow {
                         Some(canvas(
                             move |bounds, _, cx| {
                                 let bounds = engine::Bounds {
-                                    x: f64::from(f32::from(bounds.origin.x)),
-                                    y: f64::from(f32::from(bounds.origin.y)),
-                                    width: f64::from(f32::from(bounds.size.width)),
-                                    height: f64::from(f32::from(bounds.size.height)),
+                                    x: f64::from(f32::from(bounds.origin.x)) + peek_inset,
+                                    y: f64::from(f32::from(bounds.origin.y)) + peek_inset,
+                                    width: f64::from(f32::from(bounds.size.width)) - 2. * peek_inset,
+                                    height: f64::from(f32::from(bounds.size.height)) - 2. * peek_inset,
                                 };
                                 let surfaces = match pages.try_borrow_mut() {
                                     Ok(mut pages) => { if pages.set_viewport_bounds(generation, bounds) { Some(pages.surface_bounds()) } else { None } }
@@ -3892,6 +3917,7 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
+        if self.peek_owner.is_some() { return self.render_peek(window, cx); }
         self.sync_library_geometry(window.viewport_size(), cx);
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {
             use crate::material::*;
@@ -3998,6 +4024,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))
             .on_action(cx.listener(|this, _: &CopyUrlAsMarkdown, _, cx| this.copy_url(true, cx)))
             .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(|this, _: &crate::peek::ExitPeek, _, cx| this.exit_peek(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))

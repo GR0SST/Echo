@@ -139,7 +139,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Developer: Allow JavaScript from Apple Events | — | missing | — |
 | Toggle Developer Mode (per site) | ⌃D | missing | — |
 | Enter/Exit Full Screen | ⌃⌘F | partial | View menu, page shortcuts and overlays target the main window; Enter/Exit commands work in GPUI tests. macOS bundle entry/exit verified with guarded input, native fullscreen state and inspected screenshots; native toolbar buttons stay under AppKit control. Other platforms and exact Arc transition presentation remain unverified |
-| Exit (leave a context: Peek, full screen) | ⌘Esc | missing | — |
+| Exit (leave a context: Peek, full screen) | ⌘Esc | partial | Peek handles Escape and Cmd+Escape through GPUI and native page input; full-screen exit remains unfinished |
 
 ### Spaces
 
@@ -162,7 +162,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Join Meeting (link to the next meeting) | ⌃⌘J (hidden) | missing | — |
 | Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
 | Pin/Unpin Tab | ⌘D | done | — |
-| Open Little Arc or Peek in… (pick a Space) | ⌘O | partial | Little Echo promotes into the originating Space; its arrow opens a searchable Space list. Peek remains missing |
+| Open Little Arc or Peek in… (pick a Space) | ⌘O | partial | Little Echo and Peek promote into the originating Space. Little’s arrow opens a searchable Space list. Promotion reloads the URL; live document/history transfer remains unfinished |
 | New Folder… | ⇧⌘N per nib (?) | partial | GPUI name editor from Spaces menu and Command Bar; the nib's shortcut conflicts with Incognito, so no binding is assigned yet |
 | Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | done | Tab duplication/rename and current-Space folder collapse/expand are available from menus and the Command Bar |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
@@ -380,10 +380,10 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Links to other sites from Pinned/Favorites open in Peek (option) | missing | — |
-| Shift-click opens a link in Peek (option) | missing | — |
-| Closing Peek (⌘Esc / Esc), Undo "Close Peek" | missing | — |
-| Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | missing | — |
+| Links to other sites from Pinned/Favorites open in Peek (option) | partial | Main-frame user GET navigation across hosts opens an isolated child card, with source Space material backdrop and three vector controls. Existing Peek setting gates routing. Subdomain rules and native resize/motion parity need further validation |
+| Shift-click opens a link in Peek (option) | partial | CEF NEW_WINDOW user disposition opens the card, gated by the existing setting. Nested Peek/Little routing remains unfinished |
+| Closing Peek (⌘Esc / Esc), Undo "Close Peek" | partial | Close control, backdrop click, Escape and Cmd+Escape restore the source without archiving it. Opening uses a damped spring; closing 180 ms. Exact motion, Undo and Cmd+Escape reference behavior need further verification |
+| Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | partial | Expand and Cmd+O create a Today tab in the source Space. Split control fills a new pane and preserves Pinned/Favorite originals. Live page/history transfer and the dedicated Space picker remain unfinished |
 | Swipe to dismiss the modal (`modal-v2-native-gestures`) (?) | missing | — |
 
 ## 11. Air Traffic Control (link routing)
@@ -392,7 +392,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 |---|---|---|
 | "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | missing | — |
 | Access from Links → "Air Traffic Control…" and from the Command Bar | missing | — |
-| Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | partial | Popups (`window.open`, target=_blank) open as a new tab. No other modes |
+| Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | partial | Popups (`window.open`, target=_blank) open as a new tab; Shift-click and cross-host Pinned/Favorite links support Peek. Other link disposition modes remain unfinished |
 
 ## 12. Profiles
 
@@ -431,7 +431,7 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | General → Automatically update my Arc | out of scope (Arc service/account dependency; no UI) |
 | General → Export Data (Spaces and tabs as Markdown, "Arc Data Export.md") | missing |
 | Profiles → profile list, creating and deleting, Default Search Engine, Include search engine suggestions, Search Settings…, auto-archive, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | partial (real profile inventory and existing creation sheet; search engine and per-profile archive policy wired. Suggestions control the Command Bar; document/download choices persist. Deletion, search management and data-page routes remain unavailable) |
-| Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | partial (reference controls persist intent; Little Arc, Peek and Air Traffic Control integrations remain missing) |
+| Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | partial (Peek toggles gate native link routing; Little Arc launch preferences and Air Traffic Control remain unfinished) |
 | Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | partial (searchable observed shortcut catalog, with local Space names. Recording, conflict/priority editing, reset, extension routes and the Favorites-ordering menu remain missing) |
 | Max → Settings tab: Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | missing (tab, controls and AI integrations; use the user's provider directly) |
 | Max → "Sign in with ChatGPT" (OAuth to the user's OpenAI/ChatGPT account, as in the Codex CLI) | missing (AI-only sign-in; credentials in the local OS keychain; no Echo account, sync or intermediary server) |
