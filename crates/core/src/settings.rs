@@ -43,12 +43,29 @@ impl Toggle {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Shared across local website profiles; absent in older sessions.
+    pub air_traffic_control: Option<crate::routing::AirTrafficControl>,
     toggles: BTreeMap<Toggle, bool>,
     pub little_window_archive: LittleWindowArchive,
     /// Browser appearance is shared across Spaces and normal windows.
     pub theme_appearance: crate::themes::ThemeAppearance,
 }
 impl Settings {
+    pub fn routing(&self) -> crate::routing::AirTrafficControl {
+        self.air_traffic_control.clone().unwrap_or_else(|| {
+            let mut routes = crate::routing::AirTrafficControl::default();
+            if self.enabled(Toggle::LittleWindowLinks) { routes.default_destination = crate::routing::LinkDestination::LittleWindow; }
+            routes
+        })
+    }
+    pub fn edit_routing<R>(&mut self, edit: impl FnOnce(&mut crate::routing::AirTrafficControl) -> R) -> R {
+        let mut routes = self.routing();
+        let result = edit(&mut routes);
+        self.toggles.insert(Toggle::LittleWindowLinks, routes.default_destination == crate::routing::LinkDestination::LittleWindow);
+        self.air_traffic_control = Some(routes);
+        result
+    }
+
     pub fn enabled(&self, toggle: Toggle) -> bool {
         self.toggles
             .get(&toggle)
@@ -57,6 +74,11 @@ impl Settings {
     }
     pub fn set_enabled(&mut self, toggle: Toggle, enabled: bool) {
         self.toggles.insert(toggle, enabled);
+        if toggle == Toggle::LittleWindowLinks {
+            if let Some(routes) = &mut self.air_traffic_control {
+                routes.default_destination = if enabled { crate::routing::LinkDestination::LittleWindow } else { crate::routing::LinkDestination::MostRecentSpace };
+            }
+        }
     }
 }
 

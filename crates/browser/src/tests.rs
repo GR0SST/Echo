@@ -8901,7 +8901,7 @@ fn little_picker_escape_keeps_page_and_cmd_w_closes_only_lookup_window(cx: &mut 
 fn external_web_url_opens_lookup_without_modifying_regular_tabs(cx: &mut TestAppContext) {
     let (source, visual) = open(cx);
     let before = source.read_with(visual, |view, _| view.browser.all_tabs().count());
-    source.update(visual, |view, cx| view.retain_normal_source(cx));
+    source.update(visual, |view, cx| { view.edit_profile(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::LittleWindowLinks, true)); view.retain_normal_source(cx); });
     visual.cx.update(|cx| crate::transient::open_external_urls(vec!["file:///private/example".into(), "HTTPS://external.example/path".into()], cx));
     visual.run_until_parked();
     let (little, compact) = little_root(visual);
@@ -9690,4 +9690,72 @@ fn cancelling_or_selecting_the_current_little_profile_preserves_its_live_documen
     let calls = engine.take_calls();
     assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..) | Call::Transfer(..))), "{calls:?}");
     assert!(calls.contains(&Call::FocusPage(1)), "{calls:?}");
+}
+
+
+#[gpui::test]
+fn air_traffic_routes_external_links_to_spaces_and_rejects_non_web_urls(cx: &mut TestAppContext) {
+    use browser_core::routing::{LinkMatch, LinkDestination};
+    let (view, cx, _) = open_pages(cx);
+    let work = view.update(cx, |view, cx| {
+        let work = view.browser.spaces[1].id;
+        view.edit_profile(|browser| browser.settings.edit_routing(|routes| { routes.add(LinkMatch::Contains("route.example".into()), LinkDestination::Space(work)); }));
+        view.retain_normal_source(cx);
+        work
+    });
+    cx.cx.update(|cx| crate::link_routing::open("https://route.example/from-mail".into(), None, cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.browser.space().id, work);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://route.example/from-mail");
+    });
+    let count = view.read_with(cx, |view, _| view.browser.all_tabs().count());
+    cx.cx.update(|cx| crate::link_routing::open("file:///private/test".into(), None, cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.browser.all_tabs().count()), count);
+}
+
+#[gpui::test]
+fn air_traffic_source_application_uses_the_destination_profiles_storage(cx: &mut TestAppContext) {
+    use browser_core::routing::{LinkMatch, LinkDestination};
+    let (view, cx, _) = open_pages(cx);
+    let profile = view.update(cx, |view, cx| {
+        let profile = view.edit_profile(|browser| {
+            let profile = browser.create_user_profile("Mail").unwrap();
+            browser.assign_space_user_profile(browser.spaces[1].id, profile).unwrap();
+            browser.settings.edit_routing(|routes| { routes.add(LinkMatch::SourceApplication("com.example.mail".into()), LinkDestination::Profile(profile)); });
+            profile
+        });
+        view.retain_normal_source(cx);
+        profile
+    });
+    cx.cx.update(|cx| crate::link_routing::open("https://mail-route.example".into(), Some("com.example.other"), cx));
+    cx.run_until_parked();
+    assert_ne!(view.read_with(cx, |view, _| view.browser.active_user_profile_id()), profile);
+    cx.cx.update(|cx| crate::link_routing::open("https://mail-route.example".into(), Some("com.example.mail"), cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.browser.active_user_profile_id()), profile);
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://mail-route.example"));
+}
+
+#[gpui::test]
+fn air_traffic_routes_define_little_window_promotion_defaults(cx: &mut TestAppContext) {
+    use browser_core::routing::{LinkMatch, LinkDestination};
+    let (source, cx) = open(cx);
+    source.update(cx, |view, _| view.edit_profile(|browser| {
+        let destination = browser.spaces[1].id;
+        browser.settings.edit_routing(|routes| { routes.add(LinkMatch::Contains("promote.example".into()), LinkDestination::Space(destination)); });
+    }));
+    cx.simulate_keystrokes("cmd-alt-n");
+    cx.run_until_parked();
+    let (little, mut compact) = little_root(cx);
+    bar(&little, &mut compact).simulate_input("https://promote.example/page");
+    bar(&little, &mut compact).simulate_keystrokes("enter");
+    compact.run_until_parked();
+    compact.simulate_keystrokes("cmd-o");
+    compact.run_until_parked();
+    source.read_with(cx, |view, _| {
+        assert_eq!(view.browser.active_space, 1);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://promote.example/page");
+    });
 }

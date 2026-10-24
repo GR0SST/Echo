@@ -703,3 +703,5 @@ pub(crate) fn pointer_in_view(view: *mut c_void) -> Option<(f32, f32)> {
 
 /// Platform-owned sharing destination menu.
 pub(crate) mod sharing;
+
+pub(crate) mod link_source;

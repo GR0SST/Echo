@@ -15,6 +15,7 @@ pub mod splits;
 pub mod bulk_archive;
 pub mod preferences;
 pub mod settings;
+pub mod routing;
 pub mod icons;
 pub mod folders;
 pub mod undo;

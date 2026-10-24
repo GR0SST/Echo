@@ -20,6 +20,7 @@ mod new_menu;
 mod new_window;
 mod blank_window;
 mod transient;
+mod link_routing;
 mod global_little;
 mod peek;
 mod peek_history;
@@ -273,9 +274,12 @@ fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
 pub fn run() {
     let app = Application::new();
     app.on_reopen(reopen);
-    let urls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let urls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, Option<String>)>::new()));
     let incoming = urls.clone();
-    app.on_open_urls(move |batch| incoming.borrow_mut().extend(batch));
+    app.on_open_urls(move |batch| {
+        let source = native::link_source::current();
+        incoming.borrow_mut().extend(batch.into_iter().map(|url| (url, source.clone())));
+    });
     app.run(move |cx: &mut App| {
         init(cx);
         open_browser_window(cx);
@@ -284,7 +288,7 @@ pub fn run() {
             let batch = std::mem::take(&mut *urls.borrow_mut());
             if batch.is_empty() { continue; }
             if cx.update(|cx| {
-                transient::open_external_urls(batch, cx);
+                for (url, source) in batch { link_routing::open(url, source.as_deref(), cx); }
             }).is_err() { break; }
         }).detach();
         #[cfg(target_os = "macos")]

@@ -48,11 +48,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 pub(crate) fn open_external_urls(urls: Vec<String>, cx: &mut App) {
-    for url in urls {
-        let web_url = url.split_once("://").is_some_and(|(scheme, rest)|
-            !rest.is_empty() && (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")));
-        if web_url { open(Some(url), cx); }
-    }
+    for url in urls { crate::link_routing::open(url, None, cx); }
 }
 
 pub(crate) fn open(url: Option<String>, cx: &mut App) {
@@ -66,7 +62,7 @@ pub(crate) fn open(url: Option<String>, cx: &mut App) {
     open_with(source, space, profile, url, cx);
 }
 
-fn open_with(source: NormalProfile, space: SpaceId, profile: UserProfileId, url: Option<String>, cx: &mut App) -> Option<WindowHandle<BrowserWindow>> {
+pub(crate) fn open_with(source: NormalProfile, space: SpaceId, profile: UserProfileId, url: Option<String>, cx: &mut App) -> Option<WindowHandle<BrowserWindow>> {
     if crate::quit::is_quitting() { return None; }
     let bounds = Bounds::centered(None, size(px(1000.), px(760.)), cx);
     let empty = url.is_none();
@@ -127,10 +123,18 @@ impl BrowserWindow {
         cx.defer(move |cx| { open_with(source, space, profile, None, cx); });
     }
 
+    fn routed_promotion_space(&self) -> SpaceId {
+        let transient = self.transient.as_ref().expect("Little window");
+        let browser = transient.source.profile.projection(&transient.source.profile.selection());
+        self.browser.active_tab().and_then(|tab| browser.settings.routing().resolve(&browser, &tab.url, None))
+            .and_then(|destination| crate::link_routing::destination_space(&browser, destination))
+            .unwrap_or(transient.space)
+    }
+
     pub(crate) fn render_transient_content(&self, cx: &mut Context<Self>) -> AnyElement {
         let transient = self.transient.as_ref().expect("compact chrome");
         let projection = transient.source.profile.projection(&transient.source.profile.selection());
-        let space = projection.spaces.iter().find(|space| space.id == transient.space).unwrap_or(projection.space());
+        let space = projection.spaces.iter().find(|space| space.id == self.routed_promotion_space()).unwrap_or(projection.space());
         let title = self.browser.active_tab().map(|tab| lookup_host(&tab.url)).unwrap_or_default();
         let button = |id: &'static str| div().id(id).debug_selector(move || id.into())
             .h(px(30.)).flex_none().flex().items_center().justify_center().rounded(px(6.))
@@ -175,7 +179,8 @@ impl BrowserWindow {
         let Some(tab) = self.browser.active_tab().cloned() else { return; };
         let source = transient.source.clone();
         let lookup_pages = self.pages.clone();
-        let space = destination.unwrap_or(transient.space);
+        let lookup_profile = self.browser.active_user_profile_id();
+        let space = destination.unwrap_or_else(|| self.routed_promotion_space());
         let roots: Vec<_> = cx.windows().into_iter().filter_map(|w| w.downcast::<BrowserWindow>()).collect();
         let target = roots.into_iter().find(|handle| handle.read(cx).is_ok_and(|view|
             view.transient.is_none() && view.profile.handle.same_workspace(&source.profile)));
@@ -196,6 +201,12 @@ impl BrowserWindow {
                         let previous = browser.active_space;
                         let index = browser.spaces.iter().position(|candidate| candidate.id == space).unwrap();
                         browser.switch_space(index);
+                        // Crossing website profiles must open in the destination's
+                        // storage, never transplant a document with other cookies.
+                        if browser.active_user_profile_id() != lookup_profile {
+                            browser.new_tab(tab.url.clone(), SystemTime::now());
+                            return true;
+                        }
                         let adopted = browser.adopt_lookup_tab(tab.clone(), SystemTime::now(), |browser, id| {
                             transfer_lookup_document(lookup_pages.as_ref(), tab.id, pages.as_ref(), id, browser)
                         }).is_some();

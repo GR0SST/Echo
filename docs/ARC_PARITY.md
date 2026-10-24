@@ -390,7 +390,7 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 | Feature | Status | What's missing |
 |---|---|---|
-| "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | missing | — |
+| "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | partial | Install-local ordered/enabled model, URL/domain/app-source matching, Space/Little/profile destinations, external URL delivery and Little promotion defaults implemented. GPUI editor is the next piece; reference and limitations: [ATC_REFERENCE.md](ATC_REFERENCE.md) |
 | Access from Links → "Air Traffic Control…" and from the Command Bar | missing | — |
 | Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | partial | Popups (`window.open`, target=_blank) open as a new tab; Shift-click and cross-host Pinned/Favorite links support Peek. Other link disposition modes remain unfinished |
 
