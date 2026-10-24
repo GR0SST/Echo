@@ -464,6 +464,7 @@ pub struct CommandBar {
     pub(crate) remote_generation: u64,
     pub(crate) remote_task: Option<Task<()>>,
     pub(crate) suggestions_privacy: bool,
+    pub(crate) material_backdrop: Rc<Cell<bool>>,
     pub(crate) archive_reason: Option<browser_core::ArchiveReason>,
     pub(crate) archive_limit: usize,
     pub(crate) rows_scroll: gpui::ScrollHandle,
@@ -1286,6 +1287,7 @@ impl BrowserWindow {
             remote_generation: 0,
             remote_task: None,
             suggestions_privacy: false,
+            material_backdrop: Rc::new(Cell::new(false)),
             archive_reason: None,
             archive_limit: 8,
             rows_scroll: gpui::ScrollHandle::new(),
@@ -2560,9 +2562,8 @@ impl BrowserWindow {
             }))
             .when(segmented, |this| this.px_1().gap_0())
             .rounded(px(SIDEBAR_ROW_RADIUS))
-            .when(active, |this| this.bg(hsla(0.0, 0.0, 1.0, 0.85)).shadow_sm())
-            .when(self.theme_is_dark(), |this| this.text_color(hsla(0., 0., 1., 0.85))
-                .when(active, |this| this.bg(hsla(0., 0., 1., 0.16))))
+            .when(active, |this| this.bg(self.theme_tab_selection_for(painted_space)))
+            .text_color(self.theme_foreground_for(painted_space))
             .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
@@ -2876,12 +2877,13 @@ impl BrowserWindow {
     /// reuse the same card during tab drags; Arc's drag presentation is still
     /// pending native observation, so no additional transition is introduced.
     fn render_empty_favorites(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.theme_colors();
         div().id("empty-favorites").debug_selector(|| self.sidebar_debug_name((|| "empty-favorites".into())()))
             .relative().w_full().h(px(95.)).flex_none()
             .rounded(px(12.)).border_1().border_dashed()
-            .border_color(hsla(0., 0., 1., 0.26))
+            .border_color(colors.border)
             .flex().flex_col().items_center().pt(px(11.))
-            .text_color(hsla(0., 0., 1., 0.78))
+            .text_color(colors.foreground.opacity(0.78))
             .child(canvas(|_, _, _| (), |bounds, _, window, _| {
                 let center = bounds.center();
                 window.paint_quad(gpui::fill(Bounds::new(
@@ -2904,8 +2906,8 @@ impl BrowserWindow {
             .child(div().id("dismiss-empty-favorites").debug_selector(|| self.sidebar_debug_name((|| "dismiss-empty-favorites".into())()))
                 .absolute().top(px(4.)).right(px(4.)).size(px(20.))
                 .flex().items_center().justify_center().cursor_pointer()
-                .text_color(hsla(0., 0., 1., 0.45))
-                .hover(|style| style.text_color(hsla(0., 0., 1., 0.8)))
+                .text_color(colors.muted)
+                .hover(move |style| style.text_color(colors.foreground))
                 .on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();
                     this.edit_browser(|browser| browser.active_user_profile_mut().empty_favorites_dismissed = true);
@@ -3040,7 +3042,7 @@ impl BrowserWindow {
 
     fn render_space_page(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let space = &self.browser.spaces[index];
-        let ink = if self.theme_is_dark() {1.} else {0.};
+        let ink = if self.theme_is_dark_for(space.id) {1.} else {0.};
         let space_id = space.id;
         let hue = space.accent_hue() / 360.0;
         let current = index == self.browser.active_space;
@@ -3471,6 +3473,9 @@ impl BrowserWindow {
 
     fn render_command_bar(&self, bar: &CommandBar, width: f32, height: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let history_owner = self.browser.active_user_profile_id();
+        let material_backdrop = bar.material_backdrop.clone();
+        let panel_fill = self.command_bar_panel_fill(material_backdrop.get());
+        let row_selection = self.command_bar_selection();
         let accent = self.accent();
         let region = self.split_draft.as_ref().and_then(|draft| {
             let split = self.browser.split_for(draft.pane)?;
@@ -3559,7 +3564,7 @@ impl BrowserWindow {
                     .mx_2()
                     .rounded(px(8.0))
                     .text_color(hsla(0.0, 0.0, 1.0, if selected { 1.0 } else { 0.82 }))
-                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(0xffa000).into() } else { hsla(accent, 0.67, 0.55, 1.0) }))
+                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(0xffa000).into() } else { row_selection }))
                     .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.04))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
@@ -3622,7 +3627,7 @@ impl BrowserWindow {
             .items_center()
             .pt(px(top))
             .when_some(region, |this, bounds| this.pl(px(bounds.x as f32)).pr(px((width - bounds.x as f32 - bounds.width as f32).max(0.))))
-            .bg(hsla(0.0, 0.0, 0.0, if region.is_some() { 0.0 } else { 0.15 }))
+            .bg(gpui::transparent_black())
             .on_click(cx.listener(|this, _, _, cx| this.close_command_bar(cx)))
             .child(
                 div()
@@ -3663,13 +3668,21 @@ impl BrowserWindow {
                     .flex()
                     .flex_col()
                     .rounded(px(COMMAND_BAR_RADIUS))
-                    .bg(hsla(200. / 360., 0.05, 0.1, if crate::native::HAS_BACKDROP { 0.88 } else { 0.98 }))
+                    .bg(panel_fill)
                     .shadow_2xl()
                     .border_1()
                     .border_color(hsla(0.0, 0.0, 1.0, 0.2))
                     .text_color(hsla(0.0, 0.0, 1.0, 0.92))
                     .font_family(".SystemUIFont")
-                    .child(gpui::canvas(|_, _, _| (), |bounds, _, window, _| crate::panel::backdrop(window, "command-bar", Some(bounds), COMMAND_BAR_RADIUS, crate::native::Material::Hud)).absolute().inset_0())
+                    .child(gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+                        let installed = crate::native::view_of(window).is_some_and(|view| {
+                            crate::native::set_backdrop(view, "command-bar", Some([
+                                f32::from(bounds.origin.x) as f64, f32::from(bounds.origin.y) as f64,
+                                f32::from(bounds.size.width) as f64, f32::from(bounds.size.height) as f64,
+                            ]), COMMAND_BAR_RADIUS as f64, crate::native::Material::Menu)
+                        });
+                        if material_backdrop.replace(installed) != installed { window.refresh(); }
+                    }).absolute().inset_0())
                     .child(
                         div()
                             .h(px(COMMAND_BAR_HEADER - 1.)).flex_none()

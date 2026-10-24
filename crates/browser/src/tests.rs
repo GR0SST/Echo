@@ -7934,3 +7934,39 @@ fn split_window_minimum_fits_two_vertical_panes(cx: &mut TestAppContext) { asser
 fn split_window_minimum_fits_three_vertical_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 3, true); }
 #[gpui::test]
 fn split_window_minimum_fits_four_vertical_panes(cx: &mut TestAppContext) { assert_split_window_grows_to_fit_panes(cx, 4, true); }
+
+#[gpui::test]
+fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx: &mut TestAppContext) {
+    use browser_core::themes::{SpaceTheme, ThemeAppearance};
+    let (view,cx)=open(cx);
+    let other=view.read_with(cx,|w,_|w.browser.spaces.iter().find(|s|s.id!=w.browser.space().id).unwrap().id);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view,cx).simulate_input("new");
+    bar(&view,cx).simulate_keystrokes("down");
+    for appearance in [ThemeAppearance::Light,ThemeAppearance::Dark] {
+        view.update(cx,|w,cx|{
+            let mut theme=SpaceTheme::from_hue(270.);theme.appearance=appearance;
+            let id=w.browser.space().id;
+            let mut other_theme=theme.clone();
+            other_theme.appearance=if appearance==ThemeAppearance::Light {ThemeAppearance::Dark} else {ThemeAppearance::Light};
+            w.edit_profile(|b|{b.update_space_theme(id,theme);b.update_space_theme(other,other_theme);});cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx,|w,cx|{
+            let input=w.command_bar.as_ref().unwrap();
+            assert_eq!(input.input.read(cx).text(),"new");
+            assert_eq!(input.selected,1);
+            assert!(w.theme_tab_selection_for(w.browser.space().id).a<0.6);
+            assert_eq!(w.theme_tab_selection_for(w.browser.space().id).l,1.);
+            assert_ne!(w.theme_is_dark(),w.theme_is_dark_for(other));
+            assert_ne!(w.theme_foreground_for(w.browser.space().id),w.theme_foreground_for(other));
+            assert!(w.command_bar_selection().a<0.2);
+            assert_eq!(w.command_bar_selection().s,0.);
+            assert_eq!(w.command_bar_panel_fill(false).a,1.);
+            assert!(w.command_bar_panel_fill(true).a<0.3);
+        });
+        assert!(bar(&view,cx).debug_bounds("suggestion-1").is_some());
+    }
+    bar(&view,cx).simulate_keystrokes("escape");cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.command_bar.is_none()));
+}

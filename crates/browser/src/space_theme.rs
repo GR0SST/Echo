@@ -126,15 +126,19 @@ pub(crate) struct ChromeColors {
 }
 
 impl BrowserWindow {
+    pub(crate) fn theme_tab_selection_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
+        gpui::hsla(0., 0., 1., if self.theme_is_dark_for(space) { 0.16 } else { 0.55 })
+    }
+    pub(crate) fn command_bar_selection(&self) -> gpui::Hsla {
+        gpui::hsla(0., 0., 1., 0.10)
+    }
+    pub(crate) fn command_bar_panel_fill(&self, blurred: bool) -> gpui::Hsla {
+        gpui::hsla(self.accent(), 0.08, 0.16, if blurred { 0.22 } else { 1. })
+    }
     pub(crate) fn theme_colors(&self) -> ChromeColors {
         let dark = self.theme_is_dark();
         let ink = if dark { 1. } else { 0. };
-        let foreground = gpui::hsla(
-            self.accent(),
-            if dark { 0.12 } else { 0. },
-            if dark { 0.92 } else { 0.1 },
-            1.,
-        );
+        let foreground = self.theme_foreground_for(self.browser.space().id);
         ChromeColors {
             foreground,
             secondary: foreground.opacity(0.65),
@@ -150,18 +154,23 @@ impl BrowserWindow {
         }
     }
     pub(crate) fn theme_is_dark(&self) -> bool {
-        self.browser.is_private()
-            || match self
-                .theme_editor
-                .as_ref()
-                .filter(|e| e.space == self.browser.space().id)
-                .map_or_else(|| self.browser.space().theme(), |e| e.draft.clone())
-                .appearance
-            {
-                ThemeAppearance::Light => false,
-                ThemeAppearance::Dark => true,
-                ThemeAppearance::Automatic => self.theme_system_dark,
-            }
+        self.theme_is_dark_for(self.browser.space().id)
+    }
+    pub(crate) fn theme_is_dark_for(&self, space: browser_core::SpaceId) -> bool {
+        let appearance = self.theme_editor.as_ref().filter(|e| e.space == space)
+            .map(|e| e.draft.appearance)
+            .or_else(|| self.browser.spaces.iter().find(|s| s.id == space).map(|s| s.theme().appearance))
+            .unwrap_or(ThemeAppearance::Automatic);
+        self.browser.is_private() || match appearance {
+            ThemeAppearance::Light => false,
+            ThemeAppearance::Dark => true,
+            ThemeAppearance::Automatic => self.theme_system_dark,
+        }
+    }
+    pub(crate) fn theme_foreground_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
+        let dark = self.theme_is_dark_for(space);
+        let hue = self.browser.spaces.iter().find(|s| s.id == space).map_or(self.accent(), |s| s.accent_hue() / 360.);
+        gpui::hsla(hue, if dark { 0.12 } else { 0. }, if dark { 0.92 } else { 0.1 }, 1.)
     }
     pub(crate) fn theme_surface(&self, translucent: bool) -> AnyElement {
         use crate::sidebar_pages::SidebarPage;
