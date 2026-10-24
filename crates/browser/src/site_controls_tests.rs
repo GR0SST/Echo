@@ -464,3 +464,51 @@ fn an_unanswered_permission_is_not_misreported_as_a_stored_block(cx: &mut TestAp
     let mut controls = panel(&view, cx);
     assert!(controls.debug_bounds("site-permission-Camera").is_none());
 }
+
+#[gpui::test]
+fn site_share_opens_system_services_for_the_full_url_and_keeps_the_panel(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    visual.simulate_keystrokes("cmd-l");
+    bar(&view, visual).simulate_input("https://share.example/path?query=exact#fragment");
+    bar(&view, visual).simulate_keystrokes("enter");
+    visual.run_until_parked();
+    let url = active_url(&view, visual).unwrap();
+    assert_eq!(url, "https://share.example/path?query=exact#fragment");
+    click(visual, "address-site-controls");
+    let mut controls = panel(&view, visual);
+    click(&mut controls, "site-share");
+    view.read_with(visual, |view, _| {
+        assert_eq!(view.share_picker.as_ref().unwrap().urls, vec![url]);
+        assert!(view.site_controls.is_some());
+    });
+    controls.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.site_controls.is_none()));
+}
+
+#[gpui::test]
+fn site_share_uses_the_current_url_after_navigation_within_the_same_origin(
+    cx: &mut TestAppContext,
+) {
+    let (view, visual, _) = open_pages(cx);
+    click(visual, "address-site-controls");
+    let mut controls = panel(&view, visual);
+    let bounds = controls.debug_bounds("site-share").unwrap();
+    controls.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    controls.run_until_parked();
+    let url = view.update(visual, |view, _| {
+        let origin = browser_core::site_settings::SiteSettings::origin(
+            &view.browser.active_tab().unwrap().url,
+        )
+        .unwrap();
+        let url = format!("{origin}/changed-before-menu?exact=true#part");
+        view.edit_browser(|model| model.set_url(model.active_tab().unwrap().id, &url));
+        url
+    });
+    controls.simulate_click(bounds.center(), Modifiers::none());
+    controls.run_until_parked();
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert_eq!(view.share_picker.as_ref().unwrap().urls, vec![url])
+    });
+}

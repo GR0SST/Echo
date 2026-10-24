@@ -222,6 +222,48 @@ impl BrowserWindow {
             })
     }
 
+    fn share_current_site(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(panel) = self.site_controls.as_ref().filter(|panel| {
+            panel.permission_request.is_none() && self.site_scope_is_current(&panel.scope)
+        }) else {
+            return;
+        };
+        let Some(overlay) = panel.overlay else {
+            return;
+        };
+        let scope = panel.scope.clone();
+        let Some(url) = self.browser.active_tab().map(|tab| tab.url.clone()) else {
+            return;
+        };
+        // Native service menus track a nested AppKit loop. Leave all GPUI and
+        // page borrows first, and anchor to the panel so it remains visible.
+        cx.spawn(async move |owner, cx| {
+            let current = owner
+                .read_with(cx, |this, _| {
+                    this.site_scope_is_current(&scope)
+                        && this.browser.active_tab().is_some_and(|tab| tab.url == url)
+                        && this
+                            .site_controls
+                            .as_ref()
+                            .is_some_and(|panel| panel.overlay == Some(overlay))
+                })
+                .unwrap_or(false);
+            if !current {
+                return;
+            }
+            let Ok(view) = overlay.update(cx, |_, window, _| crate::native::view_of(window)) else {
+                return;
+            };
+            let picker = crate::native::sharing::show(
+                view,
+                [f32::from(position.x), f32::from(position.y), 0., 0.],
+                &[url],
+            );
+            let _ = owner.update(cx, |this, _| this.share_picker = picker);
+        })
+        .detach();
+    }
+
     fn dismiss_site_controls(&mut self, cx: &mut Context<Self>) {
         if let Some(panel) = &mut self.site_controls {
             if panel.more {
@@ -855,10 +897,11 @@ impl BrowserWindow {
                             .gap(px(TILE_GAP))
                             .child(
                                 top_tile("site-share")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_site_controls(cx);
-                                        this.copy_url(false, cx);
-                                    }))
+                                    .on_click(cx.listener(
+                                        |this, event: &gpui::ClickEvent, _, cx| {
+                                            this.share_current_site(event.position(), cx);
+                                        },
+                                    ))
                                     .child(crate::icons::control_sized(Icon::Share, 22.)),
                             )
                             .child(
