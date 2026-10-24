@@ -10374,3 +10374,135 @@ fn sidebar_multi_selection_move_keeps_the_source_space_and_moves_every_item(cx: 
         assert!(ids.iter().all(|id| destination.today.iter().any(|tab| tab.id == *id)));
     });
 }
+
+fn local_setup(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext)->(Entity<crate::setup::SetupDialog>,VisualTestContext) {
+    cx.run_until_parked();
+    let (dialog,overlay)=view.read_with(cx,|v,_|{let h=v.setup.as_ref().unwrap();(h.dialog.clone(),h.overlay.unwrap())});
+    let mut panel=VisualTestContext::from_window(overlay.into(),&cx.cx);panel.run_until_parked();(dialog,panel)
+}
+fn import_fixture(cx:&mut VisualTestContext)->tempfile::TempDir {
+    let dir=tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Bookmarks"),r#"{"roots":{"bookmark_bar":{"type":"folder","name":"Bookmarks bar","children":[{"type":"url","name":"Keep","url":"https://keep.example"},{"type":"url","name":"Omit","url":"https://omit.example"}]}}}"#).unwrap();
+    cx.cx.update(|cx|cx.set_global(crate::setup::ImportSources(vec![importer::SourceProfile {browser:importer::BrowserKind::Chrome,name:"Fixture".into(),path:dir.path().into()}])));dir
+}
+#[gpui::test]
+fn local_import_cancel_and_disabled_next_leave_every_profile_and_tab_untouched(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let _fixture=import_fixture(cx);
+    let before=view.read_with(cx,|v,_|browser_core::session::to_json(&v.browser));fake.take_calls();
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (dialog,mut panel)=local_setup(&view,cx);
+    let card=panel.debug_bounds("setup-card").unwrap();assert_eq!(card.size,gpui::size(gpui::px(580.),gpui::px(454.)));
+    click(&mut panel,"setup-next");assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Sources);
+    click(&mut panel,"import-source-0");panel.simulate_keystrokes("enter");panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Destination);
+    panel.simulate_keystrokes("escape");panel.run_until_parked();cx.run_until_parked();
+    assert!(view.read_with(cx,|v,_|v.setup.is_none()));assert_eq!(view.read_with(cx,|v,_|browser_core::session::to_json(&v.browser)),before);
+    assert!(!fake.take_calls().iter().any(|c|matches!(c,Call::Create(..)|Call::Navigate(..)|Call::Close(..))));
+}
+#[gpui::test]
+fn local_import_filters_bookmarks_and_publishes_once_into_a_new_profile_and_space(cx:&mut TestAppContext) {
+    let (view,cx,_)=open_pages(cx);let _fixture=import_fixture(cx);
+    let (profile,space,spaces)=view.read_with(cx,|v,_|(v.browser.active_user_profile_id(),v.browser.space().id,v.browser.spaces.len()));
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (dialog,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-new-profile");click(&mut panel,"setup-next");
+    panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Bookmarks);
+    click(&mut panel,"import-bookmark-0.1");click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Complete);
+    view.read_with(cx,|v,_|{assert_eq!(v.browser.spaces.len(),spaces+1);assert_ne!(v.browser.space().id,space);assert_ne!(v.browser.active_user_profile_id(),profile);assert_eq!(v.browser.space().pinned.len(),1);assert_eq!(v.browser.space().pinned[0].title,"Keep");assert_eq!(v.browser.space().folders[0].name,"Bookmarks bar");});
+    click(&mut panel,"setup-next");cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.setup.is_none()));
+}
+#[gpui::test]
+fn closing_import_owner_cancels_worker_and_discards_a_late_result(cx:&mut TestAppContext) {
+    let (view,cx,_)=open_pages(cx);let _fixture=import_fixture(cx);let owner=view.read_with(cx,|v,_|v.profile.handle.clone());let before=owner.read_settings(|b|b.spaces.len());
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (_,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");let button=panel.debug_bounds("setup-next").unwrap();panel.simulate_click(button.center(),Modifiers::none());
+    view.update(cx,|v,cx|v.close_window(cx));cx.run_until_parked();panel.run_until_parked();assert_eq!(owner.read_settings(|b|b.spaces.len()),before);
+}
+#[gpui::test]
+fn onboarding_default_is_explicit_and_cancellation_never_completes_that_step(cx:&mut TestAppContext) {
+    use crate::browser_registration::{BrowserRegistration,DefaultState};
+    struct Fake(std::sync::atomic::AtomicUsize);
+    impl BrowserRegistration for Fake {fn state(&self)->DefaultState {DefaultState::Other}fn request(&self)->Result<DefaultState,String>{self.0.fetch_add(1,std::sync::atomic::Ordering::Relaxed);Err("Cancelled".into())}}
+    let (view,cx)=open(cx);let fake=std::sync::Arc::new(Fake(std::sync::atomic::AtomicUsize::new(0)));
+    cx.cx.update(|cx|cx.set_global(crate::setup::Registration(fake.clone())));
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(browser_core::onboarding::SetupStep::DefaultBrowser));v.open_setup(true,cx);});
+    let (dialog,mut panel)=local_setup(&view,cx);assert_eq!(fake.0.load(std::sync::atomic::Ordering::Relaxed),0);
+    click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();assert_eq!(fake.0.load(std::sync::atomic::Ordering::Relaxed),1);
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(browser_core::onboarding::SetupStep::DefaultBrowser));
+    click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(browser_core::onboarding::SetupStep::Basics));
+    click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()));
+}
+
+#[gpui::test]
+fn onboarding_theme_and_favorites_resume_without_duplicating_favorites(cx: &mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Theme));v.open_setup(true,cx);});
+    let (_,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"setup-theme-2");cx.run_until_parked();
+    view.read_with(cx,|v,_|assert_eq!(v.browser.space().theme().colors[0],crate::theme_editor::preset_color(0,2)));
+    click(&mut panel,"setup-next");cx.run_until_parked();
+    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
+    view.read_with(cx,|v,_|assert_eq!(v.browser.active_user_profile().favorites.iter().filter(|t|t.url=="https://mail.google.com").count(),1));
+    panel.simulate_keystrokes("escape");panel.run_until_parked();cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Favorites));
+    view.update(cx,|v,cx|v.open_setup(true,cx));let (_,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
+    view.read_with(cx,|v,_|assert!(!v.browser.active_user_profile().favorites.iter().any(|t|t.url=="https://mail.google.com")));
+    click(&mut panel,"setup-next");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Import));
+}
+
+#[gpui::test]
+fn onboarding_shortcuts_escape_returns_to_basics_and_done_completes_setup(cx:&mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Basics));v.open_setup(true,cx);});
+    let (dialog,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"setup-shortcuts");assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Shortcuts);
+    panel.simulate_keystrokes("escape");panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Basics));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Basics));
+    click(&mut panel,"setup-next");cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()&&v.setup.is_none()));
+}
+
+#[gpui::test]
+fn default_browser_menu_serializes_concurrent_requests(cx:&mut TestAppContext) {
+    use crate::browser_registration::{BrowserRegistration,DefaultState};
+    struct Fake(std::sync::atomic::AtomicUsize);
+    impl BrowserRegistration for Fake {fn state(&self)->DefaultState {DefaultState::Other}fn request(&self)->Result<DefaultState,String>{self.0.fetch_add(1,std::sync::atomic::Ordering::Relaxed);Err("Cancelled".into())}}
+    let (view,cx)=open(cx);let fake=std::sync::Arc::new(Fake(std::sync::atomic::AtomicUsize::new(0)));
+    cx.cx.update(|cx|cx.set_global(crate::setup::Registration(fake.clone())));
+    view.update(cx,|view,cx|{view.request_default_browser(cx);view.request_default_browser(cx);});
+    cx.run_until_parked();assert_eq!(fake.0.load(std::sync::atomic::Ordering::Relaxed),1);
+}
+
+#[gpui::test]
+fn imported_passwords_only_reach_the_credential_store_and_never_the_session(cx:&mut TestAppContext) {
+    struct Store(std::sync::Mutex<Vec<(String,String,String)>>);
+    impl importer::CredentialStore for Store {fn store(&self,profile:&str,c:&importer::Credential)->Result<(),String>{self.0.lock().unwrap().push((profile.into(),c.origin.clone(),c.password.clone()));Ok(())}}
+    let (view,cx,_)=open_pages(cx);let fixture=import_fixture(cx);
+    let store=std::sync::Arc::new(Store(std::sync::Mutex::new(vec![])));
+    cx.cx.update(|cx|cx.set_global(crate::setup::CredentialStorage(store.clone())));
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (dialog,mut panel)=local_setup(&view,cx);
+    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"setup-next");
+    let path=fixture.path().join("Passwords.csv");std::fs::write(&path,"url,username,password\nhttps://vault.example/login,alice,fixture-secret-unique\n").unwrap();
+    dialog.update(&mut panel,|d,cx|d.load_password_file(path,cx));panel.run_until_parked();
+    click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Complete);
+    let saved=store.0.lock().unwrap();assert_eq!(saved.len(),1);assert_eq!(saved[0].1,"https://vault.example");assert_eq!(saved[0].2,"fixture-secret-unique");
+    let session=view.read_with(cx,|v,_|browser_core::session::to_json(&v.browser));assert!(!session.contains("fixture-secret-unique"));assert!(!session.contains("vault.example"));
+}
+
+#[gpui::test]
+fn local_setup_card_stays_centered_when_its_owner_resizes(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);let _fixture=import_fixture(cx);
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (_,mut panel)=local_setup(&view,cx);
+    cx.simulate_resize(gpui::size(gpui::px(1000.),gpui::px(760.)));cx.run_until_parked();panel.run_until_parked();
+    let requested=panel.update(|w,_|w.bounds().size);assert_eq!(requested,cx.update(|w,_|w.viewport_size()));panel.simulate_resize(requested);panel.run_until_parked();
+    assert_eq!(panel.debug_bounds("setup-card").unwrap().origin,gpui::point(gpui::px(210.),gpui::px(153.)));
+    cx.simulate_resize(gpui::size(gpui::px(900.),gpui::px(700.)));cx.run_until_parked();panel.run_until_parked();
+    let requested=panel.update(|w,_|w.bounds().size);assert_eq!(requested,cx.update(|w,_|w.viewport_size()));panel.simulate_resize(requested);panel.run_until_parked();
+    assert_eq!(panel.debug_bounds("setup-card").unwrap().origin,gpui::point(gpui::px(160.),gpui::px(123.)));
+}

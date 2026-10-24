@@ -48,6 +48,7 @@ impl BrowserWindow {
         self.finish_tab_rename(true, cx);
         // The replacement slot is filled before any deferred peer restoration.
         self.close_user_profile_dialog_with_focus(PopupFocus::OnActivation, cx);
+        self.close_setup_with_focus(PopupFocus::OnActivation,cx);
         self.close_command_bar(cx);
         self.close_find(cx);
         self.close_tab_menu(cx);

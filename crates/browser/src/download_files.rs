@@ -235,12 +235,12 @@ fn fallback() -> AnyElement {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn native_icon(_: &Path) -> Option<Arc<RenderImage>> {
+pub(crate) fn native_icon(_: &Path) -> Option<Arc<RenderImage>> {
     None
 }
 
 #[cfg(target_os = "macos")]
-fn native_icon(path: &Path) -> Option<Arc<RenderImage>> {
+pub(crate) fn native_icon(path: &Path) -> Option<Arc<RenderImage>> {
     use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_foundation::NSString;
     // NSWorkspace supplies the OS artwork, never assets from Arc's bundle.

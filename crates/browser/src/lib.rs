@@ -18,6 +18,7 @@ mod favicon_style;
 mod window_snapshots;
 mod new_menu;
 mod new_window;
+mod setup;
 mod browser_registration;
 mod import_credentials;
 mod blank_window;
@@ -104,6 +105,7 @@ pub fn init(cx: &mut App) {
     window::bind_keys(cx);
     find::bind_keys(cx);
     menus::init(cx);
+    setup::init(cx);
     settings::init(cx);
     transient::bind_keys(cx);
     global_little::init(cx);
@@ -169,7 +171,12 @@ fn profile_dir() -> PathBuf {
 /// Only a genuinely absent session is a first launch. Existing invalid or
 /// unreadable state is preserved byte-for-byte and must never select Default.
 fn load_session(path: &std::path::Path) -> std::io::Result<Browser> {
-    browser_core::session::load(path).map(|browser| browser.unwrap_or_else(demo_browser))
+    browser_core::session::load(path).map(|browser| browser.unwrap_or_else(|| {
+        // Native drive scripts use their existing demo fixture unless explicitly
+        // testing first-run setup. This switch is inert outside automation.
+        if std::env::var_os("BROWSER_SCRIPT").is_some() && std::env::var_os("BROWSER_TEST_ONBOARDING").is_none() { demo_browser() }
+        else { Browser::first_run() }
+    }))
 }
 
 struct SessionRestoreError { message: String }

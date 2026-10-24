@@ -338,7 +338,7 @@ impl BrowserWindow {
         });
         let selection_changed = self.browser.space().id != projection.space().id
             || self.browser.space().active_tab != projection.space().active_tab;
-        if selection_changed && self.page_content_visible() && self.user_profile_dialog.is_none() && self.command_bar.is_none() && self.tab_rename.is_none() {
+        if selection_changed && self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() && self.command_bar.is_none() && self.tab_rename.is_none() {
             if let Some(pages) = &self.pages {
                 let mut pages = pages.borrow_mut();
                 // A native Focused event has already selected its responder.

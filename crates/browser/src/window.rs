@@ -523,6 +523,7 @@ pub enum OverlayKind {
     SiteControls,
     NewMenu,
     UserProfileDialog,
+    Setup,
     ThemeEditor,
     TransientPicker,
 }
@@ -581,6 +582,7 @@ impl Render for Overlay {
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
+                    OverlayKind::Setup => browser.render_setup(),
                     OverlayKind::TransientPicker => browser.render_transient_picker(window, cx),
                 };
                 browser.render_overlay_shell(content, cx)
@@ -653,6 +655,7 @@ pub struct BrowserWindow {
     pub(crate) theme_system_dark: bool,
     theme_background_blurred: Option<bool>,
     pub(crate) user_profile_dialog: Option<crate::user_profiles::ProfileDialogHost>,
+    pub(crate) setup: Option<crate::setup::SetupHost>,
     pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
     pub(crate) tab_rename_pending: Option<TabId>,
     pub(crate) tab_rename_generation: u64,
@@ -786,6 +789,7 @@ impl BrowserWindow {
         });
         cx.observe_window_bounds(window, |this, window, cx| {
             this.resize_peek(window, cx);
+            this.resize_setup(window,cx);
         }).detach();
         cx.observe_window_appearance(window, |this, window, cx| {
             this.theme_system_dark = matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark);
@@ -911,6 +915,7 @@ impl BrowserWindow {
             theme_background_blurred: None,
             theme_system_dark: matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark),
             user_profile_dialog: None,
+            setup: None,
             tab_rename: None,
             tab_rename_pending: None,
             tab_rename_generation: 0,
@@ -1087,6 +1092,7 @@ impl BrowserWindow {
         self.clear_site_controls_backdrop();
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
         let profile_child = self.take_user_profile_child(cx);
+        let setup_child = self.take_setup_child(cx);
         let theme_child = self.take_theme_editor();
         if let Some(child) = self.peek_child.take() {
             // Peek owns native pages, so it needs its own retirement boundary.
@@ -1096,6 +1102,7 @@ impl BrowserWindow {
             self.boost_editor.take().map(|handle|handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
+            setup_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),
             self.command_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
             self.find_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
@@ -1152,7 +1159,7 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::Focused { view } => {
@@ -1391,6 +1398,7 @@ impl BrowserWindow {
         self.remember_library_popup_focus(window, cx);
         self.close_transient_picker(cx);
         self.close_user_profile_dialog(cx);
+        self.close_setup(cx);
         self.finish_tab_rename(true, cx);
         self.close_link_status(cx);
         self.close_command_bar(cx);
@@ -1542,7 +1550,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1555,7 +1563,7 @@ impl BrowserWindow {
             // A root with no popup already owns its responder intent (for
             // example History search or docked DevTools). Only replace it when
             // this operation actually takes over a popup's restoration.
-            self.popup_focus_on_activation |= self.theme_editor.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
+            self.popup_focus_on_activation |= self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
                 || self.find_bar.is_some() || self.tab_menu.is_some()
                 || self.popup_focus_pending > 0;
             self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
@@ -1568,6 +1576,7 @@ impl BrowserWindow {
         self.close_theme_editor_with_focus(focus, cx);
         self.close_transient_picker_with_focus(focus, cx);
         self.close_user_profile_dialog_with_focus(focus, cx);
+        self.close_setup_with_focus(focus,cx);
         self.close_site_controls_with_focus(focus, cx);
         self.close_new_menu_with_focus(focus, cx);
         self.close_command_bar_with_focus(focus, cx);
@@ -2166,6 +2175,8 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::SetDefaultBrowser, _, cx| this.request_default_browser(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
                 .on_action(cx.listener(|this, _: &crate::menus::NewProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx); }))
                 .on_action(cx.listener(|this, _: &crate::menus::ChangeProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_switch(space, cx); })))
@@ -2174,6 +2185,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if this.peek_owner.is_some() { this.retain_closed_peek(cx); this.close_window(cx); }
                 else if this.theme_editor.is_some() { this.close_theme_editor(cx); }
+                else if this.setup.is_some() { this.close_setup(cx); }
                 else if this.user_profile_dialog.is_some() { this.close_user_profile_dialog(cx); }
                 else if this.command_bar.is_some() { this.close_command_bar(cx); }
                 else { this.close_focused_tab(cx); }
@@ -2252,6 +2264,7 @@ impl BrowserWindow {
 
     fn on_close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.transient.is_some() { self.close_window(cx); return; }
+        if self.setup.is_some() { self.close_setup(cx); return; }
         if self.user_profile_dialog.is_some() { self.close_user_profile_dialog(cx); return; }
         let editing_name = self.tab_rename.is_some();
         self.close_focused_tab(cx);
@@ -4200,7 +4213,7 @@ impl Render for BrowserWindow {
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
-        if self.page_content_visible() && self.user_profile_dialog.is_none() { self.sync_history_focus(window, cx); }
+        if self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() { self.sync_history_focus(window, cx); }
         if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_target_exists(menu.target)) {
             self.close_tab_menu(cx);
         }
@@ -4255,6 +4268,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::SetDefaultBrowser, _, cx| this.request_default_browser(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
                 .on_action(cx.listener(|this, _: &crate::menus::NewProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx); }))
                 .on_action(cx.listener(|this, _: &crate::menus::ChangeProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_switch(space, cx); })))

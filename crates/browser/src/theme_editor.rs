@@ -799,7 +799,7 @@ impl BrowserWindow {
 
 // The installed catalogs use sRGB for Brand 1–4, linear sRGB for Brand 5,
 // and Display P3 for the remaining colors. Store only converted sRGB.
-fn preset_color(page: usize, index: usize) -> ThemeColor {
+pub(crate) fn preset_color(page: usize, index: usize) -> ThemeColor {
     let c = PALETTES[page][index];
     match (page, index) {
         (0, 0..=3) => ThemeColor { red: c[0], green: c[1], blue: c[2] },

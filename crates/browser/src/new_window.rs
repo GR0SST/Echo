@@ -124,7 +124,10 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
         )
         .unwrap();
     cx.activate(true);
-    if command_bar {
+    let onboarding=handle.read(cx).is_ok_and(|view|view.browser.onboarding.is_some());
+    if onboarding {
+        cx.defer(move|cx|{let _=handle.update(cx,|view,_,cx|view.open_setup(true,cx));});
+    } else if command_bar {
         // Wait for the old overlay's key event to finish returning focus.
         cx.spawn(async move |cx| {
             let _ = handle.update(cx, |view, window, cx| {

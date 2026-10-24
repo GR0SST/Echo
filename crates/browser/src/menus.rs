@@ -6,6 +6,8 @@ actions!(
     menu,
     [
         Settings,
+        ImportFromBrowser,
+        SetDefaultBrowser,
         HideApp,
         HideOthers,
         ShowAllApps,
@@ -79,7 +81,9 @@ pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'stati
 
 pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None) }
 fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>) -> Vec<Menu> {
-    let mut app = vec![MenuItem::action("Settings…", Settings), MenuItem::separator()];
+    let mut app = vec![MenuItem::action("Settings…", Settings),
+        MenuItem::action("Set as Default Browser", SetDefaultBrowser), MenuItem::separator(),
+        MenuItem::action("Import from Another Browser…", ImportFromBrowser), MenuItem::separator()];
     if native::supports_app_visibility() {
         app.extend([
             MenuItem::action("Hide Echo", HideApp),

@@ -68,8 +68,8 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | About Arc | — | missing | About window with licenses (Arc's `Credits.html`) |
 | Preferences… | ⌘, | partial | Separate GPUI Settings window from the app menu, Command Bar and page shortcut; General, Profiles, Links, Shortcuts, Icon and Advanced. Stored controls and remaining integrations are detailed below |
 | Share Arc (referral link) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
-| Set as Default Browser | — | partial | Isolated macOS LaunchServices/NSWorkspace registration and consent interface; Windows/Linux stubs. App-menu/setup wiring and native consent validation remain outstanding |
-| Import from Another Browser… | — | missing | See "Onboarding and import" |
+| Set as Default Browser | — | partial | Application-menu action and explicit first-run prompt use isolated macOS LaunchServices/NSWorkspace consent requests; duplicate requests serialized. Windows/Linux stubs; native OS consent and weekly prompts remain unvalidated. See docs/ONBOARDING_IMPORT_WIP.md |
+| Import from Another Browser… | — | partial | GPUI import flow in the app menu, matching the installed Arc menu location. Source picker geometry and fixture import checked natively; later-screen visual parity and unsupported formats remain. See "Onboarding and import" |
 | Check for Updates… | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Privacy Policy | — | missing | — |
 | Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
@@ -538,13 +538,13 @@ Max download rename/revert feedback awaits the later Max implementation.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | partial | Read-only Chrome/Edge/Brave, Firefox and Safari readers for bookmarks, history and supported open-tab session formats; atomic import to a new Space and profile-scoped history. Password CSV parser/store interface. Import UI, encrypted sessions/password databases, cookies and autofill remain outstanding |
-| Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | missing | — |
-| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | partial | Persisted local setup state supports first-run/resume and rejects stale-window advances; older sessions skip setup. Screens and visual/motion validation remain outstanding. Blocker and AI steps remain missing; accounts, sync and member cards are out of scope |
-| "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | missing | — |
-| "Essential Keyboard Shortcuts" window (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | missing | — |
+| Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | partial | Read-only Chrome/Edge/Brave, Firefox and Safari bookmarks/history/supported open-tab sessions; selected folders/Pinned bookmarks and ordered tabs publish into a new Space. GPUI selection, category progress/cancellation, and CSV upload/drop to a macOS local Keychain boundary. Encrypted sessions/source password databases, modern Safari formats, cookies/autofill and later-screen visual parity remain. See docs/ONBOARDING_IMPORT_WIP.md |
+| Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | partial | Existing/new local profile selection and atomic publication covered by GPUI/native fixture checks; Arc destination-picker visuals remain unverified |
+| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | partial | Fresh profiles enter persisted/resumable local theme, Favorites, import and default-browser setup; older sessions skip it. Uses existing theme APIs and resource copy. Full onboarding layout/motion and Favorites catalog, blocker and later AI steps remain; account/sync/member-card steps excluded. See docs/ONBOARDING_IMPORT_WIP.md |
+| "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | partial | Local basics screen with resource copy and shortcuts; video and full Arc layout remain |
+| "Essential Keyboard Shortcuts" window (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | partial | Resource-derived shortcuts accessible from setup, with Esc returning to basics; separate-window geometry remains |
 | Empty state: "Open your first tab. Click New Tab or press ⌘T…" | partial | We show a "No tab open / Press ⌘T to open a new tab" placeholder |
-| Default browser prompts ("Try Arc as default for one week" etc.) | missing | — |
+| Default browser prompts ("Try Arc as default for one week" etc.) | partial | Explicit first-run default request, skip/cancel behavior and app-menu action; recurring weekly prompts and final OS consent validation remain |
 
 ## 20. Local sessions and persistence
 
