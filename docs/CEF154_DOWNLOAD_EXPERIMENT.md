@@ -113,7 +113,7 @@ ditto "$out/ceftests.app" "$owned/ceftests.app"
   > "$owned/native-tests.log" 2>&1
 ```
 
-Require a successful process exit and all 28 cases with no skips or failures.
+Require a successful process exit and all 31 cases with no skips or failures.
 The BFCache flag selects the legacy request-replacement path covered by these
 tests; it is not an Echo application default. Retain the owned log/XML and check
 that its helper processes have exited. A failed copy is evidence of that attempt;
@@ -135,14 +135,22 @@ before dispatch. A same-document case first exposed a renderer crash in trusted
 null-origin fragment navigation. The unchanged test now verifies the original
 DOM, fragment URL, original-token outcome and final unregister.
 
-Additional native cases cancel a real beforeunload dialog while unregister is
-Pending, then verify the original document and one original-token outcome.
-Same-origin iframe GET and POST commands retain the parent's exact DOM/nonce and
-URL while completing in the named child after Closing. The POST case checks its
-exact body on the IO resource request and transfers owned observations to UI.
+Additional native cases allow and cancel real beforeunload dialogs while
+unregister is Pending, then verify one original-token outcome and the expected
+document. Same- and cross-origin iframe GET and POST commands retain the parent's
+exact DOM/nonce and URL while completing in the named child after Closing. POST
+checks its exact body on the IO resource request and transfers owned observations
+to UI.
 CEF154's NavigationHandle-backed OnBeforeBrowse metadata does not contain
 postdata; checking it there produced the initial fixture failure, not evidence
 that transport dropped the body.
+
+The first cross-origin run passed 29 of 31 cases: Chromium terminated both target
+renderers with INVALID_INITIATOR_ORIGIN. CEF's generic request conversion used the
+destination origin as initiator. Frame LoadRequest now uses the current document's
+security origin instead. Chromium's validation remains unchanged. All 31 tests,
+including their receipt, parent-document and POST assertions, were unchanged for
+the passing run.
 
 The 131 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
@@ -154,12 +162,11 @@ tests and the security exploit browser test) passed syntax-only compilation with
 their configured compiler flags; their full test suites were not executed.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
-returns Unsupported with fence zero; full-fence capability is off. Complete
-beforeunload allow, cross-origin/retargeted subframe, request rewriting,
-duplicate suppression, frame/context loss and endpoint-disconnect coverage.
-Actual Service Worker paths, other early
-ingress/no-item exits, SavePackage/resume and ordered public seal/drain/failure
-semantics remain open. A timeout, first association or nonloading source is not
+returns Unsupported with fence zero; full-fence capability is off. Remaining
+coverage includes retargeted subframes, request rewriting, duplicate suppression,
+frame/context loss and endpoint disconnects. Actual Service Worker paths, other
+early ingress/no-item exits, SavePackage/resume and ordered public
+seal/drain/failure semantics remain open. A timeout, first association or nonloading source is not
 an admission fence.
 
 Production adoption additionally needs verified distribution and loaded-framework

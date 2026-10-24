@@ -39,7 +39,7 @@
     },
     {
       "path": "cef.patch",
-      "sha256": "e207e219371efc3c28a4f22213b9ad58272956eb6cef1022d89aa539e93468e0"
+      "sha256": "1e1112eb2db7527c43a59a1450d1af3e4174210ff8c135c9e09bbb215555f2ce"
     }
   ],
   "standard_patch_files": [
@@ -2790,7 +2790,7 @@
     {
       "path": "cef/libcef/renderer/frame_impl.cc",
       "base_sha256": "2de57e0baa3fb3971ec41f5b8ec3d1ea078c893943a6edb39a8aad37586956d9",
-      "result_sha256": "21b09dd399a3e0de1d41871d90d2c2fcd99c1ca1b58eb842f5079e7bad00592c",
+      "result_sha256": "6da3dcded5b3638c4ce6f0e561df900f3c9e611e20523da55e87f409c38aee0c",
       "mode": "100644"
     },
     {
@@ -2814,7 +2814,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "e8ecf916aaa2c1acac020272247f410b0bee828dfa7a6617916bb83ba3e05ba0",
+      "result_sha256": "6733f8848cf541fde9b4a834c46bfda5446d84cd881d3d40dd98e1c5ea31ad35",
       "mode": "100644"
     },
     {

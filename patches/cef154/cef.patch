@@ -4796,7 +4796,15 @@ diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
  
  // Enable deprecation warnings on Windows. See http://crbug.com/585142.
  #if BUILDFLAG(IS_WIN)
-@@ -72,7 +77,54 @@
+@@ -37,6 +42,7 @@
+ #include "content/renderer/render_frame_impl.h"
+ #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
+ #include "third_party/blink/public/platform/web_data.h"
++#include "third_party/blink/public/platform/web_security_origin.h"
+ #include "third_party/blink/public/platform/web_string.h"
+ #include "third_party/blink/public/platform/web_url.h"
+ #include "third_party/blink/public/web/blink.h"
+@@ -72,7 +78,54 @@
    return frame->GetAgentGroupScheduler()->Isolate();
  }
  
@@ -4851,7 +4859,7 @@ diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
  
  CefFrameImpl::CefFrameImpl(CefBrowserImpl* browser, blink::WebLocalFrame* frame)
      : browser_(browser),
-@@ -886,15 +938,25 @@
+@@ -886,15 +939,29 @@
  }
  
  void CefFrameImpl::LoadRequest(cef::mojom::RequestParamsPtr params) {
@@ -4874,6 +4882,10 @@ diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
 +         blink::WebLocalFrame* frame) {
 +        blink::WebURLRequest request;
 +        CefRequestImpl::Get(params, request);
++        // LoadRequest is initiated by this frame's current document. The generic
++        // request conversion uses the destination origin, which a cross-origin
++        // frame navigation cannot claim as its renderer initiator.
++        request.SetRequestorOrigin(frame->GetDocument().GetSecurityOrigin());
 +        if (params->browser_command_nonce) {
 +          request.SetURLRequestExtraData(base::MakeRefCounted<CefNavigationCommandData>(
 +              *params->browser_command_nonce, std::move(result)));
@@ -4942,7 +4954,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,2702 @@
+@@ -0,0 +1,2740 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -7332,9 +7344,11 @@ new file mode 100644
 +constexpr char kBoundaryTarget[] = "https://echo-frame-boundary.test/target";
 +constexpr char kBoundaryChildName[] = "receipt-child";
 +constexpr char kBoundaryPostBody[] = "receipt=iframe-post";
++constexpr char kBoundaryCrossTarget[] = "https://echo-frame-cross-origin.test/target";
 +class FrameCommandBoundaryHandler : public TestHandler {
 + public:
-+  enum Mode { kBeforeUnloadCancel, kSubframeGet, kSubframePost };
++  enum Mode { kBeforeUnloadCancel, kSubframeGet, kSubframePost,
++              kBeforeUnloadAllow, kSubframeCrossOriginGet, kSubframeCrossOriginPost };
 +  explicit FrameCommandBoundaryHandler(Mode mode) : mode_(mode) {}
 +  ~FrameCommandBoundaryHandler() override {
 +    if (probe_->registration) {
@@ -7356,7 +7370,7 @@ new file mode 100644
 +    SetUseAlloyStyle(true, false);
 +    std::string page = "<html><body>parent document<script>"
 +        "document.body.dataset.receiptNonce=crypto.randomUUID();";
-+    if (mode_ == kBeforeUnloadCancel)
++    if (IsBeforeUnload())
 +      page += "window.onbeforeunload=()=> 'retain original document';";
 +    page += "</script>";
 +    if (IsChild())
@@ -7364,7 +7378,7 @@ new file mode 100644
 +    page += "</body></html>";
 +    AddResource(kBoundarySource, page, "text/html");
 +    AddResource(kBoundaryChild, "<html><body>child source document</body></html>", "text/html");
-+    AddResource(kBoundaryTarget, "<html><body>child-target-document</body></html>", "text/html");
++    AddResource(TargetUrl(), "<html><body>child-target-document</body></html>", "text/html");
 +    CefRequestContextSettings settings;
 +    CreateBrowser(kBoundarySource, CefRequestContext::CreateContext(settings, nullptr));
 +  }
@@ -7381,16 +7395,18 @@ new file mode 100644
 +  void OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int status) override {
 +    if (finished_) return;
 +    EXPECT_EQ(browser_id_, browser->GetIdentifier());
-+    if (command_sent_ && frame->GetURL() == kBoundaryTarget) {
-+      if (!IsChild()) {
++    if (command_sent_ && frame->GetURL() == TargetUrl()) {
++      if (mode_ == kBeforeUnloadCancel) {
 +        ADD_FAILURE() << "beforeunload cancellation replaced the document";
 +        Finish();
 +        return;
 +      }
-+      EXPECT_FALSE(frame->IsMain());
-+      EXPECT_EQ(kBoundaryChildName, frame->GetName().ToString());
-+      auto parent = frame->GetParent();
-+      EXPECT_TRUE(parent && parent->IsMain());
++      EXPECT_EQ(!IsChild(), frame->IsMain());
++      if (IsChild()) {
++        EXPECT_EQ(kBoundaryChildName, frame->GetName().ToString());
++        auto parent = frame->GetParent();
++        EXPECT_TRUE(parent && parent->IsMain());
++      }
 +      EXPECT_EQ(200, status);
 +      target_loaded_ = true;
 +      return;
@@ -7399,7 +7415,7 @@ new file mode 100644
 +    EXPECT_EQ(kBoundarySource, frame->GetURL().ToString());
 +    EXPECT_EQ(200, status);
 +    started_ = true;
-+    if (mode_ == kBeforeUnloadCancel) {
++    if (IsBeforeUnload()) {
 +      // The upstream JSDialog tests use this real renderer activation helper.
 +      // GetSource is the frame-channel barrier before sending the next command.
 +      CefExecuteJavaScriptWithUserGestureForTests(frame, CefString());
@@ -7435,16 +7451,16 @@ new file mode 100644
 +    probe_->navigation_tokens.clear();
 +    probe_->no_item_tokens.clear();
 +    probe_->no_item.clear();
-+    probe_->expected_method = mode_ == kSubframePost ? "POST" : "GET";
++    probe_->expected_method = IsPost() ? "POST" : "GET";
 +    auto browser = GetBrowser();
 +    auto frame = IsChild() ? browser->GetFrameByName(kBoundaryChildName)
 +                           : browser->GetMainFrame();
 +    ASSERT_TRUE(frame);
 +    EXPECT_EQ(!IsChild(), frame->IsMain());
 +    auto request = CefRequest::Create();
-+    request->SetURL(kBoundaryTarget);
++    request->SetURL(TargetUrl());
 +    request->SetMethod(probe_->expected_method);
-+    if (mode_ == kSubframePost) {
++    if (IsPost()) {
 +      auto body = CefPostData::Create();
 +      auto element = CefPostDataElement::Create();
 +      element->SetToBytes(sizeof(kBoundaryPostBody) - 1, kBoundaryPostBody);
@@ -7462,7 +7478,7 @@ new file mode 100644
 +  }
 +  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 +      CefRefPtr<CefRequest> request, bool, bool) override {
-+    if (finished_ || !command_sent_ || request->GetURL() != kBoundaryTarget) return false;
++    if (finished_ || !command_sent_ || request->GetURL() != TargetUrl()) return false;
 +    EXPECT_EQ(browser_id_, browser->GetIdentifier());
 +    EXPECT_EQ(!IsChild(), frame->IsMain());
 +    EXPECT_EQ(probe_->expected_method, request->GetMethod().ToString());
@@ -7471,7 +7487,7 @@ new file mode 100644
 +  }
 +  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser> browser,
 +      CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request) override {
-+    if (mode_ == kSubframePost && request->GetURL() == kBoundaryTarget) {
++    if (IsPost() && request->GetURL() == TargetUrl()) {
 +      // NavigationHandle-backed OnBeforeBrowse metadata omits POST data.
 +      // Copy the actual resource request's bytes on IO, then assert on UI.
 +      auto post = request->GetPostData();
@@ -7506,17 +7522,17 @@ new file mode 100644
 +      callback->Continue(true, CefString());  // Allow final test teardown.
 +      return true;
 +    }
-+    EXPECT_EQ(kBeforeUnloadCancel, mode_);
++    EXPECT_TRUE(IsBeforeUnload());
 +    EXPECT_FALSE(is_reload);
 +    EXPECT_TRUE(command_sent_);
-+    EXPECT_FALSE(canceled_);
++    EXPECT_FALSE(decision_completed_);
 +    EXPECT_EQ(1, probe_->reserves);
 +    EXPECT_EQ(1, probe_->authorizations);
 +    EXPECT_TRUE(probe_->no_item_tokens.empty());
 +    EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, probe_->api.unregister_poll(probe_->registration));
 +    dialog_seen_ = true;
-+    canceled_ = true;
-+    callback->Continue(false, CefString());
++    decision_completed_ = true;
++    callback->Continue(mode_ == kBeforeUnloadAllow, CefString());
 +    return true;
 +  }
 +  void Poll() {
@@ -7531,10 +7547,11 @@ new file mode 100644
 +      }
 +    }
 +    const bool observed = IsChild()
-+        ? (target_loaded_ && (mode_ != kSubframePost || post_body_seen_))
-+        : (dialog_seen_ && canceled_);
-+    if (!probe_->registration && !observed && !IsChild()) {
-+      ADD_FAILURE() << "unregister completed before beforeunload cancellation";
++        ? (target_loaded_ && (!IsPost() || post_body_seen_))
++        : (dialog_seen_ && decision_completed_ &&
++           (mode_ == kBeforeUnloadCancel || target_loaded_));
++    if (!probe_->registration && IsBeforeUnload() && !decision_completed_) {
++      ADD_FAILURE() << "unregister completed before beforeunload decision";
 +      Finish();
 +      return;
 +    }
@@ -7552,23 +7569,31 @@ new file mode 100644
 +    EXPECT_EQ(1, probe_->reserves);
 +    EXPECT_EQ(1, probe_->authorizations);
 +    EXPECT_EQ(probe_->navigation_tokens, probe_->no_item_tokens);
-+    EXPECT_EQ((std::vector<uint32_t>{IsChild() ? ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD
-+                                             : ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}),
-+              probe_->no_item);
-+    if (IsChild()) EXPECT_TRUE(target_browse_seen_);
++    const uint32_t expected_reason = mode_ == kBeforeUnloadCancel
++        ? ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED : ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD;
++    EXPECT_EQ((std::vector<uint32_t>{expected_reason}), probe_->no_item);
++    if (mode_ != kBeforeUnloadCancel) EXPECT_TRUE(target_browse_seen_);
 +    final_source_requested_ = true;
 +    GetBrowser()->GetMainFrame()->GetSource(new RendererSourceAck(base::BindOnce(
 +        &FrameCommandBoundaryHandler::FinalSource, this)));
 +  }
 +  void FinalSource(const CefString& source) {
 +    if (finished_) return;
++    if (mode_ == kBeforeUnloadAllow) {
++      EXPECT_TRUE(dialog_seen_ && decision_completed_ && target_loaded_);
++      EXPECT_EQ(TargetUrl(), GetBrowser()->GetMainFrame()->GetURL().ToString());
++      EXPECT_NE(original_source_, source.ToString());
++      EXPECT_NE(std::string::npos, source.ToString().find("child-target-document"));
++      Finish();
++      return;
++    }
 +    EXPECT_EQ(original_source_, source.ToString());
 +    EXPECT_EQ(kBoundarySource, GetBrowser()->GetMainFrame()->GetURL().ToString());
 +    if (IsChild()) {
 +      auto child = GetBrowser()->GetFrameByName(kBoundaryChildName);
 +      EXPECT_TRUE(child && !child->IsMain());
 +      if (!child) { Finish(); return; }
-+      EXPECT_EQ(kBoundaryTarget, child->GetURL().ToString());
++      EXPECT_EQ(TargetUrl(), child->GetURL().ToString());
 +      child->GetSource(new RendererSourceAck(base::BindOnce(
 +          &FrameCommandBoundaryHandler::FinalChildSource, this)));
 +      return;
@@ -7614,14 +7639,20 @@ new file mode 100644
 +    Finish();
 +  }
 + private:
-+  bool IsChild() const { return mode_ != kBeforeUnloadCancel; }
++  bool IsChild() const { return mode_ != kBeforeUnloadCancel && mode_ != kBeforeUnloadAllow; }
++  bool IsBeforeUnload() const { return !IsChild(); }
++  bool IsPost() const { return mode_ == kSubframePost || mode_ == kSubframeCrossOriginPost; }
++  const char* TargetUrl() const {
++    return mode_ == kSubframeCrossOriginGet || mode_ == kSubframeCrossOriginPost
++        ? kBoundaryCrossTarget : kBoundaryTarget;
++  }
 +  const Mode mode_;
 +  const std::shared_ptr<Probe> probe_ = std::make_shared<Probe>();
 +  std::string original_source_;
 +  int browser_id_ = 0, polls_ = 0, cleanup_polls_ = 0, initial_polls_ = 0;
 +  bool started_ = false, command_sent_ = false, finished_ = false;
 +  bool target_loaded_ = false, target_browse_seen_ = false, dialog_seen_ = false;
-+  bool canceled_ = false, final_source_requested_ = false, extra_signaled_ = false;
++  bool decision_completed_ = false, final_source_requested_ = false, extra_signaled_ = false;
 +  bool post_body_seen_ = false;
 +  IMPLEMENT_REFCOUNTING(FrameCommandBoundaryHandler);
 +};
@@ -7640,6 +7671,25 @@ new file mode 100644
 +TEST(EchoDownloadBridge, SubframePostKeepsBodyParentAndOriginalAdmissionAfterClosing) {
 +  CefRefPtr<FrameCommandBoundaryHandler> handler =
 +      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kSubframePost);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++TEST(EchoDownloadBridge, BeforeUnloadAllowRetainsOriginalAdmissionThroughCommit) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kBeforeUnloadAllow);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, CrossOriginSubframeGetRetainsParentAndOriginalAdmission) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kSubframeCrossOriginGet);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission) {
++  CefRefPtr<FrameCommandBoundaryHandler> handler =
++      new FrameCommandBoundaryHandler(FrameCommandBoundaryHandler::kSubframeCrossOriginPost);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
 +}
