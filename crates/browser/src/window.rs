@@ -489,6 +489,8 @@ pub struct CommandBar {
     pub(crate) remote_task: Option<Task<()>>,
     pub(crate) suggestions_privacy: bool,
     pub(crate) material_backdrop: Rc<Cell<bool>>,
+    material_alive: Rc<Cell<bool>>,
+    pub(crate) shadow_cache: crate::space_theme::ThemeShadowCache,
     pub(crate) archive_reason: Option<browser_core::ArchiveReason>,
     pub(crate) archive_limit: usize,
     pub(crate) rows_scroll: gpui::ScrollHandle,
@@ -1046,6 +1048,8 @@ impl BrowserWindow {
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
         self.discard_sidebar_resize();
+        if let Some(bar) = &self.command_bar { bar.material_alive.set(false); }
+        self.clear_command_bar_backdrop();
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
         let profile_child = self.take_user_profile_child(cx);
         let theme_child = self.take_theme_editor();
@@ -1388,6 +1392,8 @@ impl BrowserWindow {
             remote_task: None,
             suggestions_privacy: false,
             material_backdrop: Rc::new(Cell::new(false)),
+            material_alive: Rc::new(Cell::new(true)),
+            shadow_cache: Default::default(),
             archive_reason: None,
             archive_limit: 8,
             rows_scroll: gpui::ScrollHandle::new(),
@@ -1478,6 +1484,8 @@ impl BrowserWindow {
     pub(crate) fn close_command_bar_with_focus(&mut self, focus: PopupFocus, cx: &mut Context<Self>) {
         self.cancel_split_draft();
         let Some(bar) = self.command_bar.take() else { return; };
+        bar.material_alive.set(false);
+        self.clear_command_bar_backdrop();
         self.close_popup_overlay(bar.overlay, focus, true, cx);
         cx.notify();
     }
@@ -3717,17 +3725,32 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    fn clear_command_bar_backdrop(&self) {
+        if let Some(view) = self.native_view {
+            use crate::material::*;
+            crate::native::set_content_backdrop(view, "command-bar-page", None, 0., BackdropConfig {
+                appearance: EffectAppearance::Dark, state: EffectState::Active,
+                blending: EffectBlending::WithinWindow, emphasized: false,
+                effect_alpha: 1., material: EffectMaterial::Menu,
+            });
+        }
+    }
+
     fn render_command_bar_overlay(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
         match &self.command_bar {
-            Some(bar) if matches!(bar.target, Target::Icon(_)) => self.render_icon_picker(bar, width, height, cx),
-            Some(bar) => self.render_command_bar(bar, width, height, cx).into_any_element(),
+            Some(bar) if matches!(bar.target, Target::Icon(_)) => { bar.material_alive.set(false); self.clear_command_bar_backdrop(); self.render_icon_picker(bar, width, height, cx) },
+            Some(bar) => { bar.material_alive.set(true); self.render_command_bar(bar, width, height, cx).into_any_element() },
             None => div().into_any_element(),
         }
     }
 
     fn render_command_bar(&self, bar: &CommandBar, width: f32, height: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let dark = self.theme_is_dark();
+        let ink = if dark { 1. } else { 0. };
         let history_owner = self.browser.active_user_profile_id();
         let material_backdrop = bar.material_backdrop.clone();
+        let material_alive = bar.material_alive.clone();
+        let page_parent = self.native_view.map(|view| view as usize);
         let panel_fill = self.command_bar_panel_fill(material_backdrop.get());
         let row_selection = self.command_bar_selection();
         let accent = self.accent();
@@ -3810,9 +3833,9 @@ impl BrowserWindow {
                     .pl(px(10.0)).pr(px(11.0))
                     .mx_2()
                     .rounded(px(8.0))
-                    .text_color(hsla(0.0, 0.0, 1.0, if selected { 1.0 } else { 0.82 }))
+                    .text_color(hsla(0.0, 0.0, if selected { 1. } else { ink }, if selected { 1.0 } else { 0.82 }))
                     .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(0xffa000).into() } else { row_selection }))
-                    .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.04))))
+                    .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.04))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
                     .child(
@@ -3832,13 +3855,13 @@ impl BrowserWindow {
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(hsla(0.0, 0.0, 1.0, if selected { 0.95 } else { 0.4 }))
+                            .text_color(hsla(0.0, 0.0, if selected { 1. } else { ink }, if selected { 0.95 } else { 0.4 }))
                             .child(detail),
                     )
                     .when_some(archived_id, |this, id| this.child(div()
                         .id(("delete-archived", id.get() as usize))
                         .debug_selector(|| self.sidebar_debug_name((move || format!("delete-archived-{}", id.get()))()))
-                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
+                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_archive_entry(id, cx);
@@ -3846,14 +3869,14 @@ impl BrowserWindow {
                     .when_some(history_url, |this, url| this.child(div()
                         .id(("delete-suggestion", index))
                         .debug_selector(|| self.sidebar_debug_name((move || format!("delete-suggestion-{index}"))()))
-                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.12)))
+                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_command_history_entry(history_owner, &url, cx);
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when(!search_row && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
-                        .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, 1.0, 0.06) })
-                        .text_color(if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, 1.0, 0.6) })
+                        .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, ink, 0.06) })
+                        .text_color(if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
                         .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0))));
                 div().flex().flex_col().flex_none()
                     .children(date.map(|date| div().debug_selector(|| self.sidebar_debug_name((move || format!("archive-date-{index}"))())).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
@@ -3917,17 +3940,27 @@ impl BrowserWindow {
                     .flex_col()
                     .rounded(px(COMMAND_BAR_RADIUS))
                     .bg(panel_fill)
-                    .shadow_2xl()
+                    .child(div().absolute().inset_0().child(self.command_bar_shadow()))
                     .border_1()
-                    .border_color(hsla(0.0, 0.0, 1.0, 0.2))
-                    .text_color(hsla(0.0, 0.0, 1.0, 0.92))
+                    .border_color(if dark { hsla(0., 0., 0., 0.9) } else { hsla(0., 0., 1., 0.8) })
+                    .child(div().absolute().inset(px(1.)).rounded(px(COMMAND_BAR_RADIUS - 1.))
+                        .border_1().border_color(hsla(0., 0., ink, if dark { 0.2 } else { 0.08 })))
+                    .text_color(hsla(0.0, 0.0, ink, 0.92))
                     .font_family(".SystemUIFont")
                     .child(gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
-                        let installed = crate::native::view_of(window).is_some_and(|view| {
-                            crate::native::set_backdrop(view, "command-bar", Some([
+                        // A queued child frame must not recreate a material
+                        // after its owner closes or changes to the icon picker.
+                        if !material_alive.get() { return; }
+                        let installed = page_parent.is_some_and(|view| {
+                            use crate::material::*;
+                            crate::native::set_content_backdrop(view as *mut std::ffi::c_void, "command-bar-page", Some([
                                 f32::from(bounds.origin.x) as f64, f32::from(bounds.origin.y) as f64,
                                 f32::from(bounds.size.width) as f64, f32::from(bounds.size.height) as f64,
-                            ]), COMMAND_BAR_RADIUS as f64, crate::native::Material::Menu)
+                            ]), COMMAND_BAR_RADIUS as f64, BackdropConfig {
+                                appearance: if dark { EffectAppearance::Dark } else { EffectAppearance::Light }, state: EffectState::Active,
+                                blending: EffectBlending::WithinWindow, emphasized: false,
+                                effect_alpha: 1., material: EffectMaterial::Menu,
+                            }) == BackdropInstallation::Installed
                         });
                         if material_backdrop.replace(installed) != installed { window.refresh(); }
                     }).absolute().inset_0())
@@ -3936,10 +3969,10 @@ impl BrowserWindow {
                             .h(px(COMMAND_BAR_HEADER - 1.)).flex_none()
                             .flex().items_center().gap(px(13.0))
                             .pl(px(22.0)).pr(px(21.0))
-                            .child(div().text_color(hsla(0.0, 0.0, 1.0, 0.75)).child(
+                            .child(div().text_color(hsla(0.0, 0.0, ink, 0.75)).child(
                                 if let Target::Tab(id) = bar.target {
                                     self.browser.all_tabs().find(|tab| tab.id == id)
-                                        .map(|tab| self.render_favicon_on(tab, accent, true))
+                                        .map(|tab| self.render_favicon_on(tab, accent, dark))
                                         .unwrap_or_else(|| crate::icons::control_sized(crate::icons::Icon::Search, 16.0))
                                 } else { crate::icons::control_sized(crate::icons::Icon::Search, 16.0) }))
                             .when_some(bar.site_search, |this, site| this.child(div()
@@ -3961,14 +3994,14 @@ impl BrowserWindow {
                                     cx.notify();
                                 }))
                                 .size(px(24.0)).flex_none().flex().items_center().justify_center().rounded_full()
-                                .bg(hsla(0.0, 0.0, 0.0, 0.8)).text_color(hsla(0.0, 0.0, 1.0, 0.55))
+                                .bg(hsla(0.0, 0.0, 1. - ink, 0.8)).text_color(hsla(0.0, 0.0, ink, 0.55))
                                 .child(crate::icons::control_sized(crate::icons::Icon::Info, 17.0)))),
                     )
                     .when(matches!(bar.target, Target::Archive(_)), |this| this.child(self.render_archive_controls(cx)))
                     .when(bar.target == Target::ConfirmClearArchive, |this| this.child(div().px_4().pb_2().text_sm().child("This action is permanent. Archived tabs from all Spaces will be deleted.")))
                     .when(!has_rows && matches!(bar.target, Target::Archive(_)), |this| this.child(div().px_4().py_3().text_sm().child("No archived tabs match your search.")))
                     .when(has_rows, |this| {
-                        this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, 1.0, 0.1)))
+                        this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, ink, 0.1)))
                             .text_size(px(14.0))
                             .child(div().id("command-suggestions").debug_selector(|| self.sidebar_debug_name((|| "command-suggestions".into())()))
                                 .flex().flex_col().gap_1().pt(px(6.0)).pb(px(10.0)).max_h(px(rows_height + 16.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
@@ -3976,7 +4009,7 @@ impl BrowserWindow {
                     .when(bar.suggestions_privacy, |this| this.child(div()
                         .debug_selector(|| "suggestions-privacy".into())
                         .flex().items_center().gap_3().px_4().py_3()
-                        .bg(gpui::black()).rounded_b(px(COMMAND_BAR_RADIUS))
+                        .bg(gpui::black()).text_color(gpui::white()).rounded_b(px(COMMAND_BAR_RADIUS))
                         .child(crate::icons::control_sized(crate::icons::Icon::Info, 16.))
                         .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM)
                             .child("We talk to your search engine to help us suggest results."))

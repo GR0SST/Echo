@@ -144,6 +144,39 @@ impl ThemePaintCache {
         (gradient, texture)
     }
 }
+const SHADOW_MARGIN: u32 = 160;
+#[derive(Clone, Default)]
+pub(crate) struct ThemeShadowCache(Rc<RefCell<Option<(u32, u32, Arc<RenderImage>)>>>);
+fn rounded_distance(width: f32, height: f32, x: f32, y: f32) -> f32 {
+    let dx = (x - width * 0.5).abs() - (width * 0.5 - 12.);
+    let dy = (y - height * 0.5).abs() - (height * 0.5 - 12.);
+    dx.max(0.).hypot(dy.max(0.)) + dx.max(dy).min(0.) - 12.
+}
+fn command_shadow_alpha(width: f32, height: f32, x: f32, y: f32) -> f32 {
+    if rounded_distance(width, height, x, y) <= 0. { return 0.; }
+    let distance = rounded_distance(width, height, x, y - 22.);
+    // Logistic approximation of the measured Gaussian edge response. Keeping
+    // the center transparent avoids GPUI shadow culling and interior overdraw.
+    0.54 / (1. + (1.702 * distance / 51.).exp())
+}
+impl ThemeShadowCache {
+    fn image(&self, width: u32, height: u32) -> Arc<RenderImage> {
+        let mut cache = self.0.borrow_mut();
+        if let Some((w, h, image)) = cache.as_ref().filter(|(w, h, _)| *w == width && *h == height) {
+            let _ = (w, h);
+            return image.clone();
+        }
+        let image = image::RgbaImage::from_fn(width + SHADOW_MARGIN * 2, height + SHADOW_MARGIN * 2, |x, y| {
+            let alpha = command_shadow_alpha(width as f32, height as f32,
+                x as f32 + 0.5 - SHADOW_MARGIN as f32, y as f32 + 0.5 - SHADOW_MARGIN as f32);
+            image::Rgba([0, 0, 0, (alpha * 255.).round() as u8])
+        });
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
+        *cache = Some((width, height, image.clone()));
+        image
+    }
+}
+
 /// Shared chrome semantics for hosted Library/Media/Downloads surfaces.
 /// Surface fills stay with their owners; these values never alter layout.
 #[derive(Clone, Copy)]
@@ -201,17 +234,33 @@ impl BrowserWindow {
             }
         }).size_full().into_any_element()
     }
+    pub(crate) fn command_bar_shadow(&self) -> AnyElement {
+        let cache = self.command_bar.as_ref().expect("command bar owns its shadow").shadow_cache.clone();
+        canvas(|_, _, _| (), move |bounds, _, window, _| {
+            let image = cache.image(f32::from(bounds.size.width).round() as u32, f32::from(bounds.size.height).round() as u32);
+            let _ = window.paint_image(bounds.dilate(px(SHADOW_MARGIN as f32)), Default::default(), image, 0, false);
+        }).size_full().into_any_element()
+    }
     pub(crate) fn theme_tab_selection_for(&self, space: browser_core::SpaceId) -> gpui::Hsla {
         gpui::hsla(0., 0., 1., if self.theme_uses_light_ink_for(space) { 0.16 } else { 0.80 })
     }
     pub(crate) fn command_bar_selection(&self) -> gpui::Hsla {
         let surface = self.theme_surface_for(self.browser.space());
-        if !surface.picked { return gpui::hsla(0., 0., 1., 0.10); }
+        if !surface.picked { return gpui::hsla(0., 0., if self.theme_is_dark() { 1. } else { 0. }, 0.10); }
         let color = surface.theme.colors[0];
-        gpui::Rgba { r: color.red, g: color.green, b: color.blue, a: 0.65 }.into()
+        let lift = |channel: f32| channel * 0.75 + 0.25;
+        let mut fill: gpui::Hsla = gpui::Rgba { r: lift(color.red), g: lift(color.green), b: lift(color.blue), a: if self.theme_is_dark() { 0.65 } else { 0.30 } }.into();
+        if !self.theme_is_dark() {
+            fill.s = (fill.s * 1.6).min(1.);
+            fill.l = (fill.l - 0.015).max(0.);
+        }
+        fill
     }
     pub(crate) fn command_bar_panel_fill(&self, blurred: bool) -> gpui::Hsla {
-        gpui::hsla(self.accent(), 0.08, 0.16, if blurred { 0.22 } else { 1. })
+        let dark = self.theme_is_dark();
+        gpui::hsla(self.accent(), if dark { 0.08 } else { 0. },
+            if dark { if blurred { 0.055 } else { 0.16 } } else { 1. },
+            if blurred { 0.61 } else { 1. })
     }
     pub(crate) fn theme_colors(&self) -> ChromeColors {
         let dark = self.theme_uses_light_ink_for(self.browser.space().id);
@@ -366,6 +415,28 @@ impl BrowserWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_bar_shadow_excludes_the_translucent_rounded_interior() {
+        for y in 0..50 {
+            for x in 0..100 {
+                let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+                if rounded_distance(100., 50., x, y) <= 0. {
+                    assert_eq!(command_shadow_alpha(100., 50., x, y), 0.);
+                }
+            }
+        }
+        // The left tail continues smoothly across the panel's bottom; a
+        // clipped shadow primitive previously left a horizontal seam here.
+        for x in [-80., -40., -10.] {
+            let above = command_shadow_alpha(764., 278., x, 277.5);
+            let below = command_shadow_alpha(764., 278., x, 278.5);
+            assert!(above > 0. && below > 0.);
+            assert!((above - below).abs() < 0.01);
+        }
+        assert!(command_shadow_alpha(764., 278., 382., 279.) > 0.3);
+        assert!(command_shadow_alpha(764., 278., 382., 390.) < 0.04);
+    }
+
     #[test]
     fn appearance_intensity_and_third_color_affect_the_shared_background() {
         let mut s = Surface {

@@ -8332,7 +8332,8 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
             assert!(w.command_bar_selection().a<1.);
             assert!((w.command_bar_selection().h - w.accent()).abs() < 0.001);
             assert_eq!(w.command_bar_panel_fill(false).a,1.);
-            assert!(w.command_bar_panel_fill(true).a<0.3);
+            assert_eq!(w.command_bar_panel_fill(false).l > 0.9, appearance == ThemeAppearance::Light);
+            assert!(w.command_bar_panel_fill(true).a<1.);
         });
         assert!(bar(&view,cx).debug_bounds("suggestion-1").is_some());
     }
@@ -9327,4 +9328,28 @@ fn new_boost_without_a_website_defers_creation_and_can_cancel(cx:&mut TestAppCon
     dispatch_menu(cx,"Spaces","New Boost");cx.run_until_parked();bar(&view,cx).simulate_input("https://fresh.example");bar(&view,cx).simulate_keystrokes("enter");
     let mut panel=boost_panel(&view,cx);assert!(panel.debug_bounds("boost-editor").is_some());
     assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().domain().to_owned()),"fresh.example");
+}
+
+#[gpui::test]
+fn command_bar_material_resize_and_dismissal_retain_the_live_document(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let active = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    let mut command = bar(&view, cx);
+    command.simulate_input("weather tomorrow");
+    cx.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(760.))); cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, cx| w.command_bar.as_ref().unwrap().input.read(cx).text().to_owned()), "weather tomorrow");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), active);
+    command.simulate_keystrokes("escape"); cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none()));
+    cx.simulate_keystrokes("cmd-t");
+    let mut fresh = bar(&view, cx); fresh.simulate_input("second query");
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(700.))); cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, cx| w.command_bar.as_ref().unwrap().input.read(cx).text().to_owned()), "second query");
+    fresh.simulate_keystrokes("escape"); cx.run_until_parked();
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))), "{calls:?}");
+    assert!(calls.contains(&Call::FocusPage(1)), "{calls:?}");
+    view.read_with(cx, |w, _| assert!(w.pages.as_ref().unwrap().borrow().is_visible(active)));
 }

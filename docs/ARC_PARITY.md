@@ -276,7 +276,7 @@ Folder duplication follows the right-click action documented in the
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Popup over the page | ⌘T | partial | Uses the full browser window bounds, including the floating sidebar. Installed-Arc comparison covers 764 px width, centered input anchor, 46 px rows, radius, padding and typography; bounded native blur with a subtle theme tint and neutral translucent selection replaces the opaque panel/accent row; exact material calibration remains |
+| Popup over the page | ⌘T | partial | 764 px centered panel, 46 px rows and reference spacing. Native within-window material samples the live CEF page below the separate GPUI controls, with measured dark tint, pigment-tinted translucent selection, double edge and an exterior-only shadow. The dark 128 px stripe reference matches the blur profile within 1–2 RGB levels after sRGB conversion; Light mode also changes the panel and text, with a small remaining tint difference. Dismissal and resize retain the document; platform fallbacks and unpicked/other-palette calibration remain unverified |
 | Entering a URL or searching ("Search or Enter URL…") | — | done | Uses the selected local profile’s search engine from Settings → Profiles |
 | Editing the current URL | ⌘L | done | Enter on an unchanged URL reloads the page and preserves its title |
 | Navigation with ↑/↓, ⌃N/⌃P, Enter, Esc; clicking outside closes it | — | done | Repeating ⌘T or ⌘L dismisses its mode; switching between them replaces the input in the same overlay |

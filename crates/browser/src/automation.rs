@@ -507,7 +507,10 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     }
                 },
                 "views" => source_native!(|native| unsafe {
-                    let window = window_of(native);
+                    let window = if arg == "front" {
+                        let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
+                        msg_send![app, keyWindow]
+                    } else { window_of(native) };
                     let mask: usize = msg_send![window, styleMask];
                     let min: objc2_foundation::NSSize = msg_send![window, minSize];
                     let max: objc2_foundation::NSSize = msg_send![window, maxSize];
@@ -763,6 +766,13 @@ unsafe fn print_views(view: *mut AnyObject, depth: usize) {
             hidden.as_bool(),
             layer_class,
         );
+        let effect: Bool = msg_send![view, isKindOfClass: AnyClass::get(c"NSVisualEffectView").unwrap()];
+        if effect.as_bool() {
+            let material: isize = msg_send![view, material];
+            let blending: isize = msg_send![view, blendingMode];
+            let state: isize = msg_send![view, state];
+            eprintln!("[views] effect material={material} blending={blending} state={state}");
+        }
         if !layer.is_null() && layer_class != "CAMetalLayer" {
             print_layers(layer, depth + 2);
         }

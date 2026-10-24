@@ -143,6 +143,7 @@ mod mac {
         parent: *mut AnyObject,
         effect: *mut AnyObject,
         identifier: String,
+        above_content: bool,
     }
 
     impl super::BackdropHost for BoundedEffect {
@@ -157,7 +158,9 @@ mod mac {
                 if effect.is_null() { return false; }
                 let identifier = NSString::from_str(&self.identifier);
                 let _: () = msg_send![effect, setIdentifier: &*identifier];
-                let _: () = msg_send![self.parent, addSubview: effect, positioned: -1isize, relativeTo: self.view];
+                let relative: *mut AnyObject = if self.above_content { std::ptr::null_mut() } else { self.view };
+                let order = if self.above_content { 1isize } else { -1isize };
+                let _: () = msg_send![self.parent, addSubview: effect, positioned: order, relativeTo: relative];
                 let parent: *mut AnyObject = msg_send![effect, superview];
                 let installed = parent == self.parent;
                 if installed { self.effect = effect; }
@@ -173,6 +176,14 @@ mod mac {
                 if self.effect.is_null() { return false; }
                 let parent: *mut AnyObject = msg_send![self.effect, superview];
                 if parent != self.parent { return false; }
+                if self.above_content {
+                    let subviews: *mut AnyObject = msg_send![self.parent, subviews];
+                    let last: *mut AnyObject = msg_send![subviews, lastObject];
+                    if last != self.effect {
+                        let relative: *mut AnyObject = std::ptr::null_mut();
+                        let _: () = msg_send![self.parent, addSubview: self.effect, positioned: 1isize, relativeTo: relative];
+                    }
+                }
                 let nil: *mut AnyObject = std::ptr::null_mut();
                 let appearance = match config.appearance {
                     EffectAppearance::Inherited => nil,
@@ -222,7 +233,7 @@ mod mac {
         }
     }
 
-    pub fn set_backdrop_configured(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig) -> crate::material::BackdropInstallation {
+    pub fn set_backdrop_configured(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig, above_content: bool) -> crate::material::BackdropInstallation {
         use crate::material::BackdropInstallation;
         use objc2_foundation::NSString;
         let view = view as *mut AnyObject;
@@ -244,7 +255,7 @@ mod mac {
                     break;
                 }
             }
-            let mut host = BoundedEffect { view, parent, effect, identifier };
+            let mut host = BoundedEffect { view, parent, effect, identifier, above_content };
             super::reconcile_backdrop(&mut host, rect, radius, config)
         }
     }
@@ -448,7 +459,17 @@ pub fn set_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius
 /// Installed means an attached/configured effect view, not verified blur output.
 pub(crate) fn set_backdrop_configured(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig) -> crate::material::BackdropInstallation {
     #[cfg(all(target_os = "macos", not(test)))]
-    { mac::set_backdrop_configured(view, key, rect, radius, config) }
+    { mac::set_backdrop_configured(view, key, rect, radius, config, false) }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { let _ = (view, key, rect, radius, config); crate::material::BackdropInstallation::Unavailable }
+}
+
+/// A bounded material above embedded content, below a separate GPUI overlay.
+/// WithinWindow blending can sample the live document without grouping the
+/// sampling view into the transparent child window that owns the controls.
+pub(crate) fn set_content_backdrop(view: *mut c_void, key: &str, rect: Option<[f64; 4]>, radius: f64, config: crate::material::BackdropConfig) -> crate::material::BackdropInstallation {
+    #[cfg(all(target_os = "macos", not(test)))]
+    { mac::set_backdrop_configured(view, key, rect, radius, config, true) }
     #[cfg(any(not(target_os = "macos"), test))]
     { let _ = (view, key, rect, radius, config); crate::material::BackdropInstallation::Unavailable }
 }
