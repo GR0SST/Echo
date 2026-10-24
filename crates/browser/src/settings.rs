@@ -72,6 +72,9 @@ pub(crate) struct SettingsWindow {
     popup: Option<Popup>,
     popup_selection: usize,
     previews: bool,
+    pub(crate) atc: Option<Entity<crate::atc::AtcPanel>>,
+    atc_return_focus: bool,
+    _atc_dismiss: Option<Subscription>,
     shortcut_search: Entity<crate::text_input::TextInput>,
     _search_changed: Subscription,
     _observe: Subscription,
@@ -91,7 +94,7 @@ pub(crate) fn init(cx: &mut App) {
             match crate::new_window::normal_source(cx) {
                 Ok(normal) => {
                     let id = normal.profile.default_user_profile_id();
-                    open(normal.profile, id, None, cx);
+                    open(normal.profile, id, None, false, cx);
                 }
                 Err(error) => crate::show_session_error(error, cx),
             }
@@ -100,12 +103,14 @@ pub(crate) fn init(cx: &mut App) {
 }
 
 impl BrowserWindow {
-    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn open_settings(&mut self, cx: &mut Context<Self>) { self.open_settings_mode(false, cx); }
+    pub(crate) fn open_air_traffic_control(&mut self, cx: &mut Context<Self>) { self.open_settings_mode(true, cx); }
+    fn open_settings_mode(&mut self, air_traffic: bool, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() {
             return;
         }
         self.retain_normal_source(cx);
-        self.close_command_bar(cx);
+        self.close_command_bar_with_focus(crate::window::PopupFocus::OnActivation, cx);
         let owner = (!self.browser.is_private() && !self.browser.is_blank())
             .then(|| cx.entity().downgrade());
         let selected = self
@@ -123,7 +128,7 @@ impl BrowserWindow {
         } else {
             self.profile.handle.clone()
         };
-        cx.defer(move |cx| open(profile, selected, owner, cx));
+        cx.defer(move |cx| open(profile, selected, owner, air_traffic, cx));
     }
 }
 
@@ -131,6 +136,7 @@ fn open(
     profile: ProfileHandle,
     selected: UserProfileId,
     owner: Option<WeakEntity<BrowserWindow>>,
+    air_traffic: bool,
     cx: &mut App,
 ) {
     if crate::quit::is_quitting() {
@@ -142,19 +148,20 @@ fn open(
                 .read(cx)
                 .is_ok_and(|view| view.profile.same_workspace(&profile));
             if same {
-                let _ = handle.update(cx, |view, window, _| {
+                let _ = handle.update(cx, |view, window, cx| {
                     if owner.is_some() {
                         view.owner = owner.clone();
                     }
                     window.activate_window();
                     view.focus.focus(window);
+                    if air_traffic { view.present_atc(window, cx); }
                 });
                 return;
             }
         }
     }
     let bounds = Bounds::centered(None, size(px(684.), px(650.)), cx);
-    let _ = cx.open_window(
+    let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
@@ -187,7 +194,7 @@ fn open(
                     &shortcut_search,
                     |_, _, _: &crate::text_input::Changed, cx| cx.notify(),
                 );
-                SettingsWindow {
+                let mut view = SettingsWindow {
                     profile,
                     owner,
                     tab: Tab::General,
@@ -196,13 +203,29 @@ fn open(
                     popup: None,
                     popup_selection: 0,
                     previews: false,
+                    atc: None,
+                    atc_return_focus: false,
+                    _atc_dismiss: None,
                     shortcut_search,
                     _search_changed: search_changed,
                     _observe: observe,
-                }
+                };
+                if air_traffic { view.present_atc(window, cx); }
+                view
             })
         },
     );
+    if let Ok(handle) = opened {
+        // Let the old Command Bar's native close/activation finish first.
+        cx.spawn(async move |cx| {
+            let _ = handle.update(cx, |view, window, cx| {
+                window.activate_window();
+                if let Some(panel) = &view.atc { panel.read(cx).focus_handle(cx).focus(window); }
+                else { view.focus.focus(window); }
+            });
+        }).detach();
+        cx.activate(true);
+    }
 }
 
 fn group() -> gpui::Div {
@@ -331,6 +354,20 @@ impl SettingsWindow {
         });
     }
 
+    fn present_atc(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.change_tab(Tab::Links, window, cx);
+        if self.atc.is_none() {
+            let panel = cx.new(|cx| crate::atc::AtcPanel::new(self.profile.clone(), cx));
+            self._atc_dismiss = Some(cx.subscribe(&panel, |this, _, _: &crate::atc::Dismiss, cx| {
+                this.atc = None;
+                this.atc_return_focus = true;
+                cx.notify();
+            }));
+            self.atc = Some(panel);
+        }
+        if let Some(panel) = &self.atc { panel.read(cx).focus_handle(cx).focus(window); }
+        cx.notify();
+    }
     fn change_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = tab;
         self.popup = None;
@@ -397,12 +434,14 @@ impl SettingsWindow {
             .child(div().flex_1().min_w_0().child(label))
             .child(
                 button(action)
-                    .when(tab.is_none() && action != "Previews Settings…", |s| {
+                    .when(tab.is_none() && action != "Previews Settings…" && action != "Air Traffic Control…", |s| {
                         s.opacity(0.5)
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(tab) = tab {
                             this.change_tab(tab, window, cx);
+                        } else if action == "Air Traffic Control…" {
+                            this.present_atc(window, cx);
                         } else if action == "Previews Settings…" {
                             this.previews = true;
                             cx.notify();
@@ -1126,7 +1165,8 @@ fn archive_label(duration: Option<Duration>) -> &'static str {
     }
 }
 impl Render for SettingsWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.atc_return_focus { self.atc_return_focus = false; self.focus.focus(window); }
         let browser = self.profile.settings_snapshot();
         if browser.user_profile(self.selected_profile).is_none() {
             self.selected_profile = browser.default_user_profile_id();
@@ -1290,5 +1330,8 @@ impl Render for SettingsWindow {
                 )
             })
             .when(self.previews, |s| s.child(self.previews_panel(cx)))
+            .when_some(self.atc.clone(), |s, panel| s.child(div().absolute().inset_0().bg(gpui::hsla(0., 0., 0., 0.35))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().absolute().top(px(88.)).left(gpui::relative(0.5)).ml(px(-255.)).child(panel))))
     }
 }

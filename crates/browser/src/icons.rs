@@ -69,7 +69,7 @@ pub(crate) fn more() -> AnyElement {
 #[derive(Clone, Copy)]
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
-    Search, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, Link, Calculator,
+    Search, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, AirTraffic, Link, Calculator,
     SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab, Incognito,
 }
 
@@ -225,7 +225,7 @@ fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
         Icon::NewSpace => "duplicate-outline", Icon::Lock => "lock-closed", Icon::Unlock => "lock-open",
         Icon::Incognito => "eye-off-outline",
         Icon::Sidebar | Icon::Split | Icon::Command => return chrome_frame(icon),
-        Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size, zoom),
+        Icon::AirTraffic | Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size, zoom),
     };
     ionicon(name, size, zoom)
 }
@@ -272,6 +272,8 @@ fn circle(x: f32, y: f32, radius: f32) -> Vec<(f32, f32)> {
 fn drawn(icon: Icon, size: f32, zoom: f32) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let (strokes, fills): (Vec<Vec<(f32, f32)>>, Vec<Vec<Vec<(f32, f32)>>>) = match icon {
+            // Horizontal airplane used by the Air Traffic Control command.
+            Icon::AirTraffic => (vec![], vec![vec![vec![(17.,9.),(15.,7.8),(10.,7.8),(6.,1.),(4.5,1.),(6.7,7.8),(4.2,7.8),(2.,5.3),(1.,5.3),(2.,9.),(1.,12.7),(2.,12.7),(4.2,10.2),(6.7,10.2),(4.5,17.),(6.,17.),(10.,10.2),(15.,10.2)]]]),
             // Two interlocking links on the rising diagonal.
             Icon::Link => (vec![link((6., 12.), (7.8, 10.2), 2.9, 1.5), link((12., 6.), (10.2, 7.8), 2.9, 1.5)], vec![]),
             // Two sliders inside a rounded square: knob right on top, left below.

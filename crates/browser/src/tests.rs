@@ -10009,3 +10009,136 @@ fn default_space_dots_follow_appearance_and_remain_visible_for_every_space(cx: &
         });
     }
 }
+
+#[gpui::test]
+fn air_traffic_command_opens_the_referenced_sheet_and_blank_route_cancel_is_local(cx: &mut TestAppContext) {
+    let (source, cx) = open(cx);
+    run_named_command(&source, cx, "air traffic control");
+    let (view, mut settings) = settings_window(cx);
+    assert_eq!(settings.cx.update(|cx| cx.active_window().map(|window| window.window_id())), Some(settings.update(|window, _| window.window_handle().window_id())));
+    assert_eq!(view.read_with(&settings, |view, _| view.tab), crate::settings::Tab::Links);
+    assert_eq!(settings.debug_bounds("atc-sheet").unwrap().size, gpui::size(gpui::px(510.), gpui::px(500.)));
+    click(&mut settings, "atc-new-route");
+    assert!(settings.debug_bounds("atc-input-1").is_some());
+    click(&mut settings, "settings-tab-General");
+    assert_eq!(view.read_with(&settings, |view, _| view.tab), crate::settings::Tab::Links, "sheet blocks the toolbar");
+    settings.simulate_keystrokes("escape");
+    settings.run_until_parked();
+    assert!(view.read_with(&settings, |view, _| view.atc.is_none()));
+    assert!(source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| browser.settings.routing().rules.is_empty())));
+    click(&mut settings, "settings-button-Air Traffic Control…");
+    assert!(settings.debug_bounds("atc-sheet").is_some());
+}
+
+#[gpui::test]
+fn air_traffic_route_fields_pickers_and_delete_persist_in_the_shared_install(cx: &mut TestAppContext) {
+    use browser_core::routing::{LinkMatch, LinkDestination};
+    let (source, cx) = open(cx);
+    run_named_command(&source, cx, "air traffic control");
+    let (settings_view, mut settings) = settings_window(cx);
+    click(&mut settings, "atc-new-route");
+    settings.simulate_input("example.com");
+    settings.run_until_parked();
+    click(&mut settings, "atc-match-1");
+    settings.simulate_keystrokes("up enter");
+    settings.run_until_parked();
+    click(&mut settings, "atc-destination-1");
+    click(&mut settings, "atc-option-1");
+    settings.run_until_parked();
+    source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| {
+        let routes = browser.settings.routing();
+        assert_eq!(routes.rules.len(), 1);
+        assert_eq!(routes.rules[0].condition, LinkMatch::IsEqualTo("example.com".into()));
+        assert_eq!(routes.rules[0].destination, LinkDestination::Space(browser.spaces[1].id));
+        let restored = browser_core::session::from_json(&browser_core::session::to_json(browser)).unwrap();
+        assert_eq!(restored.settings.routing(), routes);
+    }));
+    click(&mut settings, "atc-default");
+    settings.simulate_keystrokes("escape");
+    settings.run_until_parked();
+    assert!(settings_view.read_with(&settings, |view, cx| !view.atc.as_ref().unwrap().read(cx).menu_is_open()));
+    assert!(settings.debug_bounds("atc-sheet").is_some());
+    click(&mut settings, "atc-remove-1");
+    assert!(source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| browser.settings.routing().rules.is_empty())));
+}
+
+#[gpui::test]
+fn air_traffic_default_and_little_links_toggle_stay_consistent(cx: &mut TestAppContext) {
+    use browser_core::routing::LinkDestination;
+    let (source, cx) = open(cx);
+    run_named_command(&source, cx, "air traffic control");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "atc-default");
+    click(&mut settings, "atc-option-4");
+    settings.run_until_parked();
+    source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| {
+        assert_eq!(browser.settings.routing().default_destination, LinkDestination::LittleWindow);
+        assert!(browser.settings.enabled(browser_core::settings::Toggle::LittleWindowLinks));
+    }));
+    click(&mut settings, "atc-close");
+    click(&mut settings, "settings-toggle-LittleWindowLinks");
+    source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| {
+        assert_eq!(browser.settings.routing().default_destination, LinkDestination::MostRecentSpace);
+    }));
+}
+
+#[gpui::test]
+fn air_traffic_promotion_across_profiles_opens_in_destination_storage(cx: &mut TestAppContext) {
+    use browser_core::routing::{LinkMatch, LinkDestination};
+    let (source, cx, _) = open_pages(cx);
+    let profile = source.update(cx, |view, _| view.edit_profile(|browser| {
+        let profile = browser.create_user_profile("Routed").unwrap();
+        browser.assign_space_user_profile(browser.spaces[1].id, profile).unwrap();
+        browser.settings.edit_routing(|routes| { routes.add(LinkMatch::Contains("promotion.example".into()), LinkDestination::Profile(profile)); });
+        profile
+    }));
+    cx.simulate_keystrokes("cmd-alt-n");
+    cx.run_until_parked();
+    let (little, mut compact) = little_root(cx);
+    bar(&little, &mut compact).simulate_input("https://promotion.example/path");
+    bar(&little, &mut compact).simulate_keystrokes("enter");
+    compact.run_until_parked();
+    assert_ne!(little.read_with(&compact, |view, _| view.browser.active_user_profile_id()), profile);
+    compact.simulate_keystrokes("cmd-o");
+    compact.run_until_parked();
+    source.read_with(cx, |view, _| {
+        assert_eq!(view.browser.active_user_profile_id(), profile);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://promotion.example/path");
+    });
+}
+
+#[gpui::test]
+fn air_traffic_most_recent_uses_the_focused_normal_windows_selection(cx: &mut TestAppContext) {
+    let (source, cx) = open(cx);
+    let (peer, mut peer_cx) = another_profile_window(&source, cx);
+    peer.update(&mut peer_cx, |view, _| view.edit_browser(|browser| browser.switch_space(1)));
+    source.update(cx, |view, cx| { view.edit_browser(|browser| browser.new_tab("https://source.example", std::time::SystemTime::now())); view.retain_normal_source(cx); });
+    peer_cx.update(|window, _| window.activate_window());
+    cx.cx.update(|cx| crate::link_routing::open("https://most-recent.example".into(), None, cx));
+    cx.run_until_parked(); peer_cx.run_until_parked();
+    assert_eq!(active_url(&peer, &mut peer_cx).as_deref(), Some("https://most-recent.example"));
+    assert_eq!(active_url(&source, cx).as_deref(), Some("https://source.example"));
+    assert_eq!(source.read_with(cx, |view, _| view.browser.active_space), 0);
+}
+
+
+#[gpui::test]
+fn air_traffic_opening_and_editing_existing_routes_preserves_rule_identity(cx: &mut TestAppContext) {
+    use browser_core::routing::{LinkMatch, LinkDestination};
+    let (source, cx) = open(cx);
+    let before = source.update(cx, |view, _| view.edit_profile(|browser| {
+        browser.settings.edit_routing(|routes| { routes.add(LinkMatch::Contains("meet.google.com".into()), LinkDestination::MostRecentSpace); });
+        browser.settings.routing()
+    }));
+    run_named_command(&source, cx, "air traffic control");
+    let (_, mut settings) = settings_window(cx);
+    assert_eq!(source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| browser.settings.routing())), before);
+    click(&mut settings, "atc-input-1");
+    settings.simulate_keystrokes("cmd-a");
+    settings.simulate_input("example.com");
+    source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| {
+        let routes = browser.settings.routing();
+        assert_eq!(routes.rules[0].id, before.rules[0].id);
+        assert_eq!(routes.rules[0].condition, LinkMatch::Contains("example.com".into()));
+    }));
+}

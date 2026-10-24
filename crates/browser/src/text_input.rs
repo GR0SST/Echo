@@ -208,6 +208,12 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Initialize a value without a replace-all selection.
+    pub(crate) fn set_text_at_end(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.set_text(text, cx);
+        self.move_to(self.content.len(), cx);
+    }
+
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);

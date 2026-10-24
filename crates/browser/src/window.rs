@@ -439,6 +439,7 @@ pub enum Command {
     CopyUrl,
     CopyUrlAsMarkdown,
     CopyUrlAsQuote,
+    AirTrafficControl,
     ToggleSpaceHeader,
     ToggleFavoritesOrdering,
     RevealTab,
@@ -1695,6 +1696,7 @@ impl BrowserWindow {
                 (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::Settings, "Settings…", "settings|preferences|search settings", true),
+                (Command::AirTrafficControl, "Air Traffic Control", "air traffic control|link routing|routes", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewProfile(self.browser.space().id), "New Profile", "new profile|create profile|add profile", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ChangeProfile(self.browser.space().id), "Change Profile", "change profile|set profile|switch profile", !self.browser.is_private() && !self.browser.is_blank()),
@@ -2055,6 +2057,7 @@ impl BrowserWindow {
             Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
             Command::CopyUrlAsQuote => self.copy_url_as_quote(cx),
             Command::Settings => self.open_settings(cx),
+            Command::AirTrafficControl => self.open_air_traffic_control(cx),
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.begin_space_creation(self.browser.space().id, cx),
             Command::NewProfile(space) => self.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx),
@@ -3891,9 +3894,9 @@ impl BrowserWindow {
         let rows_height = (height - default_top - if archive { 150. } else { 90. } - 16.).max(40.);
         let top = default_top;
         let mut previous_date = None;
-        let rows: Vec<_> = self
-            .suggestions(cx)
-            .into_iter()
+        let suggestions = self.suggestions(cx);
+        let atc_selected = matches!(suggestions.get(bar.selected), Some(Suggestion::Action { command: Command::AirTrafficControl, .. }));
+        let rows: Vec<_> = suggestions.into_iter()
             .enumerate()
             .map(|(index, suggestion)| {
                 let selected = index == bar.selected;
@@ -3934,6 +3937,7 @@ impl BrowserWindow {
                             else { "Switch to Tab".into() };
                         (crate::icons::Icon::Enter, title, hint)
                     }
+                    Suggestion::Action { command: Command::AirTrafficControl, label } => (crate::icons::Icon::AirTraffic, label, String::new()),
                     Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, String::new()),
                     Suggestion::SaveFolderName { name } => (crate::icons::Icon::Folder, name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
                     Suggestion::FolderDestination { label, .. } => (crate::icons::Icon::Folder, label, "Move".into()),
@@ -3949,6 +3953,7 @@ impl BrowserWindow {
                 let tile = div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(6.0))
                     .when(!search_row && selected && page.is_none(), |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
                     .when(!search_row && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
+                    .when(selected && matches!(icon, crate::icons::Icon::AirTraffic), |this| this.text_color(gpui::rgb(0x6e74ff)))
                     .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
                 let row = div()
                     .id(("suggestion", index))
@@ -4101,7 +4106,7 @@ impl BrowserWindow {
                             .flex().items_center().gap(px(13.0))
                             .pl(px(22.0)).pr(px(21.0))
                             .child(div().text_color(hsla(0.0, 0.0, ink, 0.75)).child(
-                                if let Target::Tab(id) = bar.target {
+                                if atc_selected { crate::icons::control_sized(crate::icons::Icon::AirTraffic, 16.0) } else if let Target::Tab(id) = bar.target {
                                     self.browser.all_tabs().find(|tab| tab.id == id)
                                         .map(|tab| self.render_favicon_on(tab, accent, dark))
                                         .unwrap_or_else(|| crate::icons::control_sized(crate::icons::Icon::Search, 16.0))

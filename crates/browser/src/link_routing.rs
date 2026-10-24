@@ -62,7 +62,7 @@ pub(crate) fn open(url: String, application: Option<&str>, cx: &mut App) {
                 && !view.browser.is_private()
                 && view.profile.handle.same_workspace(&source.profile)
             {
-                browser = view.browser.clone();
+                browser = source.profile.projection(&view.browser.window_selection());
             }
         }
     }
@@ -98,7 +98,18 @@ fn open_in_space(source: NormalProfile, space: SpaceId, url: String, cx: &mut Ap
                 })
             })
     };
-    let target = find(cx).or_else(|| {
+    let active = cx
+        .active_window()
+        .and_then(|window| window.downcast::<BrowserWindow>())
+        .filter(|handle| {
+            handle.read(cx).is_ok_and(|view| {
+                view.transient.is_none()
+                    && !view.browser.is_blank()
+                    && !view.browser.is_private()
+                    && view.profile.handle.same_workspace(&source.profile)
+            })
+        });
+    let target = active.or_else(|| find(cx)).or_else(|| {
         new_window::open(false, cx);
         find(cx)
     });
