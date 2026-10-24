@@ -68,7 +68,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | About Arc | — | missing | About window with licenses (Arc's `Credits.html`) |
 | Preferences… | ⌘, | partial | Separate GPUI Settings window from the app menu, Command Bar and page shortcut; General, Profiles, Links, Shortcuts, Icon and Advanced. Stored controls and remaining integrations are detailed below |
 | Share Arc (referral link) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
-| Set as Default Browser | — | missing | Registering as the default browser, prompts |
+| Set as Default Browser | — | partial | Isolated macOS LaunchServices/NSWorkspace registration and consent interface; Windows/Linux stubs. App-menu/setup wiring and native consent validation remain outstanding |
 | Import from Another Browser… | — | missing | See "Onboarding and import" |
 | Check for Updates… | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Privacy Policy | — | missing | — |

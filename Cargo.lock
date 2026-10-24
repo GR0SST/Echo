@@ -772,6 +772,7 @@ dependencies = [
 name = "browser"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "chrono",
  "core",
  "echo_ai",
@@ -779,6 +780,7 @@ dependencies = [
  "global-hotkey",
  "gpui",
  "image",
+ "importer",
  "objc2",
  "objc2-foundation",
  "raw-window-handle",

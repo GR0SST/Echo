@@ -18,6 +18,8 @@ mod favicon_style;
 mod window_snapshots;
 mod new_menu;
 mod new_window;
+mod browser_registration;
+mod import_credentials;
 mod blank_window;
 mod transient;
 mod link_routing;
