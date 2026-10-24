@@ -7844,7 +7844,9 @@ fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: 
     let mut editor=space_theme_editor(&view,cx);
     let bounds=editor.debug_bounds("theme-editor").unwrap();
     assert_eq!(bounds.size,gpui::size(gpui::px(354.),gpui::px(508.)));
+    assert!(editor.debug_bounds("theme-intensity-thumb").is_none());
     click(&mut editor,"theme-preset-4");
+    assert!(editor.debug_bounds("theme-intensity-thumb").is_some());
     view.read_with(cx, |w, _| {
         let orange = w.theme_editor.as_ref().unwrap().draft.colors[0];
         assert!((orange.green * 255. - 133.).abs() < 1.);

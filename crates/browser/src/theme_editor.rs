@@ -357,14 +357,7 @@ impl BrowserWindow {
         let field_bounds = e.color_bounds.clone();
         let picked = e.picked;
         let colors = e.draft.colors.clone();
-        let previews: Vec<_> = colors
-            .iter()
-            .map(|c| {
-                let mut theme = e.draft.clone();
-                theme.colors = vec![*c];
-                crate::space_theme::Surface { theme, dark }.sample(0.5, 0.5)
-            })
-            .collect();
+        let previews = colors.clone();
         let selected = e.selected;
         let field = div()
             .id("theme-color-field")
@@ -403,14 +396,14 @@ impl BrowserWindow {
                         field_bounds.set(Some(bounds));
                     },
                     move |bounds, _, window, _| {
-                        for y in (4..340).step_by(4) {
-                            for x in (4..340).step_by(4) {
-                                let center = bounds.origin + point(px(x as f32), px(y as f32));
-                                let c = hsla(0., 0., 1., 0.12);
+                        // The 400-point reference grid scales into its 340-point field.
+                        for y in 1..80 {
+                            for x in 1..80 {
+                                let center = bounds.origin + point(px(x as f32 * 4.25), px(y as f32 * 4.25));
                                 window.paint_quad(gpui::fill(
                                     Bounds::new(center, gpui::size(px(1.), px(1.))),
-                                    c,
-                                ));
+                                    hsla(0., 0., if dark { 1. } else { 0. }, 0.13),
+                                ).corner_radii(px(0.5)));
                             }
                         }
                         if picked {
@@ -481,11 +474,11 @@ impl BrowserWindow {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_color(ink.opacity(0.65))
+                                .text_color(hsla(0., 0., if dark { 1. } else { 0. }, if e.draft.appearance == mode { 0.7 } else { 0.5 }))
                                 .when(e.draft.appearance == mode, |this| {
-                                    this.bg(hsla(0., 0., 1., 0.10))
+                                    this.bg(hsla(0., 0., if dark { 1. } else { 0. }, 0.10))
                                 })
-                                .hover(|s| s.bg(hsla(0., 0., 1., 0.12)))
+                                .hover(move |s| s.bg(hsla(0., 0., if dark { 1. } else { 0. }, 0.12)))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(e) = &mut this.theme_editor {
@@ -669,7 +662,7 @@ impl BrowserWindow {
                                             px(i as f32),
                                             px(34.
                                                 + (i as f32 / 32. * std::f32::consts::TAU).sin()
-                                                    * 10.),
+                                                    * (intensity * 14.)),
                                         );
                                     if i == 0 {
                                         path.move_to(p);
@@ -678,23 +671,18 @@ impl BrowserWindow {
                                     }
                                 }
                                 if let Ok(path) = path.build() {
-                                    w.paint_path(path, hsla(0., 0., 1., 0.13));
+                                    w.paint_path(path, hsla(0., 0., if dark { 1. } else { 0. }, 0.30));
                                 }
-                                let x = intensity * 212. + 6.;
-                                w.paint_quad(
-                                    gpui::fill(
-                                        Bounds::new(
-                                            b.origin + point(px(x - 12.), px(6.)),
-                                            gpui::size(px(24.), px(56.)),
-                                        ),
-                                        hsla(0., 0., 1., 0.95),
-                                    )
-                                    .corner_radii(px(12.)),
-                                );
+
                             },
                         )
                         .size_full(),
-                    ),
+                    )
+                    .when(picked, |this| this.child(div()
+                        .debug_selector(|| "theme-intensity-thumb".into())
+                        .absolute().top(px(6.)).left(px(intensity * 212. - 6.))
+                        .w(px(24.)).h(px(56.)).rounded(px(12.))
+                        .bg(hsla(0., 0., 1., 0.95)))),
             )
             .child(
                 div()
