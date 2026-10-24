@@ -4990,7 +4990,7 @@ diff --git a/tests/ceftests/download_bridge_unittest.cc b/tests/ceftests/downloa
 new file mode 100644
 --- /dev/null
 +++ b/tests/ceftests/download_bridge_unittest.cc
-@@ -0,0 +1,2786 @@
+@@ -0,0 +1,3075 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include <atomic>
@@ -5017,6 +5017,7 @@ new file mode 100644
 +#endif
 +#include "include/wrapper/cef_closure_task.h"
 +#include "tests/ceftests/test_handler.h"
++#include "tests/ceftests/test_server_observer.h"
 +#include "tests/gtest/include/gtest/gtest.h"
 +
 +namespace {
@@ -6637,6 +6638,294 @@ new file mode 100644
 +};
 +TEST(EchoDownloadBridge, ActiveKnownItemCompletesAfterUnregisterAndBlank) {
 +  CefRefPtr<QuiescenceHandler> handler = new QuiescenceHandler;
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++
++// Real loopback Service Worker response/fallback, not a modeled interceptor.
++class ServiceWorkerReceiptHandler : public TestHandler {
++ public:
++  explicit ServiceWorkerReceiptHandler(bool fallback) : fallback_(fallback) {}
++  ~ServiceWorkerReceiptHandler() override {
++    if (probe_->registration) {
++      static auto* retained = new std::vector<std::shared_ptr<Probe>>;
++      retained->push_back(probe_);
++    }
++  }
++  void RunTest() override {
++    SetTestTimeout();
++    SetSignalTestCompletionCount(1);
++    probe_->get_api = echo_download_test::ResolveGetApi();
++    if (!probe_->get_api) {
++      ADD_FAILURE() << "custom bridge not loaded";
++      TestHandler::DestroyTest();
++      SignalTestCompletion();
++      return;
++    }
++    SetUseViews(false);
++    SetUseAlloyStyle(true, false);
++    CefPostTask(TID_FILE_USER_VISIBLE,
++                base::BindOnce(&ServiceWorkerReceiptHandler::PrepareFile, this));
++  }
++  void PrepareFile() {
++    EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
++    path_ = client::file_util::JoinPath(temp_dir_.GetPath(),
++        fallback_ ? "sw-fallback.bin" : "sw-response.bin");
++    CefPostTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::StartServer, this));
++  }
++  void StartServer() {
++    server_ = std::make_unique<Server>(this);
++    server_->Initialize(false);
++  }
++  void OnServerInitialized(const std::string& origin) {
++    server_initialized_ = true;
++    if (finishing_) { server_->Shutdown(); return; }
++    base_ = origin + (fallback_ ? "/receipt-sw-fallback/" : "/receipt-sw-response/");
++    CefRequestContextSettings settings;
++    CreateBrowser(base_ + "index.html", CefRequestContext::CreateContext(settings, nullptr));
++  }
++  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnAfterCreated(browser);
++    browser_created_ = true;
++    browser_id_ = browser->GetIdentifier();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, echo_download_test::CallGetApi(
++        probe_->get_api, sizeof(probe_->api), &probe_->api));
++    EXPECT_EQ(17u, probe_->api.capabilities);
++    auto callbacks = probe_->Callbacks();
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.register_browser(browser_id_,
++        {probe_->browser_generation, probe_->context_generation}, &callbacks,
++        &probe_->registration));
++  }
++  bool OnServerRequest(CefRefPtr<CefRequest> request,
++                       const test_server::ResponseCallback& callback) {
++    const std::string url = request->GetURL();
++    if (!url.starts_with(base_)) return false;
++    if (finishing_) { Reply(callback, "closed", "text/plain", 503); return true; }
++    if (url == base_ + "index.html") {
++      Reply(callback, R"(<html><body>worker download source<script>
++        navigator.serviceWorker.register('worker.js')
++          .then(() => navigator.serviceWorker.ready)
++          .then(() => new Promise(resolve => {
++            if (navigator.serviceWorker.controller) resolve();
++            else navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true});
++          }))
++          .then(() => fetch('ready'))
++          .catch(error => fetch('error?' + encodeURIComponent(error)));
++      </script></body></html>)", "text/html");
++    } else if (url == base_ + "worker.js") {
++      std::string script = "self.oninstall=e=>e.waitUntil(self.skipWaiting());"
++          "self.onactivate=e=>e.waitUntil(self.clients.claim());"
++          "self.onfetch=e=>{if(new URL(e.request.url).pathname.endsWith('/file')){"
++          "const gate=fetch('gate?destination='+encodeURIComponent(e.request.destination));";
++      if (fallback_) {
++        script += "e.waitUntil(gate);";  // No respondWith: actual network fallback.
++      } else {
++        script += "e.respondWith(gate.then(()=>{const bytes=new Uint8Array(2097152);"
++            "for(let i=0;i<bytes.length;++i)bytes[i]=(i*37+37)%251;"
++            "return new Response(bytes,{headers:{'Content-Type':'application/octet-stream',"
++            "'Content-Disposition':'attachment; filename=sw-response.bin'}});}));";
++      }
++      script += "}};";
++      Reply(callback, script, "text/javascript");
++    } else if (url == base_ + "ready") {
++      EXPECT_FALSE(started_);
++      EXPECT_EQ(1, probe_->reserves);
++      EXPECT_EQ(probe_->navigation_tokens, probe_->no_item_tokens);
++      EXPECT_EQ(std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_NOT_DOWNLOAD}, probe_->no_item);
++      Reply(callback, "ready");
++      probe_->navigation_tokens.clear(); probe_->no_item_tokens.clear(); probe_->no_item.clear();
++      probe_->reserves = 0; probe_->authorizations = 0;
++      probe_->expected_kind = ECHO_CEF_DOWNLOAD_START_DOWNLOAD;
++      started_ = true;
++      GetBrowser()->GetHost()->StartDownload(base_ + "file");
++      EXPECT_EQ(1, probe_->reserves);
++      EXPECT_EQ(1, probe_->authorizations);
++    } else if (url.starts_with(base_ + "gate?")) {
++      EXPECT_EQ(base_ + "gate?destination=", url);
++      EXPECT_FALSE(worker_seen_);
++      worker_seen_ = true;
++      if (fallback_) Reply(callback, "worker observed fallback");
++      else { EXPECT_TRUE(held_.is_null()); held_ = callback; }
++      MaybeRelease();
++    } else if (url == base_ + "file") {
++      EXPECT_TRUE(fallback_) << "a SW-generated response must not reach the network target";
++      EXPECT_EQ("GET", request->GetMethod().ToString());
++      EXPECT_FALSE(network_seen_);
++      network_seen_ = true;
++      EXPECT_TRUE(held_.is_null()); held_ = callback;
++      MaybeRelease();
++    } else if (url.starts_with(base_ + "error?")) {
++      ADD_FAILURE() << "Service Worker setup failed: " << url;
++      Reply(callback, "error");
++      failed_ = true; Finish();
++    } else {
++      Reply(callback, "not found", "text/plain", 404);
++    }
++    return true;
++  }
++  void MaybeRelease() {
++    if (draining_ || !worker_seen_ || held_.is_null()) return;
++    EXPECT_EQ(fallback_, network_seen_);
++    EXPECT_TRUE(started_);
++    EXPECT_EQ(1, probe_->reserves);
++    EXPECT_EQ(1u, probe_->direct_tokens.size());
++    EXPECT_EQ(0, probe_->associated);
++    EXPECT_TRUE(probe_->no_item.empty());
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, probe_->api.unregister_begin(probe_->registration));
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, probe_->api.unregister_poll(probe_->registration));
++    draining_ = true;
++    released_ = true;
++    auto held = held_; held_.Reset();
++    if (fallback_) Reply(held, Payload(), "application/octet-stream");
++    else Reply(held, "release worker response");
++  }
++  bool OnBeforeDownload(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++      const CefString&, CefRefPtr<CefBeforeDownloadCallback> callback) override {
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    EXPECT_EQ(base_ + "file", item->GetURL().ToString());
++    EXPECT_TRUE(worker_seen_ && draining_ && released_);
++    EXPECT_EQ(fallback_, network_seen_);
++    EXPECT_EQ(1, probe_->associated);
++    EXPECT_EQ(probe_->direct_tokens, probe_->association_tokens);
++    EXPECT_TRUE(probe_->no_item.empty());
++    EXPECT_FALSE(before_); before_ = true;
++    callback->Continue(path_, false);
++    return true;
++  }
++  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
++      CefRefPtr<CefDownloadItemCallback> callback) override {
++    if (finishing_) { if (item->IsInProgress()) callback->Cancel(); return; }
++    EXPECT_EQ(browser_id_, browser->GetIdentifier());
++    EXPECT_EQ(base_ + "file", item->GetURL().ToString());
++    EXPECT_FALSE(item->IsCanceled()); EXPECT_FALSE(item->IsInterrupted());
++    controls_ = callback;
++    if (!item->IsComplete()) return;
++    EXPECT_FALSE(complete_); complete_ = true;
++    EXPECT_TRUE(before_ && released_ && draining_);
++    EXPECT_EQ(2097152, item->GetReceivedBytes());
++    EXPECT_EQ(path_, item->GetFullPath().ToString());
++    EXPECT_EQ(probe_->direct_tokens, probe_->association_tokens);
++    EXPECT_TRUE(probe_->no_item.empty());
++    controls_ = nullptr;
++    CefPostTask(TID_FILE_USER_VISIBLE,
++                base::BindOnce(&ServiceWorkerReceiptHandler::VerifyFile, this));
++  }
++  void VerifyFile() {
++    std::string actual;
++    EXPECT_TRUE(client::file_util::ReadFileToString(path_, &actual));
++    EXPECT_EQ(Payload(), actual);
++    EXPECT_FALSE(temp_dir_.Take().empty());
++    std::cout << (fallback_ ? "ECHO_SW_FALLBACK_FILE=" : "ECHO_SW_RESPONSE_FILE=") << path_ << std::endl;
++    CefPostTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::PollDrain, this));
++  }
++  void PollDrain() {
++    const auto status = probe_->api.unregister_poll(probe_->registration);
++    if (status == ECHO_CEF_DOWNLOAD_PENDING && ++polls_ <= 500) {
++      CefPostDelayedTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::PollDrain, this), 10);
++      return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, status);
++    if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
++    EXPECT_TRUE(complete_);
++    EXPECT_EQ(1, probe_->reserves); EXPECT_EQ(1, probe_->authorizations);
++    EXPECT_EQ(1, probe_->associated); EXPECT_TRUE(probe_->no_item.empty());
++    Finish();
++  }
++  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
++    TestHandler::OnBeforeClose(browser);
++    browser_closed_ = true;
++    if (probe_->registration) CefPostTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::PollCleanup, this));
++    else SignalOnce();
++  }
++  void PollCleanup() {
++    const auto status = probe_->api.unregister_poll(probe_->registration);
++    if (status == ECHO_CEF_DOWNLOAD_PENDING && ++cleanup_polls_ <= 500) {
++      CefPostDelayedTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::PollCleanup, this), 10);
++      return;
++    }
++    EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, status);
++    if (status == ECHO_CEF_DOWNLOAD_OK) probe_->registration = 0;
++    SignalOnce();
++  }
++  void Finish() {
++    if (finishing_) return;
++    finishing_ = true;
++    if (controls_) { controls_->Cancel(); controls_ = nullptr; }
++    if (!held_.is_null()) { auto held=held_; held_.Reset(); Reply(held, "aborted", "text/plain", 503); }
++    if (probe_->registration) probe_->api.unregister_begin(probe_->registration);
++    if (server_ && server_initialized_) server_->Shutdown();
++    else if (!server_) OnServerShutdown();
++  }
++  void OnServerShutdown() {
++    server_.reset(); server_closed_ = true;
++    if (failed_ && GetBrowser()) GetBrowser()->GetHost()->CloseBrowser(true);
++    TestHandler::DestroyTest();
++    if (!browser_created_ || browser_closed_) SignalOnce();
++  }
++ protected:
++  void OnTestTimeout(int timeout, bool error) override {
++    if (error) ADD_FAILURE() << "SW receipt timeout=" << timeout
++        << " started=" << started_ << " worker=" << worker_seen_ << " network=" << network_seen_
++        << " before=" << before_ << " complete=" << complete_;
++    failed_ = true; Finish();
++  }
++ private:
++  class Server : public test_server::ObserverHelper {
++   public:
++    explicit Server(ServiceWorkerReceiptHandler* owner) : owner_(owner) {}
++    void OnInitialized(const std::string& origin) override {
++      CefPostTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::OnServerInitialized,
++                                       CefRefPtr<ServiceWorkerReceiptHandler>(owner_), origin));
++    }
++    bool OnTestServerRequest(CefRefPtr<CefRequest> request, const ResponseCallback& callback) override {
++      return owner_->OnServerRequest(request, callback);
++    }
++    void OnShutdown() override {
++      CefPostTask(TID_UI, base::BindOnce(&ServiceWorkerReceiptHandler::OnServerShutdown,
++                                       CefRefPtr<ServiceWorkerReceiptHandler>(owner_)));
++    }
++   private:
++    ServiceWorkerReceiptHandler* const owner_;
++  };
++  static void Reply(const test_server::ResponseCallback& callback, const std::string& data,
++                    const std::string& mime="text/plain", int status=200) {
++    auto response=CefResponse::Create(); response->SetStatus(status); response->SetMimeType(mime);
++    if (mime == "application/octet-stream") {
++      CefResponse::HeaderMap headers;
++      headers.emplace("Content-Disposition", "attachment; filename=sw-fallback.bin");
++      response->SetHeaderMap(headers);
++    }
++    callback.Run(response, data);
++  }
++  std::string Payload() const {
++    std::string bytes(2097152, '\0');
++    for (size_t i=0;i<bytes.size();++i) bytes[i]=static_cast<char>((i*37+(fallback_?43:37))%251);
++    return bytes;
++  }
++  void SignalOnce() {
++    if (!server_closed_ || extra_signaled_) return;
++    extra_signaled_=true; SignalTestCompletion();
++  }
++  const bool fallback_;
++  std::shared_ptr<Probe> probe_=std::make_shared<Probe>();
++  CefScopedTempDir temp_dir_;
++  std::string base_, path_;
++  std::unique_ptr<Server> server_;
++  test_server::ResponseCallback held_;
++  CefRefPtr<CefDownloadItemCallback> controls_;
++  int browser_id_=0, polls_=0, cleanup_polls_=0;
++  bool server_initialized_=false, server_closed_=false, browser_created_=false, browser_closed_=false;
++  bool started_=false, worker_seen_=false, network_seen_=false, draining_=false, released_=false;
++  bool before_=false, complete_=false, failed_=false, finishing_=false, extra_signaled_=false;
++  IMPLEMENT_REFCOUNTING(ServiceWorkerReceiptHandler);
++};
++TEST(EchoDownloadBridge, LiveServiceWorkerResponseKeepsOriginalReceiptAfterClosing) {
++  CefRefPtr<ServiceWorkerReceiptHandler> handler = new ServiceWorkerReceiptHandler(false);
++  handler->ExecuteTest();
++  ReleaseAndWaitForDestructor(handler);
++}
++TEST(EchoDownloadBridge, LiveServiceWorkerNetworkFallbackKeepsOriginalReceiptAfterClosing) {
++  CefRefPtr<ServiceWorkerReceiptHandler> handler = new ServiceWorkerReceiptHandler(true);
 +  handler->ExecuteTest();
 +  ReleaseAndWaitForDestructor(handler);
 +}

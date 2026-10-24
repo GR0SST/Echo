@@ -107,13 +107,15 @@ ditto "$out/ceftests.app" "$owned/ceftests.app"
 "$owned/ceftests.app/Contents/MacOS/ceftests" \
   --use-mock-keychain \
   --disable-features=SkipExtraBfcacheNavigationRequest \
+  --enable-features=ServiceWorkerInterceptDownloads \
+  --use-test-http-server \
   --cache-path="$owned/cache" \
   --gtest_filter='EchoDownloadBridge*.*' --gtest_repeat=1 \
   --gtest_output="xml:$owned/native-tests.xml" \
   > "$owned/native-tests.log" 2>&1
 ```
 
-Require a successful process exit and all 33 cases with no skips or failures.
+Require a successful process exit and all 35 cases with no skips or failures.
 The BFCache flag selects the legacy request-replacement path covered by these
 tests; it is not an Echo application default. Retain the owned log/XML and check
 that its helper processes have exited. A failed copy is evidence of that attempt;
@@ -166,6 +168,15 @@ frame RPC responder. Losing the result pipe abandons only its original weak
 command handle. No Mojo assertion was removed; all 33 native tests were unchanged
 for the passing run.
 
+Live Service Worker tests use a loopback server, real registration/activation and
+a fetch event with an empty destination. They hold either the worker-generated
+response or a network fallback while admission closes, then require the original
+token and distinct, fully verified 2 MiB outputs. The test command enables
+ServiceWorkerInterceptDownloads, disabled by default in Chromium 154; it changes
+no Echo default. Use the test HTTP server: the legacy CefServer's 1 MiB queued
+write limit rejected the first fallback body. The same 35 tests passed with
+CefTestServer, without reducing the payload or relaxing assertions.
+
 The 131 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
 BeginNavigation through deferred Init. A public-value assignment guard covers
@@ -178,10 +189,10 @@ their configured compiler flags; their full test suites were not executed.
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining
 coverage includes retargeted subframes, request rewriting, duplicate suppression,
-frame/context loss and endpoint disconnects. Actual Service Worker paths, other
-early ingress/no-item exits, SavePackage/resume and ordered public
-seal/drain/failure semantics remain open. A timeout, first association or nonloading source is not
-an admission fence.
+frame/context loss and endpoint disconnects. Further Service Worker failure and
+destruction paths, other early ingress/no-item exits, SavePackage/resume and
+ordered public seal/drain/failure semantics remain open. A timeout, first
+association or nonloading source is not an admission fence.
 
 Production adoption additionally needs verified distribution and loaded-framework
 identity, Rust integration, native host handoff/cleanup, no-clobber publication,

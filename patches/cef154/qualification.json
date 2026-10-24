@@ -144,7 +144,7 @@
     "state_binary_sha256": "35bbadc8cf7fd0aa8313942c1afbd39bf61d321732c5a1479bb8ae9eebfc899d"
   },
   "native": {
-    "count": 33,
+    "count": 35,
     "tests": [
       "EchoDownloadBridgeLoader.UsesLoadedFrameworkHandle",
       "EchoDownloadBridge.InvalidZeroDenyAndDrain",
@@ -167,6 +167,8 @@
       "EchoDownloadBridge.SharedContextUnregisteredAttachmentCannotBorrowOwner",
       "EchoDownloadBridge.SharedContextDevToolsRemainsUsableAfterUnregister",
       "EchoDownloadBridge.ActiveKnownItemCompletesAfterUnregisterAndBlank",
+      "EchoDownloadBridge.LiveServiceWorkerResponseKeepsOriginalReceiptAfterClosing",
+      "EchoDownloadBridge.LiveServiceWorkerNetworkFallbackKeepsOriginalReceiptAfterClosing",
       "EchoDownloadBridge.DelayedSameUrlSiblingAssociatesAfterClosingAndCompletes",
       "EchoDownloadBridge.PreClosingLoadRequestGetSurvivesRendererDelay",
       "EchoDownloadBridge.PreClosingLoadRequestPostSurvivesRendererDelay",
@@ -181,12 +183,14 @@
       "EchoDownloadBridge.CrossOriginSubframePostRetainsBodyParentAndOriginalAdmission"
     ],
     "all_once_successful": true,
-    "test_source_sha256": "b3bc950a07d97603c906069c809af0a31775e246738a2197d4f47712457a38d2",
+    "test_source_sha256": "202aed320bf068212129b033ae87d4bc710a56dc1926016b18e6a8604a365f49",
     "remaining_owned_processes": [],
     "required_flags": [
       "--use-mock-keychain",
       "--disable-features=SkipExtraBfcacheNavigationRequest",
-      "--gtest_repeat=1"
+      "--gtest_repeat=1",
+      "--enable-features=ServiceWorkerInterceptDownloads",
+      "--use-test-http-server"
     ]
   },
   "download_outputs": [
@@ -204,6 +208,16 @@
       "size": 2097152,
       "sha256": "0c716dd22988cda1246e7412d6a79616b852bfd83c44b6f06c947d152b88aaf8",
       "expected_sha256": "0c716dd22988cda1246e7412d6a79616b852bfd83c44b6f06c947d152b88aaf8"
+    },
+    {
+      "size": 2097152,
+      "sha256": "e93f5e3513a0ff4b21aff889aa9062a21a1bc122eda9496e4b7dd9f550008257",
+      "expected_sha256": "e93f5e3513a0ff4b21aff889aa9062a21a1bc122eda9496e4b7dd9f550008257"
+    },
+    {
+      "size": 2097152,
+      "sha256": "0785d54930fe551371439f759a32ab5d40c2fa9e84d03f8230ef9c733c835112",
+      "expected_sha256": "0785d54930fe551371439f759a32ab5d40c2fa9e84d03f8230ef9c733c835112"
     }
   ],
   "scope": {
@@ -215,7 +229,7 @@
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "e862fcd7fc3c5dab5bca7871502600a7fff18f1bb12fc2649c5dd7d096f4365d",
+  "native_xml_sha256": "205f1c410d83035d86289643b60f28b937c22883af27fb964634a4b9984d2eb5",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -255,6 +269,9 @@
     "prior_failed_native_run": "29/31: both cross-origin cases rejected with INVALID_INITIATOR_ORIGIN; all 31 tests unchanged for passing run",
     "source_close": "GET/POST admitted while genuine renderer sync XHR is held; browser closes before response release; exactly one original-token Shutdown, no association or target request",
     "command_acknowledgement": "independent one-way result pipe; intentional frame detach and Mojo DCHECK remain unchanged",
-    "prior_source_close_failure": "R8 native run aborted in ResetWithReason with a pending LoadRequest RPC responder; all 33 tests unchanged for passing run"
+    "prior_source_close_failure": "R8 native run aborted in ResetWithReason with a pending LoadRequest RPC responder; all 33 tests unchanged for passing run",
+    "live_service_worker": "real loopback worker response and no-respondWith network fallback; closing admission while response held; original token and full distinct 2 MiB payloads preserved",
+    "service_worker_configuration": "explicit ServiceWorkerInterceptDownloads test flag; disabled by default in pinned Chromium154; no Echo default change",
+    "service_worker_fixture": "first 34/35 run hit legacy CefServer 1 MiB buffer limit; all 35 tests unchanged for passing CefTestServer run"
   }
 }

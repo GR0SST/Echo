@@ -39,7 +39,7 @@
     },
     {
       "path": "cef.patch",
-      "sha256": "4635256cc3b51f543dd75b4f50bba8e56accdda383e99721d30f88357dac7ef5"
+      "sha256": "43b3aeb8b3380c71de97bc1c423cc87c03c46b17d4f6d39a7cb38df6af9752f5"
     }
   ],
   "standard_patch_files": [
@@ -2814,7 +2814,7 @@
     {
       "path": "cef/tests/ceftests/download_bridge_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "b3bc950a07d97603c906069c809af0a31775e246738a2197d4f47712457a38d2",
+      "result_sha256": "202aed320bf068212129b033ae87d4bc710a56dc1926016b18e6a8604a365f49",
       "mode": "100644"
     },
     {
