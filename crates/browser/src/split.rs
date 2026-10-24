@@ -245,6 +245,9 @@ impl BrowserWindow {
             })).into_any_element();
         }
         div().flex_1().min_w_0().flex().items_center().gap(px(9.))
+            .when(self.tab_capturing(tab.id), |this| this.child(div().flex_none().w(px(5.)).h(px(8.)).child(
+                div().debug_selector(|| self.sidebar_debug_name(format!("capture-indicator-{}", tab.id.get())))
+                    .size(px(8.)).rounded_full().border_1().border_color(gpui::rgb(0xffffff)).bg(gpui::rgb(0xff736d)))))
             .child(self.render_item_icon(tab, hue))
             .when(self.show_tab_audio(tab), |this| this.child(self.render_mute_control(tab, false, cx)))
             .child(self.render_inline_tab_name(tab.id, cx).unwrap_or_else(|| div().debug_selector(|| self.sidebar_debug_name(format!("sidebar-item-title-{}", tab.id.get()))).flex_1().min_w_0().overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(self.browser.item_title(tab.id))).into_any_element())).into_any_element()

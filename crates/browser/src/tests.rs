@@ -3510,6 +3510,26 @@ fn capture_access_updates_only_its_background_page_without_playback_or_activatio
 }
 
 #[gpui::test]
+fn capture_indicator_is_static_source_metadata_before_the_icon_and_clears_on_stop(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-7"); click(cx, "tab-8");
+    let before = active_url(&view, cx);
+    let title_x = cx.debug_bounds("sidebar-item-title-7").unwrap().origin.x;
+    for state in [engine::MediaCaptureState {video:true,audio:false}, engine::MediaCaptureState {video:false,audio:true}, engine::MediaCaptureState {video:true,audio:true}] {
+        fake.send(cx, Event::MediaCaptureChanged {view:page(2),state});
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("capture-indicator-7").is_some());
+        assert!(cx.debug_bounds("capture-indicator-8").is_none());
+        assert_eq!(active_url(&view,cx),before);
+    }
+    fake.send(cx, Event::MediaCaptureChanged {view:page(2),state:Default::default()});
+    cx.run_until_parked();
+    cx.update(|window,cx| { let _ = window.draw(cx); });
+    assert_eq!(cx.debug_bounds("sidebar-item-title-7").unwrap().origin.x,title_x);
+    assert!(!view.read_with(cx, |w,_| w.tab_capturing(w.browser.all_tabs().find(|t|t.id.get()==7).unwrap().id)));
+}
+
+#[gpui::test]
 fn capture_access_metadata_keeps_its_document_when_a_peek_is_promoted(cx: &mut TestAppContext) {
     let (owner, cx, fake) = open_pages(cx);
     fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://capture.example/metadata".into() });

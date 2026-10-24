@@ -1695,3 +1695,19 @@ system-share payload fidelity and non-macOS native controls are unverified.
 The local bundle check required an ignored `third_party/cef/CREDITS.html` link
 to the actual versioned SDK credits because the existing bundler expected that
 unversioned path; the upstream notice itself was preserved.
+## Capture indicator static fallback, sweep round 2 — 2026-10-25
+
+Fresh guarded normal 22461 reused Echo Test; its R2 fixture streams and tabs were
+stopped/archived and the window closed. Window 21328 was left for batch cleanup.
+The camera fixture selects the available OBS/virtual device before getUserMedia.
+`target/parity/capture-indicator/arc-r2-camera.mov` and the inspected contact
+sheet `target/parity/sweep-r2/arc-camera-contact.png` show a live single camera
+without a dot during the sampled interval. This does not establish timing.
+Under the authorized static fallback, Today/Pinned rows use the previously
+captured 8 px `#ff736d` dot, 1 px white rim, and 14 px icon/title advance. Capture
+of either source shows it; stopping both restores the original layout. Motion,
+activation timing and Favorites/Split placement remain partial. The enlarged
+pair `target/parity/sweep-r2/pair-capture-indicator-zoom.png` was inspected.
+Native virtual-device transitions and clean CEF shutdown were rechecked; the
+GPUI regression verifies background source states without activation and the
+restored title position after stopping.

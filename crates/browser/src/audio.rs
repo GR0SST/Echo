@@ -8,6 +8,10 @@ impl BrowserWindow {
         self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab).audible)
     }
 
+    pub(crate) fn tab_capturing(&self, tab: TabId) -> bool {
+        self.pages.as_ref().is_some_and(|pages| { let state = pages.borrow().state(tab).capture; state.audio || state.video })
+    }
+
     pub(crate) fn show_tab_audio(&self, tab: &browser_core::Tab) -> bool {
         tab.muted || self.tab_audible(tab.id)
     }
