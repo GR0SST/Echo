@@ -35,11 +35,11 @@
   "patch_files": [
     {
       "path": "chromium.patch",
-      "sha256": "77df106ff4a09c7655a26e4dae5a80b7736a423b25db01233d54d806ee67d780"
+      "sha256": "efb564dee4a1ed8bfdf6fe7457fbef48aae79960aece68dc0a55ff4cefdc4de8"
     },
     {
       "path": "cef.patch",
-      "sha256": "43b3aeb8b3380c71de97bc1c423cc87c03c46b17d4f6d39a7cb38df6af9752f5"
+      "sha256": "48c635953401e0b290126250fffcf6e0f1a9548fe9fd0b79eba53db441fb31d0"
     }
   ],
   "standard_patch_files": [
@@ -2436,13 +2436,13 @@
     {
       "path": "content/browser/download/download_manager_impl.cc",
       "base_sha256": "d2ec9ceec90c6441cacc7d4c5a670e8ac44354473d916c41506d0ad6c20e2b0b",
-      "result_sha256": "9555f65cd101ff0def7b619a10b983617536f1ec705abf09c7db482f44824c51",
+      "result_sha256": "77a548c4dd2b23d2823e24f7de9bca80a8cf09272fd888e9523a19821d68fdfe",
       "mode": "100644"
     },
     {
       "path": "content/browser/download/download_manager_impl.h",
       "base_sha256": "92ae5e58f43f6a4848649bf2641ffb011eaae53d68a530ba0949c700d884ead4",
-      "result_sha256": "5c6bc0f10e7cf5cd67760833756eae3e25a2f22f8e936682db0ce86b838896f7",
+      "result_sha256": "4b53c7004d41a0f5c2af6b58549c4e2c4d0b363befc64d7782bfd3a448afdd7a",
       "mode": "100644"
     },
     {
@@ -2467,6 +2467,12 @@
       "path": "content/browser/download/download_request_utils.cc",
       "base_sha256": "d16e77d680988e687bad670eda1a2f92439197f0b3def50e1e197769d6459eb8",
       "result_sha256": "4f8d3b3833540e544b7d42f1a7c596cc8df2dec2342b57fa747398e8a8dd13c0",
+      "mode": "100644"
+    },
+    {
+      "path": "content/browser/download/save_package.cc",
+      "base_sha256": "9b4054a5e68199664befd4221dc4278f7d069ad97ec9f44e055657758ddccaa3",
+      "result_sha256": "d9af11a930e49543a3b3fa6105822cd0081435f0658c6a2fb90fa0fc724273af",
       "mode": "100644"
     },
     {
@@ -2556,7 +2562,7 @@
     {
       "path": "content/public/browser/download_request_receipt_bridge.h",
       "base_sha256": null,
-      "result_sha256": "db21a346471637308e119e23327e62842f538a140b650a440b31c65d4dde6c1e",
+      "result_sha256": "6e4e450214d49a2a4a47ce2088658d6398bb63dc8ef94aedc68e52f211d38ba2",
       "mode": "100644"
     },
     {
@@ -2700,7 +2706,7 @@
     {
       "path": "cef/include/echo_cef_download_v1.h",
       "base_sha256": null,
-      "result_sha256": "b1406722b635915cf9f772ea27d6a1ca81faef3212c7f2eaf1016940081ac1f0",
+      "result_sha256": "d89c4287972cbe75cef459f2730eff4a5f714e1c91bb0757f9250e2a1b78cabb",
       "mode": "100644"
     },
     {
@@ -2724,7 +2730,7 @@
     {
       "path": "cef/libcef/browser/download_bridge.cc",
       "base_sha256": null,
-      "result_sha256": "6e5cd60eb5e145266961e8e9d1989f553ab19d3deaf0ca2f3ebe305a0f6a71c5",
+      "result_sha256": "d7791837e1d55d275bd58af186fca0bc03c8c22e4a424d2da12fc057aba0e116",
       "mode": "100644"
     },
     {
@@ -2736,7 +2742,7 @@
     {
       "path": "cef/libcef/browser/download_bridge_deferred_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "38548497d25513f454a9fb2b9c3bbf40d11a5417ed935a9bc37c6214dff793f4",
+      "result_sha256": "9ca6fa6ed95465b936da2622cb28cb9c7e8b62f1ee3948580083a7a5911dd3f6",
       "mode": "100644"
     },
     {

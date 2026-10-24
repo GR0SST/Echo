@@ -33,10 +33,10 @@ shasum -a 256 -c patches/cef154/SHA256SUMS
 bun scripts/cef154-patches.ts base /path/to/cef154/chromium/src
 ```
 
-`base` checks 534 distinct selected paths, including absent files that the custom
+`base` checks 535 distinct selected paths, including absent files that the custom
 patches will create. After applying the diffs, `patched` checks their postimages.
 `qualified-inputs` also checks six recorded generated/read prerequisites, for
-540 selected paths. The modes verify seven repository pins. They do not attest
+541 selected paths. The modes verify seven repository pins. They do not attest
 the entire checkout, SDK, all generated outputs, a compiled binary or a loaded
 framework. Keep the source tree stable while checking it.
 
@@ -177,7 +177,7 @@ no Echo default. Use the test HTTP server: the legacy CefServer's 1 MiB queued
 write limit rejected the first fallback body. The same 35 tests passed with
 CefTestServer, without reducing the payload or relaxing assertions.
 
-The 131 selected C++ tests also cover exact-target nonce consumption, failed RPC
+The 140 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
 BeginNavigation through deferred Init. A public-value assignment guard covers
 the out-of-line OpenURLParams copy assignment required by opaque receipt types.
@@ -185,6 +185,20 @@ These results are a bounded macOS slice, not the complete upstream CEF suite.
 Three additional changed call-site translation units (both navigation URL loader
 tests and the security exploit browser test) passed syntax-only compilation with
 their configured compiler flags; their full test suites were not executed.
+
+The save-page manager now captures a receipt before asynchronous item-ID
+allocation and revalidates its exact live source/context before creation.
+Association precedes embedder hooks; rejection cancels without a synthetic item.
+Seven manager cases failed before the fix while the legacy control passed; those
+eight test bodies are preserved. A ninth test invokes actual WebContents::SavePage
+and verifies synchronous refusal, no item/files, and SaveFileManager teardown.
+
+SAVE_PACKAGE is append-only kind **5**, separate from generic manager downloads.
+Its document is needed for serialization even after item association. A caller
+must retain that document until the save item is terminal, or refuse this kind
+at reserve. This manager-stage fix is not complete SavePackage ingress coverage:
+OnSavePage/GetSaveInfo directory and picker work still precede admission. Native
+save-page serialization, completion and source-dependent retirement remain open.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

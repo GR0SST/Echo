@@ -3,7 +3,7 @@
   "chromium_commit": "b859317bf11f6be47f9b7799ec690a0a42a1fb33",
   "cef_commit": "14c5a089e8452874cb1a556dc3fde26ed2d87723",
   "selected_units": {
-    "count": 131,
+    "count": 140,
     "io": [
       "DownloadResponseHandlerTest.BlobRequestRejectsManualRedirect",
       "DownloadResponseHandlerTest.BlobRequestRejectsRedirect",
@@ -85,6 +85,14 @@
       "DeferredNavigationReceiptTest.RestoredChildHistoryReauthorizesActualMethodOnSameOriginalAdmission",
       "DeferredNavigationReceiptTest.SameUrlCommandsCanReturnInReverseNonceOrderWithoutIdentitySwap",
       "DeferredNavigationReceiptTest.SanitizerCannotRemoveReceiptAndDispatchUnderAnotherOwner",
+      "DeferredNavigationReceiptTest.SavePackageCapturesAdmissionBeforeIdAndAssociatesBeforeEmbedderAttach",
+      "DeferredNavigationReceiptTest.SavePackageClosingRejectsBeforeIdAllocation",
+      "DeferredNavigationReceiptTest.SavePackageDestroyedSourceCannotAttachAfterIdAllocation",
+      "DeferredNavigationReceiptTest.SavePackageLateContextOptInCannotInventOwner",
+      "DeferredNavigationReceiptTest.SavePackageReserveZeroRejectsWithoutOutcomeOrIdAllocation",
+      "DeferredNavigationReceiptTest.SavePackageResolvedReceiptCannotAssociateAfterIdAllocation",
+      "DeferredNavigationReceiptTest.SavePackageUnregisteredPeerCannotBorrowTrackedContextOwner",
+      "DeferredNavigationReceiptTest.SavePackageUntrackedLegacyCreationStillAttaches",
       "DeferredNavigationReceiptTest.SentCommandTransfersOriginalAdmissionIntoActualNavigationAfterClosing",
       "DeferredNavigationReceiptTest.SettledCommandCannotBeSentOrEmitAnotherOutcomeOnDrop",
       "DeferredNavigationReceiptTest.SettledManagerParamsRejectLateDownloadApprovalWithoutSecondOutcome",
@@ -102,6 +110,7 @@
       "DeferredNavigationReceiptTest.UnregisteredContextKeepsLegacyFrameDownloadChecks",
       "DeferredNavigationReceiptTest.UnsentCommandCannotBeConsumedOrAcknowledgedByRenderer",
       "DeferredNavigationReceiptTest.UntrackedLegacyServiceWorkerResultKeepsNetworkDispatch",
+      "DeferredNavigationReceiptTest.WebContentsSavePageReportsRefusalWithoutItemOrFileWork",
       "DeferredNavigationReceiptTest.WrongFramePeerAndReplayedCommandCannotConsumeOriginalNonce",
       "DownloadBridgeState.OpenUrlAssignmentPreservesPublicValueWithOpaqueReceipt",
       "EchoDownloadState.AdmissionDecisionsAndClosing",
@@ -141,7 +150,7 @@
     ],
     "all_once_successful": true,
     "io_binary_sha256": "8a1f9e3a55332d23141233d42787ac719a5182fbe08535c352df92c94aa1d951",
-    "state_binary_sha256": "35bbadc8cf7fd0aa8313942c1afbd39bf61d321732c5a1479bb8ae9eebfc899d"
+    "state_binary_sha256": "9a473817d6b7472dd9d55c13b7b99c097efdcfed60c37b487c759ad0d45a1293"
   },
   "native": {
     "count": 35,
@@ -221,15 +230,15 @@
     }
   ],
   "scope": {
-    "unit_source_paths": 75,
-    "authored_custom_paths": 82,
-    "framework_named_inputs": 84,
-    "archived_source_union": 88,
+    "unit_source_paths": 76,
+    "authored_custom_paths": 83,
+    "framework_named_inputs": 85,
+    "archived_source_union": 89,
     "full_checkout_attestation": false,
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "205f1c410d83035d86289643b60f28b937c22883af27fb964634a4b9984d2eb5",
+  "native_xml_sha256": "074806bb5813360ed9eb5ff589f3b726c3a0a620fb8e6893b648f210bf596b7c",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -252,9 +261,9 @@
   ],
   "versioned_patch_replay": {
     "zero_fuzz": true,
-    "base_selected_images": 534,
-    "patched_selected_images": 534,
-    "qualified_selected_images": 540,
+    "base_selected_images": 535,
+    "patched_selected_images": 535,
+    "qualified_selected_images": 541,
     "repositories": 7,
     "selected_fixture_only": true,
     "new_build_performed_for_replay": false
@@ -272,6 +281,9 @@
     "prior_source_close_failure": "R8 native run aborted in ResetWithReason with a pending LoadRequest RPC responder; all 33 tests unchanged for passing run",
     "live_service_worker": "real loopback worker response and no-respondWith network fallback; closing admission while response held; original token and full distinct 2 MiB payloads preserved",
     "service_worker_configuration": "explicit ServiceWorkerInterceptDownloads test flag; disabled by default in pinned Chromium154; no Echo default change",
-    "service_worker_fixture": "first 34/35 run hit legacy CefServer 1 MiB buffer limit; all 35 tests unchanged for passing CefTestServer run"
+    "service_worker_fixture": "first 34/35 run hit legacy CefServer 1 MiB buffer limit; all 35 tests unchanged for passing CefTestServer run",
+    "save_package_manager": "receipt before ID allocation, original frame/context revalidation and association before embedder hooks; seven red tests plus legacy control, all eight bodies preserved; real WebContents refusal adds ninth test",
+    "save_package_kind": "append-only kind 5; caller must retain original document until save terminal or reject at reserve; Associated is not document quiescence",
+    "save_package_remaining": "OnSavePage/GetSaveInfo directory/picker work still precedes this manager admission; native serialization/completion and source-dependent retirement remain unqualified"
   }
 }

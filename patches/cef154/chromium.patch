@@ -1253,7 +1253,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  #include "content/public/browser/global_routing_id.h"
  #include "content/public/browser/render_frame_host.h"
  #include "content/public/browser/render_process_host.h"
-@@ -305,6 +306,26 @@
+@@ -305,6 +306,35 @@
    }
  }
  
@@ -1277,10 +1277,19 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
 +  OnDownloadStarted(nullptr, std::move(on_started));
 +}
 +
++void RejectSavePackage(
++    download::DownloadJob::CancelRequestCallback cancel_request,
++    DownloadManagerImpl::DownloadItemImplCreated item_created) {
++  // Both callbacks may release the caller. Keep no manager/item access across
++  // them, and never manufacture a canceled item or a second receipt outcome.
++  if (cancel_request) std::move(cancel_request).Run(true);
++  if (item_created) std::move(item_created).Run(nullptr);
++}
++
  // Creates an interrupted download and calls StartDownload. Can be called on
  // any thread.
  void CreateInterruptedDownload(
-@@ -316,6 +337,12 @@
+@@ -316,6 +346,12 @@
            base::Time::Now(), base::WrapUnique(new download::DownloadSaveInfo)));
    failed_created_info->url_chain.push_back(params->url());
    failed_created_info->result = reason;
@@ -1293,7 +1302,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
    GetUIThreadTaskRunner({})->PostTask(
        FROM_HERE,
        base::BindOnce(&DownloadManagerImpl::StartDownload, download_manager,
-@@ -509,9 +536,16 @@
+@@ -509,9 +545,16 @@
      uint32_t id,
      const download::DownloadCreateInfo& info) {
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -1312,7 +1321,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  
    download::DownloadItemImpl* download =
        item_factory_->CreateActiveItem(this, id, info);
-@@ -523,6 +557,10 @@
+@@ -523,6 +566,10 @@
    DownloadItemUtils::AttachInfo(
        download, GetBrowserContext(),
        WebContentsImpl::FromRenderFrameHostID(global_id), global_id);
@@ -1323,7 +1332,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
    if (delegate_) {
      delegate_->AttachExtraInfo(download);
  #if BUILDFLAG(IS_ANDROID)
-@@ -872,6 +910,13 @@
+@@ -872,6 +919,13 @@
      download::DownloadUrlParameters::OnStartedCallback on_started,
      download::InProgressDownloadManager::StartDownloadItemCallback callback) {
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -1337,7 +1346,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  
    download::DownloadItemImpl* download =
        static_cast<download::DownloadItemImpl*>(GetDownloadByGuid(info->guid));
-@@ -886,6 +931,10 @@
+@@ -886,6 +940,10 @@
      if (!info->guid.empty() && download) {
        LOG(WARNING) << "A download with the same GUID already exists, the new "
                        "request is ignored.";
@@ -1348,7 +1357,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
        return;
      }
      GetNextId(base::BindOnce(&DownloadManagerImpl::OnNewDownloadIdRetrieved,
-@@ -947,9 +996,16 @@
+@@ -947,9 +1005,16 @@
      const base::FilePath& duplicate_download_file_path,
      bool duplicate_file_exists) {
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -1366,7 +1375,73 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      info->save_info->needs_obfuscation =
          delegate_->ShouldObfuscateDownload(download);
      info->save_info->total_bytes = info->total_bytes;
-@@ -1196,9 +1252,18 @@
+@@ -1096,11 +1161,27 @@
+     download::DownloadJob::CancelRequestCallback cancel_request_callback,
+     DownloadItemImplCreated item_created) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  auto* source = RenderFrameHost::FromID(render_process_id, render_frame_id);
++  auto* contents = source && source->GetBrowserContext() == browser_context_
++      ? WebContents::FromRenderFrameHost(source) : nullptr;
++  auto admission = DownloadRequestReceiptBridge::Reserve(
++      contents, DownloadRequestReceiptBridge::Kind::kSavePackage, page_url, "GET");
++  const bool required = admission.handled ||
++      DownloadRequestReceiptBridge::ContextRequiresReceipts(browser_context_);
++  if ((required && !admission.receipt) || !admission.Authorize(page_url, "GET")) {
++    RejectSavePackage(std::move(cancel_request_callback), std::move(item_created));
++    return;
++  }
++  std::optional<GlobalRenderFrameHostToken> source_frame;
++  if (source && contents) source_frame = source->GetGlobalFrameToken();
++  // Capture the original admission before ID allocation can defer, and never
++  // reacquire another source/registration when that callback eventually runs.
+   GetNextId(base::BindOnce(
+       &DownloadManagerImpl::CreateSavePackageDownloadItemWithId,
+       weak_factory_.GetWeakPtr(), main_file_path, main_file_display_name,
+       page_url, mime_type, render_process_id, render_frame_id,
+-      std::move(cancel_request_callback), std::move(item_created)));
++      std::move(cancel_request_callback), std::move(item_created),
++      std::move(admission.receipt), required, source_frame));
+ }
+ 
+ void DownloadManagerImpl::CreateSavePackageDownloadItemWithId(
+@@ -1112,8 +1193,25 @@
+     int render_frame_id,
+     download::DownloadJob::CancelRequestCallback cancel_request_callback,
+     DownloadItemImplCreated item_created,
++    scoped_refptr<download::DownloadRequestReceipt> receipt,
++    bool receipt_required,
++    std::optional<GlobalRenderFrameHostToken> source_frame,
+     uint32_t id) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if ((!receipt && (receipt_required ||
++          DownloadRequestReceiptBridge::ContextRequiresReceipts(browser_context_))) ||
++      (receipt && !receipt->is_pending())) {
++    RejectSavePackage(std::move(cancel_request_callback), std::move(item_created));
++    return;
++  }
++  if (receipt) {
++    auto* source = source_frame ? RenderFrameHost::FromFrameToken(*source_frame) : nullptr;
++    if (!source || source->GetBrowserContext() != browser_context_ || !source->IsActive()) {
++      receipt->ResolveNoItem(download::DownloadRequestReceipt::NoItemReason::kShutdown);
++      RejectSavePackage(std::move(cancel_request_callback), std::move(item_created));
++      return;
++    }
++  }
+   DCHECK_NE(download::DownloadItem::kInvalidId, id);
+   DCHECK(!downloads_.contains(id));
+ 
+@@ -1125,6 +1223,10 @@
+   DownloadItemUtils::AttachInfo(
+       download_item, GetBrowserContext(),
+       WebContentsImpl::FromRenderFrameHostID(global_id), global_id);
++  if (receipt) {
++    // As for network items, publish captured ownership before any embedder hook.
++    receipt->Associate(download_item);
++  }
+   if (delegate_) {
+     delegate_->AttachExtraInfo(download_item);
+   }
+@@ -1196,9 +1298,18 @@
      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
      net::CertStatus cert_status,
      FrameTreeNodeId frame_tree_node_id,
@@ -1386,7 +1461,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      DropDownload();
      return;
    }
-@@ -1220,7 +1285,7 @@
+@@ -1220,7 +1331,7 @@
            weak_factory_.GetWeakPtr(), frame_tree_node_id,
            std::move(resource_request), std::move(url_chain), cert_status,
            std::move(response_head), std::move(response_body),
@@ -1395,7 +1470,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  
    delegate_->CheckDownloadAllowed(
        std::move(web_contents_getter), url, method, std::move(request_initiator),
-@@ -1282,8 +1347,38 @@
+@@ -1282,8 +1393,38 @@
      DCHECK_EQ("POST", params->method());
    }
  
@@ -1434,7 +1509,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  
    download::RecordDownloadCountWithSource(
        download::DownloadCountTypes::DOWNLOAD_TRIGGERED_COUNT,
-@@ -1589,8 +1684,19 @@
+@@ -1589,8 +1730,19 @@
      network::mojom::URLResponseHeadPtr response_head,
      mojo::ScopedDataPipeConsumerHandle response_body,
      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
@@ -1454,7 +1529,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      DropDownload();
      return;
    }
-@@ -1643,7 +1749,7 @@
+@@ -1643,7 +1795,7 @@
        std::move(response_head), std::move(response_body),
        std::move(url_loader_client_endpoints),
        CreatePendingSharedURLLoaderFactory(storage_partition, render_frame_host),
@@ -1463,7 +1538,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  }
  
  void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
-@@ -1652,7 +1758,20 @@
+@@ -1652,7 +1804,20 @@
      bool is_new_download,
      const StoragePartitionConfig& storage_partition_config,
      bool is_download_allowed) {
@@ -1484,7 +1559,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      DropDownload();
      return;
    }
-@@ -1721,6 +1840,10 @@
+@@ -1721,6 +1886,10 @@
                std::move(it->second));
      } else {
        DLOG(ERROR) << "No URLLoaderFactory found to download " << params->url();
@@ -1495,7 +1570,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
        return;
      }
    } else {
-@@ -1837,6 +1960,21 @@
+@@ -1837,6 +2006,21 @@
      const GURL& tab_url,
      const GURL& tab_referrer_url,
      scoped_refptr<network::SharedURLLoaderFactory> sw_factory) {
@@ -1517,7 +1592,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
    std::unique_ptr<network::PendingSharedURLLoaderFactory>
        pending_url_loader_factory;
  
-@@ -1912,6 +2050,10 @@
+@@ -1912,6 +2096,10 @@
      if (rfh->IsInactiveAndDisallowActivation(
              DisallowActivationReasonId::kBeginDownload) ||
          rfh->IsNestedWithinFencedFrame()) {
@@ -1531,7 +1606,25 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
 diff --git a/content/browser/download/download_manager_impl.h b/content/browser/download/download_manager_impl.h
 --- a/content/browser/download/download_manager_impl.h
 +++ b/content/browser/download/download_manager_impl.h
-@@ -185,7 +185,8 @@
+@@ -34,6 +34,7 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/download_manager.h"
+ #include "content/public/browser/download_manager_delegate.h"
++#include "content/public/browser/global_routing_id.h"
+ #include "content/public/browser/ssl_status.h"
+ #include "mojo/public/cpp/system/data_pipe.h"
+ #include "services/metrics/public/cpp/ukm_source_id.h"
+@@ -83,7 +84,8 @@
+ 
+   // Creates a download item for the SavePackage system.
+   // Must be called on the UI thread.  Note that the DownloadManager
+-  // retains ownership.
++  // retains ownership. Admission failure cancels the request and invokes
++  // |item_created| with nullptr; no item or native file work is started.
+   void CreateSavePackageDownloadItem(
+       const base::FilePath& main_file_path,
+       const base::FilePath& main_file_display_name,
+@@ -185,7 +187,8 @@
        network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
        net::CertStatus cert_status,
        FrameTreeNodeId frame_tree_node_id,
@@ -1541,7 +1634,7 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
  
    // DownloadItemImplDelegate overrides.
    download::QuarantineConnectionCallback GetQuarantineConnectionCallback()
-@@ -204,6 +205,7 @@
+@@ -204,6 +207,7 @@
  
    // For testing.
    friend class DownloadManagerTest;
@@ -1549,7 +1642,17 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
    friend class DownloadTest;
  
    void CreateSavePackageDownloadItemWithId(
-@@ -297,6 +299,7 @@
+@@ -215,6 +219,9 @@
+       int render_frame_id,
+       download::DownloadJob::CancelRequestCallback cancel_request_callback,
+       DownloadItemImplCreated on_started,
++      scoped_refptr<download::DownloadRequestReceipt> receipt,
++      bool receipt_required,
++      std::optional<GlobalRenderFrameHostToken> source_frame,
+       uint32_t id);
+ 
+   // InProgressDownloadManager::Delegate implementations.
+@@ -297,6 +304,7 @@
        network::mojom::URLResponseHeadPtr response_head,
        mojo::ScopedDataPipeConsumerHandle response_body,
        network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
@@ -2537,6 +2640,42 @@ diff --git a/content/browser/download/download_request_utils.cc b/content/browse
  bool DownloadRequestUtils::IsURLSafe(int render_process_id, const GURL& url) {
    // Check if the renderer is permitted to request the requested URL.
    if (!ChildProcessSecurityPolicy::GetInstance()->CanRequestURL(
+diff --git a/content/browser/download/save_package.cc b/content/browser/download/save_package.cc
+--- a/content/browser/download/save_package.cc
++++ b/content/browser/download/save_package.cc
+@@ -339,6 +339,8 @@
+   }
+ 
+   RenderFrameHost& frame_host = page_->GetMainDocument();
++  // Admission rejection can synchronously invoke cancellation and completion.
++  scoped_refptr<SavePackage> keep_alive(this);
+   download_manager_->CreateSavePackageDownloadItem(
+       saved_main_file_path_, saved_main_file_display_name_, page_url_,
+       GetMimeTypeForSaveType(save_type_),
+@@ -347,14 +349,21 @@
+       base::BindOnce(&SavePackage::InitWithDownloadItem,
+                      weak_ptr_factory_.GetWeakPtr(),
+                      std::move(download_created_callback)));
+-  return true;
++  return !canceled();
+ }
+ 
+ void SavePackage::InitWithDownloadItem(
+     SavePackageDownloadCreatedCallback download_created_callback,
+     download::DownloadItemImpl* item) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-  DCHECK(item);
++  if (!item) {
++    // The captured download admission was refused or its source disappeared
++    // while waiting for an item ID. Do not begin serialization or file work.
++    Cancel(/*user_action=*/true, /*cancel_download_item=*/false);
++    if (!download_created_callback.is_null())
++      std::move(download_created_callback).Run(nullptr);
++    return;
++  }
+ 
+   if (!page_)
+     return;
 diff --git a/content/browser/loader/navigation_url_loader_impl_unittest.cc b/content/browser/loader/navigation_url_loader_impl_unittest.cc
 --- a/content/browser/loader/navigation_url_loader_impl_unittest.cc
 +++ b/content/browser/loader/navigation_url_loader_impl_unittest.cc
@@ -4081,7 +4220,7 @@ diff --git a/content/public/browser/download_request_receipt_bridge.h b/content/
 new file mode 100644
 --- /dev/null
 +++ b/content/public/browser/download_request_receipt_bridge.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,61 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -4103,7 +4242,8 @@ new file mode 100644
 +// the hook does not advertise support for either ingress or a complete fence.
 +class CONTENT_EXPORT DownloadRequestReceiptBridge {
 + public:
-+  enum class Kind { kNavigation = 1, kRenderer = 2, kManagerOther = 4 };
++  enum class Kind { kNavigation = 1, kRenderer = 2, kManagerOther = 4,
++                    kSavePackage = 5 };
 +  using Reason = download::DownloadRequestReceipt::NoItemReason;
 +  struct CONTENT_EXPORT Admission {
 +    Admission();

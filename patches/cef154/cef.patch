@@ -89,7 +89,7 @@ diff --git a/include/echo_cef_download_v1.h b/include/echo_cef_download_v1.h
 new file mode 100644
 --- /dev/null
 +++ b/include/echo_cef_download_v1.h
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,168 @@
 +// Additive Echo extension; does not modify existing CEF ABI or API hashes.
 +// No existing CEF handler layout is changed. All functions and callbacks use
 +// the platform C calling convention (cdecl on Windows); do not use CEF_CALLBACK.
@@ -129,6 +129,10 @@ new file mode 100644
 +#define ECHO_CEF_DOWNLOAD_RENDERER 2u
 +#define ECHO_CEF_DOWNLOAD_START_DOWNLOAD 3u
 +#define ECHO_CEF_DOWNLOAD_MANAGER_OTHER 4u
++// Source-document dependent. Association settles request identity, but does not
++// permit blanking/destroying its source page. Keep that document until the save
++// item completes/cancels; no FULL_FENCE or document-quiescence support is implied.
++#define ECHO_CEF_DOWNLOAD_SAVE_PACKAGE 5u
 +
 +// NoItem reasons are append-only. Abandoned/shutdown are factual lifetime
 +// outcomes, never successful retirement readiness in their own right.
@@ -394,7 +398,7 @@ diff --git a/libcef/browser/download_bridge.cc b/libcef/browser/download_bridge.
 new file mode 100644
 --- /dev/null
 +++ b/libcef/browser/download_bridge.cc
-@@ -0,0 +1,373 @@
+@@ -0,0 +1,375 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +#include "cef/libcef/browser/download_bridge.h"
@@ -623,6 +627,8 @@ new file mode 100644
 +              ECHO_CEF_DOWNLOAD_RENDERER);
 +static_assert(static_cast<uint32_t>(EarlyBridge::Kind::kManagerOther) ==
 +              ECHO_CEF_DOWNLOAD_MANAGER_OTHER);
++static_assert(static_cast<uint32_t>(EarlyBridge::Kind::kSavePackage) ==
++              ECHO_CEF_DOWNLOAD_SAVE_PACKAGE);
 +EarlyBridge::Admission ReserveEarly(std::shared_ptr<State> state,
 +    std::shared_ptr<BrowserIdentity> identity, content::WebContents* contents,
 +    EarlyBridge::Kind kind, const GURL& url, const std::string& method) {
@@ -824,7 +830,7 @@ diff --git a/libcef/browser/download_bridge_deferred_unittest.cc b/libcef/browse
 new file mode 100644
 --- /dev/null
 +++ b/libcef/browser/download_bridge_deferred_unittest.cc
-@@ -0,0 +1,2722 @@
+@@ -0,0 +1,2919 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +
@@ -837,12 +843,16 @@ new file mode 100644
 +#include <vector>
 +
 +#include "base/functional/bind.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "content/browser/download/save_file_manager.h"
 +#include "base/run_loop.h"
 +#include "base/no_destructor.h"
 +#include "components/download/public/common/download_task_runner.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "components/download/public/common/download_request_receipt.h"
 +#include "components/download/public/common/download_create_info.h"
++#include "components/download/public/common/download_item_impl.h"
 +#include "components/download/public/common/input_stream.h"
 +#include "base/synchronization/waitable_event.h"
 +#include "base/threading/thread.h"
@@ -1436,6 +1446,22 @@ new file mode 100644
 +    EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
 +    EXPECT_TRUE(outcomes_.empty());
 +    EXPECT_EQ(0, releases_);
++  }
++
++  void BeginSavePackage(int* canceled, int* completed,
++                        download::DownloadItemImpl** created,
++                        content::RenderFrameHost* source = nullptr) {
++    expected_kind_ = Bridge::Kind::kSavePackage;
++    expected_reservation_method_ = "GET";
++    expected_authorization_methods_ = {"GET"};
++    if (!source) source = main_test_rfh();
++    const auto file = GetBrowserContext()->GetPath().AppendASCII("receipt-save.html");
++    manager_->CreateSavePackageDownloadItem(file, file.BaseName(), GURL(kDownload),
++        "text/html", source->GetProcess()->GetDeprecatedID(), source->GetRoutingID(),
++        base::BindOnce([](int* count, bool) { ++*count; }, canceled),
++        base::BindOnce([](int* count, download::DownloadItemImpl** output,
++                          download::DownloadItemImpl* item) { ++*count; *output = item; },
++                       completed, created));
 +  }
 +
 + protected:
@@ -3546,6 +3572,183 @@ new file mode 100644
 +}
 +
 +}  // namespace
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageCapturesAdmissionBeforeIdAndAssociatesBeforeEmbedderAttach) {
++  delegate_.defer_ids = true;
++  allow_association_ = true;
++  delegate_.on_attach = base::BindRepeating(
++      &DeferredNavigationReceiptTest::CheckAttachedItem, base::Unretained(this));
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ(1, delegate_.id_requests); EXPECT_TRUE(delegate_.pending_id);
++  EXPECT_EQ(0, completed); EXPECT_TRUE(associated_tokens_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, completed); EXPECT_NE(nullptr, created);
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), associated_tokens_);
++  EXPECT_TRUE(outcomes_.empty()); EXPECT_EQ(1, delegate_.attach_calls);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  if (created) { EXPECT_TRUE(created->IsSavePackageDownload()); created->Cancel(true); }
++  EXPECT_EQ(1, canceled);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageClosingRejectsBeforeIdAllocation) {
++  delegate_.defer_ids = true;
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_EQ(0, reserves_); EXPECT_EQ(0, authorizes_);
++  EXPECT_EQ(0, delegate_.id_requests); EXPECT_FALSE(delegate_.pending_id);
++  EXPECT_EQ(1, canceled); EXPECT_EQ(1, completed); EXPECT_EQ(nullptr, created);
++  EXPECT_EQ(0, delegate_.attach_calls); EXPECT_TRUE(outcomes_.empty());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  if (created) created->Cancel(true);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageDestroyedSourceCannotAttachAfterIdAllocation) {
++  delegate_.defer_ids = true;
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  DeleteContents();
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, canceled); EXPECT_EQ(1, completed); EXPECT_EQ(nullptr, created);
++  EXPECT_EQ(nullptr, manager_->GetDownload(500));
++  EXPECT_EQ(0, delegate_.attach_calls); EXPECT_TRUE(associated_tokens_.empty());
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_SHUTDOWN}), reasons_);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  if (created) created->Cancel(true);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageResolvedReceiptCannotAssociateAfterIdAllocation) {
++  delegate_.defer_ids = true;
++  scoped_refptr<download::DownloadRequestReceipt> receipt;
++  capture_next_receipt_ = &receipt;
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_TRUE(receipt);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  if (receipt) receipt->ResolveNoItem(Reason::kCancelled);
++  receipt.reset();
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, canceled); EXPECT_EQ(1, completed); EXPECT_EQ(nullptr, created);
++  EXPECT_EQ(0, delegate_.attach_calls); EXPECT_TRUE(associated_tokens_.empty());
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_CANCELLED}), reasons_);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  if (created) created->Cancel(true);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageLateContextOptInCannotInventOwner) {
++  delegate_.defer_ids = true;
++  Bridge::SetReserveCallback(contents(), {});
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_EQ(1, delegate_.id_requests); EXPECT_TRUE(delegate_.pending_id);
++  Bridge::RequireContextReceipts(GetBrowserContext());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, canceled); EXPECT_EQ(1, completed); EXPECT_EQ(nullptr, created);
++  EXPECT_EQ(0, delegate_.attach_calls); EXPECT_TRUE(associated_tokens_.empty());
++  EXPECT_EQ(0, reserves_); EXPECT_EQ(0, authorizes_); EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(0, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  if (created) created->Cancel(true);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageReserveZeroRejectsWithoutOutcomeOrIdAllocation) {
++  delegate_.defer_ids = true;
++  reject_reservation_ = 1;
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(0, authorizes_);
++  EXPECT_EQ(0, delegate_.id_requests); EXPECT_FALSE(delegate_.pending_id);
++  EXPECT_EQ(1, canceled); EXPECT_EQ(1, completed); EXPECT_EQ(nullptr, created);
++  EXPECT_TRUE(associated_tokens_.empty()); EXPECT_TRUE(outcomes_.empty());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  if (created) created->Cancel(true);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageUnregisteredPeerCannotBorrowTrackedContextOwner) {
++  delegate_.defer_ids = true;
++  Bridge::RequireContextReceipts(GetBrowserContext());
++  auto peer = content::TestWebContents::Create(GetBrowserContext(), nullptr);
++  peer->GetPrimaryMainFrame()->InitializeRenderFrameIfNeeded();
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created, peer->GetPrimaryMainFrame());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  EXPECT_EQ(0, delegate_.id_requests); EXPECT_FALSE(delegate_.pending_id);
++  EXPECT_EQ(1, canceled); EXPECT_EQ(1, completed); EXPECT_EQ(nullptr, created);
++  EXPECT_EQ(0, reserves_); EXPECT_EQ(0, authorizes_);
++  EXPECT_TRUE(associated_tokens_.empty()); EXPECT_TRUE(outcomes_.empty());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  if (created) created->Cancel(true);
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SavePackageUntrackedLegacyCreationStillAttaches) {
++  delegate_.defer_ids = true;
++  Bridge::SetReserveCallback(contents(), {});
++  int canceled = 0, completed = 0;
++  download::DownloadItemImpl* created = nullptr;
++  BeginSavePackage(&canceled, &completed, &created);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  EXPECT_EQ(1, delegate_.id_requests); EXPECT_TRUE(delegate_.pending_id);
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, completed); EXPECT_NE(nullptr, created);
++  EXPECT_EQ(1, delegate_.attach_calls); EXPECT_EQ(0, reserves_);
++  EXPECT_TRUE(associated_tokens_.empty()); EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  if (created) created->Cancel(true);
++  EXPECT_EQ(1, canceled);
++}
++
++TEST_F(DeferredNavigationReceiptTest,
++       WebContentsSavePageReportsRefusalWithoutItemOrFileWork) {
++  expected_kind_ = Bridge::Kind::kSavePackage;
++  Bridge::RequireContextReceipts(GetBrowserContext());
++  ASSERT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  ASSERT_EQ(nullptr, content::SaveFileManager::Get());
++  scoped_refptr<content::SaveFileManager> files = new content::SaveFileManager();
++  base::ScopedTempDir output;
++  ASSERT_TRUE(output.CreateUniqueTempDir());
++  const auto main_file = output.GetPath().AppendASCII("refused.html");
++  const auto resource_dir = output.GetPath().AppendASCII("refused_files");
++  EXPECT_FALSE(contents()->SavePage(main_file, resource_dir,
++                                   content::SAVE_PAGE_TYPE_AS_ONLY_HTML));
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(0, delegate_.id_requests); EXPECT_EQ(0, delegate_.attach_calls);
++  EXPECT_EQ(0, reserves_); EXPECT_EQ(0, authorizes_);
++  EXPECT_TRUE(associated_tokens_.empty()); EXPECT_TRUE(outcomes_.empty());
++  content::DownloadManager::DownloadVector items;
++  manager_->GetAllDownloads(&items);
++  EXPECT_TRUE(items.empty());
++  EXPECT_FALSE(base::PathExists(main_file));
++  EXPECT_FALSE(base::PathExists(resource_dir));
++  DeleteContents();
++  task_environment()->RunUntilIdle();
++  files->Shutdown(); files = nullptr;
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(nullptr, content::SaveFileManager::Get());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++
 +}  // namespace cef::download_bridge
 diff --git a/libcef/browser/download_bridge_state.cc b/libcef/browser/download_bridge_state.cc
 new file mode 100644
