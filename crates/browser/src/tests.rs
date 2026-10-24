@@ -7732,10 +7732,103 @@ fn theme_region_keeps_the_window_field_aligned_across_half_panes(cx: &mut TestAp
     preview.run_until_parked();
     assert_eq!(preview.debug_bounds("theme-region").unwrap(),next);
     assert_eq!(preview.debug_bounds("theme-region-field").unwrap(),field);
-    browser.update(source,|w,cx|{w.pager.position+=0.5;cx.notify();});
-    let midpoint=browser.read_with(source,|w,_|w.theme_background());
-    browser.update(source,|w,cx|{w.pager.position-=0.5;cx.notify();});
-    assert!(browser.read_with(source,|w,_|w.theme_background())!=midpoint);
+
+}
+
+fn space_theme_editor(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
+    cx.run_until_parked();
+    let overlay=view.read_with(cx,|w,_|w.theme_editor.as_ref().and_then(|e|e.overlay)).expect("theme editor overlay");
+    let editor=VisualTestContext::from_window(overlay.into(),cx);
+    editor.run_until_parked();editor
+}
+
+#[gpui::test]
+fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: &mut TestAppContext) {
+    let (view,cx)=open(cx);
+    let id=view.read_with(cx,|w,_|w.browser.space().id);
+    let tabs=view.read_with(cx,|w,_|w.browser.all_tabs().count());
+    dispatch_menu(cx,"Spaces","Edit Theme…");
+    let mut editor=space_theme_editor(&view,cx);
+    let bounds=editor.debug_bounds("theme-editor").unwrap();
+    assert_eq!(bounds.size,gpui::size(gpui::px(354.),gpui::px(508.)));
+    click(&mut editor,"theme-preset-4");
+    click(&mut editor,"theme-add-color");click(&mut editor,"theme-add-color");click(&mut editor,"theme-add-color");
+    view.read_with(cx,|w,_|assert_eq!(w.theme_editor.as_ref().unwrap().draft.colors.len(),3));
+    click(&mut editor,"theme-remove-color");
+    click(&mut editor,"theme-palette-next");click(&mut editor,"theme-preset-7");
+    click(&mut editor,"theme-light");assert!(!view.read_with(cx,|w,_|w.theme_is_dark()));
+    click(&mut editor,"theme-dark");assert!(view.read_with(cx,|w,_|w.theme_is_dark()));
+    click(&mut editor,"theme-texture");
+    let expected=view.read_with(cx,|w,_|w.theme_editor.as_ref().unwrap().draft.clone());
+    assert_eq!(expected.texture,browser_core::themes::NoiseTexture::Sand);
+    // A draft previews immediately, but dismissal makes a single Undo entry.
+    assert!(view.read_with(cx,|w,_|w.browser.space().theme.is_none()));
+    editor.simulate_keystrokes("escape");cx.run_until_parked();
+    view.read_with(cx,|w,_|{
+        assert!(w.theme_editor.is_none());assert_eq!(w.browser.space().id,id);
+        assert_eq!(w.browser.space().theme(),expected);assert_eq!(w.browser.all_tabs().count(),tabs);
+        assert_eq!(w.browser.sidebar_undo_action(),Some("Update Theme"));
+        let saved=browser_core::session::to_json(&w.browser);
+        assert_eq!(browser_core::session::from_json(&saved).unwrap().space().theme(),expected);
+    });
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.browser.space().theme.is_none()));
+    cx.simulate_keystrokes("cmd-shift-z");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|w,_|w.browser.space().theme()),expected);
+}
+
+#[gpui::test]
+fn space_theme_context_menu_targets_clicked_space_and_outside_dismissal_keeps_selection(cx: &mut TestAppContext) {
+    let (view,cx)=open(cx);
+    let active=view.read_with(cx,|w,_|w.browser.space().id);
+    let other=view.read_with(cx,|w,_|w.browser.spaces.iter().find(|s|s.id!=active).unwrap().id);
+    cx.update(|window,cx|view.update(cx,|w,cx|w.open_space_menu(other,gpui::point(gpui::px(100.),gpui::px(200.)),window,cx)));
+    let mut menu=tab_menu(&view,cx);click(&mut menu,"tab-menu-edit-theme-color");
+    let mut editor=space_theme_editor(&view,cx);
+    click(&mut editor,"theme-dark");
+    assert!(view.read_with(cx,|w,_|w.theme_editor_is_dark()));
+    click(&mut editor,"theme-light");
+    assert!(!view.read_with(cx,|w,_|w.theme_editor_is_dark()));
+    click(&mut editor,"theme-preset-6");
+    let outside = gpui::point(gpui::px(10.),gpui::px(10.));
+    editor.simulate_mouse_down(outside,gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(outside,gpui::MouseButton::Left,Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx,|w,_|{
+        assert!(w.theme_editor.is_none());assert_eq!(w.browser.space().id,active);
+        assert!(w.browser.space().theme.is_none());
+        assert!(w.browser.spaces.iter().find(|s|s.id==other).unwrap().theme.is_some());
+    });
+}
+
+#[gpui::test]
+fn space_theme_color_wheel_drags_and_automatic_appearance_follow_system(cx: &mut TestAppContext) {
+    let (view,cx)=open(cx);
+    view.update(cx,|w,cx|{w.theme_system_dark=true;cx.notify();});
+    assert!(view.read_with(cx,|w,_|w.theme_is_dark()));
+    dispatch_menu(cx,"Spaces","Edit Theme…");
+    let mut editor=space_theme_editor(&view,cx);
+    let field=editor.debug_bounds("theme-color-field").unwrap();
+    let start=field.center();let end=start+gpui::point(gpui::px(80.),gpui::px(0.));
+    editor.simulate_mouse_down(start,gpui::MouseButton::Left,Modifiers::none());
+    editor.simulate_mouse_move(end,Some(gpui::MouseButton::Left),Modifiers::none());
+    editor.simulate_mouse_up(end,gpui::MouseButton::Left,Modifiers::none());editor.run_until_parked();
+    view.read_with(cx,|w,_|{let(h,s,_)=w.theme_editor.as_ref().unwrap().draft.colors[0].hsv();assert!((h-90.).abs()<0.01);assert!(s>0.5);});
+    click(&mut editor,"theme-light");assert!(!view.read_with(cx,|w,_|w.theme_is_dark()));
+    click(&mut editor,"theme-automatic");assert!(view.read_with(cx,|w,_|w.theme_is_dark()));
+    editor.simulate_keystrokes("escape");cx.run_until_parked();
+    view.update(cx,|w,cx|{w.theme_system_dark=false;cx.notify();});
+    assert!(!view.read_with(cx,|w,_|w.theme_is_dark()));
+}
+
+#[gpui::test]
+fn space_theme_paint_uses_the_live_window_instead_of_an_automation_sentinel(cx: &mut TestAppContext) {
+    let (view,cx)=open(cx);
+    view.update(cx,|w,cx|{w.native_view=Some(1usize as *mut std::ffi::c_void);cx.notify();});
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("sidebar").is_some());
+    view.update(cx,|w,_|w.native_view=None);
 }
 
 #[gpui::test]

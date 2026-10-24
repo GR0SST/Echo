@@ -26,6 +26,8 @@ mod icon_catalog;
 mod icon_picker;
 mod folders;
 mod space_menu;
+mod space_theme;
+mod theme_editor;
 mod space_drag;
 mod tab_drag;
 mod folder_drag;
@@ -93,6 +95,7 @@ pub fn init(cx: &mut App) {
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
     new_menu::bind_keys(cx);
+    theme_editor::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);
     space_creation_view::bind_keys(cx);
     downloads_view::bind_keys(cx);

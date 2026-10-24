@@ -125,7 +125,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Space… | — | partial | Sidebar creation page from the dock + menu, Spaces menu, Command Bar, Library Spaces and right-edge pager. Drafts stay window-local; atomic creation inserts after the origin. Icon, theme and profile pickers, and exact swipe/visual parity remain incomplete |
-| Edit Theme… | — | missing | See "Space themes" |
+| Edit Theme… | — | partial | Opens the Space Style Editor; see "Space themes" |
 | Rename Space | — | done | Command Bar action opens a focused name editor; Escape cancels |
 | Change Profile | — | partial | Captured-Space routing and storage replacement work; warning conditions and exact sheet presentation still need matching |
 | Next Space / Previous Space | ⌥⌘→ / ⌥⌘← | done | — |
@@ -240,14 +240,14 @@ Folder duplication follows the right-click action documented in the
 
 | Feature | Status | What's missing |
 |---|---|---|
-| The Space color tints the sidebar and window; during a swipe the color blends smoothly | partial | We only have a hue and the blend during swipes. No gradients or grain; the root field is shared with clipped passive region previews without pane-relative gradient rescaling |
-| Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | missing | — |
-| Palette with several colors ("Add color" / "Remove color"), gradient of 2–3 colors (?) | missing | — |
-| Preset color sets in pages: Brand, Drab, Greyscale, Pastel | missing | — |
-| Noise texture ("Cycle noise texture") | missing | — |
-| "Intensity" slider | missing | — |
-| Mode: Automatic / Light / Dark Appearance | missing | — |
-| Undo "Update Theme" | missing | — |
+| The Space color tints the sidebar and window; during a swipe the color blends smoothly | partial | Shared 1–3-color background, procedural texture and intensity blend continuously at the pager position. Native bounded backdrop with an opaque fallback and aligned passive region previews; exact Arc shader, tint and material calibration remain |
+| Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | partial | GPUI child-window popover from Space context and Spaces menus, dotted color field, circular color handles, appearance controls, palettes and texture/intensity controls. Exact picker mechanics, anchor behavior and visual parity remain |
+| Palette with several colors ("Add color" / "Remove color"), gradient of 2–3 colors (?) | partial | Persistent 1–3 RGB colors, Add/Remove, selected handle and gradient preview; exact Arc spatial blending remains |
+| Preset color sets in pages: Brand, Drab, Greyscale, Pastel | partial | Four nine-color pages measured from installed Arc catalogs; exact page transitions and color management need verification |
+| Noise texture ("Cycle noise texture") | partial | Original deterministic Grain, Sand, Tweed and Denim textures, cycle action and independent strength. Reference texture/shader matching remains |
+| "Intensity" slider | partial | Persistent independent intensity, live preview and wavy slider; precise Arc response curve remains |
+| Mode: Automatic / Light / Dark Appearance | partial | Per-Space persisted appearance, Automatic follows window appearance changes, chrome contrast and native backdrop update together. Exact semantic palette and page appearance parity remain |
+| Undo "Update Theme" | partial | Dismissal commits one appearance-only undo/redo entry, Edit menu labels update and unrelated tabs/Space names survive. Arc grouping timing during a long-lived editor needs further comparison |
 | Websites can read the theme ("Allow websites to get your theme data", CSS variables `--arc-palette-*`) | missing | Option in Advanced |
 
 ## 5. Command Bar (⌘T / ⌘L)
@@ -292,7 +292,7 @@ in code, so some were reconstructed from translator comments (?).
 | **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | missing | — |
 | **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | partial | Reference layout: Share Split View…, Separate All Tabs, Add Tab…, Convert orientation, a "Tab Options" header with one submenu per pane (Separate from Split View, Share, Mute, Copy Link (as Markdown), Archive Item), Change Icon…, Rename…, Duplicate, Move to, Archive Item and Archive Tabs Below. Share has no action yet |
 | **Split View pane** (control menu): Move, Add Split, Separate Tab from Split, Convert orientation, Share Split View… | partial | Fresh Arc inspection: axis-specific Move backward/forward (unavailable edge stays visible), Add forward/backward Split, Separate Tab from Split, Convert orientation, Share Split View…. GPUI controls target the clicked pane and disable adding at four; fixed vector menu diagrams. Share and exact material/placement fidelity remain |
-| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | partial | Opens from headers, dock icons and empty sidebar space, in the reference order. Change Space Icon…, Rename Space… and New Folder work; Edit Theme Color…, Set Profile, Live Folders, Share Space…, Export into Folder, Manage Spaces… and Delete Space are shown without actions yet. Show/Hide Space Header moved to the Command Bar and Spaces menu |
+| **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | partial | Opens from headers, dock icons and empty sidebar space, in the reference order. Change Space Icon…, Rename Space…, Edit Theme Color… and New Folder work; Set Profile, Live Folders, Share Space…, Export into Folder, Manage Spaces… and Delete Space are shown without actions yet. Show/Hide Space Header moved to the Command Bar and Spaces menu |
 | **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | missing | — |
 | **Download**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | missing | — |
 | **Tab group header**: Remove header | missing | — |

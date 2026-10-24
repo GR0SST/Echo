@@ -659,6 +659,7 @@ impl BrowserWindow {
                     self.open_user_profile_switch(space, cx);
                 }
             }
+            LibraryIntent::EditTheme(space) => self.open_theme_editor(space, window, cx),
             LibraryIntent::Overflow(space) => {
                 if self.browser.spaces.iter().any(|entry| entry.id == space) {
                     self.open_space_menu(space, gpui::point(px(0.), px(48.)), window, cx);
@@ -679,13 +680,14 @@ impl BrowserWindow {
                 this.handle_library_intent(intent, window, cx)
             });
         });
+        let theme = self.theme_colors();
         let colors = LibraryColors {
             background: gpui::transparent_black(),
             card_surface: |hue| crate::window::tint(hue / 360., 0.82),
-            text: hsla(0., 0., 0.1, 1.),
-            muted: hsla(0., 0., 0.4, 1.),
-            hover: hsla(0., 0., 0., 0.06),
-            selected: hsla(0., 0., 0., 0.08),
+            text: theme.foreground,
+            muted: theme.muted,
+            hover: theme.hover,
+            selected: theme.selected,
         };
         let section = self.sidebar_navigation.library_section;
         let preview_left = self.library_preview_left();
@@ -736,6 +738,7 @@ impl BrowserWindow {
             section,
             colors,
             LibraryActions {
+                theme: true,
                 profile: true,
                 media: true,
                 downloads: true,

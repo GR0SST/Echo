@@ -55,14 +55,15 @@ impl BrowserWindow {
     fn downloads_colors(&self) -> DownloadsColors {
         // Same semantic surfaces as the existing Library Media host. Material
         // adoption stays separate from navigation and canonical ownership.
+        let theme = self.theme_colors();
         DownloadsColors {
             column: gpui::transparent_black(),
             preview: gpui::transparent_black(),
-            text: gpui::hsla(0., 0., 0.1, 1.),
-            muted: gpui::hsla(0., 0., 0.4, 1.),
-            control: gpui::hsla(0., 0., 0., 0.08),
-            selected: gpui::hsla(0., 0., 0., 0.08),
-            hover: gpui::hsla(0., 0., 0., 0.06),
+            text: theme.foreground,
+            muted: theme.muted,
+            control: theme.control,
+            selected: theme.selected,
+            hover: theme.hover,
         }
     }
     pub(crate) fn sync_library_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {

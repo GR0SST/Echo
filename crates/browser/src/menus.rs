@@ -17,6 +17,7 @@ actions!(
         NewWindow,
         NewProfile,
         ManageSpaces,
+        EditTheme,
         ChangeProfile,
         BlankWindow,
         NewIncognitoWindow,
@@ -64,7 +65,19 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_menus(build());
 }
 
-pub(crate) fn build() -> Vec<Menu> {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct ThemeUndoLabels(bool, bool);
+impl gpui::Global for ThemeUndoLabels {}
+
+pub(crate) fn sync_theme_undo(undo: bool, redo: bool, cx: &mut App) {
+    let labels = ThemeUndoLabels(undo, redo);
+    if cx.has_global::<ThemeUndoLabels>() && *cx.global::<ThemeUndoLabels>() == labels { return; }
+    cx.set_global(labels);
+    cx.set_menus(build_with_theme_undo(undo, redo));
+}
+
+pub(crate) fn build() -> Vec<Menu> { build_with_theme_undo(false, false) }
+fn build_with_theme_undo(undo: bool, redo: bool) -> Vec<Menu> {
     let mut app = vec![MenuItem::action("Settings…", Settings), MenuItem::separator()];
     if native::supports_app_visibility() {
         app.extend([
@@ -100,8 +113,8 @@ pub(crate) fn build() -> Vec<Menu> {
         Menu {
             name: "Edit".into(),
             items: vec![
-                MenuItem::os_action("Undo", text_input::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", text_input::Redo, OsAction::Redo),
+                MenuItem::os_action(if undo { "Undo Update Theme" } else { "Undo" }, text_input::Undo, OsAction::Undo),
+                MenuItem::os_action(if redo { "Redo Update Theme" } else { "Redo" }, text_input::Redo, OsAction::Redo),
                 MenuItem::separator(),
                 MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),
@@ -155,6 +168,7 @@ pub(crate) fn build() -> Vec<Menu> {
             name: "Spaces".into(),
             items: vec![
                 MenuItem::action("New Space…", window::NewSpace),
+                MenuItem::action("Edit Theme…", EditTheme),
                 MenuItem::action("New Folder…", window::NewFolder),
                 MenuItem::action("Rename Space…", RenameSpace),
                 MenuItem::action("Change Profile", ChangeProfile),

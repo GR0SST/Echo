@@ -28,7 +28,7 @@ impl BrowserWindow {
         vec![
             item("Change Space Icon…", Command::SpaceIcon).into(),
             item("Rename Space…", Command::SpaceRename).into(),
-            pending("Edit Theme Color…").into(),
+            item("Edit Theme Color…", Command::SpaceTheme).into(),
             item("Set Profile", Command::SpaceProfile).into(),
             Entry::Separator,
             item("New Folder", Command::SpaceNewFolder).into(),
@@ -55,6 +55,7 @@ impl BrowserWindow {
             return;
         };
         match command {
+            Command::SpaceTheme => self.open_theme_editor(id, window, cx),
             Command::SpaceProfile => self.open_user_profile_switch(id, cx),
             Command::SpaceRename => {
                 let name = space.name.clone();
