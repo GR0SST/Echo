@@ -924,7 +924,7 @@ diff --git a/components/download/public/common/download_request_receipt.cc b/com
 new file mode 100644
 --- /dev/null
 +++ b/components/download/public/common/download_request_receipt.cc
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,78 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -960,6 +960,7 @@ new file mode 100644
 +
 +DownloadRequestReceipt::~DownloadRequestReceipt() {
 +  DCHECK_CALLED_ON_VALID_SEQUENCE(origin_sequence_checker_);
++  weak_factory_.InvalidateWeakPtrs();
 +  // Discarded weak callbacks, params, downloader or CreateInfo all converge
 +  // here. Abandonment is an outcome, never permission to retire on a timeout.
 +  if (no_item_) {
@@ -1006,7 +1007,7 @@ diff --git a/components/download/public/common/download_request_receipt.h b/comp
 new file mode 100644
 --- /dev/null
 +++ b/components/download/public/common/download_request_receipt.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,99 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1021,6 +1022,7 @@ new file mode 100644
 +
 +#include "base/functional/callback.h"
 +#include "base/memory/ref_counted_delete_on_sequence.h"
++#include "base/memory/weak_ptr.h"
 +#include "base/sequence_checker.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "components/download/public/common/download_export.h"
@@ -1077,6 +1079,11 @@ new file mode 100644
 +  scoped_refptr<base::SequencedTaskRunner> origin_task_runner() {
 +    return owning_task_runner();
 +  }
++  // UI-only cancellation handle. It never extends carrier/userdata lifetime.
++  base::WeakPtr<DownloadRequestReceipt> GetWeakPtr() {
++    DCHECK_CALLED_ON_VALID_SEQUENCE(origin_sequence_checker_);
++    return weak_factory_.GetWeakPtr();
++  }
 +  void Associate(DownloadItem* item);
 +  void ResolveNoItem(NoItemReason reason);
 +  // UI-only: deny settles once; an already resolved receipt simply rejects.
@@ -1095,6 +1102,7 @@ new file mode 100644
 +  // Held even after resolution; runs only during final UI destruction.
 +  base::OnceClosure carrier_released_;
 +  SEQUENCE_CHECKER(origin_sequence_checker_);
++  base::WeakPtrFactory<DownloadRequestReceipt> weak_factory_{this};
 +};
 +
 +}  // namespace download
@@ -1375,23 +1383,40 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      info->save_info->needs_obfuscation =
          delegate_->ShouldObfuscateDownload(download);
      info->save_info->total_bytes = info->total_bytes;
-@@ -1096,11 +1161,27 @@
+@@ -1096,11 +1161,44 @@
      download::DownloadJob::CancelRequestCallback cancel_request_callback,
      DownloadItemImplCreated item_created) {
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
 +  auto* source = RenderFrameHost::FromID(render_process_id, render_frame_id);
 +  auto* contents = source && source->GetBrowserContext() == browser_context_
 +      ? WebContents::FromRenderFrameHost(source) : nullptr;
-+  auto admission = DownloadRequestReceiptBridge::Reserve(
-+      contents, DownloadRequestReceiptBridge::Kind::kSavePackage, page_url, "GET");
++  auto admission = DownloadRequestUtils::PrepareSavePackageReceipt(contents, page_url);
++  CreateSavePackageDownloadItemWithAdmission(
++      main_file_path, main_file_display_name, page_url, mime_type,
++      render_process_id, render_frame_id, std::move(cancel_request_callback),
++      std::move(item_created), std::move(admission));
++}
++
++void DownloadManagerImpl::CreateSavePackageDownloadItemWithAdmission(
++    const base::FilePath& main_file_path,
++    const base::FilePath& main_file_display_name,
++    const GURL& page_url, const std::string& mime_type,
++    int render_process_id, int render_frame_id,
++    download::DownloadJob::CancelRequestCallback cancel_request_callback,
++    DownloadItemImplCreated item_created,
++    NavigationReceiptAdmission admission) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
 +  const bool required = admission.handled ||
 +      DownloadRequestReceiptBridge::ContextRequiresReceipts(browser_context_);
-+  if ((required && !admission.receipt) || !admission.Authorize(page_url, "GET")) {
++  if ((required && !admission.receipt) ||
++      !DownloadRequestUtils::RefreshNavigationAdmission(admission, page_url, "GET")) {
 +    RejectSavePackage(std::move(cancel_request_callback), std::move(item_created));
 +    return;
 +  }
 +  std::optional<GlobalRenderFrameHostToken> source_frame;
-+  if (source && contents) source_frame = source->GetGlobalFrameToken();
++  auto* source = RenderFrameHost::FromID(render_process_id, render_frame_id);
++  if (source && source->GetBrowserContext() == browser_context_)
++    source_frame = source->GetGlobalFrameToken();
 +  // Capture the original admission before ID allocation can defer, and never
 +  // reacquire another source/registration when that callback eventually runs.
    GetNextId(base::BindOnce(
@@ -1404,7 +1429,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  }
  
  void DownloadManagerImpl::CreateSavePackageDownloadItemWithId(
-@@ -1112,8 +1193,25 @@
+@@ -1112,8 +1210,25 @@
      int render_frame_id,
      download::DownloadJob::CancelRequestCallback cancel_request_callback,
      DownloadItemImplCreated item_created,
@@ -1430,7 +1455,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
    DCHECK_NE(download::DownloadItem::kInvalidId, id);
    DCHECK(!downloads_.contains(id));
  
-@@ -1125,6 +1223,10 @@
+@@ -1125,6 +1240,10 @@
    DownloadItemUtils::AttachInfo(
        download_item, GetBrowserContext(),
        WebContentsImpl::FromRenderFrameHostID(global_id), global_id);
@@ -1441,7 +1466,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
    if (delegate_) {
      delegate_->AttachExtraInfo(download_item);
    }
-@@ -1196,9 +1298,18 @@
+@@ -1196,9 +1315,18 @@
      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
      net::CertStatus cert_status,
      FrameTreeNodeId frame_tree_node_id,
@@ -1461,7 +1486,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      DropDownload();
      return;
    }
-@@ -1220,7 +1331,7 @@
+@@ -1220,7 +1348,7 @@
            weak_factory_.GetWeakPtr(), frame_tree_node_id,
            std::move(resource_request), std::move(url_chain), cert_status,
            std::move(response_head), std::move(response_body),
@@ -1470,7 +1495,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  
    delegate_->CheckDownloadAllowed(
        std::move(web_contents_getter), url, method, std::move(request_initiator),
-@@ -1282,8 +1393,38 @@
+@@ -1282,8 +1410,38 @@
      DCHECK_EQ("POST", params->method());
    }
  
@@ -1509,7 +1534,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  
    download::RecordDownloadCountWithSource(
        download::DownloadCountTypes::DOWNLOAD_TRIGGERED_COUNT,
-@@ -1589,8 +1730,19 @@
+@@ -1589,8 +1747,19 @@
      network::mojom::URLResponseHeadPtr response_head,
      mojo::ScopedDataPipeConsumerHandle response_body,
      network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
@@ -1529,7 +1554,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      DropDownload();
      return;
    }
-@@ -1643,7 +1795,7 @@
+@@ -1643,7 +1812,7 @@
        std::move(response_head), std::move(response_body),
        std::move(url_loader_client_endpoints),
        CreatePendingSharedURLLoaderFactory(storage_partition, render_frame_host),
@@ -1538,7 +1563,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
  }
  
  void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
-@@ -1652,7 +1804,20 @@
+@@ -1652,7 +1821,20 @@
      bool is_new_download,
      const StoragePartitionConfig& storage_partition_config,
      bool is_download_allowed) {
@@ -1559,7 +1584,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
      DropDownload();
      return;
    }
-@@ -1721,6 +1886,10 @@
+@@ -1721,6 +1903,10 @@
                std::move(it->second));
      } else {
        DLOG(ERROR) << "No URLLoaderFactory found to download " << params->url();
@@ -1570,7 +1595,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
        return;
      }
    } else {
-@@ -1837,6 +2006,21 @@
+@@ -1837,6 +2023,21 @@
      const GURL& tab_url,
      const GURL& tab_referrer_url,
      scoped_refptr<network::SharedURLLoaderFactory> sw_factory) {
@@ -1592,7 +1617,7 @@ diff --git a/content/browser/download/download_manager_impl.cc b/content/browser
    std::unique_ptr<network::PendingSharedURLLoaderFactory>
        pending_url_loader_factory;
  
-@@ -1912,6 +2096,10 @@
+@@ -1912,6 +2113,10 @@
      if (rfh->IsInactiveAndDisallowActivation(
              DisallowActivationReasonId::kBeginDownload) ||
          rfh->IsNestedWithinFencedFrame()) {
@@ -1614,7 +1639,15 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
  #include "content/public/browser/ssl_status.h"
  #include "mojo/public/cpp/system/data_pipe.h"
  #include "services/metrics/public/cpp/ukm_source_id.h"
-@@ -83,7 +84,8 @@
+@@ -62,6 +63,7 @@
+ };
+ 
+ namespace content {
++struct NavigationReceiptAdmission;
+ class CONTENT_EXPORT DownloadManagerImpl
+     : public DownloadManager,
+       public download::InProgressDownloadManager::Delegate,
+@@ -83,7 +85,8 @@
  
    // Creates a download item for the SavePackage system.
    // Must be called on the UI thread.  Note that the DownloadManager
@@ -1624,7 +1657,24 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
    void CreateSavePackageDownloadItem(
        const base::FilePath& main_file_path,
        const base::FilePath& main_file_display_name,
-@@ -185,7 +187,8 @@
+@@ -93,6 +96,16 @@
+       int render_frame_id,
+       download::DownloadJob::CancelRequestCallback cancel_request_callback,
+       DownloadItemImplCreated item_created);
++  // Consumes the original pre-authorized save-page admission. Never consults a
++  // replacement factory after directory/picker work; used by SavePackage.
++  void CreateSavePackageDownloadItemWithAdmission(
++      const base::FilePath& main_file_path,
++      const base::FilePath& main_file_display_name,
++      const GURL& page_url, const std::string& mime_type,
++      int render_process_id, int render_frame_id,
++      download::DownloadJob::CancelRequestCallback cancel_request_callback,
++      DownloadItemImplCreated item_created,
++      NavigationReceiptAdmission admission);
+ 
+   // DownloadManager functions.
+   void SetDelegate(DownloadManagerDelegate* delegate) override;
+@@ -185,7 +198,8 @@
        network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
        net::CertStatus cert_status,
        FrameTreeNodeId frame_tree_node_id,
@@ -1634,7 +1684,7 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
  
    // DownloadItemImplDelegate overrides.
    download::QuarantineConnectionCallback GetQuarantineConnectionCallback()
-@@ -204,6 +207,7 @@
+@@ -204,6 +218,7 @@
  
    // For testing.
    friend class DownloadManagerTest;
@@ -1642,7 +1692,7 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
    friend class DownloadTest;
  
    void CreateSavePackageDownloadItemWithId(
-@@ -215,6 +219,9 @@
+@@ -215,6 +230,9 @@
        int render_frame_id,
        download::DownloadJob::CancelRequestCallback cancel_request_callback,
        DownloadItemImplCreated on_started,
@@ -1652,7 +1702,7 @@ diff --git a/content/browser/download/download_manager_impl.h b/content/browser/
        uint32_t id);
  
    // InProgressDownloadManager::Delegate implementations.
-@@ -297,6 +304,7 @@
+@@ -297,6 +315,7 @@
        network::mojom::URLResponseHeadPtr response_head,
        mojo::ScopedDataPipeConsumerHandle response_body,
        network::mojom::URLLoaderClientEndpointsPtr url_loader_client_endpoints,
@@ -1664,7 +1714,7 @@ diff --git a/content/browser/download/download_navigation_receipt.cc b/content/b
 new file mode 100644
 --- /dev/null
 +++ b/content/browser/download/download_navigation_receipt.cc
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,425 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1975,6 +2025,22 @@ new file mode 100644
 +  prepared.initial_url = url.spec();
 +  prepared.initial_method = method;
 +  prepared.allowed = admission.Authorize(url, method);
++  prepared.receipt = std::move(admission.receipt);
++  return prepared;
++}
++NavigationReceiptAdmission DownloadRequestUtils::PrepareSavePackageReceipt(
++    WebContents* contents, const GURL& url) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  auto admission = DownloadRequestReceiptBridge::Reserve(
++      contents, DownloadRequestReceiptBridge::Kind::kSavePackage, url, "GET");
++  NavigationReceiptAdmission prepared;
++  prepared.handled = admission.handled ||
++      (contents && DownloadRequestReceiptBridge::ContextRequiresReceipts(
++                       contents->GetBrowserContext()));
++  prepared.initial_url = url.spec();
++  prepared.initial_method = "GET";
++  prepared.allowed = admission.Authorize(url, "GET") &&
++      (!prepared.handled || admission.receipt);
 +  prepared.receipt = std::move(admission.receipt);
 +  return prepared;
 +}
@@ -2643,20 +2709,111 @@ diff --git a/content/browser/download/download_request_utils.cc b/content/browse
 diff --git a/content/browser/download/save_package.cc b/content/browser/download/save_package.cc
 --- a/content/browser/download/save_package.cc
 +++ b/content/browser/download/save_package.cc
-@@ -339,6 +339,8 @@
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "content/browser/download/save_package.h"
++#include "content/public/browser/download_request_receipt_bridge.h"
+ 
+ #include <algorithm>
+ #include <memory>
+@@ -175,8 +176,10 @@
+ const base::FilePath::CharType SavePackage::kDefaultHtmlExtension[] =
+     FILE_PATH_LITERAL("html");
+ 
+-SavePackage::SavePackage(PageImpl& page)
++SavePackage::SavePackage(PageImpl& page,
++    std::optional<NavigationReceiptAdmission> admission)
+     : page_(page.GetWeakPtrImpl()),
++      request_admission_(std::move(admission)),
+       page_url_(GetUrlToBeSaved(&page.GetMainDocument())),
+       page_isolation_info_(
+           page.GetMainDocument().ComputeIsolationInfoForNavigation(
+@@ -199,8 +202,10 @@
+ SavePackage::SavePackage(PageImpl& page,
+                          SavePageType save_type,
+                          const base::FilePath& file_full_path,
+-                         const base::FilePath& directory_full_path)
++                         const base::FilePath& directory_full_path,
++                         std::optional<NavigationReceiptAdmission> admission)
+     : page_(page.GetWeakPtrImpl()),
++      request_admission_(std::move(admission)),
+       page_url_(GetUrlToBeSaved(&page.GetMainDocument())),
+       saved_main_file_path_(file_full_path),
+       saved_main_directory_path_(directory_full_path),
+@@ -237,6 +242,8 @@
+ 
+ SavePackage::~SavePackage() {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  StopRequestAdmission(page_ ? download::DownloadRequestReceipt::NoItemReason::kAbandoned
++                             : download::DownloadRequestReceipt::NoItemReason::kShutdown);
+   // Stop receiving saving job's updates
+   if (!finished_ && !canceled()) {
+     // Unexpected quit.
+@@ -268,6 +275,7 @@
+ }
+ 
+ void SavePackage::ClearPage() {
++  StopRequestAdmission(download::DownloadRequestReceipt::NoItemReason::kShutdown);
+   page_ = nullptr;
+ }
+ 
+@@ -285,6 +293,9 @@
+ 
+ void SavePackage::Cancel(bool user_action, bool cancel_download_item) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  StopRequestAdmission(!page_ ? download::DownloadRequestReceipt::NoItemReason::kShutdown
++      : user_action ? download::DownloadRequestReceipt::NoItemReason::kCancelled
++                    : download::DownloadRequestReceipt::NoItemReason::kAbandoned);
+   if (!canceled()) {
+     if (user_action)
+       user_canceled_ = true;
+@@ -306,6 +317,14 @@
+   download_manager_ = static_cast<DownloadManagerImpl*>(
+       page_->GetMainDocument().GetBrowserContext()->GetDownloadManager());
+   DCHECK(download_manager_);
++  if (!request_admission_) {
++    request_admission_.emplace(DownloadRequestUtils::PrepareSavePackageReceipt(
++        GetWebContents(page_.get()), page_url_));
++  } else {
++    DownloadRequestUtils::RefreshNavigationAdmission(*request_admission_, page_url_, "GET");
++  }
++  if (request_admission_->receipt)
++    request_receipt_ = request_admission_->receipt->GetWeakPtr();
+ 
+   // Always constructed with the primary page that GetPageUkmSourceId()
+   // supports.
+@@ -326,8 +345,10 @@
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   DCHECK(page_url_.is_valid());
+   // Set proper running state.
+-  if (wait_state_ != INITIALIZE || !page_)
++  if (wait_state_ != INITIALIZE || !CanUseRequestAdmission()) {
++    Cancel(true);
+     return false;
++  }
+ 
+   wait_state_ = START_PROCESS;
+ 
+@@ -339,22 +360,34 @@
    }
  
    RenderFrameHost& frame_host = page_->GetMainDocument();
+-  download_manager_->CreateSavePackageDownloadItem(
 +  // Admission rejection can synchronously invoke cancellation and completion.
 +  scoped_refptr<SavePackage> keep_alive(this);
-   download_manager_->CreateSavePackageDownloadItem(
++  auto admission = std::move(*request_admission_);
++  request_admission_.reset();
++  download_manager_->CreateSavePackageDownloadItemWithAdmission(
        saved_main_file_path_, saved_main_file_display_name_, page_url_,
        GetMimeTypeForSaveType(save_type_),
-@@ -347,14 +349,21 @@
+       frame_host.GetProcess()->GetDeprecatedID(), frame_host.GetRoutingID(),
+       base::BindOnce(&CancelSavePackage, weak_ptr_factory_.GetWeakPtr()),
        base::BindOnce(&SavePackage::InitWithDownloadItem,
                       weak_ptr_factory_.GetWeakPtr(),
-                      std::move(download_created_callback)));
+-                     std::move(download_created_callback)));
 -  return true;
++                     std::move(download_created_callback)), std::move(admission));
 +  return !canceled();
  }
  
@@ -2665,6 +2822,7 @@ diff --git a/content/browser/download/save_package.cc b/content/browser/download
      download::DownloadItemImpl* item) {
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
 -  DCHECK(item);
++  request_receipt_.reset();
 +  if (!item) {
 +    // The captured download admission was refused or its source disappeared
 +    // while waiting for an item ID. Do not begin serialization or file work.
@@ -2676,6 +2834,183 @@ diff --git a/content/browser/download/save_package.cc b/content/browser/download
  
    if (!page_)
      return;
+@@ -1458,29 +1491,50 @@
+   }
+ }
+ 
++bool SavePackage::CanUseRequestAdmission() const {
++  if (!page_ || admission_stop_reason_ || canceled() || !request_admission_ ||
++      !request_admission_->allowed) return false;
++  if (request_admission_->handled)
++    return request_admission_->receipt && request_admission_->receipt->is_pending();
++  return !DownloadRequestReceiptBridge::ContextRequiresReceipts(
++      page_->GetMainDocument().GetBrowserContext());
++}
++
++void SavePackage::StopRequestAdmission(
++    download::DownloadRequestReceipt::NoItemReason reason) {
++  if (!admission_stop_reason_) admission_stop_reason_ = reason;
++  if (request_receipt_ && request_receipt_->is_pending())
++    request_receipt_->ResolveNoItem(*admission_stop_reason_);
++  request_receipt_.reset();
++  request_admission_.reset();
++}
++
+ void SavePackage::GetSaveInfo() {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-  if (!page_)
+-    return;
++  scoped_refptr<SavePackage> keep_alive(this);
++  if (save_info_pending_) return;
++  if (!CanUseRequestAdmission()) { Cancel(true); return; }
++  auto* delegate = download_manager_->GetDelegate();
++  if (!delegate) { Cancel(false); return; }
++  save_info_pending_ = true;
+   // Can't use |page_| in the download sequence, so get the data that we
+   // need before calling to it.
+   base::FilePath website_save_dir;
+   base::FilePath download_save_dir;
+-  auto* delegate = download_manager_->GetDelegate();
+-  if (delegate) {
+-    delegate->GetSaveDir(page_->GetMainDocument().GetBrowserContext(),
+-                         &website_save_dir, &download_save_dir);
+-  }
++  delegate->GetSaveDir(page_->GetMainDocument().GetBrowserContext(),
++                       &website_save_dir, &download_save_dir);
++  if (!CanUseRequestAdmission()) { Cancel(true); return; }
+   std::string mime_type =
+       static_cast<PageImpl*>(page_.get())->GetContentsMimeType();
+   bool can_save_as_complete = CanSaveAsComplete(mime_type);
+-  download::GetDownloadTaskRunner()->PostTaskAndReplyWithResult(
++  const bool posted = download::GetDownloadTaskRunner()->PostTaskAndReplyWithResult(
+       FROM_HERE,
+       base::BindOnce(&SavePackage::CreateDirectoryOnFileThread, title_,
+                      page_url_, can_save_as_complete, mime_type,
+                      website_save_dir, download_save_dir),
+       base::BindOnce(&SavePackage::ContinueGetSaveInfo, this,
+                      can_save_as_complete));
++  if (!posted) { save_info_pending_ = false; Cancel(false); }
+ }
+ 
+ // static
+@@ -1535,21 +1589,27 @@
+   // The WebContents which owns this SavePackage may have disappeared during
+   // the UI->download sequence->UI thread hop of
+   // GetSaveInfo->CreateDirectoryOnFileThread->ContinueGetSaveInfo.
+-  if (!page_ || !download_manager_->GetDelegate())
+-    return;
++  if (!CanUseRequestAdmission()) { Cancel(true); return; }
++  auto* delegate = download_manager_->GetDelegate();
++  if (!delegate) { Cancel(false); return; }
+ 
+   base::FilePath::StringType default_extension;
+   if (can_save_as_complete)
+     default_extension = kDefaultHtmlExtension;
+ 
+-  download_manager_->GetDelegate()->ChooseSavePath(
++  auto admission = std::move(*request_admission_);
++  request_admission_.reset();
++  // The once-callback owns the carrier while the picker is pending. Dropping
++  // it abandons naturally; the package keeps only a UI cancellation weak handle.
++  delegate->ChooseSavePath(
+       GetWebContents(page_.get()), suggested_path, default_extension,
+       can_save_as_complete,
+       base::BindOnce(&SavePackage::OnPathPicked,
+-                     weak_ptr_factory_.GetWeakPtr()));
++                     weak_ptr_factory_.GetWeakPtr(), std::move(admission)));
+ }
+ 
+ void SavePackage::OnPathPicked(
++    NavigationReceiptAdmission admission,
+     SavePackagePathPickedParams params,
+     SavePackageDownloadCreatedCallback download_created_callback) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+@@ -1557,8 +1617,14 @@
+          (params.save_type == SAVE_PAGE_TYPE_AS_MHTML) ||
+          (params.save_type == SAVE_PAGE_TYPE_AS_COMPLETE_HTML))
+       << params.save_type;
+-  if (!page_)
+-    return;
++  save_info_pending_ = false;
++  if (admission_stop_reason_) {
++    if (admission.receipt && admission.receipt->is_pending())
++      admission.receipt->ResolveNoItem(*admission_stop_reason_);
++    return;
++  }
++  request_admission_.emplace(std::move(admission));
++  if (!CanUseRequestAdmission()) { Cancel(true); return; }
+   // Ensure the filename is safe.
+   saved_main_file_path_ = params.file_path;
+ 
+diff --git a/content/browser/download/save_package.h b/content/browser/download/save_package.h
+--- a/content/browser/download/save_package.h
++++ b/content/browser/download/save_package.h
+@@ -10,6 +10,7 @@
+ 
+ #include <map>
+ #include <memory>
++#include <optional>
+ #include <set>
+ #include <string>
+ #include <unordered_map>
+@@ -26,6 +27,7 @@
+ #include "content/browser/download/save_types.h"
+ #include "content/common/content_export.h"
+ #include "content/public/browser/download_manager_delegate.h"
++#include "content/public/browser/download_request_utils.h"
+ #include "content/public/browser/frame_tree_node_id.h"
+ #include "content/public/browser/save_page_type.h"
+ #include "content/public/common/referrer.h"
+@@ -89,7 +91,8 @@
+   // Constructor for user initiated page saving. This constructor results in a
+   // SavePackage that will generate and sanitize a suggested name for the user
+   // in the "Save As" dialog box.
+-  explicit SavePackage(PageImpl& page);
++  explicit SavePackage(PageImpl& page,
++      std::optional<NavigationReceiptAdmission> admission = std::nullopt);
+ 
+   SavePackage(const SavePackage&) = delete;
+   SavePackage& operator=(const SavePackage&) = delete;
+@@ -177,7 +180,8 @@
+   SavePackage(PageImpl& page,
+               SavePageType save_type,
+               const base::FilePath& file_full_path,
+-              const base::FilePath& directory_full_path);
++              const base::FilePath& directory_full_path,
++              std::optional<NavigationReceiptAdmission> admission = std::nullopt);
+ 
+   ~SavePackage();
+ 
+@@ -190,6 +194,8 @@
+ 
+   // Notes from Init() above applies here as well.
+   void InternalInit();
++  bool CanUseRequestAdmission() const;
++  void StopRequestAdmission(download::DownloadRequestReceipt::NoItemReason reason);
+ 
+   void Stop(bool cancel_download_item);
+   void CheckFinish();
+@@ -330,7 +336,8 @@
+       const base::FilePath& download_save_dir);
+   void ContinueGetSaveInfo(bool can_save_as_complete,
+                            const base::FilePath& suggested_path);
+-  void OnPathPicked(SavePackagePathPickedParams params,
++  void OnPathPicked(NavigationReceiptAdmission admission,
++                    SavePackagePathPickedParams params,
+                     SavePackageDownloadCreatedCallback cb);
+ 
+   // The number of in process SaveItems.
+@@ -355,6 +362,10 @@
+   // The current page, may be null if the primary page has been navigated away
+   // or destroyed.
+   base::WeakPtr<PageImpl> page_;
++  std::optional<NavigationReceiptAdmission> request_admission_;
++  base::WeakPtr<download::DownloadRequestReceipt> request_receipt_;
++  std::optional<download::DownloadRequestReceipt::NoItemReason> admission_stop_reason_;
++  bool save_info_pending_ = false;
+ 
+   // A queue for items we are about to start saving.
+   base::circular_deque<std::unique_ptr<SaveItem>> waiting_item_queue_;
 diff --git a/content/browser/loader/navigation_url_loader_impl_unittest.cc b/content/browser/loader/navigation_url_loader_impl_unittest.cc
 --- a/content/browser/loader/navigation_url_loader_impl_unittest.cc
 +++ b/content/browser/loader/navigation_url_loader_impl_unittest.cc
@@ -4205,6 +4540,69 @@ diff --git a/content/browser/security_exploit_browsertest.cc b/content/browser/s
    mojo::PendingAssociatedRemote<mojom::NavigationClient> navigation_client;
    auto navigation_client_receiver =
        navigation_client.InitWithNewEndpointAndPassReceiver();
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -159,6 +159,7 @@
+ #include "content/public/browser/frame_type.h"
+ #include "content/public/browser/global_dom_node_id.h"
+ #include "content/public/browser/global_routing_id.h"
++#include "content/public/browser/download_request_utils.h"
+ #include "content/public/browser/invalidate_type.h"
+ #include "content/public/browser/javascript_dialog_manager.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
+@@ -7208,12 +7209,23 @@
+     return;
+   }
+ 
++  auto* entry = GetController().GetLastCommittedEntry();
++  auto admission = DownloadRequestUtils::PrepareSavePackageReceipt(
++      this, entry ? entry->GetURL() : GURL());
++  if (!admission.allowed) return;
++  auto source_page = GetPrimaryPage().GetWeakPtrImpl();
++  auto weak_this = GetWeakPtr();
+   Stop();
++  if (!weak_this || !source_page || source_page.get() != &GetPrimaryPage()) {
++    if (admission.receipt && admission.receipt->is_pending())
++      admission.receipt->ResolveNoItem(download::DownloadRequestReceipt::NoItemReason::kShutdown);
++    return;
++  }
+ 
+   // Create the save package and possibly prompt the user for the name to save
+   // the page as. The user prompt is an asynchronous operation that runs on
+   // another thread.
+-  save_package_ = new SavePackage(GetPrimaryPage());
++  save_package_ = new SavePackage(GetPrimaryPage(), std::move(admission));
+   save_package_->GetSaveInfo();
+ }
+ 
+@@ -7225,11 +7237,22 @@
+                                SavePageType save_type) {
+   OPTIONAL_TRACE_EVENT2("content", "WebContentsImpl::SavePage", "main_file",
+                         main_file, "dir_path", dir_path);
+-  // Stop the page from navigating.
++  auto* entry = GetController().GetLastCommittedEntry();
++  auto admission = DownloadRequestUtils::PrepareSavePackageReceipt(
++      this, entry ? entry->GetURL() : GURL());
++  if (!admission.allowed) return false;
++  auto source_page = GetPrimaryPage().GetWeakPtrImpl();
++  auto weak_this = GetWeakPtr();
++  // Refuse before stopping an unrelated already-admitted navigation.
+   Stop();
+-
+-  save_package_ =
+-      new SavePackage(GetPrimaryPage(), save_type, main_file, dir_path);
++  if (!weak_this || !source_page || source_page.get() != &GetPrimaryPage()) {
++    if (admission.receipt && admission.receipt->is_pending())
++      admission.receipt->ResolveNoItem(download::DownloadRequestReceipt::NoItemReason::kShutdown);
++    return false;
++  }
++
++  save_package_ = new SavePackage(GetPrimaryPage(), save_type, main_file, dir_path,
++                                 std::move(admission));
+   return save_package_->Init(SavePackageDownloadCreatedCallback());
+ }
+ 
 diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
 --- a/content/public/browser/BUILD.gn
 +++ b/content/public/browser/BUILD.gn
@@ -4301,7 +4699,7 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
  #include "components/download/public/common/download_url_parameters.h"
  #include "content/common/content_export.h"
  #include "net/traffic_annotation/network_traffic_annotation.h"
-@@ -14,10 +23,123 @@
+@@ -14,10 +23,127 @@
  namespace content {
  
  class WebContents;
@@ -4390,6 +4788,10 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
 +  // Reserve and authorize before caller-owned navigation state can be replaced.
 +  static NavigationReceiptAdmission PrepareNavigationReceipt(
 +      WebContents* contents, const GURL& url, const std::string& method);
++  // Save-page admission before directory/picker work. Legacy absence is frozen;
++  // a tracked context without its exact source factory rejects before work.
++  static NavigationReceiptAdmission PrepareSavePackageReceipt(
++      WebContents* contents, const GURL& url);
 +  // Move a prior admission into this exact request. Rewritten metadata is
 +  // checked with its captured authorizer; identity is never reconstructed.
 +  static void AdoptNavigationReceipt(base::SupportsUserData* navigation,
@@ -4425,7 +4827,7 @@ diff --git a/content/public/browser/download_request_utils.h b/content/public/br
    // Construct download::DownloadUrlParameters for downloading the resource at
    // |url| and associating the download with the main frame of the given
    // WebContents.
-@@ -26,6 +148,14 @@
+@@ -26,6 +152,14 @@
        WebContents* web_contents,
        const GURL& url,
        const net::NetworkTrafficAnnotationTag& traffic_annotation);

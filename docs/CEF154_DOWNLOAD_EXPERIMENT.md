@@ -33,10 +33,10 @@ shasum -a 256 -c patches/cef154/SHA256SUMS
 bun scripts/cef154-patches.ts base /path/to/cef154/chromium/src
 ```
 
-`base` checks 535 distinct selected paths, including absent files that the custom
+`base` checks 536 distinct selected paths, including absent files that the custom
 patches will create. After applying the diffs, `patched` checks their postimages.
-`qualified-inputs` also checks six recorded generated/read prerequisites, for
-541 selected paths. The modes verify seven repository pins. They do not attest
+`qualified-inputs` also checks eight recorded generated/read prerequisites, for
+544 selected paths. The modes verify seven repository pins. They do not attest
 the entire checkout, SDK, all generated outputs, a compiled binary or a loaded
 framework. Keep the source tree stable while checking it.
 
@@ -177,7 +177,7 @@ no Echo default. Use the test HTTP server: the legacy CefServer's 1 MiB queued
 write limit rejected the first fallback body. The same 35 tests passed with
 CefTestServer, without reducing the payload or relaxing assertions.
 
-The 140 selected C++ tests also cover exact-target nonce consumption, failed RPC
+The 148 selected C++ tests also cover exact-target nonce consumption, failed RPC
 cleanup, shared OpenURL copies through the real controller, and tagged
 BeginNavigation through deferred Init. A public-value assignment guard covers
 the out-of-line OpenURLParams copy assignment required by opaque receipt types.
@@ -196,9 +196,20 @@ and verifies synchronous refusal, no item/files, and SaveFileManager teardown.
 SAVE_PACKAGE is append-only kind **5**, separate from generic manager downloads.
 Its document is needed for serialization even after item association. A caller
 must retain that document until the save item is terminal, or refuse this kind
-at reserve. This manager-stage fix is not complete SavePackage ingress coverage:
-OnSavePage/GetSaveInfo directory and picker work still precede admission. Native
-save-page serialization, completion and source-dependent retirement remain open.
+at reserve. Admission now precedes Stop, directory preparation and the save picker.
+The original carrier moves through file work, the picker callback and delayed
+item-ID allocation; the package retains only a weak cancellation handle while a
+callback owns the carrier. Source loss, frozen legacy absence, callback disposal
+and refusal without stopping an admitted navigation have test-platform coverage.
+
+Seven early-save-info tests failed before the correction. Six test bodies remain
+unchanged. The seventh originally discarded a history-database reply while the
+manager still owned the save callback; it now destroys that actual queue while
+keeping the package alive and retaining the original release/outcome assertions.
+Two upstream SavePackage caller translation units passed syntax-only compilation;
+their tests were not run. The 35 native regression tests do not establish native
+Save Page serialization, successful file UX or source-dependent retirement.
+Those remain open.
 
 Capabilities remain **17** (`DIRECT_RECEIPT | EXACT_ASSOCIATION`). Public `seal`
 returns Unsupported with fence zero; full-fence capability is off. Remaining

@@ -830,7 +830,7 @@ diff --git a/libcef/browser/download_bridge_deferred_unittest.cc b/libcef/browse
 new file mode 100644
 --- /dev/null
 +++ b/libcef/browser/download_bridge_deferred_unittest.cc
-@@ -0,0 +1,2919 @@
+@@ -0,0 +1,3145 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.
 +
@@ -846,6 +846,7 @@ new file mode 100644
 +#include "base/files/file_util.h"
 +#include "base/files/scoped_temp_dir.h"
 +#include "content/browser/download/save_file_manager.h"
++#include "content/browser/download/save_package.h"
 +#include "base/run_loop.h"
 +#include "base/no_destructor.h"
 +#include "components/download/public/common/download_task_runner.h"
@@ -973,6 +974,21 @@ new file mode 100644
 +    std::move(*callback).Run(download::DownloadTargetInfo());
 +    return true;
 +  }
++  void GetSaveDir(content::BrowserContext*, base::FilePath* website,
++                  base::FilePath* downloads) override {
++    ++save_dir_queries;
++    *website = save_directory; *downloads = save_directory;
++  }
++  void ChooseSavePath(content::WebContents*, const base::FilePath&,
++                      const base::FilePath::StringType&, bool,
++                      content::SavePackagePathPickedCallback callback) override {
++    ++choose_save_path_calls;
++    EXPECT_FALSE(pending_save_path);
++    pending_save_path = std::move(callback);
++  }
++  base::FilePath save_directory;
++  int save_dir_queries = 0, choose_save_path_calls = 0;
++  content::SavePackagePathPickedCallback pending_save_path;
 +  bool defer_ids = false;
 +  bool cancel_targets = false;
 +  int id_requests = 0;
@@ -1072,6 +1088,15 @@ new file mode 100644
 +  }
 +  void TearDown() override {
 +    delegate_.pending.Reset();
++    delegate_.pending_save_path.Reset();
++    delegate_.pending_id.Reset();
++    if (save_info_files_) {
++      DeleteContents();
++      task_environment()->RunUntilIdle();
++      save_info_files_->Shutdown(); save_info_files_ = nullptr;
++      task_environment()->RunUntilIdle();
++      EXPECT_EQ(nullptr, content::SaveFileManager::Get());
++    }
 +    if (contents())
 +      Bridge::SetReserveCallback(contents(), {});
 +    if (manager_) {
@@ -1464,9 +1489,35 @@ new file mode 100644
 +                       completed, created));
 +  }
 +
++  void PrepareSaveInfoFlow() {
++    ASSERT_EQ(nullptr, content::SaveFileManager::Get());
++    save_info_files_ = new content::SaveFileManager();
++    ASSERT_TRUE(save_info_root_.CreateUniqueTempDir());
++    delegate_.save_directory = save_info_root_.GetPath();
++    Bridge::SetReserveCallback(contents(), {});
++    NavigateAndCommit(GURL(kDownload));
++    contents()->SetMainFrameMimeType("text/html");
++    expected_kind_ = Bridge::Kind::kSavePackage;
++    expected_reservation_method_ = "GET";
++    expected_authorization_methods_ = {"GET"};
++    Bridge::SetReserveCallback(contents(), base::BindRepeating(
++        &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  }
++  void DeliverSaveInfoPath() {
++    EXPECT_TRUE(delegate_.pending_save_path);
++    if (!delegate_.pending_save_path) return;
++    content::SavePackagePathPickedParams params;
++    params.file_path = save_info_root_.GetPath().AppendASCII("picked.html");
++    params.save_type = content::SAVE_PAGE_TYPE_AS_ONLY_HTML;
++    std::move(delegate_.pending_save_path).Run(
++        std::move(params), content::SavePackageDownloadCreatedCallback());
++  }
++
 + protected:
 +  std::unique_ptr<content::TestContentClientInitializer> client_;
 +  DeferredDelegate delegate_;
++  scoped_refptr<content::SaveFileManager> save_info_files_;
++  base::ScopedTempDir save_info_root_;
 +  content::DownloadManagerImpl* manager_ = nullptr;
 +  std::shared_ptr<State> state_;
 +  std::vector<std::string> expected_authorization_methods_;
@@ -3746,6 +3797,181 @@ new file mode 100644
 +  files->Shutdown(); files = nullptr;
 +  task_environment()->RunUntilIdle();
 +  EXPECT_EQ(nullptr, content::SaveFileManager::Get());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++
++TEST_F(DeferredNavigationReceiptTest,
++       ClosedSaveInfoDoesNotQueryDirectoriesCreateFoldersOrShowPicker) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  delegate_.save_directory = save_info_root_.GetPath().AppendASCII("missing-downloads");
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  contents()->OnSavePage();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(0, delegate_.save_dir_queries);
++  EXPECT_EQ(0, delegate_.choose_save_path_calls);
++  EXPECT_FALSE(delegate_.pending_save_path);
++  EXPECT_FALSE(base::PathExists(delegate_.save_directory));
++  EXPECT_EQ(0, delegate_.id_requests);
++  EXPECT_EQ(0, reserves_); EXPECT_EQ(0, authorizes_);
++  EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SaveInfoReservesBeforeFileWorkAndRetainsOriginalThroughPicker) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  contents()->OnSavePage();
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, delegate_.save_dir_queries);
++  EXPECT_EQ(1, delegate_.choose_save_path_calls);
++  EXPECT_TRUE(delegate_.pending_save_path);
++  EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  delegate_.pending_save_path.Reset();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}), reasons_);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(0, delegate_.id_requests);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SaveInfoSourceLossBeforeFileReplyCannotShowPickerOrReacquireOwner) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  contents()->OnSavePage();
++  EXPECT_EQ(1, reserves_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  DeleteContents();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(0, delegate_.choose_save_path_calls);
++  EXPECT_FALSE(delegate_.pending_save_path);
++  EXPECT_EQ(0, delegate_.id_requests);
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_SHUTDOWN}), reasons_);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SaveInfoSourceLossKeepsPickerLeaseUntilCallbackIsDiscarded) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  contents()->OnSavePage();
++  task_environment()->RunUntilIdle();
++  EXPECT_TRUE(delegate_.pending_save_path);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  DeleteContents();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_SHUTDOWN}), reasons_);
++  EXPECT_EQ(0, releases_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  delegate_.pending_save_path.Reset();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1u, outcomes_.size()); EXPECT_EQ(1, releases_);
++  EXPECT_EQ(0, delegate_.id_requests);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SaveInfoPickerHandoffAfterClosingKeepsReceiptAndCancellationStopsLateId) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  scoped_refptr<content::SavePackage> package = new content::SavePackage(contents()->GetPrimaryPage());
++  package->GetSaveInfo();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  delegate_.defer_ids = true;
++  DeliverSaveInfoPath();
++  EXPECT_EQ(1, delegate_.id_requests); EXPECT_TRUE(delegate_.pending_id);
++  EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  package->Cancel(true);
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_CANCELLED}), reasons_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  if (delegate_.pending_id) std::move(delegate_.pending_id).Run(500);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(nullptr, manager_->GetDownload(500));
++  EXPECT_EQ(0, delegate_.attach_calls); EXPECT_TRUE(associated_tokens_.empty());
++  EXPECT_FALSE(base::PathExists(save_info_root_.GetPath().AppendASCII("picked.html")));
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_); EXPECT_EQ(1, releases_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  package = nullptr;
++  task_environment()->RunUntilIdle();
++}
++TEST_F(DeferredNavigationReceiptTest,
++       SaveInfoDiscardedIdCallbackAbandonsWithoutAnOwningPackageLease) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  scoped_refptr<content::SavePackage> package = new content::SavePackage(contents()->GetPrimaryPage());
++  package->GetSaveInfo();
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  delegate_.defer_ids = true;
++  DeliverSaveInfoPath();
++  EXPECT_EQ(1, delegate_.id_requests); EXPECT_TRUE(delegate_.pending_id);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  delegate_.pending_id.Reset();
++  task_environment()->RunUntilIdle();
++  // The history reply owns no save callback: DownloadManager still owns the
++  // queued ID continuation. Destroy that actual owner, keeping the package
++  // alive to detect any accidental package-owned carrier lease.
++  EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  GetBrowserContext()->SetDownloadManagerForTesting(nullptr);
++  EXPECT_EQ(nullptr, manager_);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}), reasons_);
++  EXPECT_EQ(1, releases_); EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++  package->Cancel(true); package = nullptr;
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1u, outcomes_.size());
++}
++TEST_F(DeferredNavigationReceiptTest,
++       LegacySaveInfoCannotAdoptNewFactoryWhilePreparingSuggestedPath) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  Bridge::SetReserveCallback(contents(), {});
++  contents()->OnSavePage();
++  Bridge::SetReserveCallback(contents(), base::BindRepeating(
++      &DeferredNavigationReceiptTest::Reserve, base::Unretained(this)));
++  Bridge::RequireContextReceipts(GetBrowserContext());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(0, delegate_.choose_save_path_calls);
++  EXPECT_FALSE(delegate_.pending_save_path);
++  EXPECT_EQ(0, delegate_.id_requests);
++  EXPECT_EQ(0, reserves_); EXPECT_EQ(0, authorizes_);
++  EXPECT_TRUE(outcomes_.empty()); EXPECT_TRUE(associated_tokens_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
++}
++
++TEST_F(DeferredNavigationReceiptTest,
++       RefusedSavePageCannotStopAnAlreadyAdmittedNavigation) {
++  ASSERT_NO_FATAL_FAILURE(PrepareSaveInfoFlow());
++  expected_kind_ = Bridge::Kind::kNavigation;
++  expected_reservation_method_ = "POST";
++  expected_authorization_methods_ = {"POST"};
++  auto navigation = content::NavigationSimulator::CreateBrowserInitiated(GURL(kDownload), contents());
++  navigation->SetMethod("POST"); navigation->Start();
++  auto* node = main_test_rfh()->frame_tree_node();
++  auto* original = node->navigation_request();
++  EXPECT_NE(nullptr, original);
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Begin());
++  expected_kind_ = Bridge::Kind::kSavePackage;
++  contents()->OnSavePage();
++  EXPECT_EQ(original, node->navigation_request());
++  EXPECT_TRUE(outcomes_.empty());
++  EXPECT_FALSE(contents()->SavePage(save_info_root_.GetPath().AppendASCII("refused.html"),
++      save_info_root_.GetPath().AppendASCII("refused_files"), content::SAVE_PAGE_TYPE_AS_ONLY_HTML));
++  EXPECT_EQ(original, node->navigation_request());
++  EXPECT_TRUE(outcomes_.empty());
++  EXPECT_EQ(ECHO_CEF_DOWNLOAD_PENDING, state_->Poll());
++  if (original && node->navigation_request() == original) navigation->Fail(net::ERR_ABORTED);
++  task_environment()->RunUntilIdle();
++  EXPECT_EQ(1, reserves_); EXPECT_EQ(1, authorizes_);
++  EXPECT_EQ(0, delegate_.save_dir_queries); EXPECT_EQ(0, delegate_.choose_save_path_calls);
++  EXPECT_EQ((std::vector<uint64_t>{kOriginalToken}), outcomes_);
++  EXPECT_EQ((std::vector<uint32_t>{ECHO_CEF_DOWNLOAD_NO_ITEM_ABANDONED}), reasons_);
 +  EXPECT_EQ(ECHO_CEF_DOWNLOAD_OK, state_->Poll());
 +}
 +

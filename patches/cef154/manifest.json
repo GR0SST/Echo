@@ -35,11 +35,11 @@
   "patch_files": [
     {
       "path": "chromium.patch",
-      "sha256": "efb564dee4a1ed8bfdf6fe7457fbef48aae79960aece68dc0a55ff4cefdc4de8"
+      "sha256": "7e1fd6c0efbc720db23016dbc985720af73fb623863aa0d2c056340382366ddd"
     },
     {
       "path": "cef.patch",
-      "sha256": "48c635953401e0b290126250fffcf6e0f1a9548fe9fd0b79eba53db441fb31d0"
+      "sha256": "13eaafebae4cb3cc8a6cd312556940245eee06c416a31fdeca5e2de680f916ed"
     }
   ],
   "standard_patch_files": [
@@ -2400,13 +2400,13 @@
     {
       "path": "components/download/public/common/download_request_receipt.cc",
       "base_sha256": null,
-      "result_sha256": "90c55c9b9b881d0b01809d1f2a3c2a92d9c4ef61c749e00b3b25251681b455cc",
+      "result_sha256": "04b5e7bca2759f6bf99de16dcfd55fe635323f7a9fffdf6882e09c2c821af25c",
       "mode": "100644"
     },
     {
       "path": "components/download/public/common/download_request_receipt.h",
       "base_sha256": null,
-      "result_sha256": "61553ff5b73ff5f85f49bdd71b2dd8f4356d6ffad977915f12cc935fed738018",
+      "result_sha256": "02648c70ad5449b630f32ebe89465bc075040ca7f72182e673dccc6796fbe42c",
       "mode": "100644"
     },
     {
@@ -2436,19 +2436,19 @@
     {
       "path": "content/browser/download/download_manager_impl.cc",
       "base_sha256": "d2ec9ceec90c6441cacc7d4c5a670e8ac44354473d916c41506d0ad6c20e2b0b",
-      "result_sha256": "77a548c4dd2b23d2823e24f7de9bca80a8cf09272fd888e9523a19821d68fdfe",
+      "result_sha256": "616797bb5d17336c6054744686db934ba352bba0d19cf5e97a058cacece6a972",
       "mode": "100644"
     },
     {
       "path": "content/browser/download/download_manager_impl.h",
       "base_sha256": "92ae5e58f43f6a4848649bf2641ffb011eaae53d68a530ba0949c700d884ead4",
-      "result_sha256": "4b53c7004d41a0f5c2af6b58549c4e2c4d0b363befc64d7782bfd3a448afdd7a",
+      "result_sha256": "b899ee50e94a2c2ee139f73c5be1f1db155f0176915554d0a81c8249e2be9fe3",
       "mode": "100644"
     },
     {
       "path": "content/browser/download/download_navigation_receipt.cc",
       "base_sha256": null,
-      "result_sha256": "ac7020f47e08237f865b7f88a45feb9ccbe82493ffa62ab0dd3567065fb9c6c6",
+      "result_sha256": "543a39658192779c900bc2fb866137de31b3b167bbf75c7fa7d2206fa5c30c06",
       "mode": "100644"
     },
     {
@@ -2472,7 +2472,13 @@
     {
       "path": "content/browser/download/save_package.cc",
       "base_sha256": "9b4054a5e68199664befd4221dc4278f7d069ad97ec9f44e055657758ddccaa3",
-      "result_sha256": "d9af11a930e49543a3b3fa6105822cd0081435f0658c6a2fb90fa0fc724273af",
+      "result_sha256": "de0bde674cced5b3bd332f54cda4190b3227958b1a7ea40b7cf8fc77efcb33fa",
+      "mode": "100644"
+    },
+    {
+      "path": "content/browser/download/save_package.h",
+      "base_sha256": "ba9ae598f6fa051f2da9745ffbca7b537e466a6fb92c97e8e1200044f7da6de6",
+      "result_sha256": "06da7e8e523457b66aa7db788e14a4032a8656b08a92524c8f1088174af537e9",
       "mode": "100644"
     },
     {
@@ -2554,6 +2560,12 @@
       "mode": "100644"
     },
     {
+      "path": "content/browser/web_contents/web_contents_impl.cc",
+      "base_sha256": "36123522cb22998d03c2ba1bda0b275edf481d3fd2d942deb0a3127d8028469a",
+      "result_sha256": "3c5669ac381902e71da1422deb6131239fe2a9eb54594a20de01d8fbf7b2c852",
+      "mode": "100644"
+    },
+    {
       "path": "content/public/browser/BUILD.gn",
       "base_sha256": "70fe6ab01b9ec71b8b29841261536c2e30a9f8b8f7565ea7cf60806b8725cdac",
       "result_sha256": "324851bbce7a92ad55f58d930e6f7a8a9ad4df4638489674e2edaaf02a363af7",
@@ -2568,7 +2580,7 @@
     {
       "path": "content/public/browser/download_request_utils.h",
       "base_sha256": "527633edbfdb5a22a59875556e7f0d0bf7fc6ad26ecaad9d2f31a7c946b3c9a6",
-      "result_sha256": "18f0434a142c79db2ce1c602afca5d9ddcf32b1f55cf3c95fa6aa6c885c0543c",
+      "result_sha256": "d9ada30c47faa432bfe9d12a4839a2a97bdaed833a17e28afd949690616fc667",
       "mode": "100644"
     },
     {
@@ -2742,7 +2754,7 @@
     {
       "path": "cef/libcef/browser/download_bridge_deferred_unittest.cc",
       "base_sha256": null,
-      "result_sha256": "9ca6fa6ed95465b936da2622cb28cb9c7e8b62f1ee3948580083a7a5911dd3f6",
+      "result_sha256": "043e45bb12fa8f411e31a0729610b1fe237f63bc9fc422fce9f29e6608a0f536",
       "mode": "100644"
     },
     {
@@ -2866,6 +2878,14 @@
     {
       "path": "third_party/blink/renderer/core/frame/remote_frame.cc",
       "sha256": "a971d38faef8c6ccb1c05a28b999652ca3534a429e88d0e64a498741b4837cb9"
+    },
+    {
+      "path": "content/browser/download/save_package_unittest.cc",
+      "sha256": "1d05f1b0db6c41ea316c764ff4c6db8e8b9cae40e1a4002893b7b3eeaef3a4fb"
+    },
+    {
+      "path": "content/browser/download/save_package_browsertest.cc",
+      "sha256": "ffcb0dea5192fd1d1fe0b927fce0d78e66cdbe1695ab39500035907ff29582eb"
     }
   ],
   "capabilities": 17,

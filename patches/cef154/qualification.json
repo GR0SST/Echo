@@ -3,7 +3,7 @@
   "chromium_commit": "b859317bf11f6be47f9b7799ec690a0a42a1fb33",
   "cef_commit": "14c5a089e8452874cb1a556dc3fde26ed2d87723",
   "selected_units": {
-    "count": 140,
+    "count": 148,
     "io": [
       "DownloadResponseHandlerTest.BlobRequestRejectsManualRedirect",
       "DownloadResponseHandlerTest.BlobRequestRejectsRedirect",
@@ -37,6 +37,7 @@
       "DeferredNavigationReceiptTest.ClosedPostCommitErrorPagePreservesEarlierRequestAndPendingEntry",
       "DeferredNavigationReceiptTest.ClosedReloadPreservesEarlierRequestAndPendingEntry",
       "DeferredNavigationReceiptTest.ClosedRendererIngressPreservesEarlierRequestAndPendingEntry",
+      "DeferredNavigationReceiptTest.ClosedSaveInfoDoesNotQueryDirectoriesCreateFoldersOrShowPicker",
       "DeferredNavigationReceiptTest.ContextOptInDuringIdAllocationCannotInventAnItemOwner",
       "DeferredNavigationReceiptTest.ControllerRewriteClosingRetainsItsAlreadyAuthorizedReceipt",
       "DeferredNavigationReceiptTest.DeletingCommandTargetFrameSettlesOnlyItsOriginalReceipt",
@@ -58,6 +59,7 @@
       "DeferredNavigationReceiptTest.LegacyCommandAndAbsentTargetCannotAcquireAnotherOwner",
       "DeferredNavigationReceiptTest.LegacyNavigationCannotAcquireAnotherOwnerOnLateApproval",
       "DeferredNavigationReceiptTest.LegacyParamsCannotAcquireAnotherOwnerOnLateApproval",
+      "DeferredNavigationReceiptTest.LegacySaveInfoCannotAdoptNewFactoryWhilePreparingSuggestedPath",
       "DeferredNavigationReceiptTest.LegacyStructuralReplacementCannotAcquireFromNewFactory",
       "DeferredNavigationReceiptTest.LoadIfNecessaryCarriesCommittedPostReceiptWithoutReacquisition",
       "DeferredNavigationReceiptTest.LoadIfNecessaryReserveZeroPreservesCommittedEntryAndReloadIntent",
@@ -74,6 +76,7 @@
       "DeferredNavigationReceiptTest.PreClosingReceiptContinuesAfterServiceWorkerInterception",
       "DeferredNavigationReceiptTest.PreClosingReceiptStillAssociatesAfterDeferredIdBeforeMetadataAttach",
       "DeferredNavigationReceiptTest.QueuedRendererAdmissionSurvivesClosingUntilRealInit",
+      "DeferredNavigationReceiptTest.RefusedSavePageCannotStopAnAlreadyAdmittedNavigation",
       "DeferredNavigationReceiptTest.RejectedFallbackRequestCannotReplaceEarlierNavigatorRequest",
       "DeferredNavigationReceiptTest.RejectedReloadCannotReplaceEarlierPendingRepostAdmission",
       "DeferredNavigationReceiptTest.RejectedRendererAttemptCannotOverwriteEarlierQueuedAdmission",
@@ -85,6 +88,11 @@
       "DeferredNavigationReceiptTest.RestoredChildHistoryReauthorizesActualMethodOnSameOriginalAdmission",
       "DeferredNavigationReceiptTest.SameUrlCommandsCanReturnInReverseNonceOrderWithoutIdentitySwap",
       "DeferredNavigationReceiptTest.SanitizerCannotRemoveReceiptAndDispatchUnderAnotherOwner",
+      "DeferredNavigationReceiptTest.SaveInfoDiscardedIdCallbackAbandonsWithoutAnOwningPackageLease",
+      "DeferredNavigationReceiptTest.SaveInfoPickerHandoffAfterClosingKeepsReceiptAndCancellationStopsLateId",
+      "DeferredNavigationReceiptTest.SaveInfoReservesBeforeFileWorkAndRetainsOriginalThroughPicker",
+      "DeferredNavigationReceiptTest.SaveInfoSourceLossBeforeFileReplyCannotShowPickerOrReacquireOwner",
+      "DeferredNavigationReceiptTest.SaveInfoSourceLossKeepsPickerLeaseUntilCallbackIsDiscarded",
       "DeferredNavigationReceiptTest.SavePackageCapturesAdmissionBeforeIdAndAssociatesBeforeEmbedderAttach",
       "DeferredNavigationReceiptTest.SavePackageClosingRejectsBeforeIdAllocation",
       "DeferredNavigationReceiptTest.SavePackageDestroyedSourceCannotAttachAfterIdAllocation",
@@ -149,8 +157,8 @@
       "EchoDownloadState.WrongRunnerCannotCloseAdmissionOrQueueSettlement"
     ],
     "all_once_successful": true,
-    "io_binary_sha256": "8a1f9e3a55332d23141233d42787ac719a5182fbe08535c352df92c94aa1d951",
-    "state_binary_sha256": "9a473817d6b7472dd9d55c13b7b99c097efdcfed60c37b487c759ad0d45a1293"
+    "io_binary_sha256": "2e8e6ed6d76159e2114d41000ddf30344aae6f8c1a553ff2e08074bb7d062eec",
+    "state_binary_sha256": "ae7898b6ac95889d4137fd77a011f4ce5a7d95441e14cdc28780d166fddde5f2"
   },
   "native": {
     "count": 35,
@@ -230,15 +238,15 @@
     }
   ],
   "scope": {
-    "unit_source_paths": 76,
-    "authored_custom_paths": 83,
-    "framework_named_inputs": 85,
-    "archived_source_union": 89,
+    "unit_source_paths": 78,
+    "authored_custom_paths": 85,
+    "framework_named_inputs": 87,
+    "archived_source_union": 93,
     "full_checkout_attestation": false,
     "full_fence_accepted": false
   },
   "build_args_sha256": "da452f8810813baf5aaa8665ec9c00cb1a4b1f0cbfe818e083c7deef041f53a0",
-  "native_xml_sha256": "074806bb5813360ed9eb5ff589f3b726c3a0a620fb8e6893b648f210bf596b7c",
+  "native_xml_sha256": "33b1178656828f8cda4926601b191ccfe3a76bce4e0b360d79509287e28d5a08",
   "additional_syntax_checks": [
     {
       "target": "obj/content/test/content_unittests/navigation_url_loader_unittest.o",
@@ -261,9 +269,9 @@
   ],
   "versioned_patch_replay": {
     "zero_fuzz": true,
-    "base_selected_images": 535,
-    "patched_selected_images": 535,
-    "qualified_selected_images": 541,
+    "base_selected_images": 536,
+    "patched_selected_images": 536,
+    "qualified_selected_images": 544,
     "repositories": 7,
     "selected_fixture_only": true,
     "new_build_performed_for_replay": false
@@ -284,6 +292,9 @@
     "service_worker_fixture": "first 34/35 run hit legacy CefServer 1 MiB buffer limit; all 35 tests unchanged for passing CefTestServer run",
     "save_package_manager": "receipt before ID allocation, original frame/context revalidation and association before embedder hooks; seven red tests plus legacy control, all eight bodies preserved; real WebContents refusal adds ninth test",
     "save_package_kind": "append-only kind 5; caller must retain original document until save terminal or reject at reserve; Associated is not document quiescence",
-    "save_package_remaining": "OnSavePage/GetSaveInfo directory/picker work still precedes this manager admission; native serialization/completion and source-dependent retirement remain unqualified"
+    "save_package_remaining": "native save-page serialization/success/cancel UX and source-dependent retirement remain unqualified; public full fence remains off",
+    "save_package_early_admission": "original receipt before Stop/directory/picker work; callback owns carrier, package weak cancellation; source loss, frozen legacy absence and delayed ID guards covered on content test platform",
+    "save_package_red_lineage": "seven early-save-info tests red before fix; six unchanged; one corrected to destroy actual manager-owned ID queue instead of only history reply; package remains alive and original outcome/release assertions retained; eighth new test verifies refusal cannot stop admitted navigation",
+    "save_package_upstream_callers": "two upstream SavePackage unit/browser-test translation units passed syntax-only compilation; their tests were not executed"
   }
 }
