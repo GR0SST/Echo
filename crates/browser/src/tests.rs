@@ -1176,7 +1176,7 @@ fn swipe(cx: &mut VisualTestContext, over: &'static str, dx: f32, steps: usize) 
         let delta = if i == 0 { 0.0 } else { dx / steps as f32 };
         cx.simulate_event(ScrollWheelEvent {
             position,
-            delta: ScrollDelta::Pixels(point(px(delta), px(0.5))),
+            delta: ScrollDelta::Pixels(point(px(delta), px(if i == 0 { 0. } else { 0.5 }))),
             modifiers: Modifiers::none(),
             touch_phase,
         });
@@ -1198,25 +1198,25 @@ fn swiping_the_sidebar_switches_one_space_per_gesture(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let space = |cx: &mut VisualTestContext| view.read_with(cx, |w, _| w.browser.active_space);
 
-    swipe(cx, "sidebar", -200.0, 10);
+    swipe(cx, "sidebar", -320.0, 10);
     assert_eq!(space(cx), 1);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     // Also over the tab list, which scrolls vertically.
-    swipe(cx, "new-tab", -200.0, 10);
+    swipe(cx, "new-tab", -320.0, 10);
     assert_eq!(space(cx), 2);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    swipe(cx, "sidebar", -200.0, 10);
+    swipe(cx, "sidebar", -320.0, 10);
     assert_eq!(space(cx), 2, "the creation page retains the last real Space");
     assert_space_creation_form(&view, cx);
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
-    swipe(cx, "space-creation-form", 200.0, 10);
+    swipe(cx, "space-creation-form", 320.0, 10);
     assert_eq!(space(cx), 2);
     assert!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Space(w.browser.space().id)));
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
-    swipe(cx, "sidebar", 200.0, 10);
+    swipe(cx, "sidebar", 320.0, 10);
     assert_eq!(space(cx), 1);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
@@ -1245,11 +1245,11 @@ fn the_sidebar_follows_the_fingers_and_settles_on_release(cx: &mut TestAppContex
 
     scroll(cx, "sidebar", Started, 0.0, 0.0);
     for _ in 0..6 {
-        scroll(cx, "sidebar", Moved, -20.0, 0.0);
+        scroll(cx, "sidebar", Moved, -44.0, 0.0);
     }
-    // Halfway through 120 of 240 px: between spaces, nothing switched yet.
+    // 264 precise scroll units move 132 of 240 logical px, before selection.
     let (position, active) = state(cx);
-    assert!((position - 1.5).abs() < 0.01, "{position}");
+    assert!((position - 1.55).abs() < 0.01, "{position}");
     assert_eq!(active, 0);
 
     scroll(cx, "sidebar", Ended, 0.0, 0.0);
@@ -1257,6 +1257,21 @@ fn the_sidebar_follows_the_fingers_and_settles_on_release(cx: &mut TestAppContex
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(state(cx), (2.0, 1));
+}
+
+#[gpui::test]
+fn a_paused_sidebar_drag_must_pass_the_halfway_point(cx: &mut TestAppContext) {
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    for (distance, expected) in [(238., 0), (240., 0), (242., 1)] {
+        scroll(cx, "sidebar", Started, 0., 0.);
+        scroll(cx, "sidebar", Moved, -distance, 0.);
+        cx.executor().advance_clock(Duration::from_millis(250));
+        scroll(cx, "sidebar", Ended, 0., 0.);
+        assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), expected, "raw distance {distance}");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+    }
 }
 
 #[gpui::test]
@@ -1277,12 +1292,12 @@ fn a_fast_short_sidebar_flick_commits_by_velocity(cx: &mut TestAppContext) {
     use gpui::TouchPhase::*;
     let (view, cx) = open(cx);
     scroll(cx, "sidebar", Started, 0., 0.);
-    scroll(cx, "sidebar", Moved, -10., 0.);
-    cx.executor().advance_clock(Duration::from_millis(15));
-    scroll(cx, "sidebar", Moved, -10., 0.);
-    cx.executor().advance_clock(Duration::from_millis(15));
-    scroll(cx, "sidebar", Moved, -10., 0.);
-    // 30px is below the distance threshold, but 667px/s is a flick.
+    scroll(cx, "sidebar", Moved, -13., 0.);
+    cx.executor().advance_clock(Duration::from_millis(18));
+    scroll(cx, "sidebar", Moved, -13., 0.);
+    cx.executor().advance_clock(Duration::from_millis(18));
+    scroll(cx, "sidebar", Moved, -13., 0.);
+    // The recorded 19.5px reference flick commits at approximately 356px/s.
     scroll(cx, "sidebar", Ended, 0., 0.);
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
     cx.executor().advance_clock(Duration::from_secs(1));
@@ -1295,11 +1310,11 @@ fn pausing_before_releasing_a_short_sidebar_drag_cancels_its_flick_velocity(cx: 
     use gpui::TouchPhase::*;
     let (view, cx) = open(cx);
     scroll(cx, "sidebar", Started, 0., 0.);
-    scroll(cx, "sidebar", Moved, -10., 0.);
+    scroll(cx, "sidebar", Moved, -20., 0.);
     cx.executor().advance_clock(Duration::from_millis(15));
-    scroll(cx, "sidebar", Moved, -10., 0.);
+    scroll(cx, "sidebar", Moved, -20., 0.);
     cx.executor().advance_clock(Duration::from_millis(15));
-    scroll(cx, "sidebar", Moved, -10., 0.);
+    scroll(cx, "sidebar", Moved, -20., 0.);
     cx.executor().advance_clock(Duration::from_millis(60));
     scroll(cx, "sidebar", Ended, 0., 0.);
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
@@ -1322,7 +1337,7 @@ fn dragging_past_the_ends_resists(cx: &mut TestAppContext) {
     scroll(cx, "space-creation-form", Started, 0.0, 0.0);
     scroll(cx, "space-creation-form", Moved, -120.0, 0.0);
     let position = view.read_with(cx, |w, _| w.pager.position);
-    assert!((position - edge - 0.15).abs() < 0.01, "{position}");
+    assert!((position - edge - 0.075).abs() < 0.01, "{position}");
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);
 }
 
@@ -1347,6 +1362,74 @@ fn keyboard_space_switches_animate_the_pager(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |w, _| w.pager.position), 3.0);
+}
+
+#[gpui::test]
+fn space_slide_uses_elapsed_time_when_frames_are_delayed(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-2");
+    let position = |cx: &mut VisualTestContext| view.read_with(cx, |w, _| w.pager.position);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    assert_eq!(position(cx), 1., "document selection precedes the sidebar slide");
+    cx.executor().advance_clock(Duration::from_millis(160));
+    cx.run_until_parked();
+    assert!((position(cx) - 1.905).abs() < 0.015, "{}", position(cx));
+    cx.executor().advance_clock(Duration::from_millis(350));
+    cx.run_until_parked();
+    assert_eq!(position(cx), 2.);
+}
+
+#[gpui::test]
+fn touching_an_inflight_space_slide_keeps_the_visible_position(cx: &mut TestAppContext) {
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-2");
+    cx.executor().advance_clock(Duration::from_millis(80));
+    cx.run_until_parked();
+    let before = view.read_with(cx, |w, _| w.pager.position);
+    scroll(cx, "sidebar", Started, 0., 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), before);
+    cx.executor().advance_clock(Duration::from_millis(160));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), before);
+    scroll(cx, "sidebar", Ended, 0., 0.);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 2.);
+}
+
+#[gpui::test]
+fn sidebar_swipe_counts_movement_on_the_begin_and_end_events(cx: &mut TestAppContext) {
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    scroll(cx, "sidebar", Started, -160., 0.);
+    assert!((view.read_with(cx, |w, _| w.pager.position) - (1. + 80. / 240.)).abs() < 0.001);
+    scroll(cx, "sidebar", Ended, -160., 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 2.);
+}
+
+#[gpui::test]
+fn reversing_a_sidebar_flick_wins_over_the_earlier_drag_distance(cx: &mut TestAppContext) {
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-2");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    scroll(cx, "sidebar", Started, 0., 0.);
+    scroll(cx, "sidebar", Moved, -500., 0.);
+    cx.executor().advance_clock(Duration::from_millis(120));
+    for _ in 0..3 {
+        scroll(cx, "sidebar", Moved, 40., 0.);
+        cx.executor().advance_clock(Duration::from_millis(15));
+    }
+    scroll(cx, "sidebar", Ended, 0., 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.pager.position), 1.);
 }
 
 #[gpui::test]
@@ -8080,7 +8163,12 @@ fn space_dock_uses_eight_pixel_active_and_four_pixel_inactive_dots(cx: &mut Test
     let target = cx.debug_bounds("space-1").unwrap();
     assert_eq!(target.size, gpui::size(gpui::px(22.), gpui::px(22.)));
     click(cx, "space-1");
-    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.executor().advance_clock(Duration::from_millis(80));
+    cx.run_until_parked();
+    // While the active overlay travels, both stationary rail dots stay small.
+    assert_eq!(cx.debug_bounds("space-dot-0").unwrap().size.width, gpui::px(4.));
+    assert_eq!(cx.debug_bounds("space-dot-1").unwrap().size.width, gpui::px(4.));
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(cx.debug_bounds("space-dot-1").unwrap().size.width, gpui::px(8.));
     assert_eq!(cx.debug_bounds("space-dot-0").unwrap().size.width, gpui::px(4.));

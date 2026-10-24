@@ -4,6 +4,32 @@ use crate::{sidebar_pages::SidebarPage, space_creation::SpaceCreationController}
 use browser_core::Browser;
 
 #[test]
+fn spring_matches_recorded_arc_keyboard_positions_without_overshoot() {
+    use super::{pager_spring, PAGER_SPRING_FREQUENCY};
+    // Incoming folder center, measured in Arc at 1000x760, sidebar 228px.
+    for (seconds, center) in [(0.0457, 184.), (0.1007, 95.), (0.1757, 40.), (0.2457, 30.)] {
+        let (position, _) = pager_spring(0., 1., 0., PAGER_SPRING_FREQUENCY, seconds);
+        assert!((26. + 228. * (1. - position) - center).abs() < 3.);
+    }
+    for frame in 0..60 {
+        let (position, velocity) = pager_spring(0., 1., 0., PAGER_SPRING_FREQUENCY, frame as f32 / 60.);
+        assert!((0. ..=1.).contains(&position));
+        assert!(velocity >= 0.);
+    }
+}
+
+#[test]
+fn spring_preserves_position_and_velocity_when_retargeted() {
+    use super::{pager_spring, PAGER_SPRING_FREQUENCY};
+    let (position, velocity) = pager_spring(0., 1., 0., PAGER_SPRING_FREQUENCY, 0.08);
+    assert_eq!(pager_spring(position, 0., velocity, PAGER_SPRING_FREQUENCY, 0.), (position, velocity));
+    let split = pager_spring(position, 1., velocity, PAGER_SPRING_FREQUENCY, 0.08);
+    let whole = pager_spring(0., 1., 0., PAGER_SPRING_FREQUENCY, 0.16);
+    assert!((split.0 - whole.0).abs() < 0.00001);
+    assert!((split.1 - whole.1).abs() < 0.00001);
+}
+
+#[test]
 fn rubber_band_uses_virtual_page_edges_without_resisting_real_spaces() {
     let mut browser = Browser::new();
     browser.add_space("Second", 30.0);

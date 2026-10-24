@@ -49,9 +49,11 @@ const MAX_HISTORY_SUGGESTIONS: usize = 4;
 const MAX_COMMAND_SUGGESTIONS: usize = 12;
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 /// Fraction of the sidebar width a swipe must travel to change space.
-const SPACE_SWIPE_COMMIT: f32 = 0.25;
+const SPACE_SWIPE_COMMIT: f32 = 0.5;
+/// Arc moves 60 logical pixels for 120 precise scroll units in native captures.
+const SPACE_SCROLL_GAIN: f32 = 0.5;
 /// Finger speed (px/s) that changes space regardless of distance (a flick).
-const SPACE_FLICK_SPEED: f32 = 400.0;
+const SPACE_FLICK_SPEED: f32 = 300.0;
 /// How much the pager follows the fingers past the first and last space.
 const PAGER_RUBBER_BAND: f32 = 0.3;
 const PAGER_FRAME: Duration = Duration::from_millis(16);
@@ -67,8 +69,11 @@ const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
 const FLOATING_SIDEBAR_GRACE: Duration = Duration::from_millis(800);
 pub const TRAFFIC_LIGHT_X: f32 = 12.5;
 pub const TRAFFIC_LIGHT_Y: f32 = 17.0;
-/// Share of the remaining distance covered per frame when settling (ease-out).
-const PAGER_SETTLE_RATE: f32 = 0.28;
+/// Critical spring fitted to the installed Arc's keyboard slide (24.7/s).
+/// Evaluate in elapsed time so missed frames do not slow the animation down.
+const PAGER_SPRING_FREQUENCY: f32 = 24.7;
+/// The short-drag return in the same capture settles faster than key navigation.
+const PAGER_RETURN_FREQUENCY: f32 = 34.3;
 
 actions!(
     browser,
@@ -283,8 +288,21 @@ pub fn bind_keys(cx: &mut App) {
 pub struct Pager {
     /// Visual position in spaces: 1.5 is halfway between the 2nd and 3rd.
     pub position: f32,
+    velocity: f32,
     drag: Option<Drag>,
     settle: Option<Task<()>>,
+}
+
+/// Analytic critically damped spring, in pages and pages/second. Keeping the
+/// release velocity makes a flick and an interrupted snap continuous.
+fn pager_spring(from: f32, target: f32, velocity: f32, frequency: f32, seconds: f32) -> (f32, f32) {
+    let displacement = from - target;
+    let coefficient = velocity + frequency * displacement;
+    let decay = (-frequency * seconds).exp();
+    (
+        target + (displacement + coefficient * seconds) * decay,
+        (velocity - frequency * coefficient * seconds) * decay,
+    )
 }
 
 struct Drag {
@@ -661,6 +679,7 @@ impl BrowserWindow {
     pub(crate) fn reset_profile_pager(&mut self, index: usize) {
         self.pager.settle = None;
         self.pager.drag = None;
+        self.pager.velocity = 0.;
         self.pager.position = if self.browser.is_blank() || self.browser.is_private() {
             index
         } else {
@@ -688,7 +707,7 @@ impl BrowserWindow {
         self.popup_focus_pending = 0;
     }
     pub(crate) fn settle_sidebar_pager(&mut self, cx: &mut Context<Self>) { self.settle_pager(cx); }
-    pub(crate) fn reset_sidebar_motion(&mut self) { self.pager.drag = None; self.pager.settle = None; }
+    pub(crate) fn reset_sidebar_motion(&mut self) { self.pager.drag = None; self.pager.settle = None; self.pager.velocity = 0.; }
 
     pub fn new(
         browser: Browser,
@@ -2382,7 +2401,7 @@ impl BrowserWindow {
         let ScrollDelta::Pixels(delta) = event.delta else {
             return;
         };
-        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        let (dx, dy) = (f32::from(delta.x) * SPACE_SCROLL_GAIN, f32::from(delta.y) * SPACE_SCROLL_GAIN);
         if self.sidebar_resize.is_some() { return; }
         let sidebar_width = self.sidebar_width();
         let page_count = if self.browser.is_private() {
@@ -2390,47 +2409,49 @@ impl BrowserWindow {
         } else {
             self.sidebar_navigation.controller.pages(&self.browser).len()
         };
+        let now = cx.background_executor().now();
+        if matches!(event.touch_phase, TouchPhase::Started) {
+            self.pager.settle = None;
+            self.pager.velocity = 0.;
+            self.pager.drag = Some(Drag {
+                start: self.pager.position,
+                travel: 0.,
+                horizontal: None,
+                samples: Vec::new(),
+            });
+        }
+        // Include movement in both the initial and release events. Ignore
+        // inertial events after release, which no longer have a finger drag.
+        let Some(drag) = &mut self.pager.drag else { return; };
+        if drag.horizontal.is_none() && (dx != 0. || dy != 0.) {
+            drag.horizontal = Some(dx.abs() > dy.abs());
+        }
+        if drag.horizontal == Some(true) && dx != 0. {
+            drag.travel += dx;
+            drag.samples.push((now, dx));
+            let raw = drag.start - drag.travel / sidebar_width.max(1.);
+            self.pager.position = rubber_band(raw, page_count);
+            cx.notify();
+        }
         match event.touch_phase {
-            TouchPhase::Started => {
-                self.pager.settle = None;
-                self.pager.drag = Some(Drag {
-                    start: self.pager.position,
-                    travel: 0.0,
-                    horizontal: None,
-                    samples: Vec::new(),
-                });
-            }
-            TouchPhase::Moved => {
-                // Momentum after the fingers lift has no drag and is ignored.
-                let Some(drag) = &mut self.pager.drag else {
-                    return;
-                };
-                if drag.horizontal.is_none() && (dx != 0.0 || dy != 0.0) {
-                    drag.horizontal = Some(dx.abs() > dy.abs());
-                }
-                if drag.horizontal != Some(true) {
-                    return;
-                }
-                drag.travel += dx;
-                drag.samples.push((cx.background_executor().now(), dx));
-                // Fingers moving left reveal the space on the right.
-                let raw = drag.start - drag.travel / sidebar_width.max(1.);
-                self.pager.position = rubber_band(raw, page_count);
-                cx.notify();
-            }
+            TouchPhase::Started | TouchPhase::Moved => {}
             TouchPhase::Ended => {
                 let Some(drag) = self.pager.drag.take() else {
                     return;
                 };
                 if drag.horizontal != Some(true) {
+                    self.settle_pager(cx);
                     return;
                 }
                 let start = drag.start.round();
                 let moved = self.pager.position - drag.start;
                 let speed = drag.speed(cx.background_executor().now());
-                let step = if moved > SPACE_SWIPE_COMMIT || speed < -SPACE_FLICK_SPEED {
+                self.pager.velocity = -speed / sidebar_width.max(1.);
+                let step = if speed.abs() > SPACE_FLICK_SPEED {
+                    -speed.signum()
+                } else if moved > SPACE_SWIPE_COMMIT {
                     1.0
-                } else if moved < -SPACE_SWIPE_COMMIT || speed > SPACE_FLICK_SPEED {
+                } else if moved < -SPACE_SWIPE_COMMIT {
                     -1.0
                 } else {
                     0.0
@@ -2445,36 +2466,48 @@ impl BrowserWindow {
                     } else {
                         self.select_sidebar_page(page, cx);
                     }
-                    self.settle_pager(cx);
                 }
+                self.animate_pager(if step == 0. { PAGER_RETURN_FREQUENCY } else { PAGER_SPRING_FREQUENCY }, cx);
             }
         }
     }
 
-    /// Eases the pager to the selected page in the current derived order.
+    /// Springs to the selected page in the current derived order.
     pub(crate) fn settle_pager(&mut self, cx: &mut Context<Self>) {
+        self.animate_pager(PAGER_SPRING_FREQUENCY, cx);
+    }
+
+    fn animate_pager(&mut self, frequency: f32, cx: &mut Context<Self>) {
         let target = if self.browser.is_blank() || self.browser.is_private() {
             self.browser.active_space
         } else {
             self.sidebar_page_index()
         } as f32;
-        if (self.pager.position - target).abs() < 0.001 {
+        if (self.pager.position - target).abs() < 0.001 && self.pager.velocity.abs() < 0.01 {
             self.pager.position = target;
+            self.pager.velocity = 0.;
             self.pager.settle = None;
             return;
         }
+        let from = self.pager.position;
+        let velocity = self.pager.velocity;
+        let started = cx.background_executor().now();
         self.pager.settle = Some(cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(PAGER_FRAME).await;
             let done = this.update(cx, |this, cx| {
                 let pager = &mut this.pager;
-                let remaining = target - pager.position;
-                if remaining.abs() < 0.002 {
+                let elapsed = cx.background_executor().now().saturating_duration_since(started).as_secs_f32();
+                let (position, velocity) = pager_spring(from, target, velocity, frequency, elapsed);
+                let finished = (target - position).abs() < 0.001 && velocity.abs() < 0.01;
+                if finished {
                     pager.position = target;
+                    pager.velocity = 0.;
                 } else {
-                    pager.position += remaining * PAGER_SETTLE_RATE;
+                    pager.position = position;
+                    pager.velocity = velocity;
                 }
                 cx.notify();
-                pager.position == target
+                finished
             });
             if !matches!(done, Ok(false)) {
                 break;
@@ -3230,11 +3263,23 @@ impl BrowserWindow {
 
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let ink = if self.theme_is_dark() {1.} else {0.};
+        // Layout the stationary marks first, then paint the active dot between
+        // their actual centers. The reference moves one dot along the rail.
+        let dot_centers = Rc::new(RefCell::new(Vec::new()));
+        let paint_centers = dot_centers.clone();
+        let pager_position = self.pager.position;
         let drag_moves_active = self.sidebar_page_interactive;
         let new_menu_anchor = if self.sidebar_debug_namespace.is_none() { self.new_menu_anchor.clone() } else { Default::default() };
         let normal = !self.browser.is_blank() && !self.browser.is_private();
         let pages = self.sidebar_navigation.controller.pages(&self.browser);
         let selected = self.sidebar_navigation.controller.selected();
+        let default_positions: Vec<_> = self.browser.spaces.iter().enumerate()
+            .filter(|(_, space)| space.custom_icon.is_none())
+            .map(|(index, space)| if normal {
+                pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::Space(space.id)).unwrap_or(index + 1)
+            } else { index }).collect();
+        let traveling_dot = default_positions.contains(&(pager_position.floor() as usize))
+            && default_positions.contains(&(pager_position.ceil() as usize));
         let corner = |id: &'static str| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .flex_none().size(px(32.)).rounded_md().flex().items_center().justify_center()
             .text_color(hsla(0., 0., ink, 0.5)).hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)));
@@ -3249,15 +3294,32 @@ impl BrowserWindow {
                 .when(normal, |this| this.on_click(cx.listener(|this, _, _, cx| {
                     this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx);
                     this.settle_pager(cx);
-                })))
+                }))
+            .child(canvas(|_, _, _| (), move |_, _, window, _| {
+                let centers = paint_centers.borrow();
+                let lower = pager_position.floor() as usize;
+                let upper = pager_position.ceil() as usize;
+                let left = centers.iter().find(|(index, _, _)| *index == lower);
+                let right = centers.iter().find(|(index, _, _)| *index == upper);
+                if let (Some((_, left, true)), Some((_, right, true))) = (left, right) {
+                    let fraction = pager_position - lower as f32;
+                    let center = *left + (*right - *left) * fraction;
+                    window.paint_quad(gpui::fill(
+                        Bounds::new(center - point(px(4.), px(4.)), size(px(8.), px(8.))),
+                        hsla(0., 0., 0.1, 0.8),
+                    ).corner_radii(px(4.)));
+                }
+            }).absolute().inset_0()))
                 .child(crate::icons::control(crate::icons::Icon::Library)))
-            .child(div().flex_1().min_w_0().flex().items_center().justify_center().gap(px(4.))
+            .child(div().relative().flex_1().min_w_0().flex().items_center().justify_center().gap(px(4.))
             .children(self.browser.spaces.iter().enumerate().flat_map(|(index, space)| {
                 let space_id = space.id;
                 let page_index = if normal {
                     pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::Space(space_id)).unwrap_or(index + 1)
                 } else { index };
                 let active = page_index == self.pager.position.round() as usize;
+                let centers = dot_centers.clone();
+                let default_icon = space.custom_icon.is_none();
                 let drag = crate::space_drag::SpaceDrag { id: space_id, workspace: self.profile.handle.clone(), name: space.name.clone(), icon: space.custom_icon.clone(), hue: space.hue };
                 // Space marks are monochrome; only user emoji keep their colors.
                 let mark = hsla(0., 0., 0.1, if active { 0.8 } else { 0.3 });
@@ -3265,13 +3327,21 @@ impl BrowserWindow {
                     .id(("space", index))
                     .debug_selector(|| self.sidebar_debug_name((move || format!("space-{index}"))()))
                     .group(SharedString::from(format!("space-mark-{index}")))
-                    .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
+                    .relative().flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
                     .hover(|s| s.bg(hsla(0., 0., 1., 0.3)))
-                    .when(space.custom_icon.is_none(), |this| this.child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-dot-{index}"))())).size(px(if active { 8. } else { 4. })).rounded_full().bg(mark)
+                    .when(space.custom_icon.is_none(), |this| this.child(div()
+                        .debug_selector(|| self.sidebar_debug_name((move || format!("space-dot-{index}"))()))
+                        .size(px(if active && (!traveling_dot || pager_position.fract() == 0.) { 8. } else { 4. })).rounded_full()
+                        .bg(if active && !traveling_dot { mark } else if active && pager_position.fract() == 0. {
+                            gpui::transparent_black()
+                        } else { hsla(0., 0., 0.1, 0.3) })
                         .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., 0.1, if active { 0.8 } else { 0.5 })))))
                     .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
-                        .when(!active, |this| this.opacity(0.5))
+                        .opacity(if active { 1. } else { 0.5 })
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-icon-{index}"))())).child(crate::icons::glyph(&icon))))
+                    .child(canvas(move |bounds, _, _| {
+                        centers.borrow_mut().push((page_index, bounds.center(), default_icon));
+                    }, |_, _, _, _| ()).absolute().inset_0())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) {
                             this.switch_space(index, cx);

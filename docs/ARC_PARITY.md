@@ -225,8 +225,8 @@ Folder duplication follows the right-click action documented in the
 | Feature | Shortcut/gesture | Status | What's missing |
 |---|---|---|---|
 | Several Spaces, each with its own Pinned/Today and active tab | — | done | — |
-| Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | done | Distance or a fast flick commits the gesture; pausing before releasing a short drag springs back. Velocity uses GPUI's clock, so distance/flick/pause behavior is covered deterministically |
-| Switching Spaces from the keyboard (animated) | ⌥⌘→/← | done | — |
+| Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | gesture | partial | Native scroll gain and elapsed-time spring follow recorded Arc samples; paused short drags return faster, reversing flicks take precedence, and begin/end deltas are retained. One active default dock dot follows pager position. Paused drags must pass halfway; the recorded 19.5px flick commits. Exact flick cutoff, edge resistance, custom-icon transitions and virtual-page motion still need validation. See [motion measurements](SPACE_SWIPE.md) |
+| Switching Spaces from the keyboard (animated) | ⌥⌘→/← | done | Ctrl+digits and dock clicks use the same directional pager. Recorded Arc keyboard spring: 24.7/s, approximately 307ms to within 1px, no measurable overshoot. Elapsed-time evaluation preserves timing under delayed frames |
 | Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | — | partial | Named Spaces can be created from the dock or Command Bar with an automatic accent; Turn into Space converts a folder and inherits its name/icon. Space icons can be edited afterward. Theme/profile controls in the creation dialog remain missing |
 | Renaming a Space | — | done | Name editor via the Command Bar, Spaces menu or header/dock context menu; persisted with the same Space identity. Context actions can target an inactive Space without changing the current page |
 | Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | — | partial | Graphical 272 × 272 px popover anchored below the header icon, opened from the Spaces menu, Command Bar action or clicked Space context menu. Emoji search and category scrolling, eight-column cells, a separate 56-symbol Icon tab, immediate selection and Remove icon. Pointer selection and removal keep the picker open; Escape and outside clicks dismiss. Popup positioning outside the browser window and exact native popup animation remain unfinished |
@@ -506,7 +506,7 @@ are implemented for copied links; the remaining notifications follow below.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Sidebar swipe: Spaces follow the fingers, resistance at the edges, flick by speed, snapping back after a short swipe | done | — |
+| Sidebar swipe: Spaces follow the fingers, resistance at the edges, flick by speed, snapping back after a short swipe | partial | Measured clock-based spring, halfway threshold, release velocity, short-drag return and moving default dock indicator implemented; exact flick cutoff, edge resistance, custom-icon and virtual-page motion await reference validation |
 | Animated Space switching from the keyboard | done | — |
 | Hidden sidebar slides in from the edge and hides after a delay | done | — |
 | Swipe back/forward on the page | missing (?) | — |
