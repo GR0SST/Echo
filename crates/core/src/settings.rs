@@ -18,6 +18,7 @@ pub enum Toggle {
     RestoreWindows,
     DragWebpages,
     FullToolbarUrl,
+    ShowToolbar,
     SharedQuotes,
     AutomaticPictureInPicture,
     ThemeData,
@@ -34,7 +35,7 @@ impl Toggle {
     pub fn default_value(self) -> bool {
         !matches!(
             self,
-            Self::FullToolbarUrl | Self::DragWebpages | Self::LittleWindowLinks
+            Self::ShowToolbar | Self::FullToolbarUrl | Self::DragWebpages | Self::LittleWindowLinks
         )
     }
 }

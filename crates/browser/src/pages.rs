@@ -27,7 +27,7 @@ fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) 
     let view = match event {
         Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::EditFocusChanged { view, .. }
         | Event::FindResult { view, .. } | Event::UrlChanged { view, .. } | Event::StatusChanged { view, .. }
-        | Event::LoadingChanged { view, .. } => view,
+        | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => view,
         _ => return false,
     };
     if *view != previous { return false; }
@@ -40,7 +40,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -332,6 +332,7 @@ impl WebEngine for Chromium {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageState {
+    pub loading_progress: u16,
     pub loading: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -408,7 +409,7 @@ pub(crate) struct PageEvent {
 impl PageEvent {
     pub(crate) fn is_metadata(&self) -> bool {
         matches!(self.event, Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
-            | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
+            | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
     }
 }
 
@@ -514,6 +515,7 @@ pub struct Pages {
     axis: browser_core::splits::Axis,
     split: bool,
     square_top: bool,
+    top_toolbar: bool,
     pub(crate) peek_mode: bool,
     visible: HashSet<TabId>,
     shown: Option<TabId>,
@@ -596,7 +598,7 @@ impl Pages {
             wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
-            square_top: false, peek_mode: false,
+            square_top: false, top_toolbar: false, peek_mode: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -751,7 +753,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, peek_mode: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, peek_mode: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -1009,6 +1011,8 @@ impl Pages {
         }
     }
 
+    pub(crate) fn set_top_toolbar(&mut self, shown: bool) { self.top_toolbar = shown; }
+
     pub(crate) fn square_top(&mut self) { self.square_top = true; }
 
     pub(crate) fn viewport_generation(&self) -> u64 { self.viewport_generation }
@@ -1116,7 +1120,7 @@ impl Pages {
                     pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
-            engine.set_top_corners_rounded(pages[&tab].view, !self.split && !self.square_top);
+            engine.set_top_corners_rounded(pages[&tab].view, !self.split && !self.square_top && !self.top_toolbar);
             let page = pages.get_mut(&tab).unwrap();
             if !page.visible { engine.set_visible(page.view, true); page.visible = true; created = true; }
             self.visible.insert(tab);
@@ -1615,6 +1619,9 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         let PageStore { pages, .. } = &mut *store;
         match event {
+            Event::LoadingProgress { view, progress } => {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.loading_progress = (*progress).min(1000); }
+            }
             Event::AudioStateChanged { view, audible } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.audible = *audible; }
             }

@@ -57,7 +57,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile,
     Add(Placement), Axis(Axis), SeparateAll, SeparatePane, Move(isize), ResetName, ClosePane, ArchiveRelative(browser_core::bulk_archive::Relative) }
@@ -65,6 +65,7 @@ pub(crate) enum Command { CustomizePage, NewFolderWithTab, MoveToFolder, FolderI
 impl Command {
     fn selector(self) -> &'static str {
         match self {
+            Self::ToggleToolbar => "toggle-toolbar",
             Self::Download(action) => action.selector(),
             Self::CustomizePage => "customize-page",
             Self::SpaceTheme => "edit-theme-color",
@@ -269,7 +270,7 @@ impl BrowserWindow {
                 pending("Capture…").into(),
                 pending("Capture Full Page").into(),
                 Entry::Separator,
-                pending("Show as Toolbar").into(),
+                item(if self.toolbar_shown() { "Hide Toolbar" } else { "Show as Toolbar" }, Command::ToggleToolbar).into(),
                 pending("Disable Shared Quotes").into(),
             ],
             MenuTarget::Tab(id) => self.tab_entries(id, menu.pane),
@@ -438,12 +439,13 @@ impl BrowserWindow {
             MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
             MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }
             MenuTarget::Address => {
-                match command { Command::Copy => self.copy_url(false, cx), Command::CopyMarkdown => self.copy_url(true, cx), _ => {} }
+                match command { Command::ToggleToolbar => self.toggle_toolbar(cx), Command::Copy => self.copy_url(false, cx), Command::CopyMarkdown => self.copy_url(true, cx), _ => {} }
                 return;
             }
             MenuTarget::Tab(id) => item.pane.unwrap_or(id),
         };
         match command {
+            Command::ToggleToolbar => self.toggle_toolbar(cx),
             Command::CustomizePage => { self.edit_browser(|browser|browser.activate_tab(id,std::time::SystemTime::now()));self.customize_page(cx); }
             Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),
             Command::MoveToFolder => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
@@ -548,6 +550,7 @@ impl BrowserWindow {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
                 MenuTarget::Download(..) => Some(120.),
+                MenuTarget::Address => Some(204.),
                 _ => None,
             }).unwrap_or(MIN_WIDTH)
         };

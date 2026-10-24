@@ -74,6 +74,7 @@ pub struct Shortcut {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    LoadingProgress { view: ViewId, progress: u16 },
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     AudioStateChanged { view: ViewId, audible: bool },
@@ -104,6 +105,7 @@ pub enum Event {
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
 #[derive(Debug)]
 enum RawEvent {
+    Progress(u16),
     BoostZap(String),
     Audio(bool),
     Title(String),
@@ -1178,7 +1180,7 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
 fn transferable_metadata(event: &RawEvent) -> bool {
     matches!(event, RawEvent::Audio(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
         | RawEvent::EditFocus(_) | RawEvent::Find(..) | RawEvent::Url(_)
-        | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
+        | RawEvent::Progress(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
 }
 
 fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
@@ -1197,6 +1199,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::Find(count, active, final_update) => Event::FindResult { view, count, active, final_update },
         RawEvent::Url(url) => Event::UrlChanged { view, url },
         RawEvent::Status(text) => Event::StatusChanged { view, text },
+        RawEvent::Progress(progress) => Event::LoadingProgress { view, progress },
         RawEvent::BoostZap(selector) => Event::BoostZap { view, selector },
         RawEvent::Loading(loading, can_go_back, can_go_forward) => {
             Event::LoadingChanged {
@@ -1341,6 +1344,9 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_loading_progress_change(&self, browser: Option<&mut Browser>, progress: f64) {
+            push(&self.events, browser, RawEvent::Progress((progress.clamp(0., 1.) * 1000.).round() as u16));
+        }
         fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let (Some(browser), Some(urls)) = (browser, icon_urls) else { return; };
             // clone() produces an immutable borrowed wrapper, whose consuming

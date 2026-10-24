@@ -123,6 +123,7 @@ actions!(
         ToggleFavoritesOrdering,
         RevealTab,
         ToggleSidebar,
+        ToggleToolbar,
         NextSpace,
         PreviousSpace,
         ClearToday,
@@ -214,6 +215,7 @@ window_shortcuts! {
     "cmd-right" => GoForward,
     "cmd-d" => TogglePin,
     "cmd-s" => ToggleSidebar,
+    "cmd-shift-d" => ToggleToolbar,
     "cmd-alt-right" => NextSpace,
     "cmd-alt-left" => PreviousSpace,
     "ctrl-1" => SwitchToSpace(0),
@@ -1247,7 +1249,7 @@ impl BrowserWindow {
                         if let Some((url, Some(title))) = entry { self.edit_profile(|browser| browser.update_history_title(page_profile.expect("page provenance"), &url, &title)); }
                     }
                 }
-                Event::LoadingChanged { .. } => {}
+                Event::LoadingProgress { .. } | Event::LoadingChanged { .. } => {}
             }
         }
         }
@@ -2293,6 +2295,17 @@ impl BrowserWindow {
         }
     }
 
+    pub(crate) fn toggle_toolbar(&mut self, cx: &mut Context<Self>) {
+        let shown = self.toolbar_shown();
+        self.edit_browser(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::ShowToolbar, !shown));
+        self.close_site_controls(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn toolbar_shown(&self) -> bool {
+        self.browser.settings.enabled(browser_core::settings::Toggle::ShowToolbar)
+    }
+
     fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.toggle_sidebar(cx);
     }
@@ -3002,7 +3015,7 @@ impl BrowserWindow {
             .flex_none()
             .w(px(self.sidebar_width()))
             .h_full()
-            .pt(px(SIDEBAR_TOOLBAR_HEIGHT - 1.))
+            .pt(px(SIDEBAR_TOOLBAR_HEIGHT - if self.toolbar_shown() { 3. } else { 1. }))
             .gap(px(8.))
             .text_color(hsla(0.0, 0.0, if dark { 0.95 } else { 0.1 }, 1.0))
             .child(div().absolute().top_0().left_0().right(px(8.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).flex().items_center().gap(px(6.))
@@ -3011,7 +3024,7 @@ impl BrowserWindow {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
                     .child(crate::icons::control(crate::icons::Icon::Sidebar)))
                 .child(div().flex_1())
-                .child(control("go-back")
+                .when(!self.toolbar_shown() || self.browser.active_split().is_some(), |this| this.child(control("go-back")
                     .text_color(hsla(0., 0., if dark { 1. } else { 0. }, if state.can_go_back { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_back(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Back)))
@@ -3021,8 +3034,8 @@ impl BrowserWindow {
                     .child(crate::icons::control(crate::icons::Icon::Forward)))
                 .child(control("reload-page")
                     .on_click(cx.listener(move |this, _, _, _| { this.with_active_page(|pages, tab| { if loading { pages.stop_loading(tab); } else { pages.reload(tab); } }); }))
-                    .child(crate::icons::control(if state.loading { crate::icons::Icon::Close } else { crate::icons::Icon::Reload }))))
-            .child(
+                    .child(crate::icons::control(if state.loading { crate::icons::Icon::Close } else { crate::icons::Icon::Reload })))))
+            .when(!self.toolbar_shown(), |this| this.child(
                 div().px(px(SIDEBAR_INSET)).child(
                     div()
                         .id("address")
@@ -3069,7 +3082,7 @@ impl BrowserWindow {
                                 .child(canvas(|_, _, _| (), move |bounds, _, _, _| anchor.set(Some(bounds))).absolute().inset_0())),
                             "address-actions", address_actions_shown))),
                 ),
-            )
+            ))
             .when(!blank && (!favorites.is_empty() || (!private && (!self.browser.active_user_profile().empty_favorites_dismissed || self.tab_drag_active))), |this| this.child(
                 div().id("favorites").debug_selector(|| self.sidebar_debug_name((|| "favorites".into())()))
                     .flex().flex_wrap().gap(px(FAVORITE_GAP)).px(px(SIDEBAR_INSET))
@@ -3603,10 +3616,32 @@ impl BrowserWindow {
                         )
                         .absolute()
                         .top_0()
+                        .bottom_0()
                         .left_0()
-                        .size_full()
+                        .right_0()
                         .into_any_element())
         })
+    }
+
+    fn render_top_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let state = self.browser.active_tab().and_then(|tab| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(tab.id))).unwrap_or_default();
+        let text = self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default();
+        let anchor = self.site_controls_anchor.clone();
+        let button = |id: &'static str, icon| div().id(id).debug_selector(move || id.into()).flex_none().w(px(38.)).h(px(33.)).flex().items_center().justify_center().rounded(px(5.)).hover(|s|s.bg(hsla(0.,0.,1.,0.08))).child(crate::icons::control_sized(icon, if matches!(icon, crate::icons::Icon::Reload) { 16. } else { 18. }));
+        div().debug_selector(|| "top-toolbar".into()).absolute().top_0().left_0().right_0().h(px(33.)).px(px(2.)).flex().items_center().bg(gpui::rgb(0x222222)).border_b_1().border_color(gpui::rgb(0x2d2d2d)).text_color(hsla(0.,0.,1.,0.675))
+            .child(button("toolbar-back",crate::icons::Icon::Back).opacity(if state.can_go_back {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_back(tab)))))
+            .child(button("toolbar-forward",crate::icons::Icon::Forward).opacity(if state.can_go_forward {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_forward(tab)))))
+            .child(button("toolbar-reload",if state.loading {crate::icons::Icon::Close} else {crate::icons::Icon::Reload}).on_click(cx.listener(move |this,_,_,_|this.with_active_page(|pages,tab|if state.loading {pages.stop_loading(tab)} else {pages.reload(tab)}))))
+            .child(div().id("toolbar-address").debug_selector(||"toolbar-address".into()).flex_1().min_w_0().h_full().flex().items_center().justify_center().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0.,0.,1.,0.75))
+                .on_click(cx.listener(|this,_,window,cx|this.on_edit_current_url(&EditCurrentUrl,window,cx)))
+                .on_mouse_down(gpui::MouseButton::Right,cx.listener(|this,event:&gpui::MouseDownEvent,window,cx|this.open_sidebar_menu(crate::tab_menu::MenuTarget::Address,event.position,window,cx)))
+                // Arc centers the hostname on the page; Copy URL precedes it.
+                .child(div().relative().left(px(-32.)).px(px(32.)).min_w_0().flex().items_center()
+                .child(div().id("toolbar-copy-url").text_color(hsla(0.,0.,1.,0.675)).debug_selector(||"toolbar-copy-url".into()).size(px(26.)).flex_none().flex().items_center().justify_center().on_click(cx.listener(|this,_,_,cx|{cx.stop_propagation();this.copy_url(false,cx);})).child(crate::icons::control(crate::icons::Icon::Link)))
+                .child(div().min_w_0().truncate().child(text))))
+            .child(button("toolbar-site-controls",crate::icons::Icon::SiteControls).on_click(cx.listener(|this,_,window,cx|this.toggle_site_controls(window,cx))).child(canvas(|_,_,_|(),move |bounds,_,_,_|anchor.set(Some(bounds))).absolute().inset_0()))
+            .child(button("toolbar-split",crate::icons::Icon::Split).on_click(cx.listener(|this,_,_,cx|this.edit_split(None,cx))))
+            .into_any_element()
     }
 
     fn render_content(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3663,6 +3698,10 @@ impl BrowserWindow {
                         .when(empty_canvas, |canvas| canvas
                             .child(self.theme_surface_mask(panel_bounds, viewport, panel_mask))
                             .child(div().absolute().inset_0().rounded(px(CONTENT_CORNER_RADIUS)).bg(self.theme_empty_panel_fill())))))
+                    .child(div().debug_selector(|| "page-document-surface".into()).absolute().left_0().right_0().bottom_0()
+                        .top(px(if has_page && self.toolbar_shown() && !split_open { 33. } else { 0. }))
+                        .flex().flex_col().items_center().justify_center().gap_2()
+                        .when(!split_open, |this| this.px_8())
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .children(placeholder.map(|(title, url)| {
@@ -3682,7 +3721,8 @@ impl BrowserWindow {
                                     .child(url),
                             )
                     }))
-                    .children(self.render_page_viewport_canvas()),
+                    .children(self.render_page_viewport_canvas()))
+                    .when(has_page && self.toolbar_shown() && !split_open, |this| this.child(self.render_top_toolbar(cx))),
             )
     }
 
@@ -4093,6 +4133,7 @@ impl Render for BrowserWindow {
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
+                    pages.set_top_toolbar(self.toolbar_shown() && self.browser.active_split().is_none());
                     pages.sync(&self.browser, self.page_content_visible());
                     pages.sync_color_schemes(self.theme_appearance());
                 },
@@ -4207,6 +4248,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &UnmuteAllTabs, _, cx| this.run_command(Command::UnmuteAllTabs, cx)))
             .on_action(cx.listener(|this, _: &TogglePinnedSection, _, cx| this.toggle_pinned_section(this.browser.active_space, cx)))
             .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(|this, _: &ToggleToolbar, _, cx| this.toggle_toolbar(cx)))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousSpace, _, cx| this.cycle_space(-1, cx)))
             .on_action(cx.listener(|this, action: &SwitchToSpace, _, cx| this.switch_space(action.0, cx)))

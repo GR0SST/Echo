@@ -140,6 +140,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("Expand Current Split", window::ExpandCurrentSplit),
                 MenuItem::separator(),
                 MenuItem::action("Show/Hide Sidebar", window::ToggleSidebar),
+                MenuItem::action("Show/Hide Toolbar", window::ToggleToolbar),
                 MenuItem::action(
                     "Expand/Collapse Pinned Section",
                     window::TogglePinnedSection,
