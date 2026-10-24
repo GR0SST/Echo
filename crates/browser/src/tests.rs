@@ -10230,3 +10230,27 @@ fn max_sign_out_disconnects_even_if_credentials_are_unavailable(cx:&mut TestAppC
     click(&mut settings,"max-chatgpt-sign-out");settings.run_until_parked();cx.run_until_parked();
     view.read_with(cx,|w,_|assert_eq!(w.browser.settings.max.provider.authentication,Authentication::Disconnected));
 }
+
+#[gpui::test]
+fn max_anthropic_workspace_survives_provider_switches(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Max");
+    scroll(&mut settings, "settings-scroll", gpui::TouchPhase::Moved, 0., -2000.);
+    settings.run_until_parked();
+    click(&mut settings, "max-provider-Anthropic");
+    scroll(&mut settings, "settings-scroll", gpui::TouchPhase::Moved, 0., -2000.);
+    settings.run_until_parked();
+    click(&mut settings, "max-workspace-id");
+    settings.simulate_input("wrkspc_01Example");
+    view.read_with(cx, |w, _| assert_eq!(w.browser.settings.max.provider.anthropic_workspace_id, "wrkspc_01Example"));
+    click(&mut settings, "max-provider-OpenAi");
+    view.read_with(cx, |w, _| assert!(w.browser.settings.max.provider.anthropic_workspace_id.is_empty()));
+    click(&mut settings, "max-provider-Anthropic");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.settings.max.provider.anthropic_workspace_id, "wrkspc_01Example");
+        let saved = browser_core::session::to_json(&w.browser);
+        assert_eq!(browser_core::session::from_json(&saved).unwrap().settings.max.provider.anthropic_workspace_id, "wrkspc_01Example");
+    });
+}

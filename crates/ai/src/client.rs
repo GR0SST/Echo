@@ -93,6 +93,20 @@ fn sensitive(value: &str) -> Result<ureq::http::HeaderValue, AiError> {
     value.set_sensitive(true);
     Ok(value)
 }
+fn workspace_header(config: &ProviderConfig) -> Result<Option<ureq::http::HeaderValue>, AiError> {
+    let workspace = config.anthropic_workspace_id.trim();
+    if config.provider != Provider::Anthropic || workspace.is_empty() {
+        return Ok(None);
+    }
+    if !workspace.starts_with("wrkspc_")
+        || !workspace
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return Err(AiError::InvalidEndpoint);
+    }
+    Ok(Some(sensitive(workspace)?))
+}
 pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .max_redirects(0)
@@ -169,6 +183,9 @@ impl Client {
                 sensitive(&format!("Bearer {}", secret.expose()))?,
             )
         };
+        if let Some(workspace) = workspace_header(config)? {
+            http = http.header("anthropic-workspace-id", workspace);
+        }
         let mut response = http.send_json(body).map_err(|_| AiError::Network)?;
         status(response.status().as_u16())?;
         cancel.check()?;
@@ -209,6 +226,11 @@ impl Client {
                 "Authorization",
                 sensitive(&format!("Bearer {}", secret.expose()))?,
             )
+        };
+        let request = if let Some(workspace) = workspace_header(config)? {
+            request.header("anthropic-workspace-id", workspace)
+        } else {
+            request
         };
         let mut response = request.call().map_err(|_| AiError::Network)?;
         status(response.status().as_u16())?;
@@ -355,6 +377,23 @@ mod tests {
         io::{BufRead, Read, Write},
         net::TcpListener,
     };
+    #[test]
+    fn anthropic_workspace_is_optional_scoped_and_validated() {
+        let mut config = ProviderConfig {
+            provider: Provider::Anthropic,
+            ..Default::default()
+        };
+        assert!(workspace_header(&config).unwrap().is_none());
+        config.anthropic_workspace_id = "wrkspc_01Example".into();
+        assert_eq!(
+            workspace_header(&config).unwrap().unwrap(),
+            "wrkspc_01Example"
+        );
+        config.anthropic_workspace_id = "wrkspc_bad\r\nx-key: injected".into();
+        assert!(workspace_header(&config).is_err());
+        config.provider = Provider::OpenAi;
+        assert!(workspace_header(&config).unwrap().is_none());
+    }
     #[test]
     fn streaming_contracts_handle_deltas_completion_errors_and_interruption() {
         for (provider, stream) in [

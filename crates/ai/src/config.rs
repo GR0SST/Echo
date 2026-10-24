@@ -25,6 +25,8 @@ pub struct ProviderConfig {
     pub base_url: String,
     /// An exact provider model ID selected by the user, never a display name.
     pub model: String,
+    /// Required for Anthropic keys that are not scoped to one workspace.
+    pub anthropic_workspace_id: String,
     /// Opaque references only; secrets never implement Serialize.
     pub api_key_id: String,
     pub chatgpt_account_id: String,

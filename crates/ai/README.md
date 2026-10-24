@@ -6,6 +6,9 @@ store backed by macOS Keychain, Windows Credential Manager, or Linux Secret
 Service. All I/O runs on workers. Credentials are opaque references in browser
 sessions; actual keys and OAuth token sets are stored through `CredentialStore`.
 
+Anthropic keys not scoped to one workspace can select a Workspace ID in Max
+settings; it is sent only to Anthropic on inference and model-list requests.
+
 Providers: OpenAI Responses, Anthropic Messages, and an OpenAI-compatible
 `/chat/completions` endpoint. Remote endpoints require HTTPS; local compatible
 providers may use loopback HTTP. Credentials in URLs and cross-origin HTTP
@@ -29,6 +32,7 @@ Primary contracts inspected on 2026-10-24:
 - [OpenAI accounts and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
 - [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+- [Anthropic authentication and workspace selection](https://platform.claude.com/docs/en/manage-claude/authentication)
 - [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming)
 - [Keyring platform backends](https://docs.rs/keyring/3.6.3/keyring/)
 

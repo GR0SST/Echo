@@ -1364,8 +1364,10 @@ of a fresh live Arc empty tray remains unverified.
 
 ### Max settings and user-owned AI foundation — 2026-10-24
 
-A guarded read-only session opened one fresh Arc browser window in the shared
-Echo Test Space, verified its header crop, and claimed the newly opened settings
+The installed bundle reports **1.170.0** (`CFBundleShortVersionString`), rather
+than the requested 1.169.0. These captures document the installed reference;
+version-specific 1.169 parity is unverified. A guarded read-only session opened
+one fresh Arc browser window in the shared Echo Test Space, verified its header crop, and claimed the newly opened settings
 window separately before any popup input. Max is 684×650, with an 88 px toolbar,
 126 px banner, 64 px horizontal inset, 84 px Enable Max/future-features group,
 and 80 px feature rows with 94×62 previews and 36×16 switches. The scroll order

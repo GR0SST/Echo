@@ -70,6 +70,7 @@ pub(crate) fn store(cx: &App) -> Arc<dyn CredentialStore> {
 pub(super) struct State {
     pub key: Entity<crate::text_input::TextInput>,
     pub base_url: Entity<crate::text_input::TextInput>,
+    pub workspace: Entity<crate::text_input::TextInput>,
     pub model: Entity<crate::text_input::TextInput>,
     status: String,
     busy: Option<Cancellation>,
@@ -91,6 +92,20 @@ impl State {
             t.set_text(config.base_url, cx);
             t
         });
+        let workspace = cx.new(|cx| {
+            let mut t = crate::text_input::TextInput::new("Optional for workspace-scoped keys", cx);
+            t.set_text(config.anthropic_workspace_id, cx);
+            t
+        });
+        let workspace_changed = cx.subscribe(
+            &workspace,
+            |this, field, _: &crate::text_input::Changed, cx| {
+                let workspace = field.read(cx).text().trim().to_string();
+                this.profile
+                    .edit_settings(|b| b.settings.max.provider.anthropic_workspace_id = workspace);
+                cx.notify();
+            },
+        );
         let model = cx.new(|cx| {
             let mut t = crate::text_input::TextInput::new("Model ID", cx);
             t.set_text(config.model, cx);
@@ -105,12 +120,13 @@ impl State {
         Self {
             key,
             base_url,
+            workspace,
             model,
             status: String::new(),
             busy: None,
             models: Vec::new(),
             banner: banner_image(),
-            _changed: vec![changed],
+            _changed: vec![changed, workspace_changed],
         }
     }
     fn cancel(&mut self) {
@@ -299,6 +315,9 @@ impl SettingsWindow {
         self.max
             .base_url
             .update(cx, |field, cx| field.set_text(config.base_url, cx));
+        self.max.workspace.update(cx, |field, cx| {
+            field.set_text(config.anthropic_workspace_id, cx)
+        });
         self.max
             .model
             .update(cx, |field, cx| field.set_text(config.model, cx));
@@ -310,6 +329,7 @@ impl SettingsWindow {
             .read_settings(|b| b.settings.max.provider.clone());
         config.base_url = self.max.base_url.read(cx).text().trim().to_string();
         config.model = self.max.model.read(cx).text().trim().to_string();
+        config.anthropic_workspace_id = self.max.workspace.read(cx).text().trim().to_string();
         config.authentication = Authentication::ApiKey;
         if let Err(error) = config.endpoint("models") {
             self.max.status = error.into();
@@ -648,6 +668,13 @@ impl SettingsWindow {
                 row()
                     .child("Base URL")
                     .child(field(&self.max.base_url, "max-base-url")),
+            );
+        }
+        if provider == Provider::Anthropic {
+            providers = providers.child(line()).child(
+                row()
+                    .child("Workspace ID")
+                    .child(field(&self.max.workspace, "max-workspace-id")),
             );
         }
         providers = providers
