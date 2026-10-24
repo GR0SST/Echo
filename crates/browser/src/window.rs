@@ -399,6 +399,7 @@ pub enum Command {
     ViewArchive,
     ViewHistory,
     OpenLibrary,
+    ManageSpaces,
     PrintPage,
     ViewDownloads,
     RequestClearArchive,
@@ -1492,6 +1493,7 @@ impl BrowserWindow {
                 (Command::ReplacePinnedUrl, "Replace Pinned URL with Current", "replace pinned url with current|update pinned url|replace pin with current page", modified_pin),
                 (Command::ViewHistory, "View History", "view history|open history|browsing history", true),
                 (Command::OpenLibrary, "Open Library", "open library|view library|library", !self.browser.is_private() && !self.browser.is_blank()),
+                (Command::ManageSpaces, "Manage Spaces", "manage spaces|space management|organize|toggle space manager|view spaces", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewDownloads, "View Downloads", "view downloads|downloads", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
@@ -1827,6 +1829,7 @@ impl BrowserWindow {
             }
             Command::ViewHistory => self.history_from_command(cx),
             Command::OpenLibrary => self.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx),
+            Command::ManageSpaces => self.open_library_spaces(cx),
             Command::ViewDownloads => self.open_library_downloads(cx),
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
@@ -1954,7 +1957,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
-            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
@@ -3695,7 +3698,7 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
-            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))

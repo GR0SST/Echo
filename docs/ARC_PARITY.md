@@ -130,7 +130,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Change Profile | — | partial | Captured-Space routing and storage replacement work; warning conditions and exact sheet presentation still need matching |
 | Next Space / Previous Space | ⌥⌘→ / ⌥⌘← | done | — |
 | Go to Space N ("Jumps over to your %@ Space") | ⌃1…⌃9 (?) | done | Default shortcuts aren't in the nib |
-| Manage Spaces… (Space Manager in Library) | — | missing | — |
+| Manage Spaces… (Space Manager in Library) | — | partial | Spaces menu and Command Bar open Library → Spaces through the existing navigation lifecycle, preserving loaded documents and the window-local creation draft. Full manager presentation and repeated-invocation behavior still need reference validation. See [entry contract](SPACE_MANAGER.md) |
 
 ### Tabs
 

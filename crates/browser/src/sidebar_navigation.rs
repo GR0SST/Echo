@@ -75,6 +75,18 @@ impl SidebarNavigation {
     }
 }
 impl BrowserWindow {
+    pub(crate) fn open_library_spaces(&mut self, cx: &mut Context<Self>) {
+        if crate::quit::is_quitting() || self.browser.is_private() || self.browser.is_blank() {
+            return;
+        }
+        self.select_sidebar_page(SidebarPage::Library, cx);
+        self.invalidate_sidebar_focus();
+        self.sidebar_navigation.library_section = LibrarySection::Spaces;
+        self.sync_navigation_visibility();
+        self.defer_sidebar_focus(cx);
+        cx.notify();
+    }
+
     pub(crate) fn invalidate_navigation_focus(&mut self) {
         self.sidebar_navigation.generation = self.sidebar_navigation.generation.wrapping_add(1);
     }
