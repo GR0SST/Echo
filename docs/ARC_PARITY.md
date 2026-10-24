@@ -31,13 +31,22 @@ sync or cloud backend of ours. Anything dependent on The Browser Company's
 servers or an Arc account is permanently out of scope: Arc Members and account
 recovery; syncing Spaces, tabs, Favorites or settings; arc.net cloud sharing of
 Spaces/Folders/Easels/Splits; publishing Easels/Boosts to the gallery; "Share
-Arc" referrals; Arc Max, ChatGPT, "Browse for Me", Tidy Tabs and other AI
-features requiring Arc's servers; Arc's auto-update feed and telemetry.
+Arc" referrals; Arc's auto-update feed and telemetry.
 Do not add UI for these features, including placeholder buttons, sync notices
 or synchronization icons. Existing inert controls described below are inventory
 observations, not permission to retain or implement excluded UI.
 Local profiles, local sessions, browsing data, website logins/passwords, local
 import from other browsers and the system share sheet remain in scope.
+
+Arc Max parity is in scope by the owner's decision (2026-10-24): Tidy Tabs,
+tab/download renaming, 5-Second Previews, Ask on Page, ChatGPT in the Command
+Bar, Browse for Me and Instant Links. AI requests go directly to the user's
+own provider, with no Echo server in between. Settings must offer "Sign in
+with ChatGPT" (OAuth to the user's OpenAI/ChatGPT account, as in the Codex CLI)
+and manual API key entry for OpenAI and other providers. Keys and OAuth
+credentials stay locally in the OS keychain. This AI-only ChatGPT sign-in is
+the only allowed browser-provided sign-in; it creates no Echo account and
+enables no sync. Website logins remain in scope as above.
 
 Statuses: **done** (implemented), **partial** (local parity remains incomplete),
 **missing** (in-scope work not implemented), **out of scope** (permanently
@@ -149,7 +158,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
 | New Tab… | ⌘T | done | — |
-| New ChatGPT Message… | ⌥⌘G (hidden) | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
+| New ChatGPT Message… | ⌥⌘G (hidden) | missing | AI-only user-provider integration and shortcut routing |
 | Join Meeting (link to the next meeting) | ⌃⌘J (hidden) | missing | — |
 | Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
 | Pin/Unpin Tab | ⌘D | done | — |
@@ -210,7 +219,7 @@ Folder duplication follows the right-click action documented in the
 | **Pinned** section of a Space | ⌘D | partial | Closing keeps the tab pinned and resets it to its pinned URL. Missing: "Edit Pinned Page" (custom URL). Reset to Original URL and Replace Pinned URL with Current are available in the Command Bar; section collapses from the Space name without a separate Pinned header |
 | **Today** section (unpinned) and the "+ New Tab" button | — | done | — |
 | "Clear" button above Today (archives unpinned tabs) | ⇧⌘K | done | "↓ Clear" appears at the right of the Pinned/Today divider on sidebar hover; preserves Pinned and other Spaces |
-| "Tidy Tabs": AI grouping of Today by topic | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
+| "Tidy Tabs": AI grouping of Today by topic | — | missing | Existing inert Tidy control does not implement grouping; use the user's AI provider |
 | Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | ⇧⌘N (?) | partial | Persistent ordered nested Pinned tree with GPUI creation, rename, icons, collapse/expand and folder/tab context menus. Move pages, complete Split Views or folder subtrees across Spaces without recreating pages; tabs and complete folder subtrees can also be dragged onto folder headers or Space icons. Hover a Space icon during a drag to reveal its folders. Invalid self/descendant or over-depth folder drops are rejected. Closed folders stay closed and reveal the active item. Reveal Tab unfolds ancestors. Turn into Space promotes the children into a new Space with the folder's name/icon, preserving page and group identities. Folder sibling insertion, previews and multi-selection remain missing; fresh visual check awaits an unlocked desktop |
 | Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | — | missing | — |
 | Dragging tabs (between sections, into folders, into Favorites, into another Space) | drag | partial | Drag Today, Pinned or Favorite items onto folders, Pinned/Space headers, Today headers / New Tab, or the Favorites dock, including its empty onboarding card. Drop on a row's upper/lower half to insert before/after it and adopt its section/folder; an insertion line shows the edge. Space icon drops preserve Today/Pinned (Favorites become Pinned); hovering 500ms switches Spaces so the drag can continue to a folder or row. Leaving early cancels the hover. Complete Split Views stay atomic and keep their source pane even when the destination Space had another pane selected; loaded CEF views are reused. Closed folders stay closed. The Space name also accepts nested folders at the Pinned root. Favorites can be reordered or inserted at an icon; a full dock allows sorting but rejects new items. Drops outside targets cancel without activating an inactive tab. The empty Favorites card accepts the first drop; its dismissal persists. Exact drag-after-dismiss reference states and edge auto-scroll remain unfinished |
@@ -288,8 +297,9 @@ Folder duplication follows the right-click action documented in the
 | Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo <action> | — | partial | Toggle Sidebar is available; remaining local actions need their features. Check for Updates via Arc's feed is out of scope |
 | Running an extension by name ("Extension …") | — | missing | — |
 | Join next video call / Zoom | — | missing | — |
-| Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | partial | Five local tab suggestions with contextual Space/Switch to Tab hints. Feature/help links and Arc's complete recency/ranking policy remain missing. Arc-account, Max and ChatGPT promotion rows are excluded |
-| ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
+| Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | — | partial | Five local tab suggestions with contextual Space/Switch to Tab hints. Feature/help links, Max/ChatGPT suggestions and Arc's complete recency/ranking policy remain missing. Arc-account promotion rows remain excluded |
+| ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | — | missing | AI-only user-provider integration and Command Bar flow |
+| Instant Links (Arc Max) | — | missing | Direct navigation using the user's AI provider |
 
 ## 6. Context menus
 
@@ -400,7 +410,8 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 Reference tabs: General, Profiles, Links, Shortcuts, Max, Advanced, Account,
 Icon. Echo excludes Account and sync. There is also an internal Staff tab.
 The separate 684 × 650 GPUI Settings window follows the installed Arc reference.
-Account, synchronization and Max are permanently out of scope; no UI may be added for them. Arc artwork and
+Browser Account and synchronization remain permanently out of scope; Max and
+AI-only provider settings are in scope. Arc artwork and
 referral icon unlocks are permanently out of scope. Controls for features without an
 implementation persist intent only (this does not authorize excluded UI); action-only routes without backing behavior
 remain unavailable. The installed release puts Auto-Archive in Profiles, not
@@ -422,7 +433,9 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | Profiles → profile list, creating and deleting, Default Search Engine, Include search engine suggestions, Search Settings…, auto-archive, Download Location, Default Document App, Privacy and Security → Clear Browsing Data | partial (real profile inventory and existing creation sheet; search engine and per-profile archive policy wired. Suggestions control the Command Bar; document/download choices persist. Deletion, search management and data-page routes remain unavailable) |
 | Links → Air Traffic Control…, Peek (2 options), Little Arc (shortcut, links from other apps, ⌥⌘-click, Archive Little Arcs after) | partial (reference controls persist intent; Little Arc, Peek and Air Traffic Control integrations remain missing) |
 | Shortcuts → search ("Type a feature name or shortcut"), Default / Customized Shortcuts, recording a custom shortcut, conflicts ("is already in use by …", Remove Conflicting Shortcut), per-shortcut priority (Arc wins / Website wins / first press to the site, second to Arc), Reset Shortcut / Reset All, Extension Shortcuts…, "Include Favorites in ordering", "Learn the Essential Shortcuts" | partial (searchable observed shortcut catalog, with local Space names. Recording, conflict/priority editing, reset, extension routes and the Favorites-ordering menu remain missing) |
-| Max → Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | out of scope (Arc service/account dependency; no UI) |
+| Max → Settings tab: Ask on Page (⌘F), Tidy Tab Titles, Tidy Downloads, ChatGPT in the Command Bar, 5-Second Previews, Automatically enable future Max features | missing (tab, controls and AI integrations; use the user's provider directly) |
+| Max → "Sign in with ChatGPT" (OAuth to the user's OpenAI/ChatGPT account, as in the Codex CLI) | missing (AI-only sign-in; credentials in the local OS keychain; no Echo account, sync or intermediary server) |
+| Max → manual API key entry for OpenAI and other AI providers | missing (Settings provider configuration; keys in the local OS keychain; direct provider requests) |
 | Advanced → More Settings… (arc://settings), Reset Translated-site Prompts, Enable Boosts, Allow websites to get your theme data, Picture in Picture when leaving a tab with video, dragging the window by the top of the page, Shared Quotes, Show full URL when Toolbar is enabled, restoring windows on launch, Haptic feedback when reordering, Play Arc sound effects | partial (observed three-group layout with nine persisted toggles. Engine/platform integrations and action buttons remain unavailable) |
 | Icon → alternative app icons (unlocked by referrals) | partial (current Echo icon shown; proprietary Arc artwork and referral service permanently out of scope (no UI), alternative Echo icons not implemented) |
 
@@ -504,7 +517,7 @@ are implemented for copied links; the remaining notifications follow below.
 |---|---|---|
 | Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | missing | — |
 | Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | missing | — |
-| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | Local theme, Favorites, blocker and default-browser steps remain missing. Arc Max, Arc Members/member card and browser-account sign-in are out of scope |
+| Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | missing | Local theme, Favorites, blocker, Arc Max with the user's AI provider and default-browser steps remain missing. Arc Members/member card and browser-account sign-in remain out of scope; AI-only ChatGPT OAuth is allowed |
 | "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | missing | — |
 | "Essential Keyboard Shortcuts" window (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | missing | — |
 | Empty state: "Open your first tab. Click New Tab or press ⌘T…" | partial | We show a "No tab open / Press ⌘T to open a new tab" placeholder |
@@ -546,7 +559,7 @@ are implemented for copied links; the remaining notifications follow below.
 | Battery Saver mode | missing | — |
 | Task Manager, trace recording | missing | — |
 | Shared Quotes (link to the selected text) | missing | — |
-| Arc Max (AI: Ask on Page, Tidy Titles and Downloads, 5-Second Previews, ChatGPT) | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
+| Arc Max (AI: Tidy Tabs, tab/download renaming, 5-Second Previews, Ask on Page, ChatGPT in the Command Bar, Browse for Me, Instant Links) | missing | User-provider integrations, AI-only ChatGPT OAuth and manual API keys; credentials stored locally, no Echo intermediary server |
 
 ---
 
@@ -558,8 +571,8 @@ exclusions, not outstanding work; mixed rows count only their local status.
 
 - **done**: 65
 - **partial**: 109
-- **missing**: 113
-- **out of scope**: 15
+- **missing**: 121
+- **out of scope**: 10
 
 ### Biggest gaps (by importance for parity)
 

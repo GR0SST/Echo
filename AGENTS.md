@@ -40,8 +40,6 @@ Anything beyond that (our own features, departures from Arc) comes after.
   - Cloud sharing through Arc servers: Share Space/Folder/Easel/Split via
     arc.net links, and publishing Easels/Boosts to the gallery.
   - Referral features ("Share Arc").
-  - Arc Max, ChatGPT, "Browse for Me", Tidy Tabs and other AI features that
-    require Arc's servers.
   - Arc's auto-update feed and telemetry.
 
   Anything dependent on The Browser Company's servers or an Arc account is
@@ -50,6 +48,14 @@ Anything beyond that (our own features, departures from Arc) comes after.
   or synchronization icons.
   Local profiles, local sessions, browsing data, website logins/passwords,
   local import from other browsers and the system share sheet remain in scope.
+- Arc Max parity is in scope: Tidy Tabs, tab/download renaming, 5-Second
+  Previews, Ask on Page, ChatGPT in the Command Bar, Browse for Me and Instant
+  Links. AI features use the user's own provider directly, with no Echo server
+  in between. Settings must offer "Sign in with ChatGPT" (OAuth to the user's
+  OpenAI/ChatGPT account, as in the Codex CLI) and manual API key entry for
+  OpenAI and other providers. Store keys and OAuth credentials locally in the
+  OS keychain. "Sign in with ChatGPT" is the only allowed browser-provided
+  sign-in and is for AI features only; it is not an Echo account or sync.
 - Native testing may create new Spaces. Never delete a Space in live Arc or
   Echo sessions, including test Spaces; the owner will remove them manually.
   Run profile reassignment checks only in test Spaces; preserve user Space
