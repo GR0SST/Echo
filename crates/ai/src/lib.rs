@@ -4,6 +4,8 @@ mod config;
 pub use config::*;
 #[cfg(feature = "http")]
 pub mod client;
+#[cfg(feature = "http")]
+pub mod document;
 pub mod credentials;
 #[cfg(feature = "http")]
 pub mod oauth;

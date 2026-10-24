@@ -16,6 +16,8 @@ use crate::{demo_browser, init};
 mod max_chatgpt_tests;
 #[path = "max_downloads_tests.rs"]
 mod max_downloads_tests;
+#[path = "max_preview_tests.rs"]
+mod max_preview_tests;
 #[path = "toolbar_tests.rs"]
 mod toolbar_tests;
 #[path = "page_context_tests.rs"]
@@ -251,6 +253,7 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    preview_tokens: std::collections::HashMap<u64,u64>,
     context_images: Vec<(u64,u64,String,String)>,
     peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
     boosts: std::collections::HashMap<crate::pages::StorageSelection, Vec<engine::SiteBoost>>,
@@ -357,6 +360,7 @@ impl WebEngine for FakeEngine {
     fn set_color_scheme(&mut self, view: ViewId, dark: Option<bool>) -> bool {
         self.call(Call::ColorScheme(raw(view), dark)); true
     }
+    fn set_link_preview(&mut self, view: ViewId, token:u64) { self.0.borrow_mut().preview_tokens.insert(raw(view),token); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.0.borrow_mut().peek_policies.insert(raw(view), policy); }
     fn set_site_boosts(&mut self, storage: &crate::pages::StorageSelection, boosts: Vec<engine::SiteBoost>) { self.0.borrow_mut().boosts.insert(storage.clone(), boosts); }
     fn prepare_paste_and_match_style(&mut self, view: ViewId) -> Option<crate::pages::NativePaste> {
@@ -9183,7 +9187,7 @@ fn peek_rejects_background_stale_and_non_web_link_callbacks(cx: &mut TestAppCont
 fn peek_engine_policy_tracks_the_pin_and_both_settings(cx: &mut TestAppContext) {
     use browser_core::settings::Toggle;
     let (view, cx, fake) = open_pages(cx);
-    assert_eq!(fake.0.borrow().peek_policies[&1], engine::PeekPolicy { pinned: false, shift_click: true, capture_escape: false });
+    assert_eq!(fake.0.borrow().peek_policies[&1], engine::PeekPolicy { pinned: false, shift_click: true, capture_escape: false, capture_link_modifiers: false });
     cx.simulate_keystrokes("cmd-d"); cx.run_until_parked();
     assert!(fake.0.borrow().peek_policies[&1].pinned);
     view.update(cx, |view, cx| {

@@ -47,3 +47,18 @@ generated in memory. The ignored `native_store_round_trip` test creates and
 removes only an isolated generated OS credential; it passed on macOS. Live
 provider billing/account consent and Windows/Linux stores require validation
 on those systems; there is no test that uses the owner's provider credentials.
+
+
+Public-link previews read the destination anonymously before making a direct
+provider request. The reader has no browser cookie jar or authorization headers.
+It validates each redirect, restricts ports to HTTP/HTTPS, pins connections to
+validated public DNS answers and rejects private/special IP ranges (including
+IPv4-mapped IPv6). It accepts only HTML/plain text, caps the response at 2 MiB,
+and extracts at most 30,000 characters while excluding scripts, forms and
+navigation. Document text is untrusted model context; model output is bounded
+heading/fact text, never executable actions or replacement destination URLs.
+Private/Blank windows do not request previews. Disabling the feature, changing
+the source owner/document/provider or dismissing its panel cancels pending work.
+The tested macOS fixture saved its synthetic key through Echo Settings, made
+one loopback SSE request for a public Wikipedia destination and removed that
+credential after clean native termination. No owner credential was used.

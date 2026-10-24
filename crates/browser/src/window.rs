@@ -518,6 +518,8 @@ pub enum OverlayKind {
     Find,
     Toast(u64),
     LinkStatus,
+    MaxPreview,
+    MaxPreviewMenu,
     PageZoom,
     SplitDrop,
     /// The hidden sidebar, shown floating over the page.
@@ -545,6 +547,7 @@ pub struct Overlay {
     browser: WeakEntity<BrowserWindow>,
     kind: OverlayKind,
     _observe: Option<Subscription>,
+    preview_focus: Option<FocusHandle>,
 }
 
 impl Overlay {
@@ -556,6 +559,7 @@ impl Overlay {
             browser,
             kind,
             _observe: observe,
+            preview_focus: matches!(kind,OverlayKind::MaxPreview|OverlayKind::MaxPreviewMenu).then(||cx.focus_handle()),
         }
     }
 }
@@ -571,13 +575,17 @@ impl Render for Overlay {
             return self.browser.read_with(cx, |browser, _| browser.render_toast(generation, width, now, self.browser.clone()))
                 .unwrap_or_else(|_| div().into_any_element());
         }
-        self.browser
+        let preview_focus=self.preview_focus.clone();
+        if let Some(focus)=&preview_focus {focus.focus(window);}
+        let content=self.browser
             .update(cx, |browser, cx| {
                 let content = match kind {
                     OverlayKind::RecentItems => browser.render_recent_items(cx),
                     OverlayKind::CommandBar => browser.render_command_bar_overlay(f32::from(window.viewport_size().width), f32::from(window.viewport_size().height), cx),
                     OverlayKind::Find => browser.render_find_bar(cx),
                     OverlayKind::Toast(_) => unreachable!("passive toast renders above"),
+                    OverlayKind::MaxPreviewMenu => browser.render_max_preview_menu(cx),
+                    OverlayKind::MaxPreview => browser.render_max_preview(window, cx),
                     OverlayKind::LinkStatus => browser.render_link_status(window),
                     OverlayKind::PageZoom => browser.render_page_zoom(),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
@@ -590,9 +598,10 @@ impl Render for Overlay {
                     OverlayKind::Setup => browser.render_setup(),
                     OverlayKind::TransientPicker => browser.render_transient_picker(window, cx),
                 };
-                browser.render_overlay_shell(content, cx)
+                browser.render_overlay_shell(content, preview_focus.as_ref(), cx)
             })
-            .unwrap_or_else(|_| div().into_any_element())
+            .unwrap_or_else(|_| div().into_any_element());
+        content
     }
 }
 
@@ -817,6 +826,7 @@ impl BrowserWindow {
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
+            this.max_preview_activation(window.is_window_active(),cx);
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
         }).detach();
         if let Some(pages) = pages.clone() {
@@ -859,6 +869,7 @@ impl BrowserWindow {
                     // Reconcile both edges against the native pointer rather than
                     // leaving GPUI's cached hover stuck after a page interaction.
                     let _ = this.update_in(cx, |this, window, cx| {
+                        this.poll_max_preview_modifiers(window,cx);
                         if let Some((x, y)) = this.native_view.and_then(crate::native::pointer_in_view) {
                             let hovered = (window.is_window_active() || this.peek_child.is_some())
                                 && x >= 0. && x < this.sidebar_width() && y >= 0. && y < f32::from(window.viewport_size().height);
@@ -1119,6 +1130,7 @@ impl BrowserWindow {
         self.share_picker.take();
         self.discard_sidebar_resize();
         if let Some(bar) = &self.command_bar { bar.material_alive.set(false); }
+        self.retire_max_preview(cx);
         self.clear_command_bar_backdrop();
         self.clear_site_controls_backdrop();
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
@@ -1195,6 +1207,8 @@ impl BrowserWindow {
             if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
+                Event::LinkPreviewHover { view, token, source_url, hover } => self.max_preview_hover(view,token,source_url,hover,window,cx),
+                Event::PreviewModifiers { view, shift } => self.max_preview_modifiers(view,shift,window,cx),
                 Event::PictureInPictureReturnRequested { .. } => {
                     if let Some(identity)=identity { self.return_to_media_tab(identity.tab,cx);cx.notify(); }
                 }
@@ -1338,6 +1352,7 @@ impl BrowserWindow {
     }
 
     fn defer_engine_shortcut(&mut self, shortcut: engine::Shortcut, source: Option<crate::pages::InputOrigin>, window: &mut Window, cx: &mut Context<Self>) {
+        if shortcut.key=="escape" && self.max.preview.open.is_some() { self.dismiss_max_preview(cx); return; }
         self.engine_shortcut_pending = true;
         let browser = cx.entity().downgrade();
         let keystroke = keystroke_for(shortcut);
@@ -1615,6 +1630,8 @@ impl BrowserWindow {
     /// makeKeyAndOrderFront). Minimizing must never enqueue that activation,
     /// including from an earlier dismissal in the same command dispatch.
     pub(crate) fn close_popups_for_window_operation(&mut self, minimize: bool, cx: &mut Context<Self>) {
+        if minimize && self.max.preview.open.is_some() {self.popup_focus_on_activation=true;}
+        self.retire_max_preview(cx);
         if minimize { self.abandon_sidebar_resize(); self.queue_floating_resize(cx); }
         let focus = if minimize {
             // A root with no popup already owns its responder intent (for
@@ -1645,6 +1662,16 @@ impl BrowserWindow {
                 *generation = self.popup_focus_generation;
             }
         }
+    }
+
+    pub(crate) fn restore_passive_overlay_focus(&self,cx:&mut Context<Self>){
+        let generation=self.popup_focus_generation;let main=self.main_window;let browser=cx.weak_entity();
+        cx.defer(move|cx|{
+            if !crate::native::application_active() || cx.active_window().is_some_and(|active|active.window_id()!=main.window_id()){return;}
+            if !browser.read_with(cx,|b,_|b.popup_focus_generation==generation&&!b.popup_owns_focus()).unwrap_or(false){return;}
+            let _=main.update(cx,|_,w,_|w.activate_window());
+            let _=browser.update(cx,|b,cx|{if b.popup_focus_generation==generation&&!b.popup_owns_focus(){if let Some(pages)=&b.pages {pages.borrow_mut().request_page_focus();}cx.notify();}});
+        });
     }
 
     pub(crate) fn close_popup_overlay(&mut self, overlay: Option<WindowHandle<Overlay>>, policy: PopupFocus, sync_pages: bool, cx: &mut Context<Self>) {
@@ -2223,9 +2250,9 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    pub(crate) fn render_overlay_shell(&self, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        div().size_full().key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
+    pub(crate) fn render_overlay_shell(&self, content: AnyElement, focus:Option<&FocusHandle>, cx: &mut Context<Self>) -> AnyElement {
+        div().size_full().when_some(focus,|root,focus|root.track_focus(focus)).key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { if !this.capture_max_preview_key(event,cx) {this.capture_sidebar_resize_key(event, window, cx);} }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .when(self.peek_owner.is_some(), |this| this
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, window, cx| this.edit_undo(false, window, cx)))
@@ -4308,6 +4335,7 @@ impl Render for BrowserWindow {
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
+                    pages.preview_escape=self.max.preview.open.is_some();
                     pages.set_top_toolbar(self.toolbar_shown() && self.browser.active_split().is_none());
                     pages.sync(&self.browser, self.page_content_visible());
                     pages.sync_color_schemes(self.theme_appearance());
@@ -4317,6 +4345,7 @@ impl Render for BrowserWindow {
             }
         }
         if self.split_drop.is_some() && !cx.has_active_drag() { self.close_split_drop(cx); }
+        self.sync_max_previews(window,cx);
         self.sync_link_status(window, cx);
         self.sync_page_zoom(window, cx);
         self.sync_page_loading(window, cx);
@@ -4336,11 +4365,12 @@ impl Render for BrowserWindow {
             .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
             .track_focus(&self.focus_handle)
+            .on_mouse_down(gpui::MouseButton::Left,cx.listener(|this,_,_,cx|this.close_max_preview(cx)))
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, window, cx| {
                 let drag = event.drag(cx).clone();
                 this.update_split_drop(&drag, event.event.position, window, cx);
             }))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { if !this.capture_max_preview_key(event,cx) {this.capture_sidebar_resize_key(event, window, cx);} }))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.sidebar_resize.is_some() { return; }

@@ -68,6 +68,7 @@ pub(crate) fn request(
 }
 #[derive(Default)]
 pub(crate) struct State {
+    pub(crate) preview: crate::max_previews::State,
     generation: u64,
     tidy: Option<TidyJob>,
     pending_titles: std::collections::HashSet<TabId>,

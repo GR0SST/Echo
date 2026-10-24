@@ -135,6 +135,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn exit_peek(&mut self, cx: &mut Context<Self>) {
+        if self.max.preview.open.is_some() {self.dismiss_max_preview(cx);return;}
         if let Some(state) = &mut self.peek_owner {
             if state.close_requested { return; }
             state.close_requested = true;
@@ -280,7 +281,7 @@ impl BrowserWindow {
                 .child(button("peek-split", icons::control(Icon::Split)).on_click(cx.listener(|view, _, _, cx| view.split_peek(cx)))))
             .into_any_element();
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, close_image.is_none()); }
-        self.render_overlay_shell(content, cx)
+        self.render_overlay_shell(content, None, cx)
     }
 }
 

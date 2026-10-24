@@ -703,7 +703,7 @@ impl BrowserWindow {
 }
 
 /// The submenu arrow: a fixed vector chevron, never a font glyph.
-fn submenu_chevron() -> AnyElement {
+pub(crate) fn submenu_chevron() -> AnyElement {
     canvas(|_, _, _| (), |bounds, _, window, _| {
         let color = window.text_style().color;
         let at = |x: f32, y: f32| bounds.origin + point(px(x), px(y));

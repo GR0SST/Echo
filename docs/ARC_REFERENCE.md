@@ -1626,3 +1626,72 @@ asserted sequence. The inspected pair and enlarged crop are
 not visual parity. Archive scope, hover and Space-menu pairs are copied to the
 same evidence directory. A final guarded retry again rejected 21869/21328 and
 performed no Arc input.
+
+### Max public-link reference, 2026-10-25 (Arc 1.170.0)
+
+The owner authorized temporary changes only for 5-Second Previews, Instant Links
+and Ask on Page, on public pages in the shared Echo Test Space. The seven Max
+switches originally read: future features 1, Tidy Tabs 1, Instant Links 0,
+5-Second Previews 0, Tidy Tab Titles 1, Tidy Downloads 0, ChatGPT 1. The combined
+inspection changed Instant Links and Previews from 0 to 1 and restored both to 0
+in its `finally` block. Preview-only sessions changed Previews 0 → 1 → 0.
+`target/parity/arc-max/arc-enabled-toggles-{before,during,after}.json` and
+`arc-preview-toggles-{before,after}.json` record these values. A separate live
+recovery check (`arc-preview-recovery-{before,after}.json`) confirmed all seven
+original values without changing any switch. Tidy Downloads remained off.
+No Ask on Page switch or Ask control appeared in this installed version's Max
+pane / Command-F UI. No undocumented preference was written to force it on.
+
+On the public Wikipedia Rust article, holding Shift over Type safety opens a
+300 px-wide blue translucent panel 6 px left of the link's bounding box and
+8 px below it. The completed reference is 270 px high with a 12 px corner
+radius, 15 px padding, 13 px system text, 19 px line spacing, and approximately
+5 px between the title/fact rows. It has a bold heading and four icon-led facts
+with bold labels. The Share control is a 32 px circle inset 8 px from the right
+and bottom. Its menu has exactly Copy as Text, Copy as Image and Share, with
+24 px rows in an approximately 174 × 84 px surface. Opening this menu retains
+the preview after Shift is released; Escape first dismisses the menu and then
+the retained preview. `arc_preview_complete.png` and `arc_preview_share.png`
+were visually inspected. The later `arc_preview_loading.png` is a cached,
+already-completed answer, so it is not evidence for the initial skeleton.
+Earlier uncached inspection showed a 64 px panel with two inset skeleton bars.
+The bundle description (`arc-strings.txt:51906`) distinguishes automatic
+previews on certain websites from Shift-hover previews on any link; the
+automatic-site list has not been established.
+
+With Instant Links temporarily enabled, Shift-Return on the public query
+"Rust programming language official documentation" closed the Command Bar,
+showed a Today row titled "Searching the web for you", then opened ten public
+results, selecting Rust Documentation. The query, loading and result captures
+are `arc_instant_{query,loading,result}.png`. The nine remaining fixture tabs
+were subsequently archived by their captured IDs/creation times; no preexisting
+Today tabs were included. The returned URLs are documented in
+`instant-owned-tabs-archived.json`. Browse for Me produced no dedicated action
+in the inspected desktop Command Bar. These observations do not establish an
+Ask or Browse for Me UI and must not be replaced with invented controls.
+
+Echo's Shift-hover portion is implemented separately from the still-unverified
+automatic-site list. The private native fixture saved a synthetic key through
+Settings → Max, read the public Type safety destination without browser cookies,
+and made exactly one authorized loopback SSE request. The key was removed after
+native termination (strict exit status 0). `preview-native-provider-observation.json`
+and `preview-native-credential-cleaned.txt` contain the non-secret proof.
+Core/GPUI tests cover stale documents, disabled observers, native modifier proof,
+Shift release without a key callback, both keyboard and click menu actions, and
+minimization. A native Share click now preserves its panel across child-window
+activation; Escape dismisses its menu and then its retained panel.
+
+Visually inspected pairs at 1000 × 760 are `arc_preview_complete.png` /
+`echo_preview_complete.png` and `arc_preview_share.png` /
+`echo_preview_share.png`, all under `target/parity/arc-max`. Both captures have
+Display P3 profiles. Background row medians at y=290/400/500 are respectively
+(10,13,75)/(13,16,77)/(15,17,78) in Arc and
+(10,13,76)/(13,15,77)/(15,17,78) in Echo. The lower highlight still differs;
+`preview-color-comparison.json` records the remaining sampled differences.
+Exact font wrapping, some fact glyphs, motion and blur remain partial. These
+are panel comparisons: the fixture has different Favorites and the two browsers
+have different cached revisions of Wikipedia. Native image-copy output,
+system-share payload fidelity and non-macOS native controls are unverified.
+The local bundle check required an ignored `third_party/cef/CREDITS.html` link
+to the actual versioned SDK credits because the existing bundler expected that
+unversioned path; the upstream notice itself was preserved.

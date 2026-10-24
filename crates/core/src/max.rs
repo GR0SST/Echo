@@ -1,5 +1,7 @@
 //! Provider-independent Today grouping. A late model answer is a conditional
 //! edit of the captured tabs, never authority to create, close, or move pages.
+mod previews;
+pub use previews::{PreviewContent, PreviewIcon, PreviewPoint, PreviewSnapshot};
 use crate::{Browser, SpaceId, TabId, UserProfileId};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

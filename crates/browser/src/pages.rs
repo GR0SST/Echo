@@ -41,7 +41,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::MediaCaptureChanged { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -130,6 +130,7 @@ pub trait WebEngine {
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
+    fn set_link_preview(&mut self, _view: ViewId, _token: u64) {}
     fn set_peek_policy(&mut self, _view: ViewId, _policy: engine::PeekPolicy) {}
     fn set_corner_radius(&mut self, _view: ViewId, _radius: f64) {}
     fn set_visible(&mut self, view: ViewId, visible: bool);
@@ -206,6 +207,7 @@ impl WebEngine for Chromium {
     fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.engine.copy_context_image(view,request,page_url,url)}
     fn set_page_context_policy(&mut self, view: ViewId, policy: engine::page_context::Policy) { self.engine.set_page_context_policy(view, policy); }
+    fn set_link_preview(&mut self, view: ViewId, token: u64) { self.engine.set_link_preview(view, token); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
         if let Ok(context) = self.resolve_storage(storage) {
@@ -549,6 +551,7 @@ pub struct Pages {
     square_top: bool,
     top_toolbar: bool,
     pub(crate) peek_mode: bool,
+    pub(crate) preview_escape: bool,
     visible: HashSet<TabId>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
@@ -631,7 +634,7 @@ impl Pages {
             pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
-            square_top: false, top_toolbar: false, peek_mode: false,
+            square_top: false, top_toolbar: false, peek_mode: false, preview_escape: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -723,6 +726,18 @@ impl Pages {
         true
     }
 
+    /// Only the native page owner may install an observer or consume its data.
+    pub(crate) fn preview_pages(&self) -> Vec<(PageIdentity, Bounds, bool)> {
+        self.store.borrow().pages.values().filter(|p|p.owner==self.host&&p.visible)
+            .map(|p|(p.identity,p.frame,p.state.loading)).collect()
+    }
+    pub(crate) fn set_link_preview(&mut self, identity:PageIdentity, token:u64) {
+        let mut store=self.store.borrow_mut();
+        if let Some(view)=store.pages.get(&identity.tab).filter(|p|p.owner==self.host&&p.identity==identity).map(|p|p.view) {
+            store.engine.set_link_preview(view,token);
+        }
+    }
+
     pub(crate) fn identity_for_tab(&self, tab: TabId) -> Option<PageIdentity> { self.view(tab).and_then(|view| self.identity_for(view)) }
 
     pub(crate) fn identity_for(&self, view: ViewId) -> Option<PageIdentity> {
@@ -793,7 +808,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, peek_mode: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, peek_mode: false, preview_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -1035,7 +1050,7 @@ impl Pages {
             allow_little: !browser.is_private(), can_print: store.engine.supports_printing(),
         })).collect();
         for (view, policy) in contexts { store.engine.set_page_context_policy(view, policy); }
-        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
+        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode || self.preview_escape, capture_link_modifiers: !browser.is_private() && !browser.is_blank() && browser.settings.max.enabled(echo_ai::MaxFeature::FiveSecondPreviews) }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
     /// Browser appearance applies to every retained page owned by this host.
@@ -1798,7 +1813,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::PictureInPictureReturnRequested { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::LinkPreviewHover { .. } | Event::PreviewModifiers { .. } | Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::PictureInPictureReturnRequested { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }

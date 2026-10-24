@@ -33,6 +33,8 @@ pub use site_data::ClearSiteData;
 pub use site_info::{SiteInfo, SiteCertificate, SitePermission, PermissionKind, PermissionValue};
 mod boost_picker;
 mod quote;
+mod preview;
+pub use preview::LinkHover;
 pub use boosts::SiteBoost;
 mod printing;
 pub use printing::{PrintDispatch, PrintRequest};
@@ -104,6 +106,8 @@ pub enum Event {
     UrlChanged { view: ViewId, url: String },
     /// Link target under the pointer; an empty value clears the status.
     StatusChanged { view: ViewId, text: String },
+    LinkPreviewHover {view:ViewId,token:u64,source_url:String,hover:LinkHover},
+    PreviewModifiers {view:ViewId,shift:bool},
     LoadingChanged {
         view: ViewId,
         loading: bool,
@@ -148,6 +152,8 @@ enum RawEvent {
     Popup(String),
     BackgroundPopup(String),
     Quote(u64, String, String),
+    LinkPreviewHover(u64,String,LinkHover),
+    PreviewModifiers(bool),
     Peek(String),
     Shortcut(Shortcut),
 }
@@ -162,6 +168,7 @@ pub struct PeekPolicy {
     pub pinned: bool,
     pub shift_click: bool,
     pub capture_escape: bool,
+    pub capture_link_modifiers: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -633,6 +640,7 @@ impl Engine {
         Ok(())
     }
 
+    pub fn set_link_preview(&mut self,view:ViewId,token:u64){if let Some(view)=self.views.get(&view).filter(|v|v.role==ViewRole::Page){preview::request(&view.browser,token);}}
     pub fn request_quote(&mut self, view: ViewId, request: u64) -> bool {
         self.views.get(&view).filter(|view| view.role == ViewRole::Page).is_some_and(|view| quote::request(&view.browser, request))
     }
@@ -1355,6 +1363,8 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
             }
         }
         RawEvent::Popup(url) => Event::OpenInNewTab { opener: view, url },
+        RawEvent::LinkPreviewHover(token,source_url,hover)=>Event::LinkPreviewHover{view,token,source_url,hover},
+        RawEvent::PreviewModifiers(shift)=>Event::PreviewModifiers{view,shift},
         RawEvent::Quote(request, text, source_url) => Event::QuoteSelection { view, request, text, source_url },
         RawEvent::BackgroundPopup(url) => Event::OpenInBackgroundTab { opener: view, url },
         RawEvent::Peek(url) => Event::OpenPeek { opener: view, url },
@@ -1401,6 +1411,15 @@ wrap_client! {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
             }
             if source_process == ProcessId::RENDERER && frame.as_ref().is_some_and(|frame| frame.is_main()!=0) {
+                if let Some(message)=message.as_ref().filter(|m|CefString::from(&m.name()).to_string()==preview::REPORT) {
+                    if let Some(args)=message.argument_list().filter(|a|a.size()==2&&a.get_type(0)==ValueType::STRING&&a.get_type(1)==ValueType::STRING) {
+                        let token=CefString::from(&args.string(0)).to_string().parse::<u64>().ok();
+                        let json=CefString::from(&args.string(1)).to_string();
+                        if let (Some(token),Some(hover),Some(frame))=(token.filter(|t|*t!=0),preview::decode(&json),frame.as_ref()) {push(&self.events,browser,RawEvent::LinkPreviewHover(token,CefString::from(&frame.url()).to_string(),hover));}
+                    }
+                    return 1;
+                }
+
                 if let Some(message)=message.as_ref().filter(|message|CefString::from(&message.name()).to_string()==media::STATE) {
                     if let Some(args)=message.argument_list().filter(|args|args.size()==1&&args.get_type(0)==ValueType::STRING) {
                         if let Some(state)=media::decode(&CefString::from(&args.string(0)).to_string()) {
@@ -1784,8 +1803,13 @@ wrap_keyboard_handler! {
             let Some(event) = event else {
                 return 0;
             };
+            let policy=*self.policy.lock().unwrap();
+            let shift=event.modifiers & sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 != 0;
+            if policy.capture_link_modifiers && (shift || matches!(event.windows_key_code,16|160|161)) {
+                if let Some(browser)=browser.as_ref(){self.events.push((browser.identifier(),RawEvent::PreviewModifiers(shift)));}
+            }
             let escape = shortcut_for(event);
-            let peek_escape = self.policy.lock().unwrap().capture_escape && event.type_ == KeyEventType::RAWKEYDOWN && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
+            let peek_escape = policy.capture_escape && event.type_ == KeyEventType::RAWKEYDOWN && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
             let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts)) else { return 0; };
             if shortcut.key == "z" {
                 if let Some(browser) = browser.as_ref() { self.events.push((browser.identifier(), RawEvent::EditFocus(false))); }

@@ -801,3 +801,31 @@ pub(crate) fn show_certificate(view: *mut c_void, chain: &[Vec<u8>], host: &str)
     #[cfg(any(not(target_os = "macos"), test))]
     { let _ = (view, chain, host); false }
 }
+
+pub(crate) mod overlay_image;
+
+/// Current native modifier state, including flagsChanged events consumed by an
+/// embedded page before GPUI/CEF's ordinary key callbacks. None uses the
+/// backend's normal key-event state; the test platform never reads the OS.
+pub(crate) fn shift_pressed() -> Option<bool> {
+    #[cfg(all(target_os = "macos", not(test)))]
+    unsafe {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" { fn CGEventSourceFlagsState(state: i32) -> u64; }
+        Some(CGEventSourceFlagsState(0) & (1 << 17) != 0)
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { None }
+}
+
+pub(crate) fn application_active() -> bool {
+    #[cfg(all(target_os = "macos", not(test)))]
+    unsafe {
+        use objc2::{msg_send, runtime::{AnyClass,AnyObject,Bool}};
+        let Some(class)=AnyClass::get(c"NSApplication") else{return false;};
+        let app:*mut AnyObject=msg_send![class,sharedApplication];
+        let active:Bool=msg_send![app,isActive];active.as_bool()
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    { true }
+}
