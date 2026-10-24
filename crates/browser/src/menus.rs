@@ -67,18 +67,18 @@ pub(crate) fn init(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct ThemeUndoLabels(bool, bool);
-impl gpui::Global for ThemeUndoLabels {}
+struct SidebarUndoLabels(Option<&'static str>, Option<&'static str>);
+impl gpui::Global for SidebarUndoLabels {}
 
-pub(crate) fn sync_theme_undo(undo: bool, redo: bool, cx: &mut App) {
-    let labels = ThemeUndoLabels(undo, redo);
-    if cx.has_global::<ThemeUndoLabels>() && *cx.global::<ThemeUndoLabels>() == labels { return; }
+pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>, cx: &mut App) {
+    let labels = SidebarUndoLabels(undo, redo);
+    if cx.try_global::<SidebarUndoLabels>() == Some(&labels) { return; }
     cx.set_global(labels);
-    cx.set_menus(build_with_theme_undo(undo, redo));
+    cx.set_menus(build_with_sidebar_undo(undo, redo));
 }
 
-pub(crate) fn build() -> Vec<Menu> { build_with_theme_undo(false, false) }
-fn build_with_theme_undo(undo: bool, redo: bool) -> Vec<Menu> {
+pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None) }
+fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>) -> Vec<Menu> {
     let mut app = vec![MenuItem::action("Settings…", Settings), MenuItem::separator()];
     if native::supports_app_visibility() {
         app.extend([
@@ -115,8 +115,8 @@ fn build_with_theme_undo(undo: bool, redo: bool) -> Vec<Menu> {
         Menu {
             name: "Edit".into(),
             items: vec![
-                MenuItem::os_action(if undo { "Undo Update Theme" } else { "Undo" }, text_input::Undo, OsAction::Undo),
-                MenuItem::os_action(if redo { "Redo Update Theme" } else { "Redo" }, text_input::Redo, OsAction::Redo),
+                MenuItem::os_action(undo.map(|label| format!("Undo {label}")).unwrap_or_else(|| "Undo".into()), text_input::Undo, OsAction::Undo),
+                MenuItem::os_action(redo.map(|label| format!("Redo {label}")).unwrap_or_else(|| "Redo".into()), text_input::Redo, OsAction::Redo),
                 MenuItem::separator(),
                 MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),

@@ -22,6 +22,7 @@ mod blank_window;
 mod transient;
 mod global_little;
 mod peek;
+mod peek_history;
 mod audio;
 mod split_layout;
 mod split_drop;

@@ -162,11 +162,12 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
+enum SidebarEdit { PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
         match self {
+            Self::PeekClose(_) => false,
             Self::Theme { space, before, after } => {
                 let (source, target) = if redo { (&*before, &*after) } else { (&*after, &*before) };
                 let Some(space) = browser.spaces.iter_mut().find(|entry| entry.id == *space) else { return false; };
@@ -214,10 +215,31 @@ impl SidebarHistory {
 
 impl Browser {
     pub fn sidebar_undo_action(&self) -> Option<&'static str> {
-        match self.sidebar_history.undo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), _ => None }
+        match self.sidebar_history.undo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
     }
     pub fn sidebar_redo_action(&self) -> Option<&'static str> {
-        match self.sidebar_history.redo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), _ => None }
+        match self.sidebar_history.redo.last() { Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
+    }
+
+    /// The UI owns the retained live renderer; the core only orders its opaque
+    /// token alongside ordinary sidebar edits. Tokens are never serialized.
+    pub fn record_peek_close(&mut self, token: u64) { self.sidebar_history.record(SidebarEdit::PeekClose(token)); }
+    pub fn peek_history_token(&self, redo: bool) -> Option<u64> {
+        let stack = if redo { &self.sidebar_history.redo } else { &self.sidebar_history.undo };
+        match stack.last() { Some(SidebarEdit::PeekClose(token)) => Some(*token), _ => None }
+    }
+    pub fn take_peek_history(&mut self, redo: bool) -> Option<u64> {
+        let token = self.peek_history_token(redo)?;
+        let edit = if redo { self.sidebar_history.redo.pop().unwrap() } else { self.sidebar_history.undo.pop().unwrap() };
+        if redo { self.sidebar_history.undo.push(edit); } else { self.sidebar_history.redo.push(edit); }
+        Some(token)
+    }
+    pub fn has_peek_history(&self, token: u64) -> bool {
+        self.sidebar_history.undo.iter().chain(&self.sidebar_history.redo).any(|edit| matches!(edit, SidebarEdit::PeekClose(id) if *id == token))
+    }
+    pub fn discard_peek_history(&mut self, token: u64) {
+        self.sidebar_history.undo.retain(|edit| !matches!(edit, SidebarEdit::PeekClose(id) if *id == token));
+        self.sidebar_history.redo.retain(|edit| !matches!(edit, SidebarEdit::PeekClose(id) if *id == token));
     }
 
     /// Arc's context-menu Remove Pin archives a pin; its minus button only unloads it.
@@ -241,7 +263,9 @@ impl Browser {
     /// Reverses the last supported sidebar action, independently of text edits.
     /// Invalidated entries are discarded without recreating removed pages.
     pub fn undo_sidebar(&mut self, now: std::time::SystemTime) -> bool {
-        while let Some(mut edit) = self.sidebar_history.undo.pop() {
+        while !self.sidebar_history.undo.is_empty() {
+            if self.peek_history_token(false).is_some() { return false; }
+            let mut edit = self.sidebar_history.undo.pop().unwrap();
             if edit.apply(false, self, now) {
                 self.sidebar_history.redo.push(edit);
                 return true;
@@ -251,7 +275,9 @@ impl Browser {
     }
 
     pub fn redo_sidebar(&mut self, now: std::time::SystemTime) -> bool {
-        while let Some(mut edit) = self.sidebar_history.redo.pop() {
+        while !self.sidebar_history.redo.is_empty() {
+            if self.peek_history_token(true).is_some() { return false; }
+            let mut edit = self.sidebar_history.redo.pop().unwrap();
             if edit.apply(true, self, now) {
                 self.sidebar_history.undo.push(edit);
                 return true;
@@ -269,6 +295,29 @@ mod tests {
     const NOW: SystemTime = SystemTime::UNIX_EPOCH;
 
     fn ids(tabs: &[Tab]) -> Vec<TabId> { tabs.iter().map(|tab| tab.id).collect() }
+
+    #[test]
+    fn live_peek_tokens_preserve_sidebar_order_redo_invalidation_and_session_boundaries() {
+        let mut browser = Browser::new();
+        browser.clear_sidebar_history();
+        browser.record_peek_close(10);
+        assert_eq!(browser.sidebar_undo_action(), Some("Close Peek"));
+        let id = browser.new_tab("https://example.com", NOW);
+        browser.toggle_pin(id);
+        assert!(browser.undo_sidebar(NOW));
+        assert!(!browser.undo_sidebar(NOW));
+        assert_eq!(browser.take_peek_history(false), Some(10));
+        assert!(!browser.redo_sidebar(NOW));
+        assert_eq!(browser.take_peek_history(true), Some(10));
+        assert!(browser.redo_sidebar(NOW));
+        assert!(browser.undo_sidebar(NOW));
+        browser.record_peek_close(11);
+        assert!(browser.has_peek_history(10));
+        browser.discard_peek_history(10);
+        assert!(!browser.has_peek_history(10));
+        let restored: Browser = serde_json::from_str(&serde_json::to_string(&browser).unwrap()).unwrap();
+        assert!(!restored.has_peek_history(11));
+    }
 
     #[test]
     fn remove_pin_archives_and_one_undo_restores_original_url_and_folder_slot() {

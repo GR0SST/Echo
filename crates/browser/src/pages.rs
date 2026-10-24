@@ -733,6 +733,16 @@ impl Pages {
         self.store.borrow().pages.get(&identity.tab).is_some_and(|page| page.identity == identity)
     }
 
+    /// A closed, undoable Peek keeps its renderer but must not play audio.
+    pub(crate) fn mute_retained_document(&mut self) {
+        let mut store = self.store.borrow_mut();
+        let PageStore { engine, pages, .. } = &mut *store;
+        for page in pages.values_mut() {
+            engine.set_audio_muted(page.view, true);
+            page.muted = true;
+        }
+    }
+
     /// Creates an independent layout over the same live pages and engine.
     /// The new host cannot take another window's page until explicitly activated.
     pub fn for_host(&self, parent: *mut c_void) -> Self {

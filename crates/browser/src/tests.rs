@@ -9435,3 +9435,88 @@ fn global_little_entry_uses_the_focused_window_space_over_another_windows_last_e
     little.read_with(&compact, |view, _| assert_eq!(view.transient.as_ref().unwrap().space, expected));
 
 }
+
+#[gpui::test]
+fn peek_undo_redo_retains_the_live_renderer_and_renderer_history(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/start".into() });
+    let (child, mut peek) = peek_window(&owner, cx);
+    let engine = fake.0.borrow().forks.last().unwrap().clone();
+    let id = child.read_with(&peek, |view, _| view.browser.active_tab().unwrap().id);
+    engine.send(&mut peek, Event::UrlChanged { view: page(1), url: "https://peek.example/nested".into() });
+    engine.take_calls();
+    peek.simulate_keystrokes("escape"); peek.run_until_parked();
+    peek.executor().advance_clock(Duration::from_millis(210)); peek.run_until_parked(); cx.run_until_parked();
+    assert!(owner.read_with(cx, |view, _| view.peek_child.is_none()));
+    assert!(engine.take_calls().contains(&Call::Mute(1, true)));
+    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
+    let (restored, mut restored_cx) = peek_window(&owner, cx);
+    restored.read_with(&restored_cx, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().id, id);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://peek.example/nested");
+    });
+    let calls = engine.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))), "{calls:?}");
+    assert!(calls.contains(&Call::Mute(1, false)), "{calls:?}");
+    restored_cx.simulate_keystrokes("cmd-["); restored_cx.run_until_parked();
+    assert!(engine.take_calls().contains(&Call::Back(1)));
+    restored_cx.simulate_keystrokes("cmd-shift-z"); restored_cx.run_until_parked();
+    restored_cx.executor().advance_clock(Duration::from_millis(210)); restored_cx.run_until_parked(); cx.run_until_parked();
+    assert!(owner.read_with(cx, |view, _| view.peek_child.is_none()));
+    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
+    let (_, mut restored_cx) = peek_window(&owner, cx);
+    assert!(restored_cx.debug_bounds("peek-card").is_some());
+    assert!(!engine.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))));
+}
+
+#[gpui::test]
+fn a_closed_peeks_metadata_is_reconciled_before_undo_and_owner_close_releases_it(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example/start".into() });
+    let (_, mut peek) = peek_window(&owner, cx);
+    let engine = fake.0.borrow().forks.last().unwrap().clone();
+    peek.simulate_keystrokes("cmd-w"); peek.run_until_parked(); cx.run_until_parked();
+    engine.0.borrow_mut().events.push(Event::UrlChanged { view: page(1), url: "https://peek.example/script-navigation".into() });
+    engine.0.borrow_mut().events.push(Event::TitleChanged { view: page(1), title: "Hidden title".into() });
+    engine.take_calls();
+    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
+    let (restored, mut restored_cx) = peek_window(&owner, cx);
+    restored.read_with(&restored_cx, |view, _| {
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://peek.example/script-navigation");
+        assert_eq!(view.browser.active_tab().unwrap().title, "Hidden title");
+    });
+    assert!(!engine.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))));
+    restored_cx.simulate_keystrokes("cmd-w"); restored_cx.run_until_parked(); cx.run_until_parked();
+    owner.update(cx, |view, cx| view.close_window(cx)); cx.run_until_parked();
+    assert!(engine.take_calls().iter().any(|call| matches!(call, Call::Close(1))));
+}
+
+#[gpui::test]
+fn editable_peek_content_owns_text_undo_and_promotion_invalidates_close_redo(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&owner, cx);
+    let engine = fake.0.borrow().forks.last().unwrap().clone();
+    engine.send(&mut peek, Event::EditFocusChanged { view: page(1), editable: true });
+    engine.take_calls(); peek.simulate_keystrokes("cmd-z"); peek.run_until_parked();
+    assert!(engine.take_calls().contains(&Call::Undo(1)));
+    peek.simulate_keystrokes("cmd-w"); peek.run_until_parked(); cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-z"); cx.run_until_parked();
+    let (_, mut restored) = peek_window(&owner, cx);
+    click(&mut restored, "peek-expand"); restored.run_until_parked(); cx.run_until_parked();
+    assert!(owner.read_with(cx, |view, _| view.browser.peek_history_token(true).is_none()));
+    assert!(owner.read_with(cx, |view, _| view.browser.active_tab().unwrap().url == "https://peek.example/"));
+}
+
+#[gpui::test]
+fn closing_the_owner_during_peek_exit_cannot_add_a_late_undo_document(cx: &mut TestAppContext) {
+    let (owner, cx, fake) = open_pages(cx);
+    fake.send(cx, Event::OpenPeek { opener: page(1), url: "https://peek.example".into() });
+    let (_, mut peek) = peek_window(&owner, cx);
+    let engine = fake.0.borrow().forks.last().unwrap().clone();
+    peek.simulate_keystrokes("escape"); peek.run_until_parked();
+    owner.update(cx, |view, cx| view.close_window(cx)); cx.run_until_parked();
+    peek.executor().advance_clock(Duration::from_millis(300)); peek.run_until_parked(); cx.run_until_parked();
+    assert!(owner.read_with(cx, |view, _| view.browser.peek_history_token(false).is_none()));
+    assert!(engine.take_calls().iter().any(|call| matches!(call, Call::Close(1))));
+}

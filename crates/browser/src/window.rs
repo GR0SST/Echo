@@ -949,6 +949,7 @@ impl BrowserWindow {
         // Parent windows stay alive until all engine-tracked children are closed.
         self.remove_child_windows(cx);
         self.pages.take();
+        self.native_view = None;
         self.pending_engine_events.clear();
         cx.notify();
     }
@@ -965,6 +966,10 @@ impl BrowserWindow {
         if let Some(pages) = &self.pages { pages.borrow_mut().release_host(); }
         if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>().cloned() { downloads.wake(cx); }
         self.remove_child_windows(cx);
+        // Native teardown is complete while the NSView/HWND is still alive.
+        // Entity release can happen after GPUI destroys it; never reuse that
+        // raw pointer from the release callback or a late metadata observer.
+        self.native_view = None;
         window_close::prepare(self.main_window, cx);
     }
 
@@ -1057,6 +1062,7 @@ impl BrowserWindow {
     /// Child windows can outlive their parent on GPUI's test platform and
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
+        crate::peek_history::discard_owner(self.main_window.window_id(), cx);
         self.discard_sidebar_resize();
         if let Some(bar) = &self.command_bar { bar.material_alive.set(false); }
         self.clear_command_bar_backdrop();
@@ -1286,7 +1292,7 @@ impl BrowserWindow {
         }
     }
 
-    fn edit_undo(&mut self, redo: bool, cx: &mut Context<Self>) {
+    fn edit_undo(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !redo {
             if let Some(editor)=self.boost_editor.filter(|editor|editor.read_with(cx,|editor,_|editor.picking).unwrap_or(false)) {
                 cx.defer(move|cx|{let _=editor.update(cx,|editor,_,cx|editor.undo_last_zap(cx));});return;
@@ -1295,9 +1301,12 @@ impl BrowserWindow {
         let before = self.browser.all_tabs().count();
         let editable = self.browser.active_tab().is_some_and(|tab|
             self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
+        if !editable && self.peek_owner.is_some() { self.edit_peek_history(redo, window, cx); return; }
         if !editable && if redo { self.edit_browser(|browser| browser.redo_sidebar(SystemTime::now())) } else { self.edit_browser(|browser| browser.undo_sidebar(SystemTime::now())) } {
             self.settle_pager(cx);
             if self.browser.all_tabs().count() < before { self.after_tab_removal(cx); }
+            cx.notify();
+        } else if !editable && self.edit_peek_history(redo, window, cx) {
             cx.notify();
         } else {
             self.with_active_page(|pages, tab| if redo { pages.redo(tab) } else { pages.undo(tab) });
@@ -2095,6 +2104,8 @@ impl BrowserWindow {
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .when(self.peek_owner.is_some(), |this| this
+                .on_action(cx.listener(|this, _: &crate::text_input::Undo, window, cx| this.edit_undo(false, window, cx)))
+                .on_action(cx.listener(|this, _: &crate::text_input::Redo, window, cx| this.edit_undo(true, window, cx)))
                 .on_action(cx.listener(Self::on_go_back))
                 .on_action(cx.listener(Self::on_go_forward))
                 .on_action(cx.listener(Self::on_reload))
@@ -2114,7 +2125,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::EditTheme, window, cx| { let space = this.browser.space().id; this.open_theme_editor(space, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
-                if this.peek_owner.is_some() { this.close_window(cx); }
+                if this.peek_owner.is_some() { this.retain_closed_peek(cx); this.close_window(cx); }
                 else if this.theme_editor.is_some() { this.close_theme_editor(cx); }
                 else if this.user_profile_dialog.is_some() { this.close_user_profile_dialog(cx); }
                 else if this.command_bar.is_some() { this.close_command_bar(cx); }
@@ -4042,7 +4053,10 @@ impl Render for BrowserWindow {
         if window.is_window_active() {
             let sidebar = self.command_bar.is_none() && self.tab_rename.is_none()
                 && !self.browser.active_tab().is_some_and(|tab| self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
-            crate::menus::sync_theme_undo(sidebar && self.browser.sidebar_undo_action().is_some(), sidebar && self.browser.sidebar_redo_action().is_some(), cx);
+            let labels = if let Some(owner) = self.peek_owner.as_ref().and_then(|state| state.owner.upgrade()) {
+                let owner = owner.read(cx); (owner.browser.sidebar_undo_action(), owner.browser.sidebar_redo_action())
+            } else { (self.browser.sidebar_undo_action(), self.browser.sidebar_redo_action()) };
+            crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, cx);
         }
         if crate::quit::is_quitting() {
             return div().size_full().p_8().bg(gpui::rgb(0x202126)).text_color(gpui::rgb(0xf2f2f2))
@@ -4128,8 +4142,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::EditTheme, window, cx| { let space = this.browser.space().id; this.open_theme_editor(space, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
             .when(self.tab_rename.is_none(), |this| this
-                .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.edit_undo(false, cx)))
-                .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.edit_undo(true, cx))))
+                .on_action(cx.listener(|this, _: &crate::text_input::Undo, window, cx| this.edit_undo(false, window, cx)))
+                .on_action(cx.listener(|this, _: &crate::text_input::Redo, window, cx| this.edit_undo(true, window, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))

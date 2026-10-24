@@ -8,12 +8,14 @@ use crate::{icons::{self, Icon}, native, new_window::NormalProfile, pages::Stora
 
 actions!(peek, [ExitPeek]);
 pub(crate) struct PeekOwner {
-    owner: WeakEntity<BrowserWindow>,
+    pub(crate) owner: WeakEntity<BrowserWindow>,
+    pub(crate) history_token: Option<u64>,
+    pub(crate) redo_close: Option<u64>,
     sidebar: f32,
     opened: Instant,
-    origin: gpui::Point<gpui::Pixels>,
+    pub(crate) origin: gpui::Point<gpui::Pixels>,
     closing: Option<Instant>,
-    detached: bool,
+    pub(crate) detached: bool,
     close_requested: bool,
     close_image: Option<std::sync::Arc<gpui::RenderImage>>,
 }
@@ -64,7 +66,7 @@ impl BrowserWindow {
                     if let Some(pages) = &view.pages { pages.borrow_mut().peek_mode = true; }
                     view.sidebar_visible = false;
                     view.transient = Some(Transient { source, space, picker: None });
-                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
+                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: None, redo_close: None, sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);
                     view
                 })
@@ -72,6 +74,49 @@ impl BrowserWindow {
             if let Ok(handle) = handle {
                 let _ = owner.update(cx, |view, cx| { view.peek_child = Some(handle); cx.notify(); });
             }
+        });
+    }
+
+    pub(crate) fn restore_peek(&mut self, token: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let bounds = window.bounds();
+        let sidebar = self.sidebar_width() * self.sidebar_amount();
+        let parent = self.native_view;
+        let owner = cx.weak_entity();
+        let history = self.profile.handle.clone();
+        if let Some(pages) = &self.pages { pages.borrow_mut().request_ui_focus(); }
+        cx.defer(move |cx| {
+            if owner.upgrade().is_none() || crate::quit::is_quitting() { crate::peek_history::discard(token, cx); return; }
+            let Some(document) = crate::peek_history::take_document(token, cx) else { return; };
+            let origin = document.origin;
+            let handle = cx.open_window(WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)), titlebar: None,
+                kind: WindowKind::Normal, is_movable: false, is_resizable: false, is_minimizable: false,
+                window_background: WindowBackgroundAppearance::Transparent, ..Default::default()
+            }, |window, cx| {
+                if let (Some(parent), Some(child)) = (parent, native::view_of(window)) { native::attach_overlay(parent, child, false); }
+                let pages = document.pages.as_ref().map(|pages| {
+                    let parent = native::view_of(window).unwrap_or(std::ptr::null_mut());
+                    #[cfg(test)]
+                    let parent = if parent.is_null() { std::ptr::dangling_mut::<std::ffi::c_void>() } else { parent };
+                    let mut pages = pages.borrow().for_host(parent);
+                    pages.peek_mode = true;
+                    pages
+                });
+                cx.new(|cx| {
+                    let mut view = BrowserWindow::with_profile_pages(document.profile, Some(document.selection), pages, window, cx);
+                    view.sidebar_visible = false;
+                    view.transient = Some(Transient { source: document.source, space: document.space, picker: None });
+                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: Some(token), redo_close: None,
+                        sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
+                    view.focus(window);
+                    view
+                })
+            });
+            if let Ok(handle) = handle {
+                let child = handle.update(cx, |_, _, cx| cx.weak_entity());
+                let _ = owner.update(cx, |view, cx| { view.peek_child = Some(handle); cx.notify(); });
+                if let Ok(child) = child { crate::peek_history::restored(token, owner, history, child, cx); }
+            } else { history.edit_settings(|browser| browser.discard_peek_history(token)); }
         });
     }
 
@@ -124,7 +169,7 @@ impl BrowserWindow {
                     }
                 });
                 cx.background_executor().timer(std::time::Duration::from_millis(180)).await;
-                let _ = child.update(cx, |view, cx| view.close_window(cx));
+                let _ = child.update(cx, |view, cx| { view.retain_closed_peek(cx); view.close_window(cx); });
             }).detach();
         } else if let Some(child) = self.peek_child {
             cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.exit_peek(cx)); });
@@ -135,6 +180,7 @@ impl BrowserWindow {
         let Some(state) = self.peek_owner.as_mut() else { return; };
         if state.detached { return; }
         state.detached = true;
+        if let Some(token) = state.history_token.take() { crate::peek_history::discard(token, cx); }
         let owner = state.owner.clone();
         let handle = self.main_window;
         cx.defer(move |cx| {

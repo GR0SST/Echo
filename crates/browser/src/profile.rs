@@ -258,6 +258,7 @@ pub(crate) struct ProfileBinding {
 }
 
 impl ProfileBinding {
+    pub(crate) fn selection(&self) -> WindowSelection { self.selection.clone() }
     pub(crate) fn new(handle: ProfileHandle, selection: WindowSelection, cx: &mut Context<BrowserWindow>) -> Self {
         let draft = DraftSlot::default();
         let protected = Rc::new(RefCell::new(selection.selected_tabs().collect()));
