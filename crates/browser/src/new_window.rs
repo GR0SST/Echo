@@ -32,7 +32,7 @@ struct NewWindow {
 impl BrowserWindow {
     pub(crate) fn retain_normal_source(&self, cx: &mut App) {
         if crate::quit::is_quitting() { return; }
-        if !self.browser.is_private() && !self.browser.is_blank() {
+        if self.transient.is_none() && !self.browser.is_private() && !self.browser.is_blank() {
             cx.set_global(NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() });
         }
     }

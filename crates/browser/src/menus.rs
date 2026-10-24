@@ -33,7 +33,8 @@ actions!(
 );
 
 pub(crate) fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None), KeyBinding::new("cmd-,", Settings, None)]);
+    cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None), KeyBinding::new("cmd-,", Settings, None), KeyBinding::new("cmd-alt-n", crate::transient::NewLittleWindow, None)]);
+    cx.on_action(|_: &crate::transient::NewLittleWindow, cx| { cx.defer(|cx| crate::transient::open(None, cx)); });
     cx.bind_keys([KeyBinding::new("ctrl-cmd-n", BlankWindow, None)]);
     cx.on_action(|_: &BlankWindow, cx| { cx.defer(crate::blank_window::open); });
     cx.on_action(|_: &NewWindow, cx| { cx.defer(|cx| crate::new_window::open(true, cx)); });
@@ -98,6 +99,7 @@ fn build_with_theme_undo(undo: bool, redo: bool) -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Tab…", window::OpenCommandBar),
                 MenuItem::action("New Window", NewWindow),
+                MenuItem::action("New Little Echo Window", crate::transient::NewLittleWindow),
                 MenuItem::action("New Profile", NewProfile),
                 MenuItem::action("Blank Window", BlankWindow),
                 MenuItem::action("New Incognito Window", NewIncognitoWindow),

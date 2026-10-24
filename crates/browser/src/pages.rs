@@ -478,6 +478,7 @@ pub struct Pages {
     wanted_focus: Option<TabId>,
     axis: browser_core::splits::Axis,
     split: bool,
+    square_top: bool,
     visible: HashSet<TabId>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
@@ -559,6 +560,7 @@ impl Pages {
             wanted_focus: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
+            square_top: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -649,7 +651,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -878,6 +880,8 @@ impl Pages {
         }
     }
 
+    pub(crate) fn square_top(&mut self) { self.square_top = true; }
+
     pub(crate) fn viewport_generation(&self) -> u64 { self.viewport_generation }
 
     /// A deferred normal canvas must not overwrite a newer Library viewport.
@@ -983,7 +987,7 @@ impl Pages {
                     pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
-            engine.set_top_corners_rounded(pages[&tab].view, !self.split);
+            engine.set_top_corners_rounded(pages[&tab].view, !self.split && !self.square_top);
             let page = pages.get_mut(&tab).unwrap();
             if !page.visible { engine.set_visible(page.view, true); page.visible = true; created = true; }
             self.visible.insert(tab);

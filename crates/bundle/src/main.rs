@@ -58,4 +58,9 @@ fn install_icon(app: &Path) {
         .status()
         .expect("cannot run plutil");
     assert!(status.success(), "cannot set the bundle icon");
+    let status = std::process::Command::new("plutil")
+        .args(["-insert", "CFBundleURLTypes", "-json",
+            r#"[{"CFBundleURLName":"Web URLs","CFBundleTypeRole":"Viewer","CFBundleURLSchemes":["http","https"]}]"#])
+        .arg(&plist).status().expect("cannot register web URL handling");
+    assert!(status.success(), "cannot register web URL handling");
 }

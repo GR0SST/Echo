@@ -62,7 +62,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | New Window | ⌘N | partial | File menu, shortcut and Command Bar open normal windows sharing the profile and one live CEF page per TabId. The source Space is inherited with no selected page in any Space and the Command Bar focused. Selection is independent; transferring and closing a hosting window retain document input and navigation history. Normal state survives Dock reopen and stays separate from private windows. Verified in bundled Echo on macOS. Inactive windows retain their own frozen, dimmed source-viewport image while another window owns the same live CEF page; returning transfers the document without reloading. Capture completion preserves Command Bar and inline-editor focus. Windows/X11 hosting and remaining window states need native verification |
 | Blank Window | ⌃⌘N | partial | File menu, Command Bar and shortcut open an independent Today model with focused input; no Favorites/Pinned/Space controls. Normal-profile storage/history are shared, including creation from Incognito; local restore and final-tab closure verified in bundled Echo. Profile chooser, global Archive behavior, exact visual details and relaunch persistence remain unverified |
 | New Incognito Window | ⇧⌘N | partial | File menu, shortcut and Command Bar open independent private tab lists. CEF cookies and localStorage are shared only among live private windows, isolated from regular browsing and discarded after the last private window closes. Private visits and sessions are not saved; closed tabs can be restored in memory. Verified against installed Arc and bundled Echo. Private menu/action availability and remaining visual states still need parity work |
-| New Little Arc Window | ⌥⌘N | missing | See "Little Arc" |
+| New Little Arc Window | ⌥⌘N | partial | Standalone Little Echo window and in-app shortcut; see "Little Arc" for remaining parity gaps |
 | Restore Last Closed Tab | ⇧⌘T | done | Brings the last archived tab back to its Space |
 | Open Command Bar (on the current URL) | ⌘L | done | — |
 | New Boost / Edit Boost / Boost Gallery | hidden | missing | See "Boosts" |
@@ -141,7 +141,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Join Meeting (link to the next meeting) | ⌃⌘J (hidden) | missing | — |
 | Peek Email… (code from an email) | ⇧⌘E (hidden) | missing | — |
 | Pin/Unpin Tab | ⌘D | done | — |
-| Open Little Arc or Peek in… (pick a Space) | ⌘O | missing | — |
+| Open Little Arc or Peek in… (pick a Space) | ⌘O | partial | Little Echo promotes into the originating Space; its arrow opens a searchable Space list. Peek remains missing |
 | New Folder… | ⇧⌘N per nib (?) | partial | GPUI name editor from Spaces menu and Command Bar; the nib's shortcut conflicts with Incognito, so no binding is assigned yet |
 | Duplicate / Rename Current Item / Collapse All Folders / Expand All Folders | hidden | done | Tab duplication/rename and current-Space folder collapse/expand are available from menus and the Command Bar |
 | Next Tab / Previous Tab | ⌥⌘↓ / ⌥⌘↑ | done | — |
@@ -346,11 +346,11 @@ These flows now have GPUI regression coverage and real-app CEF checks. See
 
 | Feature | Shortcut | Status | What's missing |
 |---|---|---|---|
-| Small window for quick lookups | ⌥⌘N | missing | — |
+| Small window for quick lookups | ⌥⌘N | partial | Independent lookup tabs and website storage, 1000×760 reference frame, flush 46 px toolbar, hostname editing/copy, inherited Space theme and contrast. Initial global prompt, saved placement and opening motion remain unverified |
 | Global shortcut "Open Little Arc when I press … in any app" | configurable | missing | — |
-| Links from other apps open in Little Arc | — | missing | — |
+| Links from other apps open in Little Arc | — | partial | HTTP/HTTPS application URL events create an independent Little window; macOS bundle registers both schemes. Air Traffic Control and other platform launch integrations remain unfinished |
 | ⌥⌘-click on a link opens it in Little Arc | — | missing | — |
-| Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | ⌘O | missing | — |
+| Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | ⌘O | partial | Cmd+O and Open in promote directly; the 244 px Space list has 46 px rows, search, keyboard selection and dismissal. Copy URL preserves the complete URL while the resting address shows the hostname. Promotion reloads instead of transferring live history; profile switching, Extensions and downloads remain missing |
 | Show/Close all Little Arc windows | — | missing | — |
 | Tip for new users "Links Open in Little Arc" | — | missing | — |
 

@@ -8214,3 +8214,117 @@ fn hovering_a_split_row_reveals_independent_pane_close_targets(cx: &mut TestAppC
     assert_eq!(calls.iter().filter(|c|matches!(c,Call::Close(..))).count(),1);
     assert!(!calls.iter().any(|c|matches!(c,Call::Navigate(..)|Call::Create(..)|Call::Reload(..))));
 }
+
+fn little_root(cx: &mut VisualTestContext) -> (Entity<BrowserWindow>, VisualTestContext) {
+    let (view, handle) = cx.cx.update(|cx| {
+        let handle = cx.windows().into_iter().filter_map(|w| w.downcast::<BrowserWindow>())
+            .find(|w| w.read(cx).is_ok_and(|view| view.transient.is_some())).expect("Little window");
+        (handle.root(cx).unwrap(), handle)
+    });
+    let visual = VisualTestContext::from_window(handle.into(), &cx.cx);
+    visual.run_until_parked();
+    (view, visual)
+}
+
+#[gpui::test]
+fn little_window_shortcut_isolates_tabs_and_uses_compact_chrome(cx: &mut TestAppContext) {
+    let (source, visual) = open(cx);
+    let mut theme = browser_core::themes::SpaceTheme::from_hue(80.);
+    theme.appearance = browser_core::themes::ThemeAppearance::Dark;
+    source.update(visual, |view, _| view.edit_browser(|browser| browser.spaces[browser.active_space].theme = Some(theme.clone())));
+    let before = source.read_with(visual, |view, _| view.browser.all_tabs().count());
+    visual.simulate_keystrokes("cmd-alt-n");
+    visual.run_until_parked();
+    let (little, mut compact) = little_root(visual);
+    bar(&little, &mut compact).simulate_input("https://little.example/lookup");
+    bar(&little, &mut compact).simulate_keystrokes("enter");
+    compact.run_until_parked();
+    assert!(compact.debug_bounds("little-address").is_some());
+    assert!(compact.debug_bounds("workspace-sidebar").is_none());
+    compact.simulate_mouse_move(gpui::point(gpui::px(1.), gpui::px(200.)), None, Modifiers::none());
+    compact.simulate_keystrokes("cmd-s");
+    compact.run_until_parked();
+    little.read_with(&compact, |view, _| {
+        assert!(view.floating_sidebar.is_none());
+        assert_eq!(view.window_controls_offset(), 0.);
+    });
+    assert_eq!(compact.debug_bounds("transient-page").unwrap().top(), gpui::px(46.));
+    little.read_with(&compact, |view, _| {
+        assert!(view.browser.is_blank());
+        assert_eq!(view.browser.space().theme.as_ref(), Some(&theme));
+        assert!(view.theme_is_dark());
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://little.example/lookup");
+    });
+    assert_eq!(source.read_with(visual, |view, _| view.browser.all_tabs().count()), before);
+    compact.simulate_keystrokes("cmd-o");
+    compact.run_until_parked();
+    source.read_with(visual, |view, _| {
+        assert_eq!(view.browser.all_tabs().count(), before + 1);
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://little.example/lookup");
+    });
+}
+
+#[gpui::test]
+fn little_space_picker_filters_and_moves_to_selected_space(cx: &mut TestAppContext) {
+    let (source, visual) = open(cx);
+    visual.simulate_keystrokes("cmd-alt-n");
+    visual.run_until_parked();
+    let (little, mut compact) = little_root(visual);
+    bar(&little, &mut compact).simulate_input("https://little.example/move");
+    bar(&little, &mut compact).simulate_keystrokes("enter");
+    compact.run_until_parked();
+    click(&mut compact, "little-space-picker");
+    compact.run_until_parked();
+    let overlay = little.read_with(&compact, |view, _| view.transient.as_ref().unwrap().picker.as_ref().unwrap().overlay.unwrap());
+    let mut picker = VisualTestContext::from_window(overlay.into(), &compact.cx);
+    picker.simulate_input("Research");
+    picker.run_until_parked();
+    picker.simulate_keystrokes("enter");
+    picker.run_until_parked();
+    source.read_with(visual, |view, _| {
+        assert_eq!(view.browser.space().name, "Research");
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://little.example/move");
+    });
+}
+
+#[gpui::test]
+fn little_picker_escape_keeps_page_and_cmd_w_closes_only_lookup_window(cx: &mut TestAppContext) {
+    let (source, visual) = open(cx);
+    let original = source.read_with(visual, |view, _| view.browser.space().active_tab);
+    visual.simulate_keystrokes("cmd-alt-n");
+    visual.run_until_parked();
+    let (little, mut compact) = little_root(visual);
+    bar(&little, &mut compact).simulate_input("https://little.example/close");
+    bar(&little, &mut compact).simulate_keystrokes("enter");
+    compact.run_until_parked();
+    click(&mut compact, "little-space-picker");
+    compact.run_until_parked();
+    let overlay = little.read_with(&compact, |view, _| view.transient.as_ref().unwrap().picker.as_ref().unwrap().overlay.unwrap());
+    let mut picker = VisualTestContext::from_window(overlay.into(), &compact.cx);
+    picker.simulate_keystrokes("escape");
+    picker.run_until_parked();
+    little.read_with(&compact, |view, _| {
+        assert!(view.transient.as_ref().unwrap().picker.is_none());
+        assert_eq!(view.browser.active_tab().unwrap().url, "https://little.example/close");
+    });
+    let handle = little.read_with(&compact, |view, _| view.main_window);
+    compact.simulate_keystrokes("cmd-w");
+    compact.run_until_parked();
+    assert!(!compact.cx.update(|cx| cx.windows().iter().any(|w| w.window_id() == handle.window_id())));
+    assert_eq!(source.read_with(visual, |view, _| view.browser.space().active_tab), original);
+}
+
+#[gpui::test]
+fn external_web_url_opens_lookup_without_modifying_regular_tabs(cx: &mut TestAppContext) {
+    let (source, visual) = open(cx);
+    let before = source.read_with(visual, |view, _| view.browser.all_tabs().count());
+    source.update(visual, |view, cx| view.retain_normal_source(cx));
+    visual.cx.update(|cx| crate::transient::open_external_urls(vec!["file:///private/example".into(), "HTTPS://external.example/path".into()], cx));
+    visual.run_until_parked();
+    let (little, compact) = little_root(visual);
+    little.read_with(&compact, |view, _| {
+        assert!(view.command_bar.is_none());
+        assert_eq!(view.browser.active_tab().unwrap().url, "HTTPS://external.example/path");
+    });
+    assert_eq!(source.read_with(visual, |view, _| view.browser.all_tabs().count()), before);
+}

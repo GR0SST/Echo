@@ -17,6 +17,7 @@ mod window_snapshots;
 mod new_menu;
 mod new_window;
 mod blank_window;
+mod transient;
 mod audio;
 mod split_layout;
 mod split_drop;
@@ -91,6 +92,7 @@ pub fn init(cx: &mut App) {
     find::bind_keys(cx);
     menus::init(cx);
     settings::init(cx);
+    transient::bind_keys(cx);
     history::bind_keys(cx);
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);
@@ -261,9 +263,20 @@ fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
 pub fn run() {
     let app = Application::new();
     app.on_reopen(reopen);
-    app.run(|cx: &mut App| {
+    let urls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let incoming = urls.clone();
+    app.on_open_urls(move |batch| incoming.borrow_mut().extend(batch));
+    app.run(move |cx: &mut App| {
         init(cx);
         open_browser_window(cx);
+        cx.spawn(async move |cx| loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
+            let batch = std::mem::take(&mut *urls.borrow_mut());
+            if batch.is_empty() { continue; }
+            if cx.update(|cx| {
+                transient::open_external_urls(batch, cx);
+            }).is_err() { break; }
+        }).detach();
         #[cfg(target_os = "macos")]
         if let Ok(script) = std::env::var("BROWSER_SCRIPT") {
             if let Some(handle) = cx.windows().into_iter().find_map(|handle| handle.downcast::<BrowserWindow>()) {

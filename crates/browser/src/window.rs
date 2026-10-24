@@ -173,6 +173,8 @@ window_shortcuts! {
     "cmd-shift-w" => crate::menus::CloseWindow,
     "ctrl-cmd-n" => crate::menus::BlankWindow,
     "cmd-n" => crate::menus::NewWindow,
+    "cmd-alt-n" => crate::transient::NewLittleWindow,
+    "cmd-o" => crate::transient::OpenInSpace,
     "cmd-shift-n" => crate::menus::NewIncognitoWindow,
     "ctrl-shift-=" => AddSplit,
     "ctrl-shift--" => CloseSplitPane,
@@ -381,6 +383,7 @@ pub enum Command {
     NewFolderWithTab,
     NewWindow,
     NewIncognitoWindow,
+    NewLittleWindow,
     NewProfile(SpaceId),
     ChangeProfile(SpaceId),
     BlankWindow,
@@ -491,6 +494,7 @@ pub enum OverlayKind {
     NewMenu,
     UserProfileDialog,
     ThemeEditor,
+    TransientPicker,
 }
 
 /// Who restores native focus after an overlay has been removed.
@@ -539,6 +543,7 @@ impl Render for Overlay {
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
+                    OverlayKind::TransientPicker => browser.render_transient_picker(cx),
                 };
                 browser.render_overlay_shell(content, cx)
             })
@@ -573,6 +578,7 @@ pub struct BrowserWindow {
     pub(crate) sidebar_debug_namespace: Option<String>,
     pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
+    pub(crate) transient: Option<crate::transient::Transient>,
     sidebar_width: f32,
     sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
     sidebar_resize_generation: u64,
@@ -645,7 +651,7 @@ pub struct BrowserWindow {
 
 impl BrowserWindow {
     pub(crate) fn window_controls_offset(&self) -> f32 {
-        if !self.page_content_visible() { 0. } else { self.sidebar_width() * (self.sidebar_amount() - 1.) }
+        if self.transient.is_some() || !self.page_content_visible() { 0. } else { self.sidebar_width() * (self.sidebar_amount() - 1.) }
     }
 
     pub(crate) fn sidebar_debug_name(&self, name: String) -> String {
@@ -807,6 +813,7 @@ impl BrowserWindow {
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
+            transient: None,
             sidebar_width: SIDEBAR_WIDTH,
             sidebar_resize: None,
             sidebar_resize_generation: 0,
@@ -991,9 +998,11 @@ impl BrowserWindow {
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
         self.discard_sidebar_resize();
+        let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
         let profile_child = self.take_user_profile_child(cx);
         let theme_child = self.take_theme_editor();
         let children = [
+            transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),
             self.command_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
@@ -1242,6 +1251,7 @@ impl BrowserWindow {
         if self.browser.is_blank() && !matches!(target, Target::NewTab | Target::Tab(_) | Target::Split { .. } | Target::RenameTab(_) | Target::Archive(_) | Target::ConfirmClearArchive | Target::Icon(crate::icons::IconTarget::Tab(_))) { return; }
         if crate::quit::is_quitting() { return; }
         self.remember_library_popup_focus(window, cx);
+        self.close_transient_picker(cx);
         self.close_user_profile_dialog(cx);
         self.finish_tab_rename(true, cx);
         self.close_link_status(cx);
@@ -1390,7 +1400,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        !self.page_content_visible() || self.theme_editor.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1414,6 +1424,7 @@ impl BrowserWindow {
             PopupFocus::Restore
         };
         self.close_theme_editor_with_focus(focus, cx);
+        self.close_transient_picker_with_focus(focus, cx);
         self.close_user_profile_dialog_with_focus(focus, cx);
         self.close_site_controls_with_focus(focus, cx);
         self.close_new_menu_with_focus(focus, cx);
@@ -1547,6 +1558,7 @@ impl BrowserWindow {
                 (Command::ChangeProfile(self.browser.space().id), "Change Profile", "change profile|set profile|switch profile", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::NewSpace, "New Space…", "new space|create space|add space", true),
                 (Command::BlankWindow, "Blank Window", "blank window|new blank window", true),
+                (Command::NewLittleWindow, "New Little Echo Window", "new little echo window|new little window|little arc|quick lookup", true),
                 (Command::NewWindow, "New Window", "new window|open new window|create window|copy window|duplicate window", true),
                 (Command::NewIncognitoWindow, "New Incognito Window", "new incognito window|incognito|private window", true),
                 (Command::RenameSpace, "Rename Space…", "rename space|change space name", true),
@@ -1890,6 +1902,7 @@ impl BrowserWindow {
             Command::ChangeProfile(space) => self.open_user_profile_switch(space, cx),
             Command::BlankWindow => self.blank_window(cx),
             Command::NewWindow => self.new_window(cx),
+            Command::NewLittleWindow => self.new_little_window(cx),
             Command::NewIncognitoWindow => {
                 self.close_command_bar(cx);
                 cx.defer(crate::open_incognito_window);
@@ -1973,6 +1986,8 @@ impl BrowserWindow {
         div().size_full().key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { this.capture_sidebar_resize_key(event, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
+            .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))
+            .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::NewWindow, _, cx| this.new_window(cx)))
             .on_action(cx.listener(|this, _: &crate::menus::Settings, _, cx| this.open_settings(cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
@@ -2057,6 +2072,7 @@ impl BrowserWindow {
     }
 
     fn on_close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.transient.is_some() { self.close_window(cx); return; }
         if self.user_profile_dialog.is_some() { self.close_user_profile_dialog(cx); return; }
         let editing_name = self.tab_rename.is_some();
         self.close_focused_tab(cx);
@@ -2198,11 +2214,13 @@ impl BrowserWindow {
     }
 
     pub(crate) fn sidebar_amount(&self) -> f32 {
+        if self.transient.is_some() { return 0.; }
         self.sidebar_reveal.as_ref().filter(|reveal| reveal.collapsed == !self.sidebar_visible)
             .map_or(if self.sidebar_visible { 1. } else { 0. }, |reveal| reveal.amount)
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        if self.transient.is_some() { return; }
         self.cancel_sidebar_resize_for_active_command(cx);
         self.finish_tab_rename(true, cx);
         let from = self.sidebar_amount();
@@ -2230,7 +2248,7 @@ impl BrowserWindow {
     /// Slides the hidden sidebar in over the page, as when the pointer
     /// touches the window's left edge in Arc.
     pub fn reveal_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sidebar_visible || self.floating_sidebar.is_some() {
+        if self.transient.is_some() || self.sidebar_visible || self.floating_sidebar.is_some() {
             return;
         }
         self.floating_sidebar = Some(FloatingSidebar {
@@ -2933,7 +2951,7 @@ impl BrowserWindow {
 
     /// Window controls stay native for their behavior, but idle as neutral
     /// dots and show their colors only while the pointer is over them.
-    fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let hovered = self.traffic_lights_hovered;
         div().id("traffic-lights").debug_selector(|| self.sidebar_debug_name((|| "traffic-lights".into())())).flex_none().w(px(74.)).h_full()
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
@@ -3667,7 +3685,8 @@ impl BrowserWindow {
                         this.confirm(index, cx)
                     }))
                     .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
-                        this.close_command_bar(cx)
+                        this.close_command_bar(cx);
+                        if this.transient.is_some() && this.browser.active_tab().is_none() { this.close_window(cx); }
                     }))
                     // Keep clicks inside the panel from reaching the backdrop.
                     .on_click(|_, _, cx| cx.stop_propagation())
@@ -3804,13 +3823,14 @@ impl Render for BrowserWindow {
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
         let window_controls_offset = self.window_controls_offset();
         if let Some(view) = crate::native::view_of(window) {
-            crate::native::position_traffic_lights(view, TRAFFIC_LIGHT_X + window_controls_offset);
+            crate::native::position_traffic_lights(view, if self.transient.is_some() { 10. } else { TRAFFIC_LIGHT_X + window_controls_offset });
         }
 
         let library_open = !self.page_content_visible() && self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library;
         let sidebar = (!library_open && sidebar_amount > 0.).then(|| self.render_sidebar(cx));
         let library = library_open.then(|| self.render_library_host(cx));
-        let content = if library_open { div().into_any_element() } else { self.render_content(cx).into_any_element() };
+        let compact = self.transient.is_some();
+        let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(cx).into_any_element() };
         div()
             .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
@@ -3870,6 +3890,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))
             .on_action(cx.listener(|this, _: &CopyUrlAsMarkdown, _, cx| this.copy_url(true, cx)))
             .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))
+            .on_action(cx.listener(|this, _: &crate::transient::OpenInSpace, _, cx| this.promote_transient(None, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
             .on_action(cx.listener(Self::on_go_back))
@@ -3924,7 +3946,7 @@ impl Render for BrowserWindow {
 
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .child(self.theme_surface(theme_blurred))
-            .when(!library_open, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
+            .when(!compact && !library_open, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
                 .relative().flex_none().h_full().w(px(self.sidebar_width() * sidebar_amount)).overflow_hidden()
                 .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(sidebar)))))
             .child(self.render_sidebar_resize_tracking(cx))
@@ -3933,7 +3955,7 @@ impl Render for BrowserWindow {
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
             .when_some(library, |this, library| this.child(library))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
-            .child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx)))
+            .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))
             .child(release_hover_on_exit())
             .into_any_element()
 

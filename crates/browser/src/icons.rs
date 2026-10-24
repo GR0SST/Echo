@@ -41,6 +41,19 @@ pub(crate) fn disclosure(collapsed: bool) -> AnyElement {
     }).size(px(18.)).flex_none().into_any_element()
 }
 
+/// Up/down chevrons use the same geometry as sidebar disclosures.
+pub(crate) fn chevron(up: bool) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let color = window.text_style().color;
+        let points = if up { [(4.5,11.25),(9.,6.75),(13.5,11.25)] }
+            else { [(4.5,6.75),(9.,11.25),(13.5,6.75)] };
+        let points = points.map(|(x,y)| bounds.origin + gpui::point(px(x),px(y)));
+        let mut path = gpui::PathBuilder::stroke(px(1.5));
+        path.move_to(points[0]); path.line_to(points[1]); path.line_to(points[2]);
+        if let Ok(path) = path.build() { window.paint_path(path,color); }
+    }).size(px(18.)).flex_none().into_any_element()
+}
+
 pub(crate) fn more() -> AnyElement {
     gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
         for x in [5., 9., 13.] {
