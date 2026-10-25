@@ -255,6 +255,9 @@ impl Engine {
         kind: PermissionKind,
         value: PermissionValue,
     ) -> bool {
+        if !kind.accepts(value) {
+            return false;
+        }
         let Some(view) = self
             .views
             .get(&id)

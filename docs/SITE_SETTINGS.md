@@ -11,7 +11,9 @@ chooser-specific choices, Sound's Automatic/Mute wording, reset/delete
 confirmations, 48 px rows (76 px for Intrusive ads), 200 × 36 px selectors,
 680 px maximum section width, dark surfaces and Peek presentation were inspected.
 CEF 154 provides each content-setting type, including Local network and Apps on
-device. Profile-context operations remain behind `crates/engine`; no engine-source
+device. Both page-bound and profile-bound setters reject values unavailable for
+the permission kind; chooser guards cannot be switched to an unsupported Allow
+value. Profile-context operations remain behind `crates/engine`; no engine-source
 patch or extension bridge is involved.
 
 `GetContentSetting` returns an effective value, not its source. Echo qualifies
@@ -61,13 +63,23 @@ All paths are relative to this worktree's `target/parity/site-controls/`:
   header/buttons remains incomplete;
   its More menu and site-details selector navigation work. Arc's default keyboard
   configuration routed Tab into the underlying page during the guarded inspection.
-- A guarded live `getUserMedia({video:true})` test showed no camera badge in the
-  installed Arc's regular toolbar or SCC, including after explicitly disabling
-  Developer Mode. See `scc-media-focused-r2/camera-active-toolbar.png` and
-  `camera-active-scc.png`. This does not establish indicator parity for microphone,
-  conferencing pages or background tabs; no speculative replacement badge was
-  added. The test stream was stopped and Camera restored to Ask (default), verified
-  in `media-permissions-restored.png`; Developer Mode and toolbar mode were restored.
+- A guarded live camera test showed no camera badge in the installed Arc's regular
+  toolbar or SCC, including with Developer Mode off. A stronger follow-up consumed
+  and closed real video frames through `MediaStreamTrackProcessor`: the toolbar
+  capture shows 358 consumed frames and the SCC capture shows 466, with the track
+  still live. See `scc-media-frames-r2/camera-active-toolbar.png` and
+  `camera-active-scc-popover.png`. No camera frames were saved; the counter records
+  consumption only. Camera was restored to Ask (default), verified in that folder's
+  `media-permissions-restored.png`; Developer Mode and toolbar mode were restored.
+  This does not qualify microphone, conferencing or background-tab indicators, so
+  no speculative replacement badge was added.
+- The HTTPS [WebRTC sample](https://webrtc.github.io/samples/src/content/getusermedia/gum/)
+  baseline had Camera set to Ask (default), recorded in
+  `scc-https-baseline-r2/https-permissions-before.png`. Its subsequent capture probe
+  stopped before requesting camera because the guarded window resize did not
+  take effect. The four owner-window bounds were checked unchanged against the
+  final inventory; no HTTPS permission change was made. HTTPS capture remains
+  unqualified. Both owned windows/tabs were closed.
 - Native Share submenu pointer handoff back to parent rows and non-macOS service
   pickers remain unqualified.
 - Full-page/Portrait capture and extension actions retain their separately
