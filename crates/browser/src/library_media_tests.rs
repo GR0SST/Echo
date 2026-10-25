@@ -336,3 +336,24 @@ fn inner_search_clicks_keep_text_input_caret_placement(cx: &mut TestAppContext) 
     visual.run_until_parked();
     assert_eq!(media.read_with(visual, |view, cx| view.query(cx)), "XabcdY");
 }
+
+#[gpui::test]
+fn media_search_replaces_idle_help_and_clearing_restores_it(cx: &mut TestAppContext) {
+    let (_, _, visual, _, _subscription) = open(cx);
+    let idle = visual.debug_bounds("library-media-empty").unwrap();
+    assert!(visual.debug_bounds("library-media-no-results").is_none());
+    click(visual, "library-media-search");
+    visual.simulate_input("Echo Media Round Two 31724a8b.png");
+    visual.run_until_parked();
+    let message = visual.debug_bounds("library-media-no-results").unwrap();
+    let group = visual.debug_bounds("library-media-empty").unwrap();
+    let icon = visual.debug_bounds("library-media-empty-icon").unwrap();
+    assert_eq!(message.size.width, px(272.));
+    assert_eq!(message.top() - icon.bottom(), px(12.));
+    assert!(group.size.height < idle.size.height, "idle help must leave layout during search");
+    assert!((group.center().y - idle.center().y).abs() <= px(1.));
+    visual.simulate_keystrokes("cmd-a backspace");
+    visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("library-media-empty").unwrap(), idle);
+    click(visual, "library-media-learn-more");
+}

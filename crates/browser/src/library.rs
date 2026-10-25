@@ -394,7 +394,7 @@ pub(crate) fn navigation_icon(section: LibrarySection, scale: f32) -> AnyElement
                 (2., 4.),
             ],
             nav_rect(5., 7., 17., 14., 1.5),
-            vec![(7., 18.), (11., 13.), (14., 16.), (17., 12.), (20., 16.)],
+            vec![(6., 18.), (10., 14.), (12., 16.), (16., 12.), (21., 17.), (21., 20.), (6., 20.), (6., 18.)],
             nav_circle(10., 11., 1.),
         ],
         LibrarySection::Downloads => vec![
@@ -454,8 +454,14 @@ pub(crate) fn navigation_icon(section: LibrarySection, scale: f32) -> AnyElement
     gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
-            for points in &contours {
-                let mut path = gpui::PathBuilder::stroke(px(1.4 * scale));
+            for (index, points) in contours.iter().enumerate() {
+                // The reference's empty-Media photo contains a solid mountain
+                // silhouette and sun inside the outlined pair of photographs.
+                let mut path = if section == LibrarySection::Media && index >= 2 {
+                    gpui::PathBuilder::fill()
+                } else {
+                    gpui::PathBuilder::stroke(px(1.4 * scale))
+                };
                 for (index, &(x, y)) in points.iter().enumerate() {
                     let point = bounds.origin + gpui::point(px(x * scale), px(y * scale));
                     if index == 0 {

@@ -43,6 +43,7 @@ impl MediaView {
         let input = cx.new(|cx| TextInput::new("Search Media...", cx));
         let changes = cx.subscribe(&input, |_, input, _: &Changed, cx| {
             cx.emit(MediaIntent::SearchChanged(input.read(cx).text().to_owned()));
+            cx.notify();
         });
         Self {
             colors,
@@ -72,6 +73,7 @@ impl MediaView {
 impl Render for MediaView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors;
+        let query = self.input.read(cx).text().trim().to_owned();
         div()
             .id("library-media")
             .debug_selector(|| "library-media".into())
@@ -170,7 +172,7 @@ impl Render for MediaView {
                                                 56. / 24.,
                                             )),
                                     )
-                                    .child(
+                                    .when(query.is_empty(), |this| this.child(
                                         div()
                                             .debug_selector(|| "library-media-empty-title".into())
                                             .mt(px(12.))
@@ -213,7 +215,15 @@ impl Render for MediaView {
                                                 cx.emit(MediaIntent::LearnMoreRequested);
                                             }))
                                             .child("Learn more"),
-                                    ),
+                                    ))
+                                    .when(!query.is_empty(), |this| this.child(
+                                        div().debug_selector(|| "library-media-no-results".into())
+                                            .mt(px(12.)).w(px(272.)).text_center()
+                                            .text_size(px(14.)).line_height(px(17.))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(colors.muted)
+                                            .child(format!("No results found for “{query}”")),
+                                    )),
                             ),
                     ),
             )
