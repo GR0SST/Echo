@@ -51,6 +51,13 @@ SRC="$DOWNLOAD/chromium/src"
 if [[ "$MODE" == all || "$MODE" == build || "$MODE" == distrib ]]; then
   [[ "$(git -C "$SRC" rev-parse HEAD)" == "$CHROMIUM_COMMIT" ]]
   [[ "$(git -C "$SRC/cef" rev-parse HEAD)" == "$CEF_COMMIT" ]]
+  SHUTDOWN_PATCH="$ROOT/patches/cef154/shutdown-durability.patch"
+  if git -C "$SRC" apply --check "$SHUTDOWN_PATCH" 2>/dev/null; then
+    git -C "$SRC" apply "$SHUTDOWN_PATCH"
+  else
+    git -C "$SRC" apply --reverse --check "$SHUTDOWN_PATCH"
+    echo "Verified shutdown patch is already applied"
+  fi
   BRIDGE_PATCH="$ROOT/patches/cef154/extensions-bridge.patch"
   if [[ "${ECHO_CEF_EXTENSIONS_BRIDGE:-0}" == 1 ]]; then
     if git -C "$SRC" apply --check "$BRIDGE_PATCH" 2>/dev/null; then
@@ -69,6 +76,7 @@ if [[ "$MODE" == all || "$MODE" == build ]]; then
   # Explicit ninja, rather than autoninja's automatic machine-wide parallelism.
   # macOS make_distrib.py packages the framework from cefclient.app.
   ninja -C "$SRC/out/Release_GN_arm64" -j 8 cefclient
+  "$ROOT/scripts/check-cef-shutdown-budget.sh" "$SRC"
 fi
 if [[ "$MODE" == all || "$MODE" == distrib ]]; then
   DISTRIB_ROOT="$SRC/cef/binary_distrib"

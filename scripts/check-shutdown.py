@@ -48,6 +48,8 @@ def main():
     parser.add_argument("--appearance", choices=["Light", "Dark"], default="Dark")
     parser.add_argument("--profiles", type=int, default=3, help="persistent profile count for profiles/combined cases")
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--require-network-exit", action="store_true",
+                        help="require source-built CEF to confirm graceful network-helper exits")
     args = parser.parse_args()
     assert 1 <= args.repeat <= 20
     assert 1 <= args.profiles <= 8
@@ -68,6 +70,7 @@ def main():
     (evidence / "bundle.json").write_text(json.dumps({
         "source": str(pathlib.Path(args.bundle).resolve()),
         "main_sha256": hashlib.sha256((frozen_bundle / "Contents/MacOS/Echo").read_bytes()).hexdigest(),
+        "framework_sha256": hashlib.sha256((frozen_bundle / "Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework").read_bytes()).hexdigest(),
     }, indent=2))
     observations = []
     observations_lock = threading.Lock()
@@ -138,6 +141,14 @@ def main():
             "automation finished": "[automation] aborted:" not in text,
             "no destructive diagnostic": "[cef-helper local-fixture-probe]" not in text,
         }
+        if args.require_network_exit:
+            cef_log = directory / f"{phase}-cef.log"
+            cef_text = cef_log.read_text(errors="replace") if cef_log.exists() else ""
+            checks["graceful network cleanup"] = (
+                "[echo-shutdown] network-cleanup-complete" in cef_text
+                and "all_exited=1" in cef_text
+                and "all_exited=0" not in cef_text
+            )
         failed = [name for name, passed in checks.items() if not passed]
         if failed:
             native_failures.append({"log": str(log), "exit": result.returncode, "checks": failed})

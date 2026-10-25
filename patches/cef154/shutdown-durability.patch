@@ -1,0 +1,231 @@
+diff --git a/base/files/important_file_writer.cc b/base/files/important_file_writer.cc
+index 71ff068568..7aafb57791 100644
+--- a/base/files/important_file_writer.cc
++++ b/base/files/important_file_writer.cc
+@@ -16,6 +16,7 @@
+ 
+ #include "base/check_op.h"
+ #include "base/compiler_specific.h"
++#include "base/environment.h"
+ #include "base/containers/span.h"
+ #include "base/critical_closure.h"
+ #include "base/debug/alias.h"
+@@ -335,7 +336,17 @@ bool ImportantFileWriter::WriteFileAtomicallyImpl(
+     }
+   }
+ 
+-  if (!tmp_file.Flush()) {
++  const bool echo_diagnostics = Environment::Create()->HasVar("ECHO_SHUTDOWN_TRACE");
++  const TimeTicks echo_flush_start = TimeTicks::Now();
++  if (echo_diagnostics) LOG(INFO) << "[echo-shutdown] atomic-flush-begin path=" << path
++      << " ticks_us=" << echo_flush_start.since_origin().InMicroseconds()
++      << " thread_type=" << static_cast<int>(PlatformThread::GetCurrentThreadType());
++  const bool echo_flushed = tmp_file.Flush();
++  if (echo_diagnostics) LOG(INFO) << "[echo-shutdown] atomic-flush-end path=" << path
++      << " ticks_us=" << TimeTicks::Now().since_origin().InMicroseconds()
++      << " elapsed_us=" << (TimeTicks::Now()-echo_flush_start).InMicroseconds()
++      << " success=" << echo_flushed;
++  if (!echo_flushed) {
+     DPLOG(WARNING) << "Failed to flush temp file to update " << path;
+     DeleteTmpFileWithRetry(std::move(tmp_file), tmp_file_path);
+     return false;
+diff --git a/chrome/browser/shutdown_watchdog_mac.cc b/chrome/browser/shutdown_watchdog_mac.cc
+index 4eae5e5800..73ce5869aa 100644
+--- a/chrome/browser/shutdown_watchdog_mac.cc
++++ b/chrome/browser/shutdown_watchdog_mac.cc
+@@ -21,6 +21,7 @@
+ #include "chrome/browser/shutdown_signal_handlers_posix.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/result_codes.h"
++#include "content/public/common/shutdown_timeouts.h"
+ 
+ namespace shutdown_watchdog {
+ namespace {
+@@ -66,7 +67,8 @@ class TearDownWatchdog : public base::PlatformThread::Delegate {
+  public:
+   void ThreadMain() override {
+     base::PlatformThread::SetName("MacShutdownWatchdog");
+-    if (GetShutdownCompleteEvent().TimedWait(GetEmergencyTimeout())) {
++    if (GetShutdownCompleteEvent().TimedWait(
++            content::GetBrowserShutdownTimeout(GetEmergencyTimeout()))) {
+       return;  // Shutdown reached its terminal phase; stand down.
+     }
+     if (base::debug::BeingDebugged()) {
+@@ -108,7 +110,8 @@ void BlockOnSigtermShutdown() {
+     return;  // Caller parks the thread (preserves the legacy marker frame).
+   }
+   g_sigterm_watchdog_armed.store(true, std::memory_order_relaxed);
+-  if (GetShutdownCompleteEvent().TimedWait(GetEmergencyTimeout())) {
++  if (GetShutdownCompleteEvent().TimedWait(
++            content::GetBrowserShutdownTimeout(GetEmergencyTimeout()))) {
+     return;  // Shutdown completed; caller parks while the process exits.
+   }
+   if (base::debug::BeingDebugged()) {
+diff --git a/content/browser/browser_process_io_thread.cc b/content/browser/browser_process_io_thread.cc
+index 94a7c8ad4f..1f7b277c6c 100644
+--- a/content/browser/browser_process_io_thread.cc
++++ b/content/browser/browser_process_io_thread.cc
+@@ -7,6 +7,7 @@
+ #include "base/clang_profiling_buildflags.h"
+ #include "base/compiler_specific.h"
+ #include "base/debug/alias.h"
++#include "base/environment.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/threading/hang_watcher.h"
+@@ -20,6 +21,7 @@
+ #include "content/browser/service_host/utility_process_host.h"
+ #include "content/public/browser/browser_child_process_host_iterator.h"
+ #include "content/public/common/process_type.h"
++#include "content/public/common/shutdown_timeouts.h"
+ #include "services/network/public/mojom/network_service.mojom.h"
+ 
+ #if BUILDFLAG(IS_ANDROID)
+@@ -106,32 +108,51 @@ void BrowserProcessIOThread::IOThreadRun(base::RunLoop* run_loop) {
+ }
+ 
+ void BrowserProcessIOThread::ProcessHostCleanUp() {
++  const bool echo_diagnostics =
++      base::Environment::Create()->HasVar("ECHO_SHUTDOWN_TRACE");
++  bool echo_all_network_exited = true;
++  size_t echo_network_waits = 0;
+   for (BrowserChildProcessHostIterator it(PROCESS_TYPE_UTILITY); !it.Done();
+        ++it) {
+     if (it.GetDelegate()->GetServiceName() ==
+         network::mojom::NetworkService::Name_) {
+       // This ensures that cookies and cache are flushed to disk on shutdown.
+       // https://crbug.com/841001
+-#if BUILDFLAG(CLANG_PROFILING)
+-      // On profiling build, browser_tests runs 10x slower.
+-      const int kMaxSecondsToWaitForNetworkProcess = 100;
+-#elif BUILDFLAG(IS_CHROMEOS)
+-      // ChromeOS will kill the browser process if it doesn't shut down within
+-      // 3 seconds, so make sure we wait for less than that.
+-      const int kMaxSecondsToWaitForNetworkProcess = 1;
+-#else
+-      const int kMaxSecondsToWaitForNetworkProcess = 10;
+-#endif
+ 
+       ChildProcessHostImpl* child_process =
+           static_cast<ChildProcessHostImpl*>(it.GetHost());
+       auto& process = child_process->GetPeerProcess();
+-      if (!process.IsValid())
++      if (!process.IsValid()) {
+         continue;
++      }
+       base::ScopedAllowBaseSyncPrimitives scoped_allow_base_sync_primitives;
+       const base::TimeTicks start_time = base::TimeTicks::Now();
+-      process.WaitForExitWithTimeout(
+-          base::Seconds(kMaxSecondsToWaitForNetworkProcess), nullptr);
++      if (echo_diagnostics) {
++        LOG(INFO) << "[echo-shutdown] network-wait-begin pid=" << process.Pid()
++                  << " ticks_us=" << start_time.since_origin().InMicroseconds();
++      }
++      int echo_exit_code = -1;
++      ++echo_network_waits;
++      const bool echo_exited = process.WaitForExitWithTimeout(
++          GetNetworkServiceShutdownTimeout(), &echo_exit_code);
++      echo_all_network_exited &= echo_exited && echo_exit_code == 0;
++#if BUILDFLAG(IS_MAC)
++      // CEF's void shutdown API must not return apparent success after killing
++      // a network helper that still has BLOCK_SHUTDOWN durable writes pending.
++      // Keep the existing bounded wait, but preserve a failed shutdown instead
++      // of falling through to TerminateAll and a successful parent exit.
++      CHECK(echo_exited && echo_exit_code == 0)
++          << "Network service did not complete durable shutdown";
++#endif
++      if (echo_diagnostics) {
++        LOG(INFO) << "[echo-shutdown] network-wait-end pid=" << process.Pid()
++                  << " ticks_us="
++                  << base::TimeTicks::Now().since_origin().InMicroseconds()
++                  << " elapsed_us="
++                  << (base::TimeTicks::Now() - start_time).InMicroseconds()
++                  << " exited=" << echo_exited
++                  << " exit_code=" << echo_exit_code;
++      }
+       // Record time spent for the method call.
+       base::TimeDelta network_wait_time = base::TimeTicks::Now() - start_time;
+       DVLOG(1) << "Waited " << network_wait_time.InMilliseconds()
+@@ -139,6 +160,11 @@ void BrowserProcessIOThread::ProcessHostCleanUp() {
+     }
+   }
+ 
++  if (echo_diagnostics) {
++    LOG(INFO) << "[echo-shutdown] network-cleanup-complete waits="
++              << echo_network_waits
++              << " all_exited=" << echo_all_network_exited;
++  }
+   // If any child processes are still running, terminate them and
+   // and delete the BrowserChildProcessHost instances to release whatever
+   // IO thread only resources they are referencing.
+diff --git a/content/child/child_process.cc b/content/child/child_process.cc
+index 57a8bb5c35..646659e3c6 100644
+--- a/content/child/child_process.cc
++++ b/content/child/child_process.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <string.h>
+ 
++#include "base/environment.h"
+ #include "base/clang_profiling_buildflags.h"
+ #include "base/functional/bind.h"
+ #include "base/message_loop/message_pump_type.h"
+@@ -185,7 +186,14 @@ ChildProcess::~ChildProcess() {
+ 
+   if (initialized_thread_pool_) {
+     DCHECK(base::ThreadPoolInstance::Get());
++    const bool echo_diagnostics = base::Environment::Create()->HasVar("ECHO_SHUTDOWN_TRACE");
++    const auto echo_start = base::TimeTicks::Now();
++    if (echo_diagnostics) LOG(INFO) << "[echo-shutdown] child-pool-shutdown-begin ticks_us="
++        << echo_start.since_origin().InMicroseconds();
+     base::ThreadPoolInstance::Get()->Shutdown();
++    if (echo_diagnostics) LOG(INFO) << "[echo-shutdown] child-pool-shutdown-end ticks_us="
++        << base::TimeTicks::Now().since_origin().InMicroseconds()
++        << " elapsed_us=" << (base::TimeTicks::Now()-echo_start).InMicroseconds();
+   }
+ 
+ #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
+diff --git a/content/public/common/BUILD.gn b/content/public/common/BUILD.gn
+index a08aa58169..044daa0333 100644
+--- a/content/public/common/BUILD.gn
++++ b/content/public/common/BUILD.gn
+@@ -194,6 +194,7 @@ source_set("common_sources") {
+     "content_client.h",
+     "content_constants.cc",
+     "content_constants.h",
++    "shutdown_timeouts.h",
+     "content_descriptors.h",
+     "content_features.cc",
+     "content_features.h",
+diff --git a/content/public/common/shutdown_timeouts.h b/content/public/common/shutdown_timeouts.h
+new file mode 100644
+index 0000000000..28e49e57c2
+--- /dev/null
++++ b/content/public/common/shutdown_timeouts.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.
++#ifndef CONTENT_PUBLIC_COMMON_SHUTDOWN_TIMEOUTS_H_
++#define CONTENT_PUBLIC_COMMON_SHUTDOWN_TIMEOUTS_H_
++#include "base/clang_profiling_buildflags.h"
++#include "base/time/time.h"
++#include "build/build_config.h"
++namespace content {
++// Keep the process wait and enclosing shutdown watchdog on the same budget.
++constexpr base::TimeDelta GetNetworkServiceShutdownTimeout() {
++#if BUILDFLAG(CLANG_PROFILING)
++  return base::Seconds(100);
++#elif BUILDFLAG(IS_CHROMEOS)
++  return base::Seconds(1);
++#else
++  return base::Seconds(10);
++#endif
++}
++// The watchdog starts before this bounded wait. Reserve the existing rundown
++// budget for work before and after it, instead of racing equal deadlines.
++constexpr base::TimeDelta GetBrowserShutdownTimeout(
++    base::TimeDelta rundown_budget) {
++  return GetNetworkServiceShutdownTimeout() + rundown_budget;
++}
++}  // namespace content
++#endif

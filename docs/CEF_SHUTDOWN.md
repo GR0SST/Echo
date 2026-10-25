@@ -1,6 +1,7 @@
 # CEF shutdown investigation
 
-Status: investigation, not a qualified fix. CEF 154.0.34 / Chromium 154.0.8037.98.
+Status: the final source-side deadline/failure correction passed 16/16 clean native exits. CEF 154.0.34 / Chromium 154.0.8037.98.
+The original prebuilt investigation and 8/16 watchdog baseline are retained below.
 
 ## What the old log concealed
 
@@ -102,7 +103,7 @@ watchdog dump confirms the parent is still inside this network-process wait.
 This identifies the failure mechanism at the parent; the exact reason for a
 particular long network-helper rundown still needs source-level timing.
 
-## Source boundary / next patch plan
+## Original source boundary / patch plan
 
 The prebuilt CEF API has a cookie-store flush and a connection-close callback,
 but neither acknowledges the network service's pending ImportantFileWriter
@@ -128,9 +129,125 @@ experiment is a macOS `ScopedBoostPriority(ThreadType::kDefault)` spanning
 remain slow, CEF needs an asynchronous durable network-storage acknowledgement
 before synchronous global teardown, rather than a shorter storage deadline.
 
-These changes require a CEF-side build; there is no `src/` checkout in this
-worktree. No Chromium/CEF source patch or source build was started. Do not carry
-the earlier unproven scheduling changes forward as the fix.
+That investigation required a CEF-side build, and its worktree had no `src/`
+checkout. It did not start a source patch or build. The subsequent source work
+is documented below; the earlier unproven scheduling changes were not retained.
+
+## Source correction (2026-10-25)
+
+`patches/cef154/shutdown-durability.patch` corrects the confirmed enclosing-deadline
+collision. `content/public/common/shutdown_timeouts.h` now supplies the network
+process wait to both its caller and the macOS graceful watchdog. The release
+watchdog reserves **10 seconds for existing teardown work plus the unchanged
+10-second network wait**, rather than starting an equal ten-second deadline
+before that wait can begin. Slow-build watchdogs likewise retain their existing
+rundown allowance in addition to the network wait. The profiling/ChromeOS network
+waits remain 100/1 seconds respectively. SessionEnding's distinct 15-second
+release deadline is unchanged. Both normal teardown and SIGTERM use the shared
+graceful policy; watchdogs remain active and disarm only on real completion.
+
+This follows the natural parent stack: ChildProcess cleanup waits for the network
+service; its ThreadPool waits for BLOCK_SHUTDOWN atomic writes. Cookie completion
+does not include that metadata barrier. The parent deadline cannot safely be the
+same length as a later nested wait. No fsync, atomic replacement, cookie callback,
+network wait, helper lifecycle or CEF completion barrier is bypassed or shortened.
+
+With `ECHO_SHUTDOWN_TRACE=1`, the patch records monotonic atomic-flush begin/end,
+file identity and worker thread type, child ThreadPool shutdown timing, and the
+network wait's duration, PID and actual exit code. A final cleanup record reports
+whether every network helper exited with code zero before the existing
+TerminateAll stage. `check-shutdown.py --require-network-exit` rejects a missing
+record, timeout or nonzero network exit even if the primary application exits 0.
+Its frozen bundle manifest now also records the CEF framework SHA-256.
+On macOS, a network timeout or nonzero helper exit now fails explicitly before
+falling through to TerminateAll. CEF's void shutdown API must not return apparent
+success after truncating a pending durable write. The existing bounded graceful
+wait remains unchanged; the normal zero-status helper path is unaffected.
+
+The new instrumented, unchanged-timeout normal/GPU probe passed **4/4 exits** at
+current load. Network waits were 9.3–13.9 ms; the largest observed atomic flush
+was 35.5 ms. Evidence is outside Git at
+`/Users/grosstgrosst/Documents/Bot/cef-src/qualification/shutdown-instrumented/run-29z75mtd/`.
+Several shutdown metadata writes ran at the default thread type. Neither this
+probe nor a separate small barrier/QoS diagnostic established priority starvation,
+so **no priority boost is shipped**. The reason for the earlier intermittent long
+kernel flush is still unproved; the source fix addresses the demonstrated parent
+deadline race rather than assigning that flush an unsupported scheduling cause.
+The historical 8/16 baseline and new qualification are different runs, not a
+matched-load statistical A/B measurement.
+
+`scripts/check-cef-shutdown-budget.sh` compiles a constexpr fake clock against the
+actual production header. It covers work before the network wait, its entire
+bounded duration, work after it and shutdown completion for normal/slow builds.
+A local negative-control copy using only the old rundown allowance fails the
+static assertions. `scripts/build-cef.sh` always applies this six-file patch and
+runs the regression after its serialized Release arm64 build. The extension
+bridge remains a separate opt-in patch. All source builds still use nice 10 and
+Ninja -j 8.
+
+The matrix under qualification uses the same Echo/GPUI/helper executables from
+phase two with the complete freshly built framework (including matching V8
+resources) substituted into a private coherent bundle. It does not change Rust
+shutdown sequencing. The selected source build includes the earlier codecs and
+extension bridge. The original prebuilt fallback does not contain this patch;
+select a newly built distribution as documented in [CEF_BUILD.md](CEF_BUILD.md).
+
+## Source-build acceptance result
+
+The complete eight-scenario matrix passed **16/16 native exits** with
+`--require-network-exit`, versus **8/16 clean exits and 8/16 watchdog exits** in
+the retained loaded-machine prebuilt baseline. All sixteen network helpers
+returned code **0** before cleanup; no timeout was converted into apparent
+application success. All twelve persistent-profile HTTP cookie checks passed,
+as did both private-context empty-cookie checks and the reset reload check.
+Every phase had one actual `cef_shutdown` return, the complete CEF barrier,
+exactly one final native terminate, and no watchdog or automation failure.
+
+| Scenario | Write exit | Restart exit | Persistent profile cookies verified |
+| --- | --- | --- | --- |
+| normal | 0 | 0 | 1 |
+| profiles | 0 | 0 | 3 |
+| private | 0 | 0 | 1 |
+| reset | 0 | 0 | 1 |
+| gpu | 0 | 0 | 1 |
+| combined | 0 | 0 | 3 |
+| media-pip | 0 | 0 | 1 |
+| media-archived | 0 | 0 | 1 |
+
+External evidence:
+`/Users/grosstgrosst/Documents/Bot/cef-src/qualification/shutdown-final/run-etf4kagk/`.
+`results.json`, `requests.json`, empty `native-failures.json`, per-phase engine/CEF
+logs, screenshots and `source-summary.json` retain the results. The maximum
+network wait was **329.834 ms**; the largest atomic flush was **743.031 ms**;
+maximum synchronous global CEF shutdown was **370 ms**. All logged atomic
+flushes succeeded. The fixture screenshot was reviewed; PiP acceptance uses its
+explicit HTTP events and engine PiP/audible assertions, including the archived
+source case. The framework SHA-256 was
+`5bddc3b2ea8c251ee8325be37768a775f5e05619082b8db86efe19eaba1c6f6e`.
+The frozen Rust/GPUI/helper executables were from current-main commit `f1d3ffe`
+(which contains `3b7c88a`). The selected final distribution passed the full
+workspace tests: **1,610 passed, zero failed, one existing ignored**. The matrix
+freezes the bundle so later builds cannot change an ongoing run. In addition to
+CEF's wait result, all sixteen network-helper `cef_execute_process` return logs
+were independently matched by PID and verified to report code zero.
+
+An earlier budget-only variant also passed 16/16 exits at
+`qualification/shutdown-qualified/run-5tdebg49/`. Review then added the explicit
+macOS failure before the inherited helper-termination fallback; the complete
+matrix was repeated on that final build, producing the results above.
+
+Exact qualification command:
+
+```sh
+python3 scripts/check-shutdown.py \
+  --bundle /Users/grosstgrosst/Documents/Bot/cef-src/qualification/shutdown-final.app \
+  --keep-going --require-network-exit \
+  --output /Users/grosstgrosst/Documents/Bot/cef-src/qualification/shutdown-final
+```
+
+The source patch corrects the demonstrated deadline collision. These successful
+runs do not establish a cause for every slow kernel flush under every load, and
+no storage-priority or filesystem-sync change is claimed.
 
 ## Reproduction / acceptance
 
@@ -174,3 +291,11 @@ alone cannot establish successful global shutdown.
 - [Durable file flush](https://raw.githubusercontent.com/chromium/chromium/154.0.8037.98/base/files/file_posix.cc)
 - [Atomic writer](https://raw.githubusercontent.com/chromium/chromium/154.0.8037.98/base/files/important_file_writer.cc)
 - [CEF local crash configuration](https://raw.githubusercontent.com/chromiumembedded/cef/14c5a089e8452874cb1a556dc3fde26ed2d87723/include/cef_crash_util.h)
+
+The freshly reassembled local `target/bundle/Echo.app` was also checked after the
+final workspace tests: its normal write/restart pair passed **2/2 exits** with
+`--require-network-exit`, cookie persistence and the full CEF/native terminate
+barriers. Its framework hash matches the final sixteen-exit matrix exactly.
+Evidence: `qualification/shutdown-final-bundle/run-moxctlik/`. Re-linking the Rust
+wrapper changed the main executable's hash, so this separate pair qualifies the
+actual local bundle as well as the frozen full-matrix fixture.

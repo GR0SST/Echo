@@ -377,3 +377,42 @@ matched, playback advanced from 0.032 to 3.998 seconds, 101 frames rendered with
 zero drops, 68,287 audio bytes decoded, and stereo 48 kHz AAC decoded to
 2,492,416 samples. The screenshot was visually reviewed; the process exited
 cleanly. Thus the extension build retains the independently delivered codecs.
+
+## Shutdown deadline correction
+
+Current source builds always apply `patches/cef154/shutdown-durability.patch`.
+The original phase-one codec qualification used no Echo source patch; its
+preserved distribution is unchanged. Newly built distributions include the
+shutdown correction regardless of whether the optional extension bridge is
+selected. The downloaded prebuilt fallback remains unchanged.
+
+The shared timeout policy retains the network service's ten-second graceful
+wait and reserves the existing ten-second release teardown allowance around it.
+The macOS graceful watchdog therefore allows twenty seconds, disarming on actual
+completion. Atomic flushes/replacement and cookie callbacks are unchanged; no
+priority scheduling experiment is included. On macOS a network timeout/nonzero
+helper exit fails explicitly before the inherited TerminateAll fallback, so the
+void CEF shutdown call cannot report success after an unfinished durable write.
+
+`scripts/build-cef.sh build` runs the production-header fake-clock regression in
+`scripts/check-cef-shutdown-budget.sh`. It tests work before/after the full network
+wait for normal and slow-build allowances. A local negative-control copy using
+the original equal deadline fails the assertions. The six-file patch also applies
+and reverses on a fresh pinned-source mirror.
+
+The final incremental rebuild took **74 seconds**, including the fake-clock
+regression; final minimal packaging took **72 seconds**. Sources, native evidence
+and distributions occupied **53,044,936 KiB (50.59 GiB)** after packaging. The
+previous phase-two archive is retained outside Git at
+`/Users/grosstgrosst/Documents/Bot/cef-src/releases/phase2-413c771.tar.bz2`.
+
+The latest `echo-extensions-dist` contains the final qualified patch. Its framework
+SHA-256 is `5bddc3b2ea8c251ee8325be37768a775f5e05619082b8db86efe19eaba1c6f6e`;
+the minimal archive SHA-1 is `5d741a3d852ae77895b7e06458c6710730dec7e0`.
+The complete native matrix passed **16/16 exits**, all sixteen graceful zero-status
+network-helper exits and all twelve cookie persistence checks. Maximum observed
+`cef_shutdown` duration was **370 ms**. Current-main workspace tests passed
+**1,610 tests**, zero failed, one existing ignored. Investigation, before/after
+numbers and exact evidence paths are in [CEF_SHUTDOWN.md](CEF_SHUTDOWN.md).
+The original prebuilt fallback and preserved codec-only `echo-dist` do not contain
+this correction; select/rebuild the patched distribution to use it.
