@@ -19,6 +19,7 @@ pub enum Toggle {
     DragWebpages,
     FullToolbarUrl,
     ShowToolbar,
+    AllowJavaScriptFromAppleEvents,
     SharedQuotes,
     AutomaticPictureInPicture,
     ThemeData,
@@ -35,7 +36,7 @@ impl Toggle {
     pub fn default_value(self) -> bool {
         !matches!(
             self,
-            Self::ShowToolbar | Self::FullToolbarUrl | Self::DragWebpages | Self::LittleWindowLinks
+            Self::AllowJavaScriptFromAppleEvents | Self::ShowToolbar | Self::FullToolbarUrl | Self::DragWebpages | Self::LittleWindowLinks
         )
     }
 }
@@ -217,5 +218,17 @@ mod max_tests {
         let saved=session::to_json(&browser);let loaded=session::from_json(&saved).unwrap();
         assert_eq!(loaded.settings.max,browser.settings.max);
         assert!(!saved.contains("access_token")&&!saved.contains("refresh_token"));
+    }
+}
+#[cfg(test)]
+mod scripting_permission_tests {
+    use super::*;
+    #[test]
+    fn legacy_sessions_deny_javascript_until_the_explicit_persisted_opt_in() {
+        let mut browser=crate::Browser::new();let toggle=Toggle::AllowJavaScriptFromAppleEvents;
+        assert!(!browser.settings.enabled(toggle));
+        let restored=crate::session::from_json(&crate::session::to_json(&browser)).unwrap();assert!(!restored.settings.enabled(toggle));
+        browser.settings.set_enabled(toggle,true);
+        let restored=crate::session::from_json(&crate::session::to_json(&browser)).unwrap();assert!(restored.settings.enabled(toggle));
     }
 }

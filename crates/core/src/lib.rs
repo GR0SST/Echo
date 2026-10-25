@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+pub mod scripting;
 pub mod omnibox;
 pub mod links;
 pub mod history;
