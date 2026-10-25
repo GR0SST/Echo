@@ -788,9 +788,11 @@ dependencies = [
  "gpui",
  "image",
  "importer",
+ "keyring",
  "objc2",
  "objc2-foundation",
  "raw-window-handle",
+ "ring",
  "serde_json",
  "tempfile",
  "trash",
@@ -798,6 +800,7 @@ dependencies = [
  "ureq",
  "url",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

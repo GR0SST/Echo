@@ -674,6 +674,21 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 "dump" => {
                     let _ = view.update(cx, |this, cx| eprintln!("{}", dump(this, cx)));
                 }
+                #[cfg(debug_assertions)]
+                "password-store-fixture" => {
+                    let phase = arg.to_string();
+                    let result = cx.background_executor().spawn(async move {
+                        crate::password_store::native_fixture(&phase)
+                    }).await;
+                    match result {
+                        Ok(()) => eprintln!("[password-store-fixture] {arg}: passed"),
+                        Err(error) => {
+                            eprintln!("[password-store-fixture] failed: {error}");
+                            let _ = cx.update(|cx| crate::quit::request(cx));
+                            return;
+                        }
+                    }
+                }
                 "surfaces" => {
                     let _ = view.read_with(cx, |this, _| {
                         if let Some(pages) = &this.pages {

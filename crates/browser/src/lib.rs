@@ -40,6 +40,7 @@ mod new_window;
 mod setup;
 mod browser_registration;
 mod import_credentials;
+mod password_store;
 mod blank_window;
 mod transient;
 mod link_routing;
