@@ -523,6 +523,13 @@ impl BrowserWindow {
         if item.native_share {self.open_address_share(cx);return;}
         if !item.submenu.is_empty() { return; }
         let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
+        if let (MenuTarget::Space(space), Some(Command::SpaceTheme)) = (target, &item.command) {
+            // The measured header-entry bottom is 289 px below the trigger;
+            // menu.position already contains the native-style -6 px offset.
+            let bottom = self.tab_menu.as_ref().map(|menu| f32::from(menu.position.y) + 295.);
+            self.open_theme_editor_anchored(space, bottom, window, cx);
+            return;
+        }
         self.close_tab_menu(cx);
         // Items without a command are shown for parity but not built yet.
         let Some(command) = item.command else { return; };

@@ -12,7 +12,7 @@ use gpui::{
 use std::{cell::Cell, rc::Rc};
 
 const CONTEXT: &str = "SpaceThemeEditor";
-const WIDTH: f32 = 354.;
+const WIDTH: f32 = 359.;
 const HEIGHT: f32 = 508.;
 actions!(theme_editor, [Dismiss]);
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -163,6 +163,11 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_theme_editor_anchored(space, None, window, cx);
+    }
+    pub(crate) fn open_theme_editor_anchored(
+        &mut self, space: SpaceId, bottom: Option<f32>, window: &mut Window, cx: &mut Context<Self>,
+    ) {
         if self.browser.is_blank() || self.browser.is_private() {
             return;
         }
@@ -179,9 +184,11 @@ impl BrowserWindow {
         self.close_user_profile_dialog(cx);
         let focus = cx.focus_handle();
         let size = window.bounds().size;
+        let top = bottom.map_or(f32::from(size.height) - HEIGHT - 12., |bottom| bottom - HEIGHT);
+        let top_extension = (-top).max(0.).min(f32::from(window.bounds().origin.y).max(0.));
         let position = point(
             px((self.sidebar_width() + 14.).min((f32::from(size.width) - WIDTH - 8.).max(8.))),
-            px((f32::from(size.height) - HEIGHT - 12.).max(8.)),
+            px(top + top_extension),
         );
         self.theme_editor = Some(ThemeEditor {
             space,
@@ -212,9 +219,11 @@ impl BrowserWindow {
             {
                 return;
             }
-            let Ok(bounds) = main.update(cx, |_, window, _| window.bounds()) else {
+            let Ok(mut bounds) = main.update(cx, |_, window, _| window.bounds()) else {
                 return;
             };
+            bounds.origin.y -= px(top_extension);
+            bounds.size.height += px(top_extension);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: None,
@@ -787,7 +796,7 @@ impl BrowserWindow {
                     ))
                     .child(div().absolute().inset_0().child(self.theme_surface_shadow(16.)))
                     .text_color(ink)
-                    .p(px(7.))
+                    .px(px(9.5)).py(px(7.))
                     .flex()
                     .flex_col()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

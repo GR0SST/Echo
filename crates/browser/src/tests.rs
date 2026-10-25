@@ -8540,7 +8540,7 @@ fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: 
     dispatch_menu(cx,"Spaces","Edit Theme…");
     let mut editor=space_theme_editor(&view,cx);
     let bounds=editor.debug_bounds("theme-editor").unwrap();
-    assert_eq!(bounds.size,gpui::size(gpui::px(354.),gpui::px(508.)));
+    assert_eq!(bounds.size,gpui::size(gpui::px(359.),gpui::px(508.)));
     assert!(editor.debug_bounds("theme-intensity-thumb").is_none());
     click(&mut editor,"theme-preset-4");
     assert!(editor.debug_bounds("theme-intensity-thumb").is_some());
@@ -11140,4 +11140,19 @@ fn ordinary_tabs_menu_contains_only_the_reference_commands(cx: &mut TestAppConte
     assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_some()));
     cx.dispatch_action(crate::window::TogglePin);
     assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_none()));
+}
+
+#[gpui::test]
+fn header_theme_editor_uses_the_originating_menu_anchor(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    let space = view.read_with(visual, |view, _| view.browser.space().id);
+    visual.update(|window, cx| view.update(cx, |view, cx| {
+        view.open_space_menu(space, gpui::point(gpui::px(204.), gpui::px(164.)), window, cx);
+    }));
+    let mut menu = tab_menu(&view, visual);
+    click(&mut menu, "tab-menu-edit-theme-color");
+    let mut editor = space_theme_editor(&view, visual);
+    let panel = editor.debug_bounds("theme-editor").unwrap();
+    assert_eq!(panel.size.width, gpui::px(359.));
+    assert_eq!(panel.bottom(), gpui::px(453.));
 }
