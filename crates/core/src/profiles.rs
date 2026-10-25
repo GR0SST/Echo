@@ -44,6 +44,8 @@ pub struct UserProfile {
     #[serde(default)]
     pub boosts: crate::boosts::Boosts,
     #[serde(default)]
+    pub captures: crate::captures::Captures,
+    #[serde(default)]
     pub site_settings: crate::site_settings::SiteSettings,
 }
 impl UserProfile {
@@ -74,6 +76,7 @@ impl UserProfile {
             favicon_cache: Vec::new(),
             downloads: crate::downloads::CompletedDownloads::default(),
             boosts: crate::boosts::Boosts::default(),
+            captures: crate::captures::Captures::default(),
             site_settings: crate::site_settings::SiteSettings::default(),
         }
     }

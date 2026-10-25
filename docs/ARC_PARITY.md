@@ -580,7 +580,7 @@ Max download rename/revert feedback awaits the later Max implementation.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Capture (screenshot of an area, ⇧⌘2), saved to Library | missing | — |
+| Capture (screenshot of an area, ⇧⌘2), saved to Library | partial | Per-profile local capture inventory with stable IDs, basename validation and legacy-session defaults. UI, engine capture and Library file persistence are not connected in this model-only change. |
 | Quiet downloads and the downloads tray | missing | — |
 | Battery Saver mode | missing | — |
 | Task Manager, trace recording | partial | GPUI Task Manager from Help → Troubleshooting and Command Bar, retained CEF task sampler, categories/search, memory/CPU sorting and guarded End Task. Native sampling, own-renderer termination and shutdown checked. Process ID/network metrics, task grouping, full row/icon/keyboard parity and local trace recording remain unfinished; Arc team-reporting is excluded. [Reference](OTHER_REFERENCE.md) |
@@ -595,10 +595,10 @@ Counted from the table rows above, including rows marked (?). Reference
 rows without a status aren't counted. **Out of scope** rows are permanent
 exclusions, not outstanding work; mixed rows count only their local status.
 
-- **done**: 65
-- **partial**: 109
-- **missing**: 121
-- **out of scope**: 10
+- **done**: 68
+- **partial**: 152
+- **missing**: 56
+- **out of scope**: 8
 
 ### Biggest gaps (by importance for parity)
 
