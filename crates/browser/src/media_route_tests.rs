@@ -202,6 +202,9 @@ fn media_trash_and_keyboard_undo_use_a_fixture_trash_and_never_replace_an_existi
     entity.update(visual, |v, cx| v.test_media_items(vec![item.clone()], cx));
     visual.run_until_parked();
     click(visual, "media-item-echo-trash.png");
+    click(visual, "library-media-search");
+    visual.simulate_input("trash");
+    visual.run_until_parked();
     click(visual, "media-action-Trash");
     visual.run_until_parked();
     assert!(!item.stamp.path.exists());
@@ -230,6 +233,7 @@ fn media_trash_and_keyboard_undo_use_a_fixture_trash_and_never_replace_an_existi
     visual.simulate_keystrokes("cmd-z");
     visual.run_until_parked();
     assert_eq!(std::fs::read(&item.stamp.path).unwrap(), bytes);
+    assert_eq!(entity.read_with(visual, |v, cx| v.query(cx)), "trash");
     assert!(entity
         .read_with(visual, |v, _| v.test_media_names())
         .is_empty());
@@ -284,4 +288,41 @@ fn media_context_actions_capture_the_clicked_file_and_outside_click_dismisses(
         entity.read_with(visual, |v, _| v.test_media_effects()),
         vec![(MediaAction::Copy, blue.stamp)]
     );
+}
+
+#[gpui::test]
+fn media_file_drag_carries_the_pressed_file_without_navigating_the_document(
+    cx: &mut TestAppContext,
+) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.simulate_resize(gpui::size(px(1000.), px(760.)));
+    view.update(visual, |v, cx| v.open_library_media(cx));
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(400));
+    visual.run_until_parked();
+    let entity = media(&view, visual);
+    let dir = tempfile::tempdir().unwrap();
+    let item = fixture(dir.path(), "drag-fixture.png", [60, 110, 145, 255]);
+    entity.update(visual, |v, cx| v.test_media_items(vec![item.clone()], cx));
+    visual.run_until_parked();
+    fake.take_calls();
+    let start = visual
+        .debug_bounds("media-item-drag-fixture.png")
+        .unwrap()
+        .center();
+    visual.simulate_mouse_move(start, None, Modifiers::none());
+    visual.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    let end = start + gpui::point(px(30.), px(30.));
+    visual.simulate_mouse_move(end, Some(gpui::MouseButton::Left), Modifiers::none());
+    visual.run_until_parked();
+    assert_eq!(
+        entity.read_with(visual, |v, _| v.test_media_effects()),
+        vec![(MediaAction::Drag, item.stamp)]
+    );
+    visual.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    visual.simulate_keystrokes("escape");
+    assert!(!fake.take_calls().iter().any(|call| matches!(
+        call,
+        Call::Navigate(..) | Call::Close(..) | Call::Reload(..)
+    )));
 }

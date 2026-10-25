@@ -25,7 +25,11 @@ pub(crate) fn attach(
         {
             let handle = window.window_handle();
             #[cfg(target_os = "macos")]
-            let prepared = mac::prepare(crate::native::view_of(window), stamp.clone());
+            let prepared = mac::prepare(
+                crate::native::view_of(window),
+                stamp.clone(),
+                window.mouse_position(),
+            );
             #[cfg(target_os = "macos")]
             cx.spawn(async move |cx| {
                 if let Some(prepared) = prepared {
@@ -57,7 +61,7 @@ mod mac {
     use objc2::{
         class, msg_send,
         rc::Retained,
-        runtime::{AnyClass, AnyObject, ClassBuilder, Sel},
+        runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel},
         sel,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -80,13 +84,18 @@ mod mac {
     ) -> usize {
         1
     }
+    unsafe extern "C-unwind" fn ignore_modifiers(_: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
+        Bool::YES
+    }
     unsafe extern "C-unwind" fn ended(
         this: &AnyObject,
         _: Sel,
         _: *mut AnyObject,
         _: NSPoint,
-        _: usize,
+        _operation: usize,
     ) {
+        #[cfg(debug_assertions)]
+        eprintln!("[media-drag] ended operation={}", _operation);
         if let Some(done) = registry().lock().unwrap().get(&(this as *const _ as usize)) {
             done.store(true, Ordering::Release);
         }
@@ -104,6 +113,10 @@ mod mac {
                 operation as unsafe extern "C-unwind" fn(_, _, _, _) -> usize,
             );
             builder.add_method(
+                sel!(ignoreModifierKeysForDraggingSession:),
+                ignore_modifiers as unsafe extern "C-unwind" fn(_, _, _) -> Bool,
+            );
+            builder.add_method(
                 sel!(draggingSession:endedAtPoint:operation:),
                 ended as unsafe extern "C-unwind" fn(_, _, _, _, _),
             );
@@ -115,18 +128,62 @@ mod mac {
         event: Retained<AnyObject>,
         stamp: MediaStamp,
     }
-    pub fn prepare(view: Option<*mut std::ffi::c_void>, stamp: MediaStamp) -> Option<Prepared> {
+    pub fn prepare(
+        view: Option<*mut std::ffi::c_void>,
+        stamp: MediaStamp,
+        position: gpui::Point<gpui::Pixels>,
+    ) -> Option<Prepared> {
         unsafe {
             if echo_media::validate(&stamp).is_err() {
                 return None;
             }
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let event = Retained::retain(msg_send![app, currentEvent])?;
-            Some(Prepared {
-                view: Retained::retain(view?.cast())?,
-                event,
-                stamp,
-            })
+            let view: Retained<AnyObject> = Retained::retain(view?.cast())?;
+            let window: *mut AnyObject = msg_send![&*view, window];
+            if window.is_null() {
+                return None;
+            }
+            let number: isize = msg_send![window, windowNumber];
+            let current: *mut AnyObject = msg_send![app, currentEvent];
+            let kind: usize = if current.is_null() {
+                0
+            } else {
+                msg_send![current, type]
+            };
+            // GPUI can dispatch a queued drag after AppKit's current event has
+            // changed. NSDraggingSession requires a mouse event from this window.
+            let same_window = !current.is_null() && {
+                let event_window: isize = msg_send![current, windowNumber];
+                event_window == number
+            };
+            let original = (kind == 1 || kind == 6) && same_window;
+            let event = if original {
+                Retained::retain(current)?
+            } else {
+                let bounds: NSRect = msg_send![&*view, bounds];
+                let flipped: Bool = msg_send![&*view, isFlipped];
+                let point = NSPoint::new(
+                    f32::from(position.x) as f64,
+                    if flipped.as_bool() {
+                        f32::from(position.y) as f64
+                    } else {
+                        bounds.size.height - f32::from(position.y) as f64
+                    },
+                );
+                let point: NSPoint =
+                    msg_send![&*view, convertPoint:point, toView:std::ptr::null_mut::<AnyObject>()];
+                let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+                let time: f64 = msg_send![info, systemUptime];
+                Retained::retain(
+                    msg_send![class!(NSEvent), mouseEventWithType:6_usize, location:point, modifierFlags:0_usize, timestamp:time, windowNumber:number, context:std::ptr::null_mut::<AnyObject>(), eventNumber:0_isize, clickCount:1_isize, pressure:1_f32],
+                )?
+            };
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[media-drag] AppKit event type={kind}; queued fallback={}",
+                !original
+            );
+            Some(Prepared { view, event, stamp })
         }
     }
     pub struct Session {
@@ -172,6 +229,18 @@ mod mac {
                     msg_send![&*self.view,beginDraggingSessionWithItems:items,event:&*self.event,source:&*source],
                 );
                 if let Some(session) = session {
+                    #[cfg(debug_assertions)]
+                    {
+                        let board: *mut AnyObject = msg_send![&*session, draggingPasteboard];
+                        let value: *mut NSString =
+                            msg_send![board, stringForType:&*NSString::from_str("public.file-url")];
+                        let expected: *mut NSString = msg_send![url, absoluteString];
+                        let verified = !value.is_null() && {
+                            let same: Bool = msg_send![value, isEqualToString:expected];
+                            same.as_bool()
+                        };
+                        eprintln!("[media-drag] native file payload verified={verified}");
+                    }
                     Some(Session {
                         source,
                         _session: session,

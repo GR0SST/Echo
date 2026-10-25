@@ -799,7 +799,10 @@ impl MediaView {
                     .items_center()
                     .text_size(px(12.))
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if action == MediaAction::Trash {
+                            this.focus.focus(window);
+                        }
                         this.media_action(stamp.clone(), action, cx)
                     }))
                     .child(label),
