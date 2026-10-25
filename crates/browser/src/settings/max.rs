@@ -224,7 +224,7 @@ fn banner_art() -> impl IntoElement {
         }
     }).absolute().inset_0()
 }
-fn preview(index: usize, icon: &'static str) -> gpui::Div {
+fn preview(index: usize, _icon: &'static str) -> gpui::Div {
     let colors = [0xd8d1ef, 0x72bed4, 0xb9c9ef, 0xd2c5ef, 0x9cd3cf, 0x71a0d5];
     div()
         .w(px(94.))
@@ -239,7 +239,7 @@ fn preview(index: usize, icon: &'static str) -> gpui::Div {
         .items_center()
         .justify_center()
         .text_color(rgb(0x696488))
-        .child(icons::ionicon(icon, 24., 1.))
+        .child(super::max_art::feature(index))
 }
 impl SettingsWindow {
     fn max_activate(&mut self, action: &str, cx: &mut Context<Self>) {
@@ -521,7 +521,7 @@ impl SettingsWindow {
             .child(banner_art())
             .child("Max");
         let enable = group()
-            .px(px(12.))
+            .px(px(9.))
             .child(
                 row()
                     .h(px(44.))
@@ -530,14 +530,18 @@ impl SettingsWindow {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(icons::ionicon("color-wand-outline", 24., 1.))
+                            .child(div().size(px(24.)).flex_none().rounded(px(4.))
+                                .bg(rgb(0x5148dd)).text_color(rgb(0xffbaa8))
+                                .flex().items_center().justify_center()
+                                .child(icons::ionicon("color-wand-outline", 18., 1.)))
                             .child("Enable Max"),
                     )
                     .child(
                         button(cx, "max-enable-all", "Turn On All")
                             .bg(rgb(0x3532ff))
                             .text_color(rgb(0xffffff))
-                            .w(px(116.))
+                            .w(px(117.))
+                            .h(px(28.))
                             .when(all, |s| s.opacity(0.5))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.profile.edit_settings(|b| {
@@ -552,7 +556,8 @@ impl SettingsWindow {
             .child(line())
             .child(
                 row()
-                    .h(px(36.))
+                    .h(px(37.))
+                    .pl(px(3.))
                     .id("max-future")
                     .debug_selector(|| "max-future".into())
                     .focusable()

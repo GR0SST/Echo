@@ -1857,6 +1857,15 @@ The artwork intentionally differs from Arc's protected flower and wordmark.
 Native comparison: `echo_max_round2_top.png` against `arc_max_round2.png`,
 both 684 × 650; reviewed directly. CEF exited cleanly (status 0).
 
+Feature thumbnails retain the measured 94 × 62 px outer frame, white 3 px border
+and 5 px radius. Their contents are original vector miniatures of a folder list,
+search results, illustrated document, compact titles, file cards and command
+conversation. No Arc imagery, screenshot, flower or brand asset is bundled. The Enable Max
+group uses the observed 9 px inset, an original 24 px icon tile, a 117 × 28 px
+Turn On All button and 37 px future-features row; the first feature group
+starts at y=404.
+Reference: `arc_max_bottom.png`; native Echo: `echo_max_round2_features.png`.
+
 Ask on Page still exposes no Ask control in the installed desktop Command-F
 flow, including the available permitted Max flags. There is no separate Ask
 toggle in this build. Browse for Me captions exist in the bundle (52626–52635)

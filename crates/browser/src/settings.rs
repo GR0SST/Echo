@@ -1,5 +1,6 @@
 //! Arc-shaped local settings, in an independent GPUI native window.
 pub(crate) mod max;
+mod max_art;
 use crate::{
     icons::{self, Icon},
     profile::ProfileHandle,
