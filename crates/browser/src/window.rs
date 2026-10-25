@@ -1566,6 +1566,7 @@ impl BrowserWindow {
     }
 
     fn edit_undo(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !redo && self.media_route_active() && self.undo_media_trash(cx) { return; }
         if !redo {
             if let Some(editor)=self.boost_editor.filter(|editor|editor.read_with(cx,|editor,_|editor.picking).unwrap_or(false)) {
                 cx.defer(move|cx|{let _=editor.update(cx,|editor,_,cx|editor.undo_last_zap(cx));});return;

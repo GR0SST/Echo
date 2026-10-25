@@ -15,6 +15,8 @@ name = "Echo"
 path = "src/main.rs"
 
 [dependencies]
+echo_media = { path = "../media" }
+futures = "0.3"
 echo_updater = { path = "../updater" }
 echo_github = { path = "../github" }
 serde = { version = "1", features = ["derive"] }

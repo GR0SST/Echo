@@ -91,13 +91,18 @@ impl WebEngine for RecordingEngine {
 
 fn open(
     cx: &mut TestAppContext,
-    browser: Browser,
+    mut browser: Browser,
 ) -> (
     Entity<BrowserWindow>,
     &mut VisualTestContext,
     RecordingEngine,
 ) {
     cx.update(crate::init);
+    // Route tests keep consent decisions fixed; Media tests cover native grants.
+    let profiles: Vec<_> = browser.user_profiles().map(|p| p.id()).collect();
+    for profile in profiles { for folder in browser_core::media::MediaFolder::ALL {
+        browser.user_profile_mut(profile).unwrap().settings.media.revoke(folder);
+    } }
     let engine = RecordingEngine::default();
     let (view, visual) = cx.add_window_view(|window, cx| {
         let view = BrowserWindow::new(browser, Some(Box::new(engine.clone())), window, cx);

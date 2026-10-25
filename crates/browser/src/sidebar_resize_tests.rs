@@ -433,6 +433,8 @@ fn virtual_form_tracks_host_width_keeps_input_focus_and_library_cards_stay_fixed
     cx: &mut TestAppContext,
 ) {
     let (view, visual, engine) = open(cx);
+    // Consent is fixed in this resize/navigation fixture.
+    view.update(visual, |view, _| { let profile=view.browser.active_user_profile_id(); view.profile.handle.edit_settings(|b| { for folder in browser_core::media::MediaFolder::ALL { b.user_profile_mut(profile).unwrap().settings.media.revoke(folder); } }); view.refresh_profile_projection(); });
     let origin = view.read_with(visual, |view, _| view.browser.space().id);
     let before = session(&view, visual);
     let documents = engine.0.borrow().documents;

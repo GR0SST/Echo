@@ -226,6 +226,7 @@ impl ProfileHandle {
     }
 
     /// Settings edits use the canonical model and do not change a window's selection.
+    pub(crate) fn media_access(&self,id: UserProfileId)->Option<browser_core::media::MediaAccess> {self.data.borrow().user_profile(id).map(|p|p.settings.media.clone())}
     pub(crate) fn settings_snapshot(&self) -> Browser { self.data.borrow().clone() }
     pub(crate) fn read_settings<R>(&self, read: impl FnOnce(&Browser) -> R) -> R { read(&self.data.borrow()) }
 

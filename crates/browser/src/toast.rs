@@ -25,6 +25,7 @@ pub(crate) struct Toast {
 enum ToastAction {
     ShareLinks(Vec<String>),
     UndoDownload(crate::max_downloads::Receipt),
+    UndoMedia(gpui::WeakEntity<crate::library::media::MediaView>,browser_core::UserProfileId),
     RevealTab(browser_core::TabId, browser_core::UserProfileId),
     UndoArchive(Vec<browser_core::TabId>, browser_core::UserProfileId),
 }
@@ -122,6 +123,12 @@ impl BrowserWindow {
         if let Some(toast) = &mut self.toast { toast.action = Some(ToastAction::ShareLinks(urls)); }
     }
 
+    pub(crate) fn show_media_trash_undo(&mut self,media:gpui::WeakEntity<crate::library::media::MediaView>,profile:browser_core::UserProfileId,cx:&mut Context<Self>) {
+        if self.browser.active_user_profile_id()!=profile {return;}
+        self.show_toast("Moved to Trash. ⌘Z to Undo.".into(),cx);
+        if let Some(toast)=&mut self.toast {toast.action=Some(ToastAction::UndoMedia(media,profile));}
+    }
+
     pub(crate) fn show_archive_undo(&mut self, title: &str, cx: &mut Context<Self>) {
         if self.browser.is_blank() && self.browser.all_tabs().next().is_none() { return; }
         // Arc ToastController's generic Undo template, ARC_PARITY section 18.
@@ -171,6 +178,7 @@ impl BrowserWindow {
         let Some(action) = toast.action.clone() else { return; };
         let urls = match action {
             ToastAction::ShareLinks(urls) => urls,
+            ToastAction::UndoMedia(media,profile)=>{if self.browser.active_user_profile_id()==profile {let _=media.update(cx,|media,cx|media.undo_trash(profile,cx));}return;},
             ToastAction::UndoDownload(receipt) => {
                 if receipt.belongs_to(&self.profile.handle, self.browser.active_user_profile_id()) {
                     crate::max_downloads::undo(receipt, cx);
@@ -350,7 +358,7 @@ impl BrowserWindow {
         }
     }
 
-    fn retire_toast(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn retire_toast(&mut self, cx: &mut Context<Self>) {
         let Some(mut toast) = self.toast.take() else { return; };
         let now = cx.background_executor().now();
         let from = toast.progress(now, crate::native::prefers_reduced_motion()).0;

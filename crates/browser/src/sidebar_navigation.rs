@@ -47,6 +47,8 @@ pub(crate) struct SidebarNavigation {
     card_images: std::collections::HashMap<SpaceId, crate::space_theme::ProfileCardPreview>,
     media_events: Option<Subscription>,
     pub(crate) media_search_focus: bool,
+    pub(crate) media_selected: bool,
+    pub(crate) media_prompt_active: bool,
     pub(crate) downloads: crate::library_downloads::DownloadsNavigation,
     preview_focus_scope: Option<gpui::FocusHandle>,
     preview_rendered_content: Rc<std::cell::RefCell<Option<PreviewContent>>>,
@@ -75,6 +77,8 @@ impl SidebarNavigation {
             card_images: Default::default(),
             media_events: None,
             media_search_focus: false,
+            media_selected: false,
+            media_prompt_active: false,
             downloads: Default::default(),
             preview_focus_scope: None,
             preview_rendered_content: Rc::default(),
@@ -183,6 +187,7 @@ impl BrowserWindow {
     pub(crate) fn native_page_viewport(&self) -> crate::pages::PageViewport {
         if self.page_content_visible() { return crate::pages::PageViewport::Content; }
         if self.sidebar_navigation.controller.selected() == SidebarPage::Library {
+            if self.sidebar_navigation.library_section == LibrarySection::Media && self.sidebar_navigation.media_selected {return crate::pages::PageViewport::Hidden;}
             return self.sidebar_navigation.library_section.page_viewport();
         }
         crate::pages::PageViewport::Hidden
@@ -300,6 +305,7 @@ impl BrowserWindow {
         }
         self.settle_sidebar_pager(cx);
         self.defer_sidebar_focus(cx);
+        if page == SidebarPage::Library { self.begin_media_access(None, cx); }
         cx.notify();
     }
     pub(crate) fn begin_space_creation(&mut self, origin: SpaceId, cx: &mut Context<Self>) {
@@ -658,6 +664,7 @@ impl BrowserWindow {
                 self.retire_library_downloads_route();
                 self.invalidate_sidebar_focus();
                 self.sidebar_navigation.library_section = section;
+                if section == LibrarySection::Media {self.begin_media_access(None,cx);}
                 self.sync_navigation_visibility();
                 self.defer_sidebar_focus(cx);
                 cx.notify();
@@ -700,6 +707,7 @@ impl BrowserWindow {
         self.retire_library_downloads_route();
         self.invalidate_sidebar_focus();
         self.sidebar_navigation.library_section=section;
+        if section == LibrarySection::Media { self.begin_media_access(None,cx); }
         self.sync_navigation_visibility();
         self.defer_sidebar_focus(cx);
         cx.notify();
@@ -760,7 +768,14 @@ impl BrowserWindow {
                 })
                 .clone();
             if self.sidebar_navigation.media_events.is_none() {
-                self.sidebar_navigation.media_events = Some(cx.subscribe(&media, |this, _, event: &library::media::MediaIntent, _| {
+                self.sidebar_navigation.media_events = Some(cx.subscribe(&media, |this, entity, event: &library::media::MediaIntent, cx| {
+                    match event {
+                        library::media::MediaIntent::SelectionChanged(selected)=>this.sync_media_selection(*selected,cx),
+                        library::media::MediaIntent::Trashed(profile)=>this.show_media_trash_undo(entity.downgrade(),*profile,cx),
+                        library::media::MediaIntent::UndoCompleted=>this.retire_toast(cx),
+                        library::media::MediaIntent::Error(error)=>this.show_toast(error.clone(),cx),
+                        _=>{}
+                    }
                     if *event == library::media::MediaIntent::SearchFocused {
                         this.sidebar_navigation.media_search_focus = true;
                         this.sidebar_navigation.preview_ui_focus = None;
@@ -770,14 +785,23 @@ impl BrowserWindow {
                     }
                 }));
             }
+            let profile=self.browser.active_user_profile_id();
+            let access=self.browser.active_user_profile().settings.media.clone();
+            let captures=self.browser.active_user_profile().captures.clone();
+            let directory=self.profile.handle.storage_directory(cx).map(|root|root.join("Captures").join(format!("profile-{}",serde_json::to_string(&profile).unwrap())));
+            let handle=self.profile.handle.clone();
             media.update(cx, |media, cx| {
+                media.configure_media(profile,handle,access,captures,directory,preview_left,cx);
                 media.set_colors(media_colors, cx);
                 media.set_hosted_preview(cx);
             });
             // LearnMoreRequested has no navigation subscriber until its exact
             // target is verified. The input retains a window-local query.
+            let selected=media.read(cx).has_media_selection();
+            self.sidebar_navigation.media_selected=selected;
+            self.sync_page_viewport();
             div().relative().size_full().child(media)
-                .child(library::media::render_preview_at(media_colors.preview, preview, preview_left))
+                .when(!selected,|v|v.child(library::media::render_preview_at(media_colors.preview, preview, preview_left)))
                 .into_any_element()
         });
         if section == LibrarySection::Downloads {

@@ -1,4 +1,7 @@
-//! Media empty presentation from the supplied reference. No media enumeration.
+//! Library Media: retained input, bounded local results and a shared preview panel.
+#[path = "library_media_items.rs"]
+mod items;
+pub(crate) use items::MediaAction;
 use crate::text_input::{Changed, TextInput};
 use gpui::{
     div, prelude::*, px, Context, Entity, EventEmitter, Focusable, Hsla, Render, Subscription,
@@ -16,6 +19,10 @@ pub(crate) enum MediaIntent {
     SearchFocused,
     /// The target is unverified. This event never constructs or opens a URL.
     LearnMoreRequested,
+    SelectionChanged(bool),
+    Trashed(browser_core::UserProfileId),
+    UndoCompleted,
+    Error(String),
 }
 
 /// Inherited semantic surfaces. No global appearance change or hardcoded palette.
@@ -36,13 +43,18 @@ pub(crate) struct MediaView {
     hosted_preview: bool,
     input: Entity<TextInput>,
     _input_changes: Subscription,
+    runtime: items::Runtime,
+    focus: gpui::FocusHandle,
+    _access_observer: Subscription,
 }
 impl EventEmitter<MediaIntent> for MediaView {}
 impl MediaView {
     pub(crate) fn new(colors: MediaColors, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| TextInput::new("Search Media...", cx));
-        let changes = cx.subscribe(&input, |_, input, _: &Changed, cx| {
-            cx.emit(MediaIntent::SearchChanged(input.read(cx).text().to_owned()));
+        let changes = cx.subscribe(&input, |this, input, _: &Changed, cx| {
+            let query=input.read(cx).text().to_owned();
+            this.media_query_changed(&query,cx);
+            cx.emit(MediaIntent::SearchChanged(query));
             cx.notify();
         });
         Self {
@@ -50,6 +62,9 @@ impl MediaView {
             hosted_preview: false,
             input,
             _input_changes: changes,
+            runtime: items::Runtime::new(),
+            focus: cx.focus_handle(),
+            _access_observer: cx.observe_self(|this,cx|this.check_media_access(cx)),
         }
     }
     /// Let the host render the preview alongside this retained search entity.
@@ -74,8 +89,11 @@ impl Render for MediaView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors;
         let query = self.input.read(cx).text().trim().to_owned();
+        self.rebuild_media_rows(&query);
+        if !self.runtime.rows.is_empty() { return self.render_populated(cx); }
         div()
             .id("library-media")
+            .track_focus(&self.focus)
             .debug_selector(|| "library-media".into())
             .relative()
             .size_full()
@@ -227,7 +245,7 @@ impl Render for MediaView {
                             ),
                     ),
             )
-            .when(!self.hosted_preview, |this| this.child(render_preview(colors.preview, None)))
+            .when(!self.hosted_preview, |this| this.child(render_preview(colors.preview, None))).into_any_element()
     }
 }
 

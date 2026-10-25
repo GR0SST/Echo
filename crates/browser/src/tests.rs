@@ -1075,6 +1075,18 @@ fn cmd_s_hides_the_sidebar(cx: &mut TestAppContext) {
 fn open_pages(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut VisualTestContext, FakeEngine) {
     let fake = FakeEngine::default();
     let (view, cx) = open_with(cx, Some(Box::new(fake.clone())));
+    // General navigation fixtures decline external file access. Dedicated Media
+    // consent tests explicitly reset this choice before exercising first use.
+    view.update(cx, |view, _| {
+        view.profile.handle.edit_settings(|browser| {
+            let profiles: Vec<_> = browser.user_profiles().map(|p| p.id()).collect();
+            for profile in profiles { for folder in browser_core::media::MediaFolder::ALL {
+                browser.user_profile_mut(profile).unwrap().settings.media.revoke(folder);
+            } }
+        });
+        view.refresh_profile_projection();
+    });
+    cx.run_until_parked();
     (view, cx, fake)
 }
 
@@ -11597,3 +11609,5 @@ fn split_header_site_controls_anchor_to_and_clear_only_the_focused_document(cx: 
 mod menu_command_tests;
 #[path = "extensions_tests.rs"]
 mod extensions_tests;
+#[path = "media_route_tests.rs"]
+mod media_route_tests;

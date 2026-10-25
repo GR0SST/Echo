@@ -72,6 +72,7 @@ enum Popup {
 }
 
 mod archive;
+mod media;
 mod appearance;
 mod app_icon;
 mod previews;
@@ -960,6 +961,7 @@ impl SettingsWindow {
                         ))
                 )
             }))
+            .child(self.media_permissions(cx))
             .child(
                 div()
                     .flex()

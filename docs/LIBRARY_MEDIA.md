@@ -1,9 +1,26 @@
 # Local Library media backend
 
-The browser presenter is **not wired to discovery yet**. Opening Media currently
-retains its existing empty/search-miss presentation. No user-folder scan,
-watcher, permission request, or thumbnail worker starts at browser launch or on
-an existing Library route. The Media parity row remains partial.
+The Media route discovers files only after user approval. Opening Media requests
+native directory selection for Documents, Desktop and Downloads, one sheet at a
+time. Cancel/deny is persisted per profile, so reopening does not repeat prompts.
+Advanced Settings → Library Media access allows revoking or explicitly granting
+each folder. Unknown or denied folders are never scanned or watched. Profile-owned
+Captures do not require access to external folders.
+
+The populated presentation uses existing Library surfaces and metrics, with a
+virtualized two-column grid grouped by source, literal-name search, keyboard
+selection and the shared rounded preview. Open, Show in Finder, Copy, macOS
+native file dragging and Move to Trash + Undo target captured file identities.
+Search input keeps its own text Undo; file selection routes ⌘Z to Trash Undo.
+Revocation stops the discovery session and clears its rows and thumbnail cache,
+including while Library is hidden. Delayed native replies cannot undo revocation
+or grant access to a different profile. No scan starts at browser launch.
+
+**populated layout unverified — no Arc reference available**. The row remains
+partial. Videos currently show a poster with external playback. Windows/Linux
+system drag and native movie thumbnails remain unqualified. PDF/SVG and Hide
+from Arc remain outside the implemented subset; deleting is explicitly labeled
+Move to Trash.
 
 ## Implemented boundary
 
@@ -16,10 +33,10 @@ not a verified list of Arc's supported formats.
 
 - Known Folder / XDG resolution via `FolderPlatform`, without directory reads.
 - A scan/watch capability constructed from explicitly approved system-folder
-  selections. The future host must acquire that selection from the native OS
-  prompt **only after the user opens Media**. Cancel/deny must not create a
+  selections. The host acquires that selection from the native OS
+  prompt **only after the user opens Media or explicitly enables a Settings grant**. Cancel/deny must not create a
   capability. Merely resolving Documents/Desktop/Downloads grants no access.
-- Recursive discovery capped at 20,000 inspected entries and eight levels,
+- Recursive discovery capped at 20,000 inspected entries per root and eight levels,
   skipping hidden paths, symlinks and application/document packages. Errors for
   one root do not suppress the other roots. Capture discovery reads only the
   named files in the captured profile's model, independent of external access.
@@ -41,10 +58,10 @@ not a verified list of Arc's supported formats.
   same-volume hard link preserves attributes and prevents a racing overwrite.
   Windows/Linux use the OS Trash backend/receipt and collision-checked restore.
 
-There is no network service or upload. Native permission UI, persisted grants,
-platform security-scoped bookmarks, the populated GPUI layout/sections/selection
-and preview, Open/Reveal/Copy/drag-out/Hide actions and Trash/Undo UI are **not
-implemented** by this backend commit. Do not call this populated Library parity.
+There is no network service or upload. Directory grants are stored in local
+profile settings. The current macOS bundle is not sandboxed; native OS grants and
+selected absolute paths persist without security-scoped bookmarks. A sandboxed
+shipping bundle would require the platform access shim to retain bookmarks.
 
 ## Reference blocker and local evidence
 
@@ -65,7 +82,9 @@ commit or publish screenshots containing the owner's real downloads.
 ## Validation
 
 Tests use TempDir fixtures and a fake Trash, never the user's folders or Trash.
-They cover classification/search, replacement-safe selection, bounds, symlink
+They cover route-only consent, persistence/revocation and stale replies, preview
+geometry, keyboard/file actions, fake-Trash Undo collisions, classification/search,
+replacement-safe selection, bounds, symlink
 and package exclusion, watcher create/rename/remove, profile-local Captures,
 thumbnail output/eviction/coalescing, and collision-safe Trash/Undo.
 
