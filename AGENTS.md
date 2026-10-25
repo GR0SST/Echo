@@ -31,7 +31,7 @@ Anything beyond that (our own features, departures from Arc) comes after.
   profiles, Pinned and Favorites tabs, tab auto-archiving, Split View,
   Little Arc, Command Bar, Peek, Boosts, Easels, Library, Air Traffic
   Control, Picture-in-Picture, Space themes and colors.
-- Echo is a **local-only browser**. There is no cloud backend of ours.
+- Echo is a **local-only browser**. There is no cloud app server or storage/processing of user data. A static update host is allowed.
   **Out of scope (never build):**
 
   - Echo/Arc accounts, browser-account sign-in, Arc Members, recovery phrases,
@@ -48,6 +48,10 @@ Anything beyond that (our own features, departures from Arc) comes after.
   or synchronization icons.
   Local profiles, local sessions, browsing data, website logins/passwords,
   local import from other browsers and the system share sheet remain in scope.
+- In scope: Echo's own updates: a static, signed release manifest served from
+  our domain (no accounts, no telemetry, no user identifiers; the client only
+  fetches the manifest and signed artifacts). Server side is static files only.
+  "Our own cloud backend" excludes app servers/user data, not static update hosting.
 - Arc Max parity is in scope: Tidy Tabs, tab/download renaming, 5-Second
   Previews, Ask on Page, ChatGPT in the Command Bar, Browse for Me and Instant
   Links. AI features use the user's own provider directly, with no Echo server
