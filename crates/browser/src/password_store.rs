@@ -87,6 +87,9 @@ impl<K: Keys> Vault<K> {
                 note: Zeroizing::new(String::new()),
             })
             .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return Ok(());
+        }
         self.save(&VaultData {
             passwords: rows,
             blocked: BTreeSet::new(),
@@ -195,6 +198,18 @@ impl<K: Keys> Vault<K> {
             .map_err(|_| ERROR)?;
         temporary.persist(&self.file).map_err(|_| ERROR)?;
         Ok(())
+    }
+    pub(crate) fn lookup(&self, origin: &str) -> Result<(bool, Vec<SavedPassword>)> {
+        validate_origin(origin)?;
+        let _lock = ACCESS.lock().map_err(|_| ERROR)?;
+        let data = self.load()?;
+        Ok((
+            data.blocked.contains(origin),
+            data.passwords
+                .into_iter()
+                .filter(|row| row.credential.origin == origin)
+                .collect(),
+        ))
     }
     pub(crate) fn list(&self) -> Result<Vec<SavedPassword>> {
         let _lock = ACCESS.lock().map_err(|_| ERROR)?;
@@ -581,6 +596,17 @@ mod tests {
         invalid.origin.push_str("/login");
         assert!(vault.upsert(&invalid, 2).is_err());
         assert_eq!(vault.list().unwrap().len(), 1);
+    }
+    #[test]
+    fn password_vault_empty_lookups_do_not_create_a_key_or_persist_a_vault() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::with_keys(root.path(), "default", MemoryKeys::default()).unwrap();
+        vault.migrate_if_absent(|| Ok(Vec::new())).unwrap();
+        assert!(!vault.file.exists());
+        let (blocked, rows) = vault.lookup("https://echo-password-test.invalid").unwrap();
+        assert!(!blocked);
+        assert!(rows.is_empty());
+        assert!(!vault.file.exists());
     }
     #[test]
     fn password_vault_migrates_older_echo_imports_once_without_overwriting_saved_changes() {

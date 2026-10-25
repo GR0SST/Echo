@@ -43,6 +43,8 @@ mod setup;
 mod browser_registration;
 mod import_credentials;
 mod password_store;
+mod password_prompt;
+mod password_flow;
 mod blank_window;
 mod transient;
 mod link_routing;
@@ -157,6 +159,7 @@ pub fn init(cx: &mut App) {
     new_menu::bind_keys(cx);
     theme_editor::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);
+    password_prompt::bind_keys(cx);
     space_creation_view::bind_keys(cx);
     downloads_view::bind_keys(cx);
     shortcuts::init(cx);

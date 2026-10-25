@@ -27,8 +27,8 @@ Storage tests cover disk persistence, random nonces, ciphertext-only files,
 profile substitution, lost keys, damaged ciphertext, CSV origin normalization,
 update/delete/time filtering and one-time legacy migration. Native acceptance
 uses only `echo-password-test-69cec731.invalid` and synthetic credentials in an
-explicitly enabled disposable drive profile. Save/autofill and the manager UI
-remain pending; storage implementation alone does not close password parity.
+explicitly enabled disposable drive profile. Main-frame login save/autofill now share this vault; the manager UI remains
+pending. Storage implementation alone does not close password parity.
 
 ## Arc entry points and packed UI source
 
@@ -148,3 +148,44 @@ markers. Full `password-notes-full-tests-v2.log` is green: 1,171 browser, 252
 core, 166 engine, 18 AI, two bundle and four importer tests, plus one native
 bootstrap test; one existing AI test remains ignored. This validates storage,
 not the still-pending GPUI save sheet, autofill or password manager.
+
+## Website login bridge
+
+The CEF renderer reports only its main-frame HTTP(S) document. A native private
+V8 callback is captured by an isolated closure, never installed on `window`.
+Registration binds a random document token to CEF's browser/frame/origin; the
+browser process supplies the immutable tab/profile ownership. Fill replies must
+still match the current context, origin and token. A prior document may report a
+submission across a successful navigation, but can never receive a fill reply.
+Private request contexts do not install the bridge. No remote debugger is used.
+
+Only trusted edits/submits from same-origin forms produce save candidates. The
+GPUI sheet waits until the form disappears, suppresses unchanged saved passwords
+and never-save origins, and expires pending requests after 30 seconds. Failed
+forms that remain on screen do not trigger a prompt. Accepted Save/Never writes
+run off the UI thread and hold application quit until their atomic vault update
+finishes. Autofill chooses a sole account or the exact typed username; typed
+passwords are never overwritten. Notes survive subsequent login updates.
+
+The sheet uses the isolated `arc-password-isolated-save-prompt.png` reference:
+450 × 273 px, 18 px corners, 62 px key tile, and Arc's Save / No / Never on this
+site copy and keyboard hints. Source executable strings are also indexed in
+`target/parity/toasts/arc-binary-strings.txt` at the Save-password entries.
+Native `password-flow-native-run.1N0wuY/{form,autofill}.log` verifies a trusted
+synthetic POST, encrypted accepted save, immediate native quit, cold restart and
+a second POST with the exact autofilled test credentials. Both processes reached
+CEF Complete and exited 0. `password-save-pairs.png` and its `-2x` crop compare
+Arc (left) and Echo (right), inspected locally; minor font/icon/pixel-rounding
+differences remain. `autofill.png` shows only the synthetic username and a masked
+password. Fifteen focused tests cover origin/token authority, save/no/never,
+expired documents, foreground-only presentation, per-profile policy, ciphertext
+and quit leases. Cross-origin/iframe/closed-shadow forms, account-choice UI,
+light sheets and native non-macOS behavior remain unverified. A vanished form is
+a conservative success heuristic, not Chromium's internal login-success signal.
+
+The first native attempt used the optional local source-built CEF and failed
+with SIGTRAP inside CEF shutdown. It is not a passing acceptance run. The passing
+run explicitly used the portable CEF distribution. No shared native source or
+CEF distribution was changed. Two further guarded manager-reference attempts
+stopped at the header/sidebar checks, before profile reassignment; their owned
+windows were closed and every baseline window preserved.

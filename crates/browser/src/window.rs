@@ -565,6 +565,7 @@ pub enum OverlayKind {
     Capture,
     NewMenu,
     UserProfileDialog,
+    PasswordPrompt,
     Setup,
     ThemeEditor,
     TransientPicker,
@@ -638,6 +639,7 @@ impl Render for Overlay {
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
+                    OverlayKind::PasswordPrompt => browser.render_password_prompt(),
                     OverlayKind::Setup => browser.render_setup(),
                     OverlayKind::TransientPicker => browser.render_transient_picker(window, cx),
                 };
@@ -712,6 +714,7 @@ pub struct BrowserWindow {
     pub(crate) theme_paint_cache: crate::space_theme::ThemePaintCache,
     pub(crate) theme_system_dark: bool,
     theme_background_blurred: Option<bool>,
+    pub(crate) passwords: crate::password_flow::PasswordFlow,
     pub(crate) user_profile_dialog: Option<crate::user_profiles::ProfileDialogHost>,
     pub(crate) setup: Option<crate::setup::SetupHost>,
     pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
@@ -874,13 +877,14 @@ impl BrowserWindow {
         cx.observe_window_bounds(window, |this, window, cx| {
             this.resize_peek(window, cx);
             this.resize_setup(window,cx);
+            this.resize_password_prompt(window,cx);
         }).detach();
         cx.observe_window_appearance(window, |this, window, cx| {
             this.theme_system_dark = matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark);
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() { this.restore_site_settings_peek_focus(cx); }
+            if window.is_window_active() { this.restore_site_settings_peek_focus(cx); this.maybe_password_prompt(cx); }
             this.set_little_archive_active(window.is_window_active(),cx);
             this.max_preview_activation(window.is_window_active(),cx);
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
@@ -1009,6 +1013,7 @@ impl BrowserWindow {
             theme_paint_cache: Default::default(),
             theme_background_blurred: None,
             theme_system_dark: matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark),
+            passwords: Default::default(),
             user_profile_dialog: None,
             setup: None,
             tab_rename: None,
@@ -1203,6 +1208,7 @@ impl BrowserWindow {
         self.clear_command_bar_backdrop();
         self.clear_site_controls_backdrop();
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
+        let password_child = self.take_password_child(cx);
         let profile_child = self.take_user_profile_child(cx);
         let setup_child = self.take_setup_child(cx);
         let theme_child = self.take_theme_editor();
@@ -1215,6 +1221,7 @@ impl BrowserWindow {
             self.boost_editor.take().map(|handle|handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
+            password_child.map(|handle|handle.into()),
             setup_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),
             self.command_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
@@ -1275,9 +1282,10 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
+                Event::Password { event, .. } => { if let Some(identity)=identity {self.password_event(identity,event,cx);} },
                 Event::LinkPreviewHover { view, token, source_url, hover } => self.max_preview_hover(view,token,source_url,hover,window,cx),
                 Event::PreviewModifiers { view, shift } => self.max_preview_modifiers(view,shift,window,cx),
                 Event::PictureInPictureReturnRequested { .. } => {
@@ -1531,6 +1539,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_password_prompt(PopupFocus::OnActivation,cx);
         self.close_theme_editor(cx);
         if target == Target::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
         if self.browser.is_blank() && !matches!(target, Target::NewTab | Target::Tab(_) | Target::Split { .. } | Target::RenameTab(_) | Target::Archive(_) | Target::ConfirmClearArchive | Target::Icon(crate::icons::IconTarget::Tab(_))) { return; }
@@ -1699,7 +1708,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.save_prompt_active || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.save_prompt_active || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1714,7 +1723,7 @@ impl BrowserWindow {
             // A root with no popup already owns its responder intent (for
             // example History search or docked DevTools). Only replace it when
             // this operation actually takes over a popup's restoration.
-            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
+            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
                 || self.find_bar.is_some() || self.tab_menu.is_some()
                 || self.popup_focus_pending > 0;
             self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
@@ -1727,6 +1736,7 @@ impl BrowserWindow {
         self.finish_recent_items(false, focus, cx);
         self.close_theme_editor_with_focus(focus, cx);
         self.close_transient_picker_with_focus(focus, cx);
+        self.close_password_prompt(focus,cx);
         self.close_user_profile_dialog_with_focus(focus, cx);
         self.close_setup_with_focus(focus,cx);
         self.close_site_controls_with_focus(focus, cx);
@@ -4560,6 +4570,7 @@ impl Render for BrowserWindow {
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);
         }
+        self.validate_password_prompt(cx);
         self.poll_download_ui(cx);
         self.sync_library_downloads(window, cx);
         self.remember_library_preview_focus(window, cx);

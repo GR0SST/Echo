@@ -62,6 +62,8 @@ mod save_page_tests;
 mod main_menu_tests;
 #[path = "managed_search_tests.rs"]
 mod managed_search_tests;
+#[path = "password_flow_tests.rs"]
+mod password_flow_tests;
 #[path = "tab_switcher_tests.rs"]
 mod tab_switcher_tests;
 
@@ -240,6 +242,7 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    PasswordFill(u64,engine::PasswordToken,String,engine::LoginCredential),
     ArchivePage(u64),
     PermissionResponse(u64,engine::PermissionRequestId,engine::PermissionDecision),
     Quote(u64, u64),
@@ -358,6 +361,7 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.call(Call::PasswordFill(raw(view),token,origin.into(),credential.clone()));true}
     fn evaluate_script(&mut self,view:ViewId,_url:&str,source:&str)->Result<engine::ScriptTicket,String>{self.0.borrow_mut().script_calls.push((view,source.into()));Ok(engine::ScriptTicket::completed(Ok("3".into())))}
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.0.borrow_mut().context_images.push((raw(view),request,page_url.into(),url.into()));true}
     fn permission_pending(&self,view:ViewId,request:engine::PermissionRequestId)->bool {self.0.borrow().permission_requests.contains(&(raw(view),request))}

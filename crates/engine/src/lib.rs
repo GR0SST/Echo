@@ -47,6 +47,8 @@ mod editing;
 mod document_color;
 mod boosts;
 mod site_info;
+mod passwords;
+pub use passwords::{PasswordEvent,PasswordToken,LoginCredential};
 mod permissions;
 pub use permissions::{PermissionRequestId, PermissionRequest, PermissionDecision};
 mod site_data;
@@ -115,6 +117,7 @@ pub struct Shortcut {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    Password { view: ViewId, event: PasswordEvent },
     ContextImage { view: ViewId, request: u64, page_url: String, png: Vec<u8> },
     PageContext { view: ViewId, request: page_context::Request },
     PermissionRequested { view: ViewId, request: PermissionRequest },
@@ -159,6 +162,7 @@ pub enum Event {
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
 #[derive(Debug)]
 enum RawEvent {
+    Password(PasswordEvent),
     Context(page_context::Request),
     ContextImage(u64, String, Vec<u8>),
     PermissionRequested(PermissionRequest),
@@ -332,6 +336,7 @@ impl Runtime {
 }
 
 pub struct Engine {
+    password_forms: bool,
     shortcuts: Shortcuts,
     events: EventQueue,
     views: HashMap<ViewId, View>,
@@ -441,6 +446,7 @@ impl Engine {
         runtime.lifecycle.require_running().expect("Cannot fork an engine during shutdown");
         let events = EventQueue::default();
         Self {
+            password_forms: false,
             shortcuts,
             events,
             views: HashMap::new(),
@@ -795,6 +801,10 @@ impl Engine {
             extra = Some(dictionary);
             client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default(), None);
         }
+        if role == ViewRole::Page {
+            if extra.is_none() { extra = dictionary_value_create(); }
+            extra.as_ref()?.set_bool(Some(&CefString::from(passwords::ENABLED)), i32::from(self.password_forms && !CefString::from(&context.cache_path()).to_string().is_empty()));
+        }
         let prepared_downloads = if role == ViewRole::Page {
             if let Some(owner) = download_owner {
                 let private = CefString::from(&context.cache_path()).to_string().is_empty();
@@ -1125,12 +1135,22 @@ impl Engine {
         self.views.get(&id).and_then(|view| view.browser.host()).map(|host| host.is_audio_muted() != 0)
     }
 
-    /// Steps through Chromium's standard zoom factors. Zero resets to 100%.
+    /// Configure only before creating pages. No renderer gets form authority
+    /// until its browser UI explicitly opts into this profile-owned service.
+    pub fn set_password_forms_enabled(&mut self, enabled: bool) -> bool {
+        if self.password_forms == enabled { return true; }
+        if !self.views.is_empty() { return false; }
+        self.password_forms = enabled; true
+    }
+    pub fn fill_password(&mut self, id: ViewId, token: PasswordToken, origin: &str, credential: &LoginCredential) -> bool {
+        self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view|passwords::fill(&view.browser,token,origin,credential))
+    }
     pub fn evaluate_script(&mut self, id: ViewId, expected_url: &str, source: &str) -> Result<ScriptTicket, String> {
         let page = self.views.get(&id).filter(|p|p.role==ViewRole::Page).ok_or("Unknown page")?;
         self.script_evaluations.request(id,&page.browser,&self.message_ids,expected_url,source)
     }
 
+    /// Steps through Chromium's standard zoom factors. Zero resets to 100%.
     pub fn zoom(&mut self, id: ViewId, direction: i32) {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
             let factor = next_zoom_factor(1.2_f64.powf(host.zoom_level()), direction);
@@ -1406,6 +1426,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         return Some(Event::Shortcut { view, shortcut });
     }
     Some(match event {
+        RawEvent::Password(event) => Event::Password { view, event },
         RawEvent::ContextImage(request, page_url, png) => Event::ContextImage { view, request, page_url, png },
         RawEvent::Context(request) => Event::PageContext { view, request },
         RawEvent::Shortcut(_) => unreachable!(),
@@ -1484,6 +1505,7 @@ wrap_client! {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
             }
             if task_manager::receive_process(browser.as_deref(), frame.as_deref(), source_process, message.as_deref()) { return 1; }
+            if passwords::receive(browser.as_deref(),frame.as_deref(),source_process,message.as_deref(),&self.events) { return 1; }
             if source_process == ProcessId::RENDERER && frame.as_ref().is_some_and(|frame| frame.is_main()!=0) {
                 if let Some(message)=message.as_ref().filter(|m|CefString::from(&m.name()).to_string()==preview::REPORT) {
                     if let Some(args)=message.argument_list().filter(|a|a.size()==2&&a.get_type(0)==ValueType::STRING&&a.get_type(1)==ValueType::STRING) {
@@ -1807,6 +1829,7 @@ wrap_life_span_handler! {
                 task_manager::forget_process(browser.identifier());
                 site_data::destroyed(browser.identifier());
                 permissions::destroyed(browser.identifier());
+                passwords::closed(browser.identifier());
                 capture::destroyed(browser.identifier());
                 page_swipe::forget(browser.identifier());
                 #[cfg(target_os="macos")] mac::forget_page_scroll(browser.identifier());

@@ -456,6 +456,7 @@ pub(crate) fn init(cx: &mut App) {
                 let _ = cx.update(show_progress);
             }
             if preparing && state.borrow().failure.is_none()
+                && !cx.update(|cx| crate::password_flow::writes_pending(cx)).unwrap_or(true)
                 && !cx.update(|cx| crate::max_downloads::file_moves_pending(cx)).unwrap_or(true) {
                 // Exactly one running drain under the SHUTDOWN consumer lease,
                 // before detachment/begin_shutdown. No service means no drain:
