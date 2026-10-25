@@ -732,6 +732,7 @@ impl BrowserWindow {
             card_overlay: gpui::hsla(0., 0., 1., if self.theme_is_dark() { 0.10 } else { 0.02 }),
             text: theme.foreground,
             muted: theme.muted,
+            navigation_icon: if self.theme_is_dark() { theme.muted } else { gpui::rgb(0x6258ff).into() },
             hover: theme.hover,
             selected: theme.selected,
         };

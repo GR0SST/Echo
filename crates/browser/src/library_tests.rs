@@ -24,6 +24,7 @@ impl Render for Harness {
                 card_overlay: gpui::transparent_black(),
                 text: gpui::rgb(0x111111).into(),
                 muted: gpui::rgb(0x666666).into(),
+                navigation_icon: gpui::rgb(0x6258ff).into(),
                 hover: gpui::rgb(0xeeeeee).into(),
                 selected: gpui::rgb(0xcccccc).into(),
             },

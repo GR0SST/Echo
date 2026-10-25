@@ -55,6 +55,7 @@ impl Render for Host {
                 card_overlay: gpui::transparent_black(),
                 text: colors.text,
                 muted: colors.muted,
+                navigation_icon: gpui::rgb(0x6258ff).into(),
                 hover: colors.hover,
                 selected: colors.control,
             },

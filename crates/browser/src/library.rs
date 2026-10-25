@@ -154,6 +154,7 @@ pub(crate) struct LibraryColors {
     pub card_overlay: Hsla,
     pub text: Hsla,
     pub muted: Hsla,
+    pub navigation_icon: Hsla,
     pub hover: Hsla,
     pub selected: Hsla,
 }
@@ -258,7 +259,8 @@ pub(crate) fn render_library(
                                 .top(px(16.))
                                 .size(px(24.))
                                 .flex_none()
-                                .child(crate::icons::library_section(item, item == section)),
+                                .text_color(colors.navigation_icon)
+                                .child(crate::icons::library_section(item, item == section && colors.text.l > 0.5)),
                         )
                         .child(
                             div()
