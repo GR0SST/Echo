@@ -96,3 +96,42 @@ Inspected pairs: `pair-profile-rename-3x.png` and
 Sheet geometry matches the captured reference. Shared font wrapping, borders
 and keycaps still differ; illustrations use original Echo geometry instead of
 Arc artwork. Source inspection never saved a profile or assignment change.
+
+## Local application icon variants
+
+Source: the existing native `arc_Icon.png` Settings capture. Its six rows
+use 80 px content height plus a 1 px separator, 20 px radios, 52 px artwork
+and the selected row's CURRENT ICON caption. The same layout contains Echo's
+original, Candy Echo, Neon, Fluted Glass, Schoolbook and Colorful variants.
+The alternatives are original concentric Echo geometry, with no Arc artwork,
+referral controls, third-party artist attribution or account dependencies.
+
+The install-wide choice persists outside website-profile preferences. Click,
+Tab and Space activation update it only after native application succeeds.
+macOS applies the SVG artwork immediately; startup restores the choice, and
+Original clears the override to recover the bundle's full-resolution icon.
+Other-platform native application remains unimplemented behind the shared
+interface. The GUI test backend avoids calling AppKit.
+
+The first native pair exposed GPUI 0.2's encoded SVG path leaving premultiplied
+RGBA bytes in the BGRA image buffer. Preview rendering now converts those
+bytes and removes transparent Dock padding for the measured optical frame.
+The native Dock retains vector artwork and its own padding. A regression
+checks all six decoders, transparent corners and the yellow variant's channel
+order, alongside choice activation and session persistence.
+
+Final native validation: `icon-native-run.11yrMX/drive.log` and `restart.log`
+both reach CEF Complete with zero owners/browsers/flushes and exit 0. The fixture
+clicked the six rows, saved Colorful without changing profile IDs or Space
+assignments, then reopened a fresh process with Colorful still selected.
+`pair-icons-3x.png` was inspected after correcting channel order, optical
+artwork sizing, the bottom gutter and a row-wide focus fill absent from the
+reference. Row/radio/artwork/caption geometry aligns; the shared panel shade,
+font rendering and radio border treatment remain visibly different.
+
+`icon-full-tests-final-pair.log`: 1051 browser, 226 core, 15 AI, 140 engine,
+2 bundle and 4 importer tests passed; one AI test ignored. Two new GPUI tests
+cover activation, persistence, profile identity preservation and preview
+colour/alpha correctness. The native fixture explicitly activates its verified
+process before clicking, since a first click into an inactive app may only
+activate it.

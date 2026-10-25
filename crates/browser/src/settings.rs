@@ -69,6 +69,7 @@ enum Popup {
 }
 
 mod archive;
+mod app_icon;
 mod previews;
 mod profiles;
 
@@ -879,55 +880,6 @@ impl SettingsWindow {
             )
             .into_any_element()
     }
-    fn icon(&self) -> AnyElement {
-        // Arc's referral icons and artwork are deliberately not redistributed.
-        group()
-            .px(px(16.))
-            .py(px(24.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .size(px(20.))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(rgb(0x5b53ff))
-                            .bg(rgb(0xffffff))
-                            .child(
-                                div()
-                                    .m(px(3.))
-                                    .size(px(10.))
-                                    .rounded_full()
-                                    .bg(rgb(0x5b53ff)),
-                            ),
-                    )
-                    .child(
-                        gpui::img(std::sync::Arc::new(gpui::Image::from_bytes(
-                            gpui::ImageFormat::Png,
-                            include_bytes!("../assets/echo-icon.png").to_vec(),
-                        )))
-                        .size(px(52.)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child("The Original Echo")
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(0x1590ff))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child("CURRENT ICON"),
-                            ),
-                    ),
-            )
-            .into_any_element()
-    }
     fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
         static CATALOG: std::sync::LazyLock<Vec<(String, String)>> =
             std::sync::LazyLock::new(|| {
@@ -1182,7 +1134,7 @@ impl Render for SettingsWindow {
             Tab::Max => self.max(cx),
             Tab::Links => self.links(cx),
             Tab::Shortcuts => self.shortcuts(cx),
-            Tab::Icon => self.icon(),
+            Tab::Icon => self.icon(cx),
             Tab::Advanced => self.advanced(cx),
         };
         div()

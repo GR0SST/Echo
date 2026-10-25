@@ -81,6 +81,7 @@ mod downloads_presentation;
 mod user_profile_dialog;
 mod user_profiles;
 mod settings;
+mod app_icons;
 pub mod pages;
 pub(crate) use pages::devtools;
 pub mod text_input;

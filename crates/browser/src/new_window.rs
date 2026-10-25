@@ -239,6 +239,7 @@ pub(crate) fn source_from_session(
         return Err(std::io::Error::other("Browser is quitting"));
     }
     let browser = crate::load_session(path)?;
+    crate::app_icons::apply(browser.settings.app_icon);
     let profile = ProfileHandle::new(browser, cx);
     profile.save_session_to(path.to_path_buf(), cx);
     Ok(NormalProfile {

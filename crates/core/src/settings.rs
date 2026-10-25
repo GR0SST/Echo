@@ -41,9 +41,36 @@ impl Toggle {
     }
 }
 
+/// Local application artwork; never tied to referrals or browser accounts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppIcon {
+    #[default]
+    Original,
+    Candy,
+    Neon,
+    Glass,
+    Schoolbook,
+    Colorful,
+}
+impl AppIcon {
+    pub const ALL: [Self; 6] = [Self::Original, Self::Candy, Self::Neon, Self::Glass, Self::Schoolbook, Self::Colorful];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "The Original Echo",
+            Self::Candy => "Candy Echo",
+            Self::Neon => "Neon",
+            Self::Glass => "Fluted Glass",
+            Self::Schoolbook => "Schoolbook",
+            Self::Colorful => "Colorful",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub app_icon: AppIcon,
     pub max: echo_ai::MaxSettings,
     /// Shared across local website profiles; absent in older sessions.
     pub air_traffic_control: Option<crate::routing::AirTrafficControl>,
