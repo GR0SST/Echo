@@ -188,6 +188,7 @@ pub(crate) struct UserProfileDialog {
     spaces: Vec<SpaceCard>,
     selected_spaces: HashSet<SpaceId>,
     appearance: browser_core::themes::ThemeAppearance,
+    palette: crate::material::DialogPalette,
     profiles: Vec<ProfileChoice>,
     switch_space: Option<(SpaceId, String, UserProfileId)>,
     selected_profile: Option<UserProfileId>,
@@ -307,6 +308,7 @@ impl UserProfileDialog {
                 })
                 .collect(),
             appearance: browser.settings.theme_appearance,
+            palette: crate::material::DialogPalette::new(true),
             selected_spaces: match source {
                 CreationSource::File(id) => [id].into(),
                 CreationSource::Settings => HashSet::new(),
@@ -640,10 +642,12 @@ impl UserProfileDialog {
                 if enabled {
                     0x474df2
                 } else {
-                    0x222469
+                    if self.palette.dark { 0x222469 } else { 0xcfccff }
                 }
-            } else {
+            } else if self.palette.dark {
                 0x676099
+            } else {
+                0xdedee5
             }))
             .text_size(px(13.))
             .flex()
@@ -674,7 +678,7 @@ impl UserProfileDialog {
                             .bg(hsla(0., 0., 1., if enabled { 0.02 } else { 0.01 }))
                     })
                     .when(!primary, |cap| {
-                        cap.bg(rgb(0x4e4c77)).text_color(rgb(0xc4c2d7))
+                        cap.bg(rgb(if self.palette.dark { 0x4e4c77 } else { 0xe7e7e7 })).text_color(rgb(if self.palette.dark { 0xc4c2d7 } else { 0x777777 }))
                     })
                     .text_size(px(10.))
                     .font_weight(gpui::FontWeight::BOLD)
@@ -688,12 +692,14 @@ impl UserProfileDialog {
                     .when(!primary, |keycap| keycap.child("ESC"))
             })
             .bg(if primary {
-                rgb(if enabled { 0x3339f1 } else { 0x1c1d4c })
+                rgb(if enabled { 0x3339f1 } else if self.palette.dark { 0x1c1d4c } else { 0xe8e7ff })
             } else {
-                rgb(0x302f60)
+                rgb(if self.palette.dark { 0x302f60 } else { 0xffffff })
             })
             .text_color(rgb(if primary && !enabled {
-                0x5b5c7f
+                if self.palette.dark { 0x5b5c7f } else { 0xa5a2ce }
+            } else if !primary && !self.palette.dark {
+                0x202124
             } else {
                 0xffffff
             }))
@@ -867,7 +873,7 @@ impl UserProfileDialog {
                         div()
                             .debug_selector(move || format!("profile-space-label-{index}"))
                             .mt(px(4.))
-                            .text_color(rgb(0xb8b8c0))
+                            .text_color(self.palette.muted)
                             .text_size(px(12.))
                             .line_height(px(18.))
                             .child(space.name.clone()),
@@ -1070,6 +1076,12 @@ impl Render for UserProfileDialog {
         if self.closed {
             return div().into_any_element();
         }
+        let dark = match self.appearance {
+            browser_core::themes::ThemeAppearance::Dark => true,
+            browser_core::themes::ThemeAppearance::Light => false,
+            browser_core::themes::ThemeAppearance::Automatic => matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark),
+        };
+        self.palette = crate::material::DialogPalette::new(dark);
         let heading = match self.step {
             Step::Name => "Create a new Profile".to_string(),
             Step::Spaces => "Which Spaces should use this Profile?".to_string(),
@@ -1127,8 +1139,8 @@ impl Render for UserProfileDialog {
             .p(px(38.))
             .when(self.step == Step::ConfirmSwitch, |sheet| sheet.pb(px(28.)))
             .rounded(px(16.))
-            .bg(rgb(0x161c2f))
-            .text_color(rgb(0xffffff))
+            .bg(if dark { rgb(0x161c2f).into() } else { self.palette.surface })
+            .text_color(self.palette.text)
             .text_size(px(14.))
             .line_height(px(18.))
             .shadow_lg()
@@ -1229,7 +1241,7 @@ impl Render for UserProfileDialog {
             Step::Name => sheet
                 .child(div().debug_selector(|| "profile-body".into())
                     .flex_none().mt(px(12.)).h(px(72.))
-                    .text_color(rgb(0xb8b8c0))
+                    .text_color(self.palette.muted)
                     .child(crate::paragraph::render("Profiles make your Spaces truly separate — with their own history, saved passwords, extensions, and other browsing data. No more flipping between work and personal accounts!".into(),None,paragraph_width,px(-2.),window)))
                 .child(div().debug_selector(|| "profile-name-label".into())
                     .flex_none().mt(px(18.)).h(px(18.))
@@ -1237,18 +1249,18 @@ impl Render for UserProfileDialog {
                 .child(div().id("profile-name").debug_selector(|| "profile-name".into())
                     .flex_none().mt(px(6.)).h(px(48.)).px(px(12.))
                     .flex().items_center().rounded(px(7.)).border_1()
-                    .border_color(rgb(0x444650)).bg(rgb(0x101728))
+                    .border_color(self.palette.border).bg(if dark { rgb(0x101728).into() } else { self.palette.surface })
                     .child(self.input.clone())),
             Step::Spaces => sheet
                 .child(div().debug_selector(|| "profile-body".into())
                     .flex_none().mt(px(12.)).h(px(90.))
-                    .text_color(rgb(0xb8b8c0))
+                    .text_color(self.palette.muted)
                     .child(crate::paragraph::render("These Spaces will start fresh in your brand new Profile — so you’ll have to log back in to websites, re-save your passwords, add extensions, etc. You can always switch back to your previous Profile though if you forgot something!".into(),None,paragraph_width,px(-2.),window)))
                 .child(div().flex_none().mt(px(10.)).child(self.space_cards(window,cx))),
             Step::Switch => sheet
                 .child(div().debug_selector(|| "profile-body".into())
                     .absolute().left(px(38.)).right(px(38.)).top(px(160. + switch_extra)).h(px(54.))
-                    .text_color(rgb(0xb8b8c0)).child(SWITCH_WARNING))
+                    .text_color(self.palette.muted).child(SWITCH_WARNING))
                 .child(div().debug_selector(|| "profile-switch-row".into())
                     .absolute().left(px(38.)).right(px(38.)).top(px(228. + switch_extra)).h(px(24.))
                     .flex().items_center().gap(px(8.))
@@ -1260,8 +1272,8 @@ impl Render for UserProfileDialog {
                 let text = self.confirmation_body();
                 let name_start = "Each Profile has different browser data, so your ".len();
                 let name_end = name_start + self.switch_space.as_ref().unwrap().1.len();
-                sheet.child(div().debug_selector(|| "profile-switch-warning".into()).mt(px(16.)).text_color(rgb(0xb8b8c0)).child(crate::paragraph::render(text,Some(name_start..name_end),paragraph_width,px(-2.),window)))
-                    .child(div().debug_selector(|| "profile-switch-irreversible".into()).mt(px(16.)).text_color(rgb(0xb8b8c0)).child(div().relative().top(px(-2.)).child("This action cannot be undone.")))
+                sheet.child(div().debug_selector(|| "profile-switch-warning".into()).mt(px(16.)).text_color(self.palette.muted).child(crate::paragraph::render(text,Some(name_start..name_end),paragraph_width,px(-2.),window)))
+                    .child(div().debug_selector(|| "profile-switch-irreversible".into()).mt(px(16.)).text_color(self.palette.muted).child(div().relative().top(px(-2.)).child("This action cannot be undone.")))
             },
         };
         if let Some(error) = &self.error {
@@ -1354,7 +1366,9 @@ impl Render for UserProfileDialog {
                 ),
         );
         div()
+            .debug_selector(|| "profile-modal-backdrop".into())
             .size_full()
+            .bg(hsla(0., 0., 0., if dark { 0.55 } else { 0.20 }))
             .flex()
             .items_center()
             .justify_center()

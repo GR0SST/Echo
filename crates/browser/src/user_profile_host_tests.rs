@@ -198,3 +198,19 @@ fn profile_menu_routes_are_unavailable_for_private_and_blank_owners(cx: &mut Tes
         assert!(view.read_with(visual, |view, _| view.user_profile_dialog.is_none()));
     }
 }
+
+#[gpui::test]
+fn profile_modal_backdrop_covers_the_host_without_replacing_its_page(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    let before = view.read_with(visual, |view, _| view.session_json());
+    fake.take_calls();
+    dispatch_menu(visual, "File", "New Profile");
+    let mut child = sheet(&view, visual);
+    child.run_until_parked();
+    let backdrop = child.debug_bounds("profile-modal-backdrop").unwrap();
+    child.update(|window, _| assert_eq!(backdrop.size, window.viewport_size()));
+    child.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert_eq!(view.read_with(visual, |view, _| view.session_json()), before);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
