@@ -715,3 +715,47 @@ fn opening_a_new_page_from_library_cancels_the_library_offset(cx: &mut TestAppCo
     let document = fake.0.borrow().focused_page.unwrap();
     assert_eq!(fake.0.borrow().bounds[&raw(document)], original);
 }
+
+#[gpui::test]
+fn archive_retains_selected_document_without_navigation_or_recreation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let document = fake.0.borrow().focused_page.unwrap();
+    let session = view.read_with(cx, |view, _| view.session_json());
+    enter(&view, cx);
+    fake.take_calls();
+    click(cx, "library-nav-archive");
+    assert_preview(&fake, document, cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.native_page_viewport(), PageViewport::LibraryArchive);
+        assert!(view.pages.as_ref().unwrap().borrow().is_visible(view.browser.active_tab().unwrap().id));
+        assert_eq!(view.session_json(), session);
+    });
+    for viewport in [gpui::size(px(1000.), px(760.)), gpui::size(px(970.), px(660.))] {
+        cx.simulate_resize(viewport);
+        cx.run_until_parked();
+        assert_preview(&fake, document, cx);
+    }
+    unchanged(&fake.take_calls());
+}
+
+#[gpui::test]
+fn archive_preview_clips_the_original_viewport_without_document_reflow(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.simulate_resize(gpui::size(px(1000.), px(760.)));
+    visual.run_until_parked();
+    let document = raw(fake.0.borrow().focused_page.unwrap());
+    let original = fake.0.borrow().bounds[&document];
+    enter(&view, visual);
+    visual.executor().advance_clock(Duration::from_millis(400));
+    visual.run_until_parked();
+    for (selector, left, width) in [("library-nav-archive",417.,573.)] {
+        click(visual, selector);
+        let state = fake.0.borrow();
+        assert_eq!(state.bounds[&document].width, original.width);
+        assert_eq!(state.bounds[&document].x, left);
+        assert_eq!(state.viewport_clips[&document], Some(Bounds { x:0., y:0., width, height:740. }));
+    }
+    click(visual, "library-nav-spaces");
+    click(visual, "library-space-select-0");
+    assert_eq!(fake.0.borrow().viewport_clips[&document], None);
+}

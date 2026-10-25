@@ -28,6 +28,7 @@ impl LibrarySection {
             Self::Media => crate::pages::PageViewport::LibraryMedia,
             Self::Downloads => crate::pages::PageViewport::LibraryDownloads,
             Self::Boosts => crate::pages::PageViewport::LibraryBoosts,
+            Self::ArchivedTabs => crate::pages::PageViewport::LibraryArchive,
             _ => crate::pages::PageViewport::Hidden,
         }
     }

@@ -3959,7 +3959,9 @@ impl BrowserWindow {
                         let divider_pages = pages.clone();
                         // Reports the card's bounds so the native page view can sit on it.
                         Some(canvas(
-                            move |bounds, _, cx| {
+                            move |bounds, window, cx| {
+                                let clip = bounds.intersect(&window.content_mask().bounds);
+                                let clip = engine::Bounds { x: f64::from(f32::from(clip.origin.x)), y: f64::from(f32::from(clip.origin.y)), width: f64::from(f32::from(clip.size.width)), height: f64::from(f32::from(clip.size.height)) };
                                 let bounds = engine::Bounds {
                                     x: f64::from(f32::from(bounds.origin.x)),
                                     y: f64::from(f32::from(bounds.origin.y)),
@@ -3967,7 +3969,7 @@ impl BrowserWindow {
                                     height: f64::from(f32::from(bounds.size.height)),
                                 };
                                 let surfaces = match pages.try_borrow_mut() {
-                                    Ok(mut pages) => { if pages.set_viewport_bounds(generation, bounds) { Some(pages.surface_bounds()) } else { None } }
+                                    Ok(mut pages) => { if pages.set_viewport_bounds(generation, bounds) { pages.set_viewport_clip(generation, clip); Some(pages.surface_bounds()) } else { None } }
                                     Err(_) => None,
                                 };
                                 let tracking = mouse_tracking.clone();
@@ -3985,7 +3987,7 @@ impl BrowserWindow {
                                 else {
                                     let pages = pages.clone();
                                     cx.defer(move |_| {
-                                        let surfaces = { let mut pages = pages.borrow_mut(); if !pages.set_viewport_bounds(generation, bounds) { return; } pages.surface_bounds() };
+                                        let surfaces = { let mut pages = pages.borrow_mut(); if !pages.set_viewport_bounds(generation, bounds) { return; } pages.set_viewport_clip(generation, clip); pages.surface_bounds() };
                                         update_tracking(surfaces);
                                     });
                                 }

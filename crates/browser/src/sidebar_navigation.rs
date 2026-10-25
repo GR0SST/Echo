@@ -789,9 +789,12 @@ impl BrowserWindow {
         if section == LibrarySection::ArchivedTabs {
             let owner = cx.weak_entity();
             let fill = self.theme_empty_panel_fill();
-            let view = self.sidebar_navigation.archive.get_or_insert_with(|| cx.new(|cx| crate::library_archive::ArchiveLibrary::new(owner, colors, fill, cx))).clone();
-            view.update(cx, |view, _| view.set_colors(colors, fill));
-            empty = Some(view.into_any_element());
+            let view = self.sidebar_navigation.archive.get_or_insert_with(|| cx.new(|cx| crate::library_archive::ArchiveLibrary::new(owner, colors, cx))).clone();
+            view.update(cx, |view, _| view.set_colors(colors));
+            let preview = self.render_library_page_preview(cx);
+            empty = Some(div().relative().size_full().child(view)
+                .child(library::media::render_preview_at(fill, Some(preview), preview_left))
+                .into_any_element());
         }
         library::render_library(
             &projection,

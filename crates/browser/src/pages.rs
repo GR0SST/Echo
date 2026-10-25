@@ -137,6 +137,7 @@ pub trait WebEngine {
     /// Transfer an existing native page. Engines without native hosting reject it.
     fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
+    fn set_viewport_clip(&mut self, _view: ViewId, _clip: Option<Bounds>) {}
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
@@ -351,6 +352,7 @@ impl WebEngine for Chromium {
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.engine.set_frame(view, bounds)
     }
+    fn set_viewport_clip(&mut self, view: ViewId, clip: Option<Bounds>) { self.engine.set_viewport_clip(view, clip); }
     fn move_view(&mut self, view: ViewId, parent: *mut c_void, bounds: Bounds) -> bool {
         self.engine.move_view(view, parent, bounds)
     }
@@ -565,10 +567,11 @@ pub(crate) enum PageViewport {
     LibraryMedia,
     LibraryDownloads,
     LibraryBoosts,
+    LibraryArchive,
 }
 impl PageViewport {
     fn retains_library_page(self) -> bool {
-        matches!(self, Self::LibraryMedia | Self::LibraryDownloads | Self::LibraryBoosts)
+        matches!(self, Self::LibraryMedia | Self::LibraryDownloads | Self::LibraryBoosts | Self::LibraryArchive)
     }
 }
 
@@ -576,6 +579,7 @@ pub struct Pages {
     applied_shortcuts: Option<u64>,
     viewport: PageViewport,
     viewport_generation: u64,
+    viewport_clip: Option<Bounds>,
     store: Rc<RefCell<PageStore>>,
     host: u64,
     parent: *mut c_void,
@@ -674,6 +678,7 @@ impl Pages {
                 events: Vec::new(), next_event: 0, metadata: BTreeMap::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             viewport: PageViewport::Content,
             viewport_generation: 0,
+            viewport_clip: None,
             host: 1,
             parent: std::ptr::null_mut(),
             page_focus: true,
@@ -859,7 +864,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
+        Self { applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, viewport_clip: None, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, preview_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
@@ -1228,6 +1233,12 @@ impl Pages {
         true
     }
 
+    pub(crate) fn set_viewport_clip(&mut self, generation: u64, clip: Bounds) {
+        if generation != self.viewport_generation { return; }
+        let clip = self.viewport.retains_library_page().then_some(clip);
+        if self.viewport_clip != clip { self.viewport_clip = clip; self.apply(); }
+    }
+
     /// Called from layout with the content card's bounds.
     pub fn set_bounds(&mut self, bounds: Bounds) {
         if self.bounds == Some(bounds) {
@@ -1324,6 +1335,13 @@ impl Pages {
                     pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
+            let clip = self.viewport_clip.filter(|_| self.viewport.retains_library_page()).map(|clip| {
+                let x = bounds.x.max(clip.x); let y = bounds.y.max(clip.y);
+                Bounds { x: x - bounds.x, y: y - bounds.y,
+                    width: (bounds.x + bounds.width).min(clip.x + clip.width).max(x) - x,
+                    height: (bounds.y + bounds.height).min(clip.y + clip.height).max(y) - y }
+            });
+            engine.set_viewport_clip(pages[&tab].view, clip);
             engine.set_top_corners_rounded(pages[&tab].view, !self.split && !self.square_top && !self.top_toolbar);
             let page = pages.get_mut(&tab).unwrap();
             if !page.visible { engine.set_visible(page.view, true); page.visible = true; created = true; }

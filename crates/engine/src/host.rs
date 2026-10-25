@@ -54,6 +54,15 @@ pub(crate) fn set_frame(view: *mut c_void, parent: *mut c_void, frame: Bounds) {
     x11::set_frame(view, frame);
 }
 
+/// A platform mask affects presentation only; no CEF resize notification.
+pub(crate) fn set_viewport_clip(view: *mut c_void, clip: Option<Bounds>) {
+    if view.is_null() { return; }
+    #[cfg(target_os = "macos")]
+    crate::mac::set_viewport_clip(view, clip);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (view, clip); // Native region adapters remain platform-specific.
+}
+
 #[cfg(target_os = "windows")]
 mod windows {
     use super::*;

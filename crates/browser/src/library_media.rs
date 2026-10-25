@@ -230,7 +230,7 @@ pub(crate) fn render_preview(color: Hsla, content: Option<gpui::AnyElement>) -> 
 pub(crate) fn render_preview_at(color: Hsla, content: Option<gpui::AnyElement>, left: f32) -> gpui::AnyElement {
     div().debug_selector(|| "library-media-preview".into())
         .absolute().left(px(left)).right(px(10.))
-        .top(px(10.)).bottom(px(10.)).rounded(px(6.)).overflow_hidden()
+        .top(px(10.)).bottom(px(10.)).rounded(px(6.)).shadow_md().overflow_hidden()
         .bg(color).children(content).into_any_element()
 }
 

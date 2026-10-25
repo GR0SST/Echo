@@ -8,7 +8,7 @@ use crate::{
 use browser_core::{ArchiveReason, SpaceId, TabId, UserProfileId};
 use chrono::{DateTime, Local};
 use gpui::{
-    div, prelude::*, px, Context, Entity, Focusable, Hsla, Subscription, WeakEntity, Window,
+    div, prelude::*, px, Context, Entity, Focusable, Subscription, WeakEntity, Window,
 };
 use std::{collections::HashSet, time::SystemTime};
 
@@ -24,14 +24,12 @@ pub(crate) struct ArchiveLibrary {
     spaces: HashSet<SpaceId>,
     profile: Option<UserProfileId>,
     colors: LibraryColors,
-    preview: Hsla,
     _subscriptions: Vec<Subscription>,
 }
 impl ArchiveLibrary {
     pub(crate) fn new(
         owner: WeakEntity<BrowserWindow>,
         colors: LibraryColors,
-        preview: Hsla,
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| TextInput::new("Search Archive…", cx));
@@ -48,13 +46,11 @@ impl ArchiveLibrary {
             spaces: HashSet::new(),
             profile: None,
             colors,
-            preview,
             _subscriptions: subscriptions,
         }
     }
-    pub(crate) fn set_colors(&mut self, colors: LibraryColors, preview: Hsla) {
+    pub(crate) fn set_colors(&mut self, colors: LibraryColors) {
         self.colors = colors;
-        self.preview = preview;
     }
 }
 impl Render for ArchiveLibrary {
@@ -434,11 +430,7 @@ impl Render for ArchiveLibrary {
             .text_size(px(14.))
             .text_color(colors.text)
             .child(column.child(list))
-            .child(crate::library::media::render_preview_at(
-                self.preview,
-                None,
-                305.,
-            ))
+
             .into_any_element()
     }
 }

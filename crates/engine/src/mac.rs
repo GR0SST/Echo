@@ -206,6 +206,35 @@ pub fn move_clip_view(view: *mut c_void, parent: *mut c_void) {
     }
 }
 
+#[repr(transparent)]
+struct LayerColor(*const c_void);
+unsafe impl objc2::Encode for LayerColor {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Pointer(&objc2::Encoding::Struct("CGColor", &[]));
+}
+
+/// CALayer retains its mask. The CEF child and its autoresizing stay untouched.
+pub fn set_viewport_clip(view: *mut c_void, clip: Option<Bounds>) {
+    unsafe {
+        let layer: *mut AnyObject = msg_send![view as *mut AnyObject, layer];
+        if layer.is_null() { return; }
+        let Some(clip) = clip else {
+            let _: () = msg_send![layer, setMask: std::ptr::null_mut::<AnyObject>()];
+            return;
+        };
+        let bounds: NSRect = msg_send![view as *mut AnyObject, bounds];
+        let class = AnyClass::get(c"CALayer").expect("AppKit requires QuartzCore");
+        let mask: *mut AnyObject = msg_send![class, layer];
+        let frame = NSRect::new(NSPoint::new(clip.x, bounds.size.height - clip.y - clip.height), NSSize::new(clip.width, clip.height));
+        let _: () = msg_send![mask, setFrame: frame];
+        let _: () = msg_send![mask, setCornerRadius: 6_f64];
+        let color_class = AnyClass::get(c"NSColor").expect("AppKit is loaded");
+        let black: *mut AnyObject = msg_send![color_class, blackColor];
+        let color: LayerColor = msg_send![black, CGColor];
+        let _: () = msg_send![mask, setBackgroundColor: color];
+        let _: () = msg_send![layer, setMask: mask];
+    }
+}
+
 pub fn set_corner_radius(view: *mut c_void, radius: f64) {
     unsafe {
         let layer: *mut AnyObject = msg_send![view as *mut AnyObject, layer];

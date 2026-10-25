@@ -301,6 +301,7 @@ struct FakeState {
     calls: Vec<Call>,
     /// Latest bounds given to each view.
     bounds: std::collections::HashMap<u64, Bounds>,
+    viewport_clips: std::collections::HashMap<u64, Option<Bounds>>,
     rounded_top: std::collections::HashMap<u64, bool>,
     next_view: u64,
     focused_page: Option<ViewId>,
@@ -547,6 +548,7 @@ impl WebEngine for FakeEngine {
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.0.borrow_mut().bounds.insert(raw(view), bounds);
     }
+    fn set_viewport_clip(&mut self, view: ViewId, clip: Option<Bounds>) { self.0.borrow_mut().viewport_clips.insert(raw(view), clip); }
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
         let mut state = self.0.borrow_mut();
         if state.rounded_top.insert(raw(view), rounded) != Some(rounded) {

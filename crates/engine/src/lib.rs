@@ -893,6 +893,13 @@ impl Engine {
         Some(id)
     }
 
+    /// Clip the visible host without changing Chromium's document viewport.
+    pub fn set_viewport_clip(&mut self, id: ViewId, clip: Option<Bounds>) {
+        let Some(view) = self.views.get(&id) else { return; };
+        if clip.is_some_and(|r| ![r.x,r.y,r.width,r.height].iter().all(|v|v.is_finite()) || r.width < 0. || r.height < 0.) { return; }
+        host::set_viewport_clip(view.host, clip);
+    }
+
     pub fn set_frame(&mut self, id: ViewId, frame: Bounds) {
         if let Some(view)=self.views.get(&id).filter(|view|view.frame!=frame){page_swipe::cancel(view.browser.identifier());}
         let Some(view) = self.views.get_mut(&id) else {
