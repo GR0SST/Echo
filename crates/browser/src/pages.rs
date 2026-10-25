@@ -72,6 +72,9 @@ pub trait WebEngine {
     fn respond_permission(&mut self, _view: ViewId, _request: engine::PermissionRequestId, _decision: engine::PermissionDecision) -> bool { false }
     fn request_quote(&mut self, _view: ViewId, _request: u64) -> bool { false }
     fn site_info(&self, _view: ViewId) -> Option<engine::SiteInfo> { None }
+    fn profile_site_settings(&self, _storage: &StorageSelection, _origin: &str) -> Option<Vec<engine::SiteSetting>> { None }
+    fn set_profile_site_setting(&mut self, _storage: &StorageSelection, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
+
     fn set_site_permission(&mut self, _view: ViewId, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
     fn clear_site_data(&mut self, _view: ViewId, _origin: &str, _kind: engine::ClearSiteData) -> bool { false }
     fn zoom_percent(&self, _view: ViewId) -> u16 { 100 }
@@ -196,6 +199,13 @@ impl WebEngine for Chromium {
     fn evaluate_script(&mut self, view: ViewId, url: &str, source: &str) -> Result<engine::ScriptTicket,String> { self.engine.evaluate_script(view,url,source) }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_quote(view, request) }
     fn site_info(&self, view: ViewId) -> Option<engine::SiteInfo> { self.engine.site_info(view) }
+    fn profile_site_settings(&self, storage: &StorageSelection, origin: &str) -> Option<Vec<engine::SiteSetting>> {
+        self.resolve_storage(storage).ok()?.site_settings(origin)
+    }
+    fn set_profile_site_setting(&mut self, storage: &StorageSelection, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
+        self.resolve_storage(storage).is_ok_and(|context|context.set_site_setting(origin,kind,value))
+    }
+
     fn set_site_permission(&mut self, view: ViewId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool { self.engine.set_site_permission(view, origin, kind, value) }
     fn clear_site_data(&mut self, view: ViewId, origin: &str, kind: engine::ClearSiteData) -> bool { self.engine.clear_site_data(view, origin, kind) }
     fn zoom_percent(&self, view: ViewId) -> u16 { self.engine.zoom_percent(view) }
@@ -899,6 +909,15 @@ impl Pages {
         self.shown = None;
     }
 
+
+    pub(crate) fn profile_site_settings(&self, profile: UserProfileId, private: bool, origin: &str) -> Option<Vec<engine::SiteSetting>> {
+        let storage=if private {StorageSelection::Current} else {StorageSelection::for_profile(profile)};
+        self.store.borrow().engine.profile_site_settings(&storage,origin)
+    }
+    pub(crate) fn set_profile_site_setting(&mut self, profile: UserProfileId, private: bool, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
+        let storage=if private {StorageSelection::Current} else {StorageSelection::for_profile(profile)};
+        self.store.borrow_mut().engine.set_profile_site_setting(&storage,origin,kind,value)
+    }
     pub fn site_info(&self, tab: TabId) -> Option<engine::SiteInfo> {
         let store = self.store.borrow();
         let page = store.pages.get(&tab).filter(|page| page.owner == self.host)?;

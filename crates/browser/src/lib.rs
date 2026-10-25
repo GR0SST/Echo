@@ -28,6 +28,7 @@ mod page_context;
 mod feedback;
 mod page_swipe;
 mod site_controls;
+mod site_settings_page;
 mod boosts;
 mod boost_library;
 mod panel;
@@ -142,6 +143,7 @@ pub fn init(cx: &mut App) {
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
+    site_settings_page::bind_keys(cx);
     boosts::bind_keys(cx);
     capture::bind_keys(cx);
     new_menu::bind_keys(cx);

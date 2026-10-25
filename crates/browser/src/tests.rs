@@ -50,6 +50,8 @@ mod page_zoom_tests;
 mod page_loading_tests;
 #[path = "site_controls_tests.rs"]
 mod site_controls_tests;
+#[path = "site_settings_page_tests.rs"]
+mod site_settings_page_tests;
 #[path = "scripting_tests.rs"]
 mod scripting_tests;
 #[path = "save_page_tests.rs"]
@@ -238,6 +240,7 @@ enum Call {
     PermissionResponse(u64,engine::PermissionRequestId,engine::PermissionDecision),
     Quote(u64, u64),
     SitePermission(u64,String,engine::PermissionKind,engine::PermissionValue),
+    ProfileSiteSetting(crate::pages::StorageSelection,String,engine::PermissionKind,engine::PermissionValue),
     ClearSiteData(u64,String,engine::ClearSiteData),
     Create(u64, String),
     MoveHost(u64, usize, Bounds),
@@ -314,6 +317,7 @@ struct FakeState {
     identity_attempts: Vec<(crate::pages::PageIdentity, browser_core::SpaceId, crate::pages::StorageSelection, String)>,
     snapshots: Vec<engine::PageSnapshot>,
     site_infos: std::collections::HashMap<u64,engine::SiteInfo>,
+    profile_settings: Rc<RefCell<std::collections::HashMap<(crate::pages::StorageSelection,String),Vec<engine::SiteSetting>>>>,
     permission_requests: std::collections::HashSet<(u64,engine::PermissionRequestId)>,
     script_calls: Vec<(ViewId,String)>,
 }
@@ -357,6 +361,16 @@ impl WebEngine for FakeEngine {
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.call(Call::Quote(raw(view), request)); true }
     fn zoom_percent(&self, view: ViewId) -> u16 { self.0.borrow().site_infos.get(&raw(view)).map_or(100, |info| info.zoom_percent) }
     fn site_info(&self, view:ViewId)->Option<engine::SiteInfo>{self.0.borrow().site_infos.get(&raw(view)).cloned()}
+    fn profile_site_settings(&self,storage:&crate::pages::StorageSelection,origin:&str)->Option<Vec<engine::SiteSetting>> {
+        self.0.borrow().profile_settings.borrow().get(&(storage.clone(),origin.into())).cloned()
+    }
+    fn set_profile_site_setting(&mut self,storage:&crate::pages::StorageSelection,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool {
+        let settings=self.0.borrow().profile_settings.clone();
+        let mut settings=settings.borrow_mut();let Some(rows)=settings.get_mut(&(storage.clone(),origin.into()))else{return false;};
+        let Some(row)=rows.iter_mut().find(|row|row.kind==kind&&kind.accepts(value))else{return false;};
+        row.value=if value==engine::PermissionValue::Default {row.default_value}else{value};row.uses_default=Some(value==engine::PermissionValue::Default);
+        self.call(Call::ProfileSiteSetting(storage.clone(),origin.into(),kind,value));true
+    }
     fn set_site_permission(&mut self,view:ViewId,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool{
         {let mut state=self.0.borrow_mut();let Some(info)=state.site_infos.get_mut(&raw(view)).filter(|info|info.origin==origin) else{return false;};let Some(setting)=info.permissions.iter_mut().find(|setting|setting.kind==kind)else{return false;};setting.value=value;}
         self.call(Call::SitePermission(raw(view),origin.into(),kind,value));true
@@ -455,6 +469,7 @@ impl WebEngine for FakeEngine {
     }
     fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> {
         let child = Self::default();
+        child.0.borrow_mut().profile_settings=self.0.borrow().profile_settings.clone();
         self.0.borrow_mut().forks.push(child.clone());
         Some(Box::new(child))
     }

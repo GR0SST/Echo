@@ -722,6 +722,7 @@ pub struct BrowserWindow {
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
+    pub(crate) site_settings_page: crate::site_settings_page::State,
     pub(crate) capture: Option<crate::capture::Capture>,
     pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     pub(crate) new_menu: Option<crate::new_menu::NewMenu>,
@@ -860,6 +861,7 @@ impl BrowserWindow {
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() { this.restore_site_settings_peek_focus(cx); }
             this.set_little_archive_active(window.is_window_active(),cx);
             this.max_preview_activation(window.is_window_active(),cx);
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
@@ -1014,6 +1016,7 @@ impl BrowserWindow {
             floating_sidebar: None,
             tab_menu: None,
             site_controls: None,
+            site_settings_page: Default::default(),
             capture: None,
             site_controls_anchor: Default::default(),
             new_menu: None,
@@ -1261,6 +1264,7 @@ impl BrowserWindow {
                     self.finish_tab_rename(true, cx);
                     let tab = pages.borrow().tab_for(view).filter(|tab| pages.borrow().is_visible(*tab));
                     if let Some(tab) = tab {
+                        self.restore_site_settings_peek_focus(cx);
                         // Native content owns the responder. Clear a retained
                         // GPUI editor's logical action target without calling
                         // focus_ui or changing the native first responder.
@@ -1463,6 +1467,7 @@ impl BrowserWindow {
     }
 
     pub fn focus(&self, window: &mut Window) {
+        if self.focus_site_settings(window){return;}
         self.focus_handle.focus(window);
     }
 
@@ -3976,9 +3981,10 @@ impl BrowserWindow {
             size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
         let history_open = !virtual_page && self.history_is_open();
+        let site_settings_open = !virtual_page && self.site_settings_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if virtual_page || split_open || history_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if virtual_page || split_open || history_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -4025,6 +4031,7 @@ impl BrowserWindow {
                         .when(!split_open, |this| this.px_8())
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
+                    .when(site_settings_open, |this| this.child(self.render_site_settings_page(cx)))
                     .children(placeholder.map(|(title, url)| {
                         div().debug_selector(|| "page-placeholder".into())
                             .flex()
@@ -4451,6 +4458,7 @@ impl Render for BrowserWindow {
         }
         self.refresh_profile_projection();
         self.start_max_title_jobs(cx);
+        self.sync_site_settings(window,cx);
         if self.peek_owner.is_some() { return self.render_peek(window, cx); }
         self.sync_library_geometry(window.viewport_size(), cx);
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {

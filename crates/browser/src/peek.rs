@@ -25,11 +25,55 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 impl BrowserWindow {
+    /// Clearing site data reloads the covered source. CEF can make its parent
+    /// key during that navigation; keep the settings document as the responder.
+    pub(crate) fn restore_site_settings_peek_focus(&mut self, cx: &mut Context<Self>) {
+        let Some(child) = self.peek_child else { return; };
+        if !self.site_settings_page.return_focus.is_some_and(|(pending, until)| pending.window_id() == child.window_id() && until >= cx.background_executor().now()) {
+            self.site_settings_page.return_focus = None;
+            return;
+        }
+        let root = self.main_window;
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let settings = child.update(cx, |view, _, _| {
+                view.site_settings_is_open() && view.peek_owner.as_ref().is_some_and(|state| !state.close_requested && !state.detached)
+            }).unwrap_or(false);
+            if !settings { return; }
+            let current = root.update(cx, |_, window, cx| {
+                if !window.is_window_active() { return false; }
+                owner.update(cx, |view, cx| {
+                    if !view.peek_child.is_some_and(|current| current.window_id() == child.window_id()) { return false; }
+                    if !view.site_settings_page.return_focus.is_some_and(|(pending, until)| pending.window_id() == child.window_id() && until >= cx.background_executor().now()) { return false; }
+                    view.site_settings_page.return_focus = None;
+                    if let Some(pages) = &view.pages { pages.borrow_mut().request_ui_focus(); }
+                    true
+                }).unwrap_or(false)
+            }).unwrap_or(false);
+            if !current { return; }
+            let _ = child.update(cx, |view, window, cx| {
+                if !view.site_settings_is_open() || !view.peek_owner.as_ref().is_some_and(|state| !state.close_requested && !state.detached) { return; }
+                window.activate_window();
+                if let Some(pages) = &view.pages { pages.borrow_mut().focus_ui(); }
+                view.focus_site_settings(window);
+                cx.notify();
+            });
+        });
+    }
     pub(crate) fn open_peek(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.peek_owner.is_some() || self.transient.is_some() || self.peek_child.is_some() || crate::quit::is_quitting() { return; }
-        let Ok(url) = url::Url::parse(&url) else { return; };
-        if !matches!(url.scheme(), "http" | "https") { return; }
+        let Ok(url)=url::Url::parse(&url) else{return;};
+        if !matches!(url.scheme(),"http"|"https"){return;}
+        self.open_peek_document(url,window,cx);
+    }
+    pub(crate) fn open_site_settings_peek(&mut self,url:String,window:&mut Window,cx:&mut Context<Self>) {
+        if !crate::site_settings_page::is_site_url(&url){return;}
+        let Ok(url)=url::Url::parse(&url) else{return;};
+        self.open_peek_document(url,window,cx);
+    }
+    fn open_peek_document(&mut self,url:url::Url,window:&mut Window,cx:&mut Context<Self>) {
+        if self.peek_owner.is_some() || self.transient.is_some() || self.peek_child.is_some() || crate::quit::is_quitting(){return;}
         self.close_command_bar(cx);
+        let site_settings_source=if crate::site_settings_page::is_site_url(url.as_str()){crate::site_settings_page::DataSource::capture(self,cx)}else{None};
         let source = NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() };
         let space = self.browser.space().id;
         let theme = self.browser.space().theme.clone();
@@ -58,12 +102,14 @@ impl BrowserWindow {
                 let mut browser = if private { browser_core::Browser::new_private() } else { source.profile.blank_browser(website_profile) };
                 browser.spaces[0].hue = hue;
                 browser.spaces[0].theme = theme;
-                browser.new_tab(url.as_str(), SystemTime::now());
+                let tab=browser.new_tab(url.as_str(), SystemTime::now());
+                if crate::site_settings_page::is_site_url(url.as_str()){browser.set_title(tab,"Settings");}
                 let profile = if share_history { ProfileHandle::new_with_shared_history(browser, &source.profile, cx) } else { ProfileHandle::new(browser, cx) };
                 let selection = profile.selection();
                 cx.new(|cx| {
                     let mut view = BrowserWindow::with_profile_pages(profile, Some(selection), pages, window, cx);
                     if let Some(pages) = &view.pages { pages.borrow_mut().peek_mode = true; }
+                    view.site_settings_page.source=site_settings_source;
                     view.sidebar_visible = false;
                     view.transient = Some(Transient { source, space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
                     view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: None, redo_close: None, sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
@@ -271,10 +317,12 @@ impl BrowserWindow {
                 .opacity(amount.clamp(0., 1.)).child(card_shadow()))
             .child(div().debug_selector(|| "peek-card".into()).absolute().left(px(left)).top(px(top))
                 .w(px(width)).h(px(height)).rounded(px(8.)).bg(gpui::white())
+                .when(self.site_settings_is_open(),|card|card.occlude())
                 .when(self.pages.is_none(), |view| view.child(self.browser.active_tab().map(|tab| tab.url.clone()).unwrap_or_default()))
                 .overflow_hidden()
                 .when_some(close_image.clone(), |card, image| card.child(div().debug_selector(|| "peek-closing-image".into()).w(px(width)).h(px(height)).child(gpui::img(image).w(px(width)).h(px(height)).object_fit(gpui::ObjectFit::Fill))))
-                .when(close_image.is_none(), |card| card.children(self.render_page_viewport_canvas())))
+                .when(close_image.is_none() && self.site_settings_is_open(), |card|card.child(self.render_site_settings_page(cx)))
+                .when(close_image.is_none() && !self.site_settings_is_open(), |card| card.children(self.render_page_viewport_canvas())))
             .child(div().absolute().left(px(left + width + 13.)).top(px(20.)).opacity(amount.clamp(0., 1.)).flex().flex_col().gap(px(9.5))
                 .child(button("peek-close", icons::control_sized(Icon::Close, 24.)).on_click(cx.listener(|view, _, _, cx| view.exit_peek(cx))))
                 .child(button("peek-expand", expand_icon()).on_click(cx.listener(|view, _, _, cx| view.promote_transient(None, cx))))

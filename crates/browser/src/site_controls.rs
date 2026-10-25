@@ -306,6 +306,7 @@ impl BrowserWindow {
             return;
         };
         let _ = scope;
+        if index==6 {self.open_all_site_settings(cx);return;}
         match [
             SiteAction::ClearCache,
             SiteAction::ClearCookies,
@@ -851,7 +852,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &Next, _, cx| {
                 if let Some(panel) = &mut this.site_controls {
                     if panel.more {
-                        panel.selected = (panel.selected + 1) % 4;
+                        panel.selected = (panel.selected + 1) % 7;
                         cx.notify();
                     }
                 }
@@ -859,7 +860,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &Previous, _, cx| {
                 if let Some(panel) = &mut this.site_controls {
                     if panel.more {
-                        panel.selected = (panel.selected + 3) % 4;
+                        panel.selected = (panel.selected + 6) % 7;
                         cx.notify();
                     }
                 }
