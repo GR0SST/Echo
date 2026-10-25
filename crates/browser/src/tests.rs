@@ -8479,9 +8479,13 @@ fn settings_archive_dropdown_keyboard_cancel_preserves_legacy_policy(cx: &mut Te
     let (_, mut settings) = settings_window(cx);
     click(&mut settings, "settings-tab-Profiles");
     click(&mut settings, "settings-popup-Archive tabs after");
+    assert!(settings.debug_bounds("settings-popup-keyboard-selection").is_none());
+    settings.simulate_keystrokes("down");
+    assert!(settings.debug_bounds("settings-popup-keyboard-selection").is_some());
     settings.simulate_keystrokes("escape");
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), legacy);
     click(&mut settings, "settings-popup-Archive tabs after");
+    assert!(settings.debug_bounds("settings-popup-keyboard-selection").is_none());
     settings.simulate_keystrokes("down down enter");
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().archive_after), Some(Duration::from_secs(604800)));

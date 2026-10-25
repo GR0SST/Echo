@@ -437,8 +437,8 @@ General. Screenshots are recorded under `target/parity/settings/` as `arc_<Tab>.
 | Cross-device sync → Spaces, tabs, Favorites, settings; sync settings/notices/icons | out of scope |
 | Arc telemetry and our own cloud backend | out of scope |
 | General → Arc is not the default browser ("Set as default" button) | missing |
-| General → "Profile Settings…" (search engine, auto-archive, downloads) | partial (opens Profiles in the same Settings window; native capture reviewed) |
-| General → "Archive tabs after" | partial (the installed release places this dropdown in Profiles; no Command Bar interval picker) |
+| General → "Profile Settings…" (search engine, auto-archive, downloads) | done (live same-window navigation and measured action-row/destination pairs verified; excluded update/account controls omitted). [Closeout evidence](PARTIAL_ROW_REVIEW.md) |
+| Profiles → "Archive tabs after" | partial (four source intervals, per-profile persistence and keyboard/mouse selection work. The mouse-opened menu no longer adds an unobserved blue selection. Native vibrant material, corner and text rendering still differ in the comparison; no unsupported General/Command Bar picker is required). [Closeout evidence](PARTIAL_ROW_REVIEW.md) |
 | General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | missing |
 | General → "Previews Settings…" (Show Arc Previews: Gmail, Calendar, Outlook, Linear/Notion/Figma) | partial (measured 422 × 370 panel, seven persisted choices, Done/Enter/Escape, modal click isolation and the bundled Help destination; site previews themselves remain missing). [Reference](PROFILES_SETTINGS_REFERENCE.md) |
 | General → Warn before quitting | partial (toggle persists; quit confirmation is not integrated) |

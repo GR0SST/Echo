@@ -88,6 +88,7 @@ pub(crate) struct SettingsWindow {
     focus: FocusHandle,
     popup: Option<Popup>,
     popup_selection: usize,
+    popup_keyboard: bool,
     search_popup_owner: Option<UserProfileId>,
     search_popup_providers: Vec<browser_core::omnibox::search_settings::SearchProvider>,
     archive_scope: Option<archive::ArchiveScope>,
@@ -238,6 +239,7 @@ fn open(
                     focus,
                     popup: None,
                     popup_selection: 0,
+                    popup_keyboard: false,
                     search_popup_owner: None,
                     search_popup_providers: Vec::new(),
                     archive_scope: None,
@@ -477,6 +479,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         row()
+            .font_weight(gpui::FontWeight::NORMAL)
             .min_h(px(match action {
                 "Search Settings…" => 44.,
                 "Previews Settings…" => 40.,
@@ -548,6 +551,7 @@ impl SettingsWindow {
                             } else {
                                 Some(popup)
                             };
+                            this.popup_keyboard = false;
                             this.popup_selection = this
                                 .popup_options(popup)
                                 .iter()
@@ -1047,6 +1051,7 @@ impl SettingsWindow {
         };
         div()
             .id("settings-popup-menu")
+            .font_weight(gpui::FontWeight::NORMAL)
             .flex()
             .flex_col()
             .on_click(|_, _, cx| cx.stop_propagation())
@@ -1075,7 +1080,7 @@ impl SettingsWindow {
                             .items_center()
                             .gap(px(6.))
                             .hover(move |s| s.bg(colors.rgb(0x1769c4)).text_color(rgb(0xffffff)))
-                            .when(index == self.popup_selection, |s| s.bg(colors.rgb(0x087dff)).text_color(rgb(0xffffff)))
+                            .when(self.popup_keyboard && index == self.popup_selection, |s| s.debug_selector(|| "settings-popup-keyboard-selection".into()).bg(colors.rgb(0x087dff)).text_color(rgb(0xffffff)))
                             .child(div().w(px(16.)).when(selected, |s| {
                                 s.child(icons::control_sized(Icon::Check, 14.))
                             }))
@@ -1226,12 +1231,14 @@ impl Render for SettingsWindow {
                     let count = this.popup_options(popup).len();
                     match event.keystroke.key.as_str() {
                         "down" => {
+                            this.popup_keyboard = true;
                             this.popup_selection = (this.popup_selection + 1) % count;
                             cx.notify();
                             cx.stop_propagation();
                             return;
                         }
                         "up" => {
+                            this.popup_keyboard = true;
                             this.popup_selection = (this.popup_selection + count - 1) % count;
                             cx.notify();
                             cx.stop_propagation();
