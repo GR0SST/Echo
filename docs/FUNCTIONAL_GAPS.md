@@ -17,7 +17,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 3 | L192: Add Extension… / Manage Extensions… | L | Connect the qualified extension catalog/install/action engine bridge to Add/Manage Extensions. |
 | 4 | L499: Built-in ad and tracker blocker | L | Implement local request filtering with maintained ad/tracker rules and per-site exceptions. |
 | 5 | L293: History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | M | Persist visit frequency and rank typed local results by pinned/open/history tiers plus frequency and recency. |
-| 6 | L112: Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | M | Complete Undo/Redo transactions for regrouping and Pinned/Favorite unloading without losing live pages. |
+| 6 | L112: Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | M | **Regrouping fixed:** single-tab archive Redo closes its original target after a committed Split; the next Undo restores that Split without reloading its survivor. Pinned unload is verified to preserve move Undo and empty selection; no new unloading Undo is needed. Batch regrouping and Favorite unloading remain unqualified; see [Undo evidence](SIDEBAR_UNDO.md). |
 | 7 | L99: Save Page As | S | Diagnose native Shift-Command-S routing and persist the chosen Save Page format. |
 | 8 | L129: Reveal Current Tab | S | **Fixed:** Control-Space now reaches the existing reveal/unfold/scroll action in both GPUI and renderer focus; see delivery evidence. |
 | 9 | L410: Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | M | Complete user link-disposition routing while preserving source pages, focus and profile storage. |

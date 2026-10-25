@@ -438,7 +438,7 @@ impl Browser {
         closed
     }
 
-    fn close_split_pane_unrecorded(&mut self, tab: TabId, now: SystemTime) -> bool {
+    pub(crate) fn close_split_pane_unrecorded(&mut self, tab: TabId, now: SystemTime) -> bool {
         let Some((scope, mut split)) = self.take_split(tab) else { return false; };
         let selected: Vec<_> = self.spaces.iter().enumerate().filter(|(_, space)| space.active_tab == Some(tab)).map(|(index, _)| index).collect();
         let Some(mut page) = self.take_tab(tab, scope) else { self.put_split(scope, split); return false; };

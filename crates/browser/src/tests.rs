@@ -7245,6 +7245,45 @@ fn creating_the_restored_native_pane_cannot_steal_the_surviving_panes_selection(
 }
 
 #[gpui::test]
+fn pin_unload_keeps_move_undo_without_reopening_the_document(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 1);
+    let source = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("cmd-d cmd-w");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-z");
+    assert!(view.read_with(cx, |w, _| w.browser.space().today.iter().any(|tab| tab.id == source)
+        && w.browser.space().pinned.is_empty() && w.browser.space().active_tab.is_none()
+        && w.browser.archive.is_empty()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn archive_redo_after_committing_a_split_preserves_the_new_pane_and_undo_rebuilds_the_group(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let source = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("cmd-w cmd-z ctrl-shift-=");
+    bar(&view, cx).simulate_input("https://regroup.example/live");
+    bar(&view, cx).simulate_keystrokes("enter");
+    let (survivor, group) = view.read_with(cx, |w, _| {
+        let survivor = w.browser.active_tab().unwrap().id;
+        (survivor, w.browser.active_split().unwrap().id)
+    });
+    let survivor_view = fake.take_calls().iter().find_map(|call| match call {
+        Call::Create(id, url) if url == "https://regroup.example/live" => Some(*id), _ => None,
+    }).unwrap();
+    cx.simulate_keystrokes("cmd-shift-z");
+    assert!(view.read_with(cx, |w, _| w.browser.split_for(survivor).is_none()
+        && w.browser.active_tab().unwrap().id == survivor
+        && !w.browser.all_tabs().any(|tab| tab.id == source)));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Close(id) if *id == survivor_view)));
+    cx.simulate_keystrokes("cmd-z");
+    assert!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().id == group
+        && w.browser.active_tab().unwrap().id == survivor
+        && w.browser.all_tabs().any(|tab| tab.id == source)));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://regroup.example/live")));
+}
+
+#[gpui::test]
 fn cancelled_split_draft_keeps_the_previous_pin_redo(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     let source = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);

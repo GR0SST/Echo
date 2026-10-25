@@ -22,6 +22,7 @@ impl PaneCapture {
         Some(Self(PaneEdit { closed, space, before, split, whole_archived: false }))
     }
     pub(crate) fn record(self, browser: &mut Browser) { browser.sidebar_history.record(SidebarEdit::Pane(self.0)); }
+    pub(super) fn finish(self) -> PaneEdit { self.0 }
 }
 
 impl PaneEdit {

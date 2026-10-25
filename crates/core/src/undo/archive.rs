@@ -15,6 +15,7 @@ pub(super) struct ArchiveEdit {
     order: Vec<TabId>,
     active: Option<TabId>,
     items: Vec<ArchivedItem>,
+    regrouped: Option<super::pane::PaneEdit>,
 }
 
 pub(crate) struct ArchiveCapture {
@@ -41,7 +42,7 @@ impl ArchiveCapture {
             .map(|entry| ArchivedItem { anchor: entry.tab.id, panes: archived_ids(entry) }).collect();
         if items.is_empty() { return None; }
         Some(ArchiveEdit {
-            space: self.space, user_profile_id: self.user_profile_id, order: self.order, active: self.active, items,
+            space: self.space, user_profile_id: self.user_profile_id, order: self.order, active: self.active, items, regrouped: None,
         })
     }
 }
@@ -52,10 +53,25 @@ fn archived_ids(entry: &ArchivedTab) -> Vec<TabId> {
 
 impl ArchiveEdit {
     pub(super) fn anchors(&self) -> Vec<TabId> { self.items.iter().map(|item| item.anchor).collect() }
-    pub(super) fn apply(&self, redo: bool, browser: &mut Browser, now: SystemTime) -> bool {
+    pub(super) fn apply(&mut self, redo: bool, browser: &mut Browser, now: SystemTime) -> bool {
         let Some(index) = browser.spaces.iter().position(|space| space.id == self.space) else { return false; };
         if browser.spaces[index].user_profile_id != self.user_profile_id { return false; }
         if redo {
+            // Arc retains a single-tab archive Redo after that tab joins a new
+            // Split. Remove only the original tab; the following Undo restores
+            // its current group and keeps the surviving pane selected.
+            if self.items.len() == 1 && self.items[0].panes.len() == 1 {
+                let tab = self.items[0].anchor;
+                if browser.spaces[index].today.iter().any(|page| page.id == tab)
+                    && browser.split_for(tab).is_some()
+                {
+                    let Some(capture) = super::PaneCapture::new(browser, tab) else { return false; };
+                    browser.active_space = index;
+                    if !browser.close_split_pane_unrecorded(tab, now) { return false; }
+                    self.regrouped = Some(capture.finish());
+                    return true;
+                }
+            }
             // Validate the complete transaction before removing anything.
             // A subsequently regrouped, pinned or moved page invalidates it.
             if self.items.iter().any(|item| {
@@ -63,12 +79,14 @@ impl ArchiveEdit {
                     || browser.related_tabs(item.anchor) != item.panes
             }) { return false; }
             browser.active_space = index;
+            self.regrouped = None;
             for item in &self.items {
                 let result = browser.close_tab_unrecorded(item.anchor, now);
                 debug_assert_eq!(result, Some(Closed::Archived));
             }
             return true;
         }
+        if let Some(edit) = &mut self.regrouped { return edit.apply(false, browser, now); }
         if self.items.iter().any(|item| {
             !browser.archive.iter().any(|entry| entry.tab.id == item.anchor && entry.space == self.space && entry.user_profile_id == self.user_profile_id
                 && entry.reason == ArchiveReason::Manual && archived_ids(entry) == item.panes)
@@ -249,6 +267,52 @@ mod tests {
         let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
         assert!(!restored.undo_sidebar(later()));
         assert_eq!(restored.archive.len(), 1);
+    }
+
+    #[test]
+    fn unloading_a_pin_does_not_replace_the_move_undo_or_reselect_the_unloaded_page() {
+        let mut browser = Browser::new();
+        let tab = browser.new_tab("https://pin", NOW);
+        browser.toggle_pin(tab);
+        assert_eq!(browser.close_tab(tab, NOW), Some(Closed::Unloaded));
+        assert_eq!(browser.space().active_tab, None);
+        assert!(browser.undo_sidebar(later()));
+        assert_eq!(ids(&browser), vec![tab]);
+        assert!(browser.space().pinned.is_empty());
+        assert_eq!(browser.space().active_tab, None);
+        assert!(browser.archive.is_empty());
+        assert!(!browser.undo_sidebar(later()));
+    }
+
+    #[test]
+    fn single_tab_redo_after_regrouping_closes_only_its_target_and_undo_reconstructs_the_current_split() {
+        let mut browser = Browser::new();
+        let a = browser.new_tab("https://a", NOW);
+        let b = browser.new_tab("https://b", NOW);
+        browser.close_tab(b, NOW);
+        assert!(browser.undo_sidebar(later()));
+        let c = browser.new_tab("https://c", later());
+        browser.add_split(b, c, Placement::Right, later()).unwrap();
+        browser.spaces[0].splits[0].weights = vec![0.3, 0.7];
+        let group = browser.active_split().unwrap().id;
+        for round in 0..3 {
+            browser.navigate(c, format!("https://c/{round}"));
+            assert!(browser.redo_sidebar(later()));
+            assert!(browser.split_for(c).is_none());
+            assert_eq!(browser.space().active_tab, Some(c));
+            assert!(browser.all_tabs().any(|tab| tab.id == a));
+            assert!(!browser.all_tabs().any(|tab| tab.id == b));
+            assert_eq!(browser.archive.len(), 1);
+            assert_eq!(browser.archive[0].tab.id, b);
+            assert!(browser.undo_sidebar(later()));
+            let restored = browser.split_for(b).unwrap();
+            assert_eq!(restored.id, group);
+            assert_eq!(restored.panes, vec![b, c]);
+            assert_eq!(restored.active, c);
+            assert_eq!(restored.weights, vec![0.3, 0.7]);
+            assert_eq!(browser.space().active_tab, Some(c));
+            assert_eq!(browser.active_tab().unwrap().url, format!("https://c/{round}"));
+        }
     }
 
     #[test]
