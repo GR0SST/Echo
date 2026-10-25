@@ -54,6 +54,25 @@ pub(crate) fn chevron(up: bool) -> AnyElement {
     }).size(px(18.)).flex_none().into_any_element()
 }
 
+/// The Settings toolbar's keyboard, measured in its 22 px control slot.
+pub(crate) fn keyboard(size: f32) -> AnyElement {
+    div().debug_selector(|| "settings-keyboard-icon".into()).size(px(size)).flex_none()
+        .child(gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+            let scale = size / 22.;
+            let at = |x, y| bounds.origin + gpui::point(px(x * scale), px(y * scale));
+            let color = window.text_style().color;
+            window.paint_quad(gpui::quad(gpui::Bounds::new(at(0., 5.), gpui::size(px(22. * scale), px(14. * scale))), px(2. * scale), gpui::transparent_black(), px(1.5 * scale), color, gpui::BorderStyle::Solid));
+            for y in [8.25, 11.25] {
+                for x in [4., 6.75, 9.5, 12.25, 15., 17.75] {
+                    window.paint_quad(gpui::fill(gpui::Bounds::new(at(x, y), gpui::size(px(1.5 * scale), px(1.5 * scale))), color));
+                }
+            }
+            for (x, width) in [(4., 1.5), (7., 10.), (18., 1.5)] {
+                window.paint_quad(gpui::fill(gpui::Bounds::new(at(x, 14.), gpui::size(px(width * scale), px(1.3 * scale))), color));
+            }
+        }).size_full()).into_any_element()
+}
+
 pub(crate) fn more() -> AnyElement {
     gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
         for x in [5., 9., 13.] {

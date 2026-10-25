@@ -246,7 +246,15 @@ impl SettingsWindow {
                 .child(div().flex().gap(px(4.)).text_color(rgb(0x1686ff)).child(div().size(px(64.)).rounded(px(12.)).bg(rgb(0x75acff)).border_2().border_color(rgb(0x0788ff)).flex().items_center().justify_center().child(icons::control_sized(Icon::Command,40.))).child(div().size(px(64.)).rounded(px(12.)).bg(rgb(0x75acff)).border_2().border_color(rgb(0x0788ff)).flex().items_center().justify_center().child(icons::ionicon("happy-outline",42.,1.))))
                 .child(div().mt(px(12.)).font_weight(gpui::FontWeight::BOLD).child("Custom Shortcuts"))
                 .child(div().text_size(px(11.)).line_height(px(14.)).text_color(colors.rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
-                .child(div().flex_1()).child(self.settings_button("Reset All Shortcuts").id("reset-all-shortcuts").debug_selector(||"reset-all-shortcuts".into()).px(px(8.)).cursor_pointer().on_click(cx.listener(|this,_,_,cx|this.reset_shortcut(None,cx)))).into_any_element()
+                .child(div().flex_1())
+                .child(div().w(px(168.)).h(px(24.)).mb(px(1.)).flex().gap(px(4.))
+                    .child(self.settings_button("Reset All Shortcuts").id("reset-all-shortcuts").debug_selector(|| "reset-all-shortcuts".into())
+                        .w(px(140.)).px(px(8.)).cursor_pointer().on_click(cx.listener(|this, _, _, cx| this.reset_shortcut(None, cx))))
+                    .child(div().id("shortcut-footer-more").debug_selector(|| "shortcut-footer-more".into())
+                        .size(px(24.)).flex_none().rounded_full().bg(colors.rgb(0x393b3d)).flex().items_center().justify_center()
+                        .hover(move |s| s.bg(colors.rgb(0x484a4a))).cursor_pointer().child(icons::more())
+                        .on_click(cx.listener(|this, _, window, cx| this.toggle_shortcuts_menu(window, cx)))))
+                .into_any_element()
         };
         let mut last_group = None;
         let rows = entries

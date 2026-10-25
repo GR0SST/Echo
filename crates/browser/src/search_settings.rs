@@ -119,6 +119,11 @@ impl State {
         }
     }
 }
+pub(crate) const PAGE_TITLE: &str = "Settings - Manage search engines and site search";
+pub(crate) fn is_search_settings_url(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| url.scheme() == "browser" && url.host_str() == Some("settings") && url.path() == "/searchEngines")
+}
+
 impl BrowserWindow {
     #[cfg(test)]
     pub(crate) fn search_editor_debug(&self, cx: &gpui::App) -> Option<Vec<String>> {
@@ -252,7 +257,7 @@ impl BrowserWindow {
             }
             None => b.new_tab(url, std::time::SystemTime::now()),
         });
-        self.edit_browser(|b| b.set_title(id, "Settings - Manage search engines and site search"));
+        self.edit_browser(|b| b.set_title(id, PAGE_TITLE));
         self.sidebar_navigation.controller.select(
             &self.browser,
             crate::sidebar_pages::SidebarPage::Space(self.browser.space().id),
@@ -265,6 +270,9 @@ impl BrowserWindow {
     }
     pub(crate) fn sync_search_settings(&mut self) {
         let owner = self.search_settings_owner();
+        if let Some(id) = self.browser.active_tab().filter(|tab| owner.is_some() && tab.page_title.as_deref() != Some(PAGE_TITLE)).map(|tab| tab.id) {
+            self.edit_browser(|browser| browser.set_title(id, PAGE_TITLE));
+        }
         if self.search_settings.owner != owner {
             self.search_settings.owner = owner;
             self.search_settings.editor = None;
@@ -582,7 +590,7 @@ impl BrowserWindow {
             .filter(|p| !p.active)
             .filter(matches)
             .collect::<Vec<_>>();
-        div().id("search-settings-page").debug_selector(||"search-settings-page".into()).on_click(cx.listener(|this,_,_,cx|{this.search_settings.menu=None;cx.notify();})).absolute().inset_0().min_w_0().whitespace_normal().flex().flex_col().bg(rgb(0x202124)).text_color(rgb(0xe3e3e3)).font_family(".SystemUIFont").text_size(px(13.)).line_height(px(20.))
+        div().id("search-settings-page").debug_selector(||"search-settings-page".into()).on_click(cx.listener(|this,_,_,cx|{this.search_settings.menu=None;cx.notify();})).absolute().inset_0().rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).overflow_hidden().min_w_0().whitespace_normal().flex().flex_col().bg(rgb(0x202124)).text_color(rgb(0xe3e3e3)).font_family(".SystemUIFont").text_size(px(13.)).line_height(px(20.))
             .track_focus(&self.search_settings.focus)
             .key_context("ManagedSearchPage")
             .when(self.search_settings.editor.is_some(),|page|page.key_context("ManagedSearchEditor"))

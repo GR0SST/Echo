@@ -3314,6 +3314,11 @@ impl BrowserWindow {
     }
     fn render_favicon_styled(&self, tab: &Tab, profile: browser_core::UserProfileId, dark: bool, media: bool) -> AnyElement {
         if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
+        if crate::search_settings::is_search_settings_url(&tab.url) {
+            return div().debug_selector(|| format!("settings-page-icon-{}", tab.id.get()))
+                .size(px(18.)).flex_none().flex().items_center().justify_center()
+                .text_color(gpui::rgb(0x1c73e8)).child(crate::icons::ionicon("settings-sharp", 14., 1.)).into_any_element();
+        }
         let icon = match self.browser.favicon(profile, &tab.url) {
             Some(png) => {
                 let style = self.favicon_styles.borrow_mut().get(png);

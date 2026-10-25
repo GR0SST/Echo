@@ -13,7 +13,7 @@ use browser_core::{
 use gpui::{
     div, point, prelude::*, px, rgb, size, AnyElement, App, Bounds, Context, Entity, FocusHandle,
     Focusable, SharedString, Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds,
-    WindowOptions,
+    WindowOptions, WindowHandle,
 };
 use std::time::Duration;
 
@@ -48,16 +48,17 @@ impl Tab {
             Self::Advanced => "Advanced",
         }
     }
-    fn icon(self) -> &'static str {
-        match self {
+    fn icon(self) -> AnyElement {
+        let name = match self {
             Self::General => "settings-outline",
             Self::Profiles => "person-outline",
             Self::Max => "color-wand-outline",
             Self::Links => "browsers-outline",
-            Self::Shortcuts => "keypad-outline",
+            Self::Shortcuts => return icons::keyboard(22.),
             Self::Icon => "color-filter-outline",
             Self::Advanced => "options-outline",
-        }
+        };
+        icons::ionicon(name, 22., 1.)
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,7 @@ mod app_icon;
 mod previews;
 mod profiles;
 mod shortcuts;
+pub(crate) mod shortcuts_menu;
 
 pub(crate) struct SettingsWindow {
     colors: appearance::Colors,
@@ -98,6 +100,8 @@ pub(crate) struct SettingsWindow {
     _atc_dismiss: Option<Subscription>,
     max: max::State,
     shortcuts: shortcuts::State,
+    shortcuts_menu: Option<WindowHandle<shortcuts_menu::FooterMenu>>,
+    shortcuts_menu_pending: bool,
     shortcut_search: Entity<crate::text_input::TextInput>,
     _search_changed: Subscription,
     _observe: Subscription,
@@ -222,6 +226,7 @@ fn open(
                 let max = max::State::new(&profile, cx);
                 let shortcuts = shortcuts::State::new(cx);
                 let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
+                cx.on_release(|view, cx| view.close_shortcuts_menu(cx)).detach();
                 let mut view = SettingsWindow {
                     colors: appearance::Colors::from_appearance(window.appearance()),
                     _appearance: appearance,
@@ -244,6 +249,8 @@ fn open(
                     atc_return_focus: false,
                     _atc_dismiss: None,
                     shortcuts,
+                    shortcuts_menu: None,
+                    shortcuts_menu_pending: false,
                     shortcut_search,
                     _search_changed: search_changed,
                     _observe: observe,
@@ -411,6 +418,7 @@ impl SettingsWindow {
         cx.notify();
     }
     fn change_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_shortcuts_menu(cx);
         self.shortcuts.armed = false;
         self.tab = tab;
         self.popup = None;
@@ -1305,14 +1313,14 @@ impl Render for SettingsWindow {
                                     .gap(px(3.))
                                     .text_size(px(11.))
                                     .text_color(colors.rgb(if self.tab == tab {
-                                        0x0788ff
+                                        0x007aff
                                     } else {
                                         0x989a9a
                                     }))
                                     .when(self.tab == tab, |s| {
                                         s.bg(colors.rgb(0x363838)).border_1().border_color(colors.rgb(0x181919))
                                     })
-                                    .child(icons::ionicon(tab.icon(), 22., 1.))
+                                    .child(tab.icon())
                                     .child(tab.label())
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.change_tab(tab, window, cx)
