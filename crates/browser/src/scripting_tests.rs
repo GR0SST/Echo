@@ -194,3 +194,114 @@ fn scripting_rejects_a_completed_reply_after_the_model_url_changes_before_render
     });
     assert!(cx.cx.update(|cx| request.poll(cx)).unwrap().is_err());
 }
+
+#[gpui::test]
+fn scripting_creation_location_and_plural_close_keep_stable_targets(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let state = cx.cx.update(crate::scripting::snapshot);
+    let window = state.windows[0].id.clone();
+    let container = Object::Window(window.clone()).query();
+    let before = view.read_with(cx, |v, _| v.browser.all_tabs().count());
+    let invalid = Command::Make {
+        class: code(b"tAbB"),
+        container: container.clone(),
+        properties: Record::from([(code(b"loca"), Value::Text("invalid".into()))]),
+    };
+    assert!(cx
+        .cx
+        .update(|cx| crate::scripting::dispatch(invalid, cx))
+        .is_err());
+    assert_eq!(
+        view.read_with(cx, |v, _| v.browser.all_tabs().count()),
+        before
+    );
+    for location in ["pinned", "topApp"] {
+        let made = dispatch(
+            Command::Make {
+                class: code(b"tAbB"),
+                container: container.clone(),
+                properties: Record::from([
+                    (
+                        code(b"URL "),
+                        Value::Text("https://created.example/".into()),
+                    ),
+                    (code(b"loca"), Value::Text(location.into())),
+                ]),
+            },
+            cx,
+        );
+        let Value::Object(tab) = made else { panic!() };
+        assert_eq!(
+            dispatch(
+                Command::Get(Query::Property {
+                    property: code(b"loca"),
+                    container: Box::new(tab.query())
+                }),
+                cx
+            ),
+            Value::Text(location.into())
+        );
+    }
+    let all = Query::Elements {
+        class: code(b"tAbB"),
+        container: Box::new(container),
+        selector: browser_core::scripting::Selector::All,
+    };
+    // Closing a pinned/Favorite tab preserves its saved item, as in the UI.
+    // Move these fixture tabs to Today before asserting removal.
+    dispatch(
+        Command::Set(
+            Query::Property {
+                property: code(b"loca"),
+                container: Box::new(all.clone()),
+            },
+            Value::Text("unpinned".into()),
+        ),
+        cx,
+    );
+    dispatch(Command::Close(all), cx);
+    cx.run_until_parked();
+    assert!(cx
+        .cx
+        .update(crate::scripting::snapshot)
+        .windows
+        .iter()
+        .find(|w| w.id == window)
+        .is_none_or(|w| w.tabs.is_empty()));
+}
+
+#[gpui::test]
+fn scripting_navigation_commands_route_to_the_resolved_live_page(cx: &mut TestAppContext) {
+    let fake = FakeEngine::default();
+    let (view, cx) = open_with(cx, Some(Box::new(fake.clone())));
+    view.update(cx, |v, cx| v.retain_normal_source(cx));
+    cx.run_until_parked();
+    let state = cx.cx.update(crate::scripting::snapshot);
+    let w = &state.windows[0];
+    let q = Object::Tab {
+        window: w.id.clone(),
+        id: w.active_tab.clone().unwrap(),
+    }
+    .query();
+    fake.0.borrow_mut().calls.clear();
+    for command in [
+        Command::Back(q.clone()),
+        Command::Forward(q.clone()),
+        Command::Reload(q.clone()),
+        Command::Stop(q),
+    ] {
+        dispatch(command, cx);
+    }
+    let calls = &fake.0.borrow().calls;
+    let ids: Vec<_> = calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Back(id) | Call::Forward(id) | Call::Reload(id) | Call::StopLoading(id) => {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 4);
+    assert!(ids.iter().all(|id| *id == ids[0]));
+}

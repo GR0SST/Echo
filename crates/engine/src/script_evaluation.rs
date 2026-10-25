@@ -179,6 +179,32 @@ mod tests {
         assert!(result(false, br#"{"message":"denied"}"#).is_err());
     }
     #[test]
+    fn dictionary_text_results_preserve_javascript_string_coercion_output() {
+        // Runtime evaluates String(eval(source)); Arc.sdef declares text, not
+        // an AppleEvent number/list/record. Do not reinterpret numeric-looking text.
+        for text in [
+            "undefined",
+            "null",
+            "true",
+            "false",
+            "42",
+            "NaN",
+            "Infinity",
+            "1,2",
+            "[object Object]",
+            "Symbol(x)",
+            "",
+            "💜",
+        ] {
+            let reply = serde_json::json!({"result":{"type":"string", "value":text}});
+            assert_eq!(
+                result(true, &serde_json::to_vec(&reply).unwrap()),
+                Ok(text.into())
+            );
+        }
+        assert!(result(true, br#"{"result":{"type":"number","value":42}}"#).is_err());
+    }
+    #[test]
     fn dropping_an_owner_completes_its_ticket_and_never_another() {
         let first = ScriptTicket(Arc::new(Mutex::new(None)));
         let second = ScriptTicket(Arc::new(Mutex::new(None)));

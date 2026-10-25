@@ -165,6 +165,11 @@ fn new_window(private: bool, cx: &mut App) -> Result<WindowHandle<BrowserWindow>
 }
 fn make(class: u32, container: Query, properties: Record, cx: &mut App) -> Result<Value> {
     if class == code(b"WiND") {
+        if snapshot(cx).one(&container)? != Object::Application {
+            return Err(Error::invalid(
+                "Windows must be created in the application.",
+            ));
+        }
         if properties
             .keys()
             .any(|k| ![code(b"mode"), code(b"inco")].contains(k))
@@ -193,18 +198,15 @@ fn make(class: u32, container: Query, properties: Record, cx: &mut App) -> Resul
     if class != code(b"tAbB") {
         return Err(Error::unsupported());
     }
-    if properties.keys().any(|k| *k != code(b"URL ")) {
-        return Err(Error::invalid("A new tab accepts only URL."));
-    }
-    let url = properties
-        .get(&code(b"URL "))
-        .map(Value::text)
-        .transpose()?
-        .unwrap_or("about:blank")
-        .to_owned();
+    let properties = browser_core::scripting::TabProperties::parse(&properties)?;
+    let url = properties.url;
+    let location = properties.location;
     let target = snapshot(cx).one(&container)?;
     if target == Object::Application {
         let before = handles(cx).into_iter().map(window_id).collect();
+        if location != "unpinned" {
+            return Err(Error::invalid("Little Echo tabs must be unpinned."));
+        }
         crate::transient::open(Some(url), cx);
         let h = made_window(before, cx)?;
         let tab = h
@@ -236,7 +238,19 @@ fn make(class: u32, container: Query, properties: Record, cx: &mut App) -> Resul
                     .ok_or_else(Error::missing)?;
                 view.switch_space(index, cx);
             }
-            let id = view.edit_browser(|b| b.new_tab(&url, SystemTime::now()));
+            let id = view.edit_browser(|b| {
+                let id = b.new_tab(&url, SystemTime::now());
+                match location.as_str() {
+                    "pinned" => {
+                        b.toggle_pin(id);
+                    }
+                    "topApp" => {
+                        b.favorite_tab(id);
+                    }
+                    _ => {}
+                }
+                id
+            });
             view.close_command_bar(cx);
             cx.notify();
             Ok(id.get().to_string())
@@ -274,6 +288,35 @@ pub(crate) fn dispatch(command: Command, cx: &mut App) -> Result<Value> {
         | Command::Focus(q) => q,
         _ => unreachable!(),
     };
+    let mutation_container = match &command {
+        Command::Set(Query::Property { container, .. }, _) => container.as_ref(),
+        _ => query,
+    };
+    let (targets, plural) = state.resolve(mutation_container)?;
+    if plural {
+        for target in targets {
+            let q = target.query();
+            let operation = match &command {
+                Command::Set(Query::Property { property, .. }, value) => Command::Set(
+                    Query::Property {
+                        property: *property,
+                        container: Box::new(q),
+                    },
+                    value.clone(),
+                ),
+                Command::Close(_) => Command::Close(q),
+                Command::Select(_) => Command::Select(q),
+                Command::Back(_) => Command::Back(q),
+                Command::Forward(_) => Command::Forward(q),
+                Command::Reload(_) => Command::Reload(q),
+                Command::Stop(_) => Command::Stop(q),
+                Command::Focus(_) => Command::Focus(q),
+                _ => return Err(Error::unsupported()),
+            };
+            dispatch(operation, cx)?;
+        }
+        return Ok(Value::Null);
+    }
     let (target, property) = if let Command::Set(
         Query::Property {
             property,
@@ -292,6 +335,37 @@ pub(crate) fn dispatch(command: Command, cx: &mut App) -> Result<Value> {
         _ => return Err(Error::unsupported()),
     };
     let h = handle(window, cx)?;
+    if let (Object::Window(id), Some(p), Command::Set(_, value)) = (&target, property, &command) {
+        if p == code(b"pidx") {
+            let Value::Int(index) = value else {
+                return Err(Error::invalid("Window index must be an integer."));
+            };
+            if let Some((anchor, above)) = state.window_order_anchor(id, *index)? {
+                #[cfg(target_os = "macos")]
+                {
+                    let anchor = handle(&anchor, cx)?
+                        .update(cx, |_, window, _| {
+                            crate::native::view_of(window).map(|p| p as usize)
+                        })
+                        .map_err(|_| Error::missing())?;
+                    h.update(cx, |_, window, _| {
+                        crate::native::scripting::order_window(
+                            crate::native::view_of(window),
+                            anchor.map(|p| p as *mut std::ffi::c_void),
+                            above,
+                        )
+                    })
+                    .map_err(|_| Error::missing())??;
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = (anchor, above);
+                    return Err(Error::unsupported());
+                }
+            }
+            return Ok(Value::Null);
+        }
+    }
     h.update(cx, |view, window, cx| {
         view.refresh_profile_projection();
         match &target {

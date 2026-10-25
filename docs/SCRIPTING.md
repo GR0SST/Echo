@@ -38,8 +38,17 @@ Implemented surfaces:
   canonical profile, page identity, current URL and opt-in, rejecting stale replies. Permission and preference
   state remain local.
 
-Compatibility limits: range/predicate/relative object selectors and arbitrary
-window-index writes are not implemented. Window mode is fixed at creation. An
+The locked-session expansion adds typed URL/location creation properties (validated
+before mutation), plural select/close/navigation/location operations using stable
+references, lossless signed 64-bit AppleEvent integers and browser-only window-index
+writes. Core tests cover raw index/name/ID selectors, all dictionary window properties,
+command codes, invalid creation values and ordering anchors; GPUI tests cover creation
+location and plural closure. Execute results remain text for every JavaScript value,
+as declared by Arc.sdef; the engine uses JavaScript String conversion and preserves
+exceptions as errors. These additions require native validation after macOS unlocks.
+
+Compatibility limits: range/predicate/relative object selectors and beginning/relative
+insertion locations are not implemented (rejected explicitly). Window mode is fixed at creation. An
 unloaded tab has no live JavaScript target; scripts should select/load it before
 execution. Window-state setters and normal/Little creation need broader native
 coverage. macOS AppleEvent consent for an external controller is owned by the OS.

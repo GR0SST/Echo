@@ -107,6 +107,41 @@ impl Value {
         }
     }
 }
+/// Validate all creation properties before allocating a tab or changing a Space.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabProperties {
+    pub url: String,
+    pub location: String,
+}
+impl TabProperties {
+    pub fn parse(properties: &Record) -> Result<Self> {
+        if properties
+            .keys()
+            .any(|k| ![code(b"URL "), code(b"loca")].contains(k))
+        {
+            return Err(Error::invalid("A new tab accepts URL and location."));
+        }
+        let url = properties
+            .get(&code(b"URL "))
+            .map(Value::text)
+            .transpose()?
+            .unwrap_or("about:blank");
+        let location = properties
+            .get(&code(b"loca"))
+            .map(Value::text)
+            .transpose()?
+            .unwrap_or("unpinned");
+        if !["topApp", "pinned", "unpinned"].contains(&location) {
+            return Err(Error::invalid(
+                "Location must be topApp, pinned or unpinned.",
+            ));
+        }
+        Ok(Self {
+            url: url.into(),
+            location: location.into(),
+        })
+    }
+}
 pub fn query(value: &Value) -> Result<Query> {
     query_depth(value, 0)
 }
@@ -224,10 +259,20 @@ impl Command {
                     None => Record::new(),
                     _ => return Err(Error::invalid("Expected a properties record.")),
                 };
-                let container = if let Some(Value::Record(_, r)) = params.get(&code(b"insh")) {
-                    query(r.get(&code(b"kobj")).unwrap_or(&Value::Null))?
-                } else {
-                    query(params.get(&code(b"subj")).unwrap_or(&Value::Null))?
+                let container = match params.get(&code(b"insh")) {
+                    Some(Value::Record(kind, r)) if *kind == code(b"insl") => {
+                        let position = r.get(&code(b"kpos")).map(Value::type_code).transpose()?;
+                        if position.is_some_and(|p| p != code(b"end ") && p != code(b"bgng")) {
+                            return Err(Error::invalid("Relative insertion is not supported."));
+                        }
+                        // Beginning insertion requires ordering support; never silently append.
+                        if position == Some(code(b"bgng")) {
+                            return Err(Error::unsupported());
+                        }
+                        query(r.get(&code(b"kobj")).unwrap_or(&Value::Null))?
+                    }
+                    Some(_) => return Err(Error::invalid("Expected an insertion location.")),
+                    None => query(params.get(&code(b"subj")).unwrap_or(&Value::Null))?,
                 };
                 Self::Make {
                     class,
@@ -303,6 +348,32 @@ pub struct Snapshot {
     pub windows: Vec<Window>,
 }
 impl Snapshot {
+    /// Resolve an index write against browser windows only (never child overlays).
+    /// The anchor survives removing the moved window from the ordering.
+    pub fn window_order_anchor(&self, id: &str, index: i64) -> Result<Option<(String, bool)>> {
+        let current = self
+            .windows
+            .iter()
+            .position(|w| w.id == id)
+            .ok_or_else(Error::missing)?;
+        let requested = usize::try_from(index)
+            .ok()
+            .filter(|i| *i > 0 && *i <= self.windows.len())
+            .ok_or_else(Error::missing)?
+            - 1;
+        if requested == current {
+            return Ok(None);
+        }
+        let remaining: Vec<_> = self.windows.iter().filter(|w| w.id != id).collect();
+        if requested < remaining.len() {
+            Ok(Some((remaining[requested].id.clone(), true)))
+        } else {
+            Ok(Some((
+                remaining.last().ok_or_else(Error::missing)?.id.clone(),
+                false,
+            )))
+        }
+    }
     pub fn resolve(&self, q: &Query) -> Result<(Vec<Object>, bool)> {
         match q {
             Query::Application => Ok((vec![Object::Application], false)),
@@ -351,9 +422,9 @@ impl Snapshot {
                     }
                     let index = match selector {
                         Selector::Index(n) if *n > 0 => usize::try_from(*n - 1).ok(),
-                        Selector::Index(n) if *n < 0 => {
-                            elements.len().checked_sub(n.unsigned_abs() as usize)
-                        }
+                        Selector::Index(n) if *n < 0 => usize::try_from(n.unsigned_abs())
+                            .ok()
+                            .and_then(|n| elements.len().checked_sub(n)),
                         Selector::Last => elements.len().checked_sub(1),
                         Selector::Middle => elements.len().checked_sub(1).map(|n| n / 2),
                         Selector::Any => Some(0),
@@ -732,5 +803,138 @@ mod tests {
             Ok(Command::Select(_))
         ));
         assert!(Command::decode(code(b"CrSu"), code(b"xxxx"), &params).is_err());
+    }
+    #[test]
+    fn raw_name_index_and_id_selectors_cover_tabs_spaces_and_windows() {
+        let state = fixture();
+        for (class, parent, form, selection, expected) in [
+            (
+                code(b"WiND"),
+                Object::Application,
+                code(b"name"),
+                Value::Text("B".into()),
+                Object::Window("b".into()),
+            ),
+            (
+                code(b"tAbB"),
+                Object::Window("a".into()),
+                code(b"name"),
+                Value::Text("Same title".into()),
+                Object::Tab {
+                    window: "a".into(),
+                    id: "1".into(),
+                },
+            ),
+            (
+                code(b"tAbB"),
+                Object::Space {
+                    window: "a".into(),
+                    id: "s2".into(),
+                },
+                code(b"indx"),
+                Value::Int(1),
+                Object::Tab {
+                    window: "a".into(),
+                    id: "2".into(),
+                },
+            ),
+            (
+                code(b"sPaC"),
+                Object::Window("a".into()),
+                code(b"ID  "),
+                Value::Text("s2".into()),
+                Object::Space {
+                    window: "a".into(),
+                    id: "s2".into(),
+                },
+            ),
+        ] {
+            let raw = Value::Record(
+                code(b"obj "),
+                Record::from([
+                    (code(b"want"), Value::Code(class)),
+                    (code(b"from"), Value::Object(parent)),
+                    (code(b"form"), Value::Code(form)),
+                    (code(b"seld"), selection),
+                ]),
+            );
+            assert_eq!(state.one(&query(&raw).unwrap()), Ok(expected));
+        }
+        for property in [
+            b"ID  ", b"pnam", b"pidx", b"hclb", b"ismn", b"pmnd", b"prsz", b"pvis", b"iszm",
+            b"pzum", b"acTa", b"acSp", b"inco", b"mode",
+        ] {
+            assert!(
+                state
+                    .property(&Object::Window("a".into()), code(property))
+                    .is_ok(),
+                "{property:?}"
+            );
+        }
+        assert_eq!(
+            state.window_order_anchor("a", 2),
+            Ok(Some(("b".into(), false)))
+        );
+        assert_eq!(
+            state.window_order_anchor("b", 1),
+            Ok(Some(("a".into(), true)))
+        );
+        assert_eq!(state.window_order_anchor("a", 1), Ok(None));
+        assert!(state.window_order_anchor("a", 0).is_err());
+        assert!(state.window_order_anchor("gone", 1).is_err());
+    }
+    #[test]
+    fn creation_properties_are_typed_and_reject_invalid_values_before_mutation() {
+        for location in ["topApp", "pinned", "unpinned"] {
+            assert_eq!(
+                TabProperties::parse(&Record::from([(
+                    code(b"loca"),
+                    Value::Text(location.into())
+                )]))
+                .unwrap()
+                .location,
+                location
+            );
+        }
+        for properties in [
+            Record::from([(code(b"URL "), Value::Int(3))]),
+            Record::from([(code(b"loca"), Value::Text("other".into()))]),
+            Record::from([(code(b"pnam"), Value::Text("read only".into()))]),
+        ] {
+            assert!(TabProperties::parse(&properties).is_err());
+        }
+        let params = Record::from([
+            (code(b"kocl"), Value::Code(code(b"tAbB"))),
+            (code(b"insh"), Value::Text("invalid container".into())),
+        ]);
+        assert!(Command::decode(code(b"core"), code(b"crel"), &params).is_err());
+    }
+    #[test]
+    fn every_dictionary_navigation_command_decodes_without_losing_its_target() {
+        let target = Object::Tab {
+            window: "a".into(),
+            id: "1".into(),
+        }
+        .query();
+        let params = Record::from([(
+            code(b"----"),
+            Value::Object(Object::Tab {
+                window: "a".into(),
+                id: "1".into(),
+            }),
+        )]);
+        for (class, id, expected) in [
+            (b"core", b"clos", Command::Close(target.clone())),
+            (b"CrSe", b"lect", Command::Select(target.clone())),
+            (b"CrSu", b"Back", Command::Back(target.clone())),
+            (b"CrSu", b"Fwd ", Command::Forward(target.clone())),
+            (b"CrSu", b"Rlod", Command::Reload(target.clone())),
+            (b"CrSu", b"stop", Command::Stop(target.clone())),
+        ] {
+            assert_eq!(
+                Command::decode(code(class), code(id), &params),
+                Ok(expected)
+            );
+        }
     }
 }

@@ -115,7 +115,18 @@ unsafe fn decode(d: *mut AnyObject, depth: usize) -> Result<Value, Error> {
         let b: u8 = unsafe { msg_send![d, booleanValue] };
         return Ok(Value::Bool(b != 0));
     }
-    if [code(b"long"), code(b"shor"), code(b"comp")].contains(&kind) {
+    if kind == code(b"comp") {
+        let data: *mut AnyObject = unsafe { msg_send![d, data] };
+        let length: usize = unsafe { msg_send![data, length] };
+        let bytes: *const c_void = unsafe { msg_send![data, bytes] };
+        if length != 8 || bytes.is_null() {
+            return Err(Error::invalid("Invalid 64-bit integer."));
+        }
+        return Ok(Value::Int(unsafe {
+            std::ptr::read_unaligned(bytes.cast::<i64>())
+        }));
+    }
+    if [code(b"long"), code(b"shor")].contains(&kind) {
         let n: i32 = unsafe { msg_send![d, int32Value] };
         return Ok(Value::Int(n.into()));
     }
@@ -162,7 +173,13 @@ unsafe fn encode(v: &Value) -> Result<*mut AnyObject, Error> {
             Value::Null => msg_send![class,descriptorWithTypeCode:code(b"msng")],
             Value::Text(s) => msg_send![class,descriptorWithString:&*NSString::from_str(s)],
             Value::Bool(b) => msg_send![class,descriptorWithBoolean:u8::from(*b)],
-            Value::Int(n) => msg_send![class,descriptorWithInt32:*n as i32],
+            Value::Int(n) => {
+                if let Ok(n) = i32::try_from(*n) {
+                    msg_send![class,descriptorWithInt32:n]
+                } else {
+                    msg_send![class,descriptorWithDescriptorType:code(b"comp"), bytes:(n as *const i64).cast::<c_void>(), length:8usize]
+                }
+            }
             Value::Code(c) => msg_send![class,descriptorWithTypeCode:*c],
             Value::List(values) => {
                 let list: *mut AnyObject = msg_send![class, listDescriptor];
@@ -415,12 +432,40 @@ pub(crate) fn state(view: Option<*mut c_void>) -> (usize, bool, bool, bool) {
         (index, mini.as_bool(), visible.as_bool(), zoom.as_bool())
     }
 }
+/// Reorder a browser window relative to a resolved browser sibling, excluding
+/// GPUI child overlays from AppleScript's one-based window index.
+pub(crate) fn order_window(
+    view: Option<*mut c_void>,
+    anchor: Option<*mut c_void>,
+    above: bool,
+) -> Result<(), Error> {
+    let view = view.ok_or_else(Error::missing)?;
+    let anchor = anchor.ok_or_else(Error::missing)?;
+    unsafe {
+        let window: *mut AnyObject = msg_send![view as *mut AnyObject, window];
+        let sibling: *mut AnyObject = msg_send![anchor as *mut AnyObject, window];
+        if window.is_null() || sibling.is_null() {
+            return Err(Error::missing());
+        }
+        let number: isize = msg_send![sibling, windowNumber];
+        let ordering: isize = if above { 1 } else { -1 };
+        let _: () = msg_send![window, orderWindow:ordering, relativeTo:number];
+    }
+    Ok(())
+}
+
 pub(crate) fn set_window(
     view: Option<*mut c_void>,
     property: u32,
     value: &Value,
 ) -> Result<(), Error> {
     let view = view.ok_or_else(Error::missing)?;
+    if ![code(b"pmnd"), code(b"pvis"), code(b"pzum")].contains(&property) {
+        return Err(Error {
+            number: -10006,
+            message: "This window property cannot be changed after creation.".into(),
+        });
+    }
     let Value::Bool(value) = value else {
         return Err(Error::invalid("Expected a boolean window state."));
     };
@@ -562,6 +607,8 @@ mod scalar_tests {
                 Value::Bool(false),
                 Value::Bool(true),
                 Value::Int(-1700),
+                Value::Int(i64::MAX),
+                Value::Int(i64::MIN),
                 Value::Text("Echo 💜".into()),
                 Value::Code(code(b"WiND")),
                 Value::List(vec![Value::Bool(true), Value::Text("value".into())]),
