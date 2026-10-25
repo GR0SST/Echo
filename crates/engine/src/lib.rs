@@ -49,7 +49,7 @@ mod site_data;
 mod script_evaluation;
 pub use script_evaluation::ScriptTicket;
 pub use site_data::ClearSiteData;
-pub use site_info::{SiteInfo, SiteCertificate, SitePermission, PermissionKind, PermissionValue};
+pub use site_info::{SiteInfo, SiteCertificate, SitePermission, SiteSetting, PermissionKind, PermissionValue};
 mod boost_picker;
 mod quote;
 mod preview;

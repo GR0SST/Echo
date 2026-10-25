@@ -14,6 +14,29 @@ pub enum Permission {
     Clipboard,
     AutomaticDownloads,
     Sound,
+    MotionSensors,
+    Javascript,
+    Images,
+    IntrusiveAds,
+    BackgroundSync,
+    MidiDevices,
+    UsbDevices,
+    SerialPorts,
+    FileEditing,
+    HidDevices,
+    PaymentHandlers,
+    InsecureContent,
+    JavascriptOptimization,
+    AugmentedReality,
+    VirtualReality,
+    DeviceUse,
+    WindowManagement,
+    Fonts,
+    AutomaticPictureInPicture,
+    CapturedSurfaceControl,
+    WebAppInstallation,
+    LocalNetwork,
+    LoopbackNetwork,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -31,6 +54,26 @@ impl SiteSettings {
             return false;
         };
         self.0.entry(origin).or_default().insert(permission)
+    }
+    pub fn forget_permission(&mut self, url: &str, permission: Permission) -> bool {
+        let Some(origin) = Self::origin(url) else {
+            return false;
+        };
+        let removed = self
+            .0
+            .get_mut(&origin)
+            .is_some_and(|permissions| permissions.remove(&permission));
+        if self
+            .0
+            .get(&origin)
+            .is_some_and(|permissions| permissions.is_empty())
+        {
+            self.0.remove(&origin);
+        }
+        removed
+    }
+    pub fn forget_permissions(&mut self, url: &str) -> bool {
+        Self::origin(url).is_some_and(|origin| self.0.remove(&origin).is_some())
     }
     pub fn permissions(&self, url: &str) -> impl Iterator<Item = Permission> + '_ {
         Self::origin(url)
