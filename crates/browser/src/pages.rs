@@ -25,7 +25,7 @@ impl StorageSelection {
 
 fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) -> bool {
     let view = match event {
-        Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::EditFocusChanged { view, .. }
+        Event::DocumentColor { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::EditFocusChanged { view, .. }
         | Event::MediaCaptureChanged { view, .. }
         | Event::FindResult { view, .. } | Event::UrlChanged { view, .. } | Event::StatusChanged { view, .. }
         | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => view,
@@ -39,7 +39,7 @@ fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) 
 pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     match event {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
-        Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
+        Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::DocumentColor { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::PageSwipe { view,.. } | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
@@ -388,6 +388,7 @@ impl WebEngine for Chromium {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageState {
     pub loading_progress: u16,
+    pub document_color: Option<[u8; 3]>,
     pub loading: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -465,7 +466,7 @@ pub(crate) struct PageEvent {
 
 impl PageEvent {
     pub(crate) fn is_metadata(&self) -> bool {
-        matches!(self.event, Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
+        matches!(self.event, Event::DocumentColor { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
             | Event::MediaCaptureChanged { .. } | Event::MediaStateChanged { .. } | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
     }
 }
@@ -1852,6 +1853,9 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         let PageStore { pages, .. } = &mut *store;
         match event {
+            Event::DocumentColor { view, url, color } => {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view && page.url == *url) { page.state.document_color = Some(*color); }
+            }
             Event::PageSwipe { .. } => {}
             Event::LoadingProgress { view, progress } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.loading_progress = (*progress).min(1000); }
@@ -1873,6 +1877,7 @@ impl Pages {
             }
             Event::UrlChanged { view, url } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
+                    if page.url != *url { page.state.document_color = None; }
                     page.url = url.clone();
                     page.state.status.clear();
                 }

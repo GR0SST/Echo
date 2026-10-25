@@ -41,6 +41,7 @@ pub use page_swipe::PageSwipe;
 mod capture;
 pub use capture::MediaCaptureState;
 mod editing;
+mod document_color;
 mod boosts;
 mod site_info;
 mod permissions;
@@ -117,6 +118,7 @@ pub enum Event {
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     AudioStateChanged { view: ViewId, audible: bool },
+    DocumentColor { view: ViewId, url: String, color: [u8; 3] },
     PageSwipe { view: ViewId, state: Option<PageSwipe> },
     MediaCaptureChanged { view: ViewId, state: MediaCaptureState },
     MediaStateChanged { view: ViewId, state: MediaState },
@@ -159,6 +161,7 @@ enum RawEvent {
     Progress(u16),
     BoostZap(String),
     Audio(bool),
+    DocumentColor(String, [u8; 3]),
     PageSwipe(Option<PageSwipe>),
     Capture(MediaCaptureState),
     Media(MediaState),
@@ -1371,7 +1374,7 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
 }
 
 fn transferable_metadata(event: &RawEvent) -> bool {
-    matches!(event, RawEvent::Audio(_) | RawEvent::Capture(_) | RawEvent::Media(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
+    matches!(event, RawEvent::DocumentColor(..) | RawEvent::Audio(_) | RawEvent::Capture(_) | RawEvent::Media(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
         | RawEvent::EditFocus(_) | RawEvent::Find(..) | RawEvent::Url(_)
         | RawEvent::Progress(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
 }
@@ -1388,6 +1391,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::PermissionRequested(request) => Event::PermissionRequested { view, request },
         RawEvent::PermissionDismissed(request) => Event::PermissionDismissed { view, request },
         RawEvent::LoadError(_, _, _) => return None,
+        RawEvent::DocumentColor(url, color) => Event::DocumentColor { view, url, color },
         RawEvent::Media(state) => Event::MediaStateChanged { view, state },
         RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
         RawEvent::PageSwipe(state) => Event::PageSwipe { view, state },
@@ -1469,6 +1473,16 @@ wrap_client! {
                     return 1;
                 }
 
+                if let Some(message) = message.as_ref().filter(|message| CefString::from(&message.name()).to_string() == document_color::MESSAGE) {
+                    if let (Some(frame), Some(args)) = (frame.as_ref().filter(|frame| frame.is_main() != 0), message.argument_list().filter(|args| args.size() == 4 && args.get_type(0) == ValueType::STRING && (1..4).all(|index| args.get_type(index) == ValueType::INT))) {
+                        let url = CefString::from(&args.string(0)).to_string();
+                        let values = [args.int(1), args.int(2), args.int(3)];
+                        if url == CefString::from(&frame.url()).to_string() && values.iter().all(|value| (0..=255).contains(value)) {
+                            push(&self.events, browser, RawEvent::DocumentColor(url, values.map(|value| value as u8)));
+                        }
+                    }
+                    return 1;
+                }
                 if let Some(message)=message.as_ref().filter(|message|CefString::from(&message.name()).to_string()==media::STATE) {
                     if let Some(args)=message.argument_list().filter(|args|args.size()==1&&args.get_type(0)==ValueType::STRING) {
                         if let Some(state)=media::decode(&CefString::from(&args.string(0)).to_string()) {

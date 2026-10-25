@@ -11050,3 +11050,27 @@ mod developer_mode_tests;
 
 #[path = "advanced_footer_tests.rs"]
 mod advanced_footer_tests;
+
+#[gpui::test]
+fn toolbar_canvas_color_tracks_its_document_and_rejects_stale_navigation_reports(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let url = active_url(&view, cx).unwrap();
+    let color = |view: &Entity<BrowserWindow>, cx: &VisualTestContext| view.read_with(cx, |view, _| {
+        view.pages.as_ref().unwrap().borrow().state(view.browser.active_tab().unwrap().id).document_color
+    });
+    fake.send(cx, Event::DocumentColor { view: page(1), url: "https://stale.example/".into(), color: [10; 3] });
+    assert_eq!(color(&view, cx), None);
+    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [245; 3] });
+    assert_eq!(color(&view, cx), Some([245; 3]));
+    assert_eq!(crate::window::toolbar_colors(color(&view, cx), true), (gpui::white(), 0.));
+    cx.simulate_keystrokes("cmd-shift-d");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("top-toolbar").unwrap().size.height, gpui::px(33.));
+    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [18; 3] });
+    assert_eq!(crate::window::toolbar_colors(color(&view, cx), true).1, 1.);
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://next.example/".into() });
+    assert_eq!(color(&view, cx), None);
+    fake.send(cx, Event::DocumentColor { view: page(1), url, color: [18; 3] });
+    assert_eq!(color(&view, cx), None);
+    assert_eq!(crate::window::toolbar_colors(color(&view, cx), true), (gpui::rgb(0x222222).into(), 1.));
+}
