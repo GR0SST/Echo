@@ -84,3 +84,26 @@ extension management, usage/media counts, main-panel keyboard traversal and
 embedded cross-origin qualification. Its existing native profile/permission
 checks do not establish those missing behaviors. None of the seven page rows
 is promoted solely because its underlying action works.
+
+
+## Profile draft ownership
+
+`arc-settings-drafts.log` opens the source creation draft from Profiles and
+cancels without entering a name or saving an assignment. Settings and the
+claimed browser are closed in the same script. `pair-profile-create-draft.png`
+compares the 450 × 426 card at 2×; original Echo artwork and omission of the
+excluded sync notice are intentional. Paragraph baselines, field/keycap border
+and material differences remain, so creation is still partial.
+
+The native Echo check exposed an ownership defect: closing Settings could leave
+its browser behind another window while the transparent sheet was raised.
+The host now activates its own browser before attaching the sheet. The GPUI
+regression observes the browser activation transition, focused profile input
+and Escape dismissal. `echo-profile-final.log` records the clean native run;
+the corrected full-window image shows the disposable empty browser beneath the
+dimmer, rather than a peer's window. No owner profile was created or edited.
+
+Same-profile Blank-window projections also retain explicit developer-site
+choices. A core regression checks positive and negative overrides after session
+restoration and projection; creating another profile retains its independent
+localhost default. This does not qualify the remaining profile-switcher visuals.

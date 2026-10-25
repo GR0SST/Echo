@@ -596,10 +596,15 @@ fn localhost_developer_choices_are_profile_owned_and_survive_sessions() {
     let other = browser.create_user_profile("Other").unwrap();
     browser.user_profile_mut(first).unwrap()
         .set_developer_mode_for_host("fixture.localhost".into(), false);
+    browser.user_profile_mut(first).unwrap()
+        .set_developer_mode_for_host("web.example".into(), true);
     let restored = session::from_json(&session::to_json(&browser)).unwrap();
     assert!(!restored.user_profile(first).unwrap().developer_mode_for_host("fixture.localhost"));
     assert!(restored.user_profile(other).unwrap().developer_mode_for_host("fixture.localhost"));
     assert!(restored.user_profile(first).unwrap().developer_mode_for_host("localhost"));
     assert!(!restored.user_profile(first).unwrap().developer_mode_for_host("localhost.example"));
     assert!(!restored.user_profile(first).unwrap().developer_mode_for_host("notlocalhost"));
+    let blank = restored.new_blank_for_user_profile(first).unwrap();
+    assert!(!blank.active_user_profile().developer_mode_for_host("fixture.localhost"));
+    assert!(blank.active_user_profile().developer_mode_for_host("web.example"));
 }

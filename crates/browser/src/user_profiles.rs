@@ -86,7 +86,12 @@ impl BrowserWindow {
                 this.user_profile_dialog.as_ref().is_some_and(|host| host.dialog == dialog)
             }).unwrap_or(false);
             if !wanted { return; }
-            let Ok(bounds) = main.update(cx, |_, window, _| window.bounds()) else { return; };
+            let Ok(bounds) = main.update(cx, |_, window, _| {
+                // Settings may cover this host. Raise the browser before its
+                // transparent sheet so the backdrop contains the owning page.
+                window.activate_window();
+                window.bounds()
+            }) else { return; };
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)), titlebar: None,
                 kind: WindowKind::Normal, is_movable: false, is_resizable: false, is_minimizable: false,

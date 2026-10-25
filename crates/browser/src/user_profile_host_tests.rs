@@ -20,6 +20,27 @@ fn input_focused(view: &Entity<BrowserWindow>, visual: &mut VisualTestContext) -
 }
 
 #[gpui::test]
+fn settings_creation_raises_its_browser_before_the_transparent_sheet(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    let changes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = changes.clone();
+    let _observer = visual.update(|window, cx| view.update(cx, |_, cx| {
+        cx.observe_window_activation(window, move |_, _, _| observed.set(observed.get() + 1))
+    }));
+    visual.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(visual);
+    click(&mut settings, "settings-tab-Profiles");
+    let before = changes.get();
+    click(&mut settings, "settings-add-profile");
+    visual.run_until_parked();
+    assert!(changes.get() > before, "Settings must raise the owning browser before showing its sheet");
+    assert!(input_focused(&view, visual));
+    sheet(&view, visual).simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.user_profile_dialog.is_none()));
+}
+
+#[gpui::test]
 fn file_profile_sheet_focus_back_and_cancel_preserve_the_workspace(cx: &mut TestAppContext) {
     let (view, visual, fake) = open_pages(cx);
     let before = view.read_with(visual, |view, _| view.session_json());

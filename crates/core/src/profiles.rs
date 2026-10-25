@@ -287,6 +287,8 @@ impl Browser {
         blank.profiles.get_mut(&id).unwrap().settings = source.settings.clone();
         blank.profiles.get_mut(&id).unwrap().boosts = source.boosts.clone();
         blank.profiles.get_mut(&id).unwrap().site_settings = source.site_settings.clone();
+        blank.profiles.get_mut(&id).unwrap().developer_sites = source.developer_sites.clone();
+        blank.profiles.get_mut(&id).unwrap().developer_disabled_sites = source.developer_disabled_sites.clone();
         blank.spaces[0].user_profile_id = id;
         blank.blank_source_user_profile_id = Some(id);
         blank.next_user_profile_id = self.next_user_profile_id;
