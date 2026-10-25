@@ -42,6 +42,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), SpaceDelete(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
 
+#[derive(Clone)]
+struct AddressDocument {identity:crate::pages::PageIdentity,epoch:u64,url:String}
 pub(crate) struct TabMenu {
     pub target: MenuTarget,
     owner_profile: Option<browser_core::UserProfileId>,
@@ -51,6 +53,8 @@ pub(crate) struct TabMenu {
     pub submenu: Option<usize>,
     pub sub_selected: Option<usize>,
     pub alternate: bool,
+    document:Option<AddressDocument>,
+    native_share_open:bool,
     max_height: Pixels,
     viewport: gpui::Size<Pixels>,
     width: Pixels,
@@ -117,11 +121,12 @@ pub(crate) struct Item {
     /// The split pane the command acts on, instead of the menu's target.
     pub pane: Option<TabId>,
     pub submenu: Vec<Entry>,
+    native_share:bool,
     submenu_width: Option<f32>,
 }
 
 pub(crate) fn item(label: impl Into<SharedString>, command: Command) -> Item {
-    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, space_destination: false, pane: None, submenu: Vec::new(), submenu_width: None }
+    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, space_destination: false, pane: None, submenu: Vec::new(), native_share:false, submenu_width: None }
 }
 
 /// A row the reference has whose action is not built yet.
@@ -137,6 +142,7 @@ impl Item {
     pub(crate) fn space_icon(mut self, space: SpaceId) -> Self { self.space_icon = Some(space); self }
     pub(crate) fn space_destination(mut self, space: SpaceId) -> Self { self.space_icon = Some(space); self.space_destination = true; self }
     pub(crate) fn pane(mut self, tab: TabId) -> Self { self.pane = Some(tab); self }
+    fn native_share(mut self)->Self{self.native_share=true;self}
     pub(crate) fn submenu(mut self, entries: Vec<Entry>) -> Self { self.submenu = entries; self }
     fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
     fn selector(&self) -> String {
@@ -229,7 +235,7 @@ impl BrowserWindow {
         self.browser.spaces.iter().find(|entry| entry.id == space).map(|entry| entry.user_profile_id)
     }
     pub(crate) fn menu_is_current(&self, menu: &TabMenu) -> bool {
-        self.menu_target_exists(menu.target) && menu.owner_profile == self.menu_target_profile(menu.target)
+        self.menu_target_exists(menu.target) && menu.owner_profile == self.menu_target_profile(menu.target) && menu.document.as_ref().is_none_or(|document|self.address_document_is_current(document))
     }
 
     pub(crate) fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -239,7 +245,8 @@ impl BrowserWindow {
         self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
-        self.tab_menu = Some(TabMenu { target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        let document=if target==MenuTarget::Address {self.browser.active_tab().and_then(|tab|{let pages=self.pages.as_ref()?.borrow();Some(AddressDocument{identity:pages.media_identity(tab.id)?,epoch:pages.page_document_epoch(tab.id)?,url:tab.url.clone()})})}else{None};
+        self.tab_menu = Some(TabMenu { document,native_share_open:false,target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
         let width = self.menu_level_width(&self.menu_entries(), false, window);
         if let Some(menu) = &mut self.tab_menu { menu.width = width; }
         let origin = window.bounds().origin;
@@ -306,12 +313,11 @@ impl BrowserWindow {
             MenuTarget::Folder(id) => self.folder_menu_commands(id),
             MenuTarget::Address => vec![
                 item("Copy URL", Command::Copy).into(),
-                pending("Share").submenu(vec![item("Copy URL as Markdown", Command::CopyMarkdown).into()]).into(),
+                item("Share",Command::Share).native_share().enabled(self.can_share_page()).into(),
                 item("Capture…",Command::Capture).enabled(self.capture_available()).into(),
                 pending("Capture Full Page").into(),
                 Entry::Separator,
                 item(if self.toolbar_shown() { "Hide Toolbar" } else { "Show as Toolbar" }, Command::ToggleToolbar).into(),
-                pending("Disable Shared Quotes").into(),
             ],
             MenuTarget::Tab(id) => self.tab_entries(id, menu.pane),
         })
@@ -416,6 +422,31 @@ impl BrowserWindow {
         rows
     }
 
+    fn address_document_is_current(&self,document:&AddressDocument)->bool {
+        self.browser.active_user_profile_id()==document.identity.profile && self.browser.active_tab().is_some_and(|tab|tab.id==document.identity.tab&&tab.url==document.url)
+            && self.pages.as_ref().is_some_and(|pages|{let pages=pages.borrow();pages.media_identity(document.identity.tab)==Some(document.identity)&&pages.page_document_epoch(document.identity.tab)==Some(document.epoch)})
+    }
+    fn open_address_share(&mut self,cx:&mut Context<Self>) {
+        let Some(menu)=self.tab_menu.as_ref().filter(|menu|menu.target==MenuTarget::Address&&!menu.native_share_open&&self.menu_is_current(menu))else{return;};
+        let Some((document,overlay,bounds))=menu.document.clone().zip(menu.overlay).zip(menu.bounds.get()).map(|((d,o),b)|(d,o,b))else{return;};
+        let focus=menu.focus.clone();let anchor=[f32::from(bounds.right())-4.,f32::from(bounds.top())+PADDING+ROW_HEIGHT,0.,0.];
+        self.tab_menu.as_mut().unwrap().native_share_open=true;
+        cx.spawn(async move|owner,cx|{
+            let valid=owner.update(cx,|view,_|{view.refresh_profile_projection();view.tab_menu.as_ref().is_some_and(|menu|menu.focus==focus&&view.menu_is_current(menu))&&view.address_document_is_current(&document)}).unwrap_or(false);
+            if !valid{return;}
+            let Ok(native)=overlay.update(cx,|_,window,_|crate::native::view_of(window))else{return;};
+            let mut picker=crate::native::sharing::show(native,anchor,&[document.url.clone()]);
+            let selected=picker.as_ref().is_some_and(|picker|picker.selected);
+            let previous=owner.update(cx,|view,cx|{
+                let previous=std::mem::replace(&mut view.share_picker,picker.take());
+                if view.tab_menu.as_ref().is_some_and(|menu|menu.focus==focus){
+                    if selected{view.close_tab_menu(cx);}else if let Some(menu)=&mut view.tab_menu{menu.native_share_open=false;cx.notify();}
+                }
+                previous
+            }).ok().flatten();drop(previous);drop(picker);
+        }).detach();
+    }
+
     fn current_level(&self) -> (Vec<Entry>, bool) {
         let entries = self.menu_entries();
         match self.tab_menu.as_ref().and_then(|menu| menu.submenu.filter(|_| menu.sub_selected.is_some())) {
@@ -440,12 +471,14 @@ impl BrowserWindow {
     fn open_tab_submenu(&mut self, cx: &mut Context<Self>) {
         let entries = self.menu_entries();
         if let Some(menu) = &mut self.tab_menu {
-            if let Some(index) = menu.selected.filter(|index| matches!(entries.get(*index), Some(Entry::Item(item)) if !item.submenu.is_empty())) {
+            if let Some(index) = menu.selected.filter(|index| matches!(entries.get(*index), Some(Entry::Item(item)) if !item.submenu.is_empty() || item.native_share)) {
                 let Some(Entry::Item(item)) = entries.get(index) else { return; };
                 menu.submenu = Some(index);
                 menu.sub_selected = step(&item.submenu, None, 1);
             }
         }
+        let share=self.tab_menu.as_ref().and_then(|menu|menu.selected).and_then(|index|entries.get(index)).is_some_and(|entry|matches!(entry,Entry::Item(item) if item.native_share));
+        if share {self.open_address_share(cx);}
         cx.notify();
     }
 
@@ -468,6 +501,7 @@ impl BrowserWindow {
         self.refresh_profile_projection();
         if self.tab_menu.as_ref().is_none_or(|menu| !self.menu_is_current(menu)) { self.close_tab_menu(cx); return; }
         if !item.enabled { return; }
+        if item.native_share {self.open_address_share(cx);return;}
         if !item.submenu.is_empty() { return; }
         let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
         self.close_tab_menu(cx);
@@ -623,7 +657,7 @@ impl BrowserWindow {
                 + if item.space_destination { 19. } else if item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
                 + if pane_controls { 22. } else { 0. }
                 + item.shortcut.map_or(0., |shortcut| 30. + text_width(shortcut))
-                + if item.submenu.is_empty() { 0. } else if space_menu { 31. } else { 38. }),
+                + if item.submenu.is_empty() && !item.native_share { 0. } else if space_menu { 31. } else { 38. }),
             Entry::Header(label) => Some(inset + 17. + text_width(label)),
             Entry::Separator => None,
         }).fold(minimum, f32::max).ceil())
@@ -644,7 +678,8 @@ impl BrowserWindow {
             Entry::Item(item) => {
                 let highlighted = selected == Some(index) || open == Some(index);
                 let enabled = item.enabled;
-                let has_submenu = !item.submenu.is_empty();
+                let native_share=item.native_share;
+                let has_submenu = !item.submenu.is_empty() || native_share;
                 let selector = item.selector();
                 let item_for_click = item.clone();
                 let id = SharedString::from(format!("{}-row-{index}", if nested { "submenu" } else { "menu" }));
@@ -665,12 +700,14 @@ impl BrowserWindow {
                             menu.selected = None;
                         }
                         cx.notify();
+                        if native_share && *hovered {this.open_address_share(cx);}
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         if has_submenu {
                             if let Some(menu) = &mut this.tab_menu { menu.selected = Some(index); menu.submenu = Some(index); }
                             cx.notify();
+                            if native_share {this.open_address_share(cx);}
                         } else { this.confirm_menu_item(item_for_click.clone(), window, cx); }
                     }))
                     .when(checks, |row| row.child(div().absolute().left(px(PADDING + 4.)).top(px(3.))

@@ -2,6 +2,7 @@
 use std::ffi::c_void;
 
 pub(crate) struct SharePicker {
+    pub(crate) selected: bool,
     #[cfg(all(target_os = "macos", not(test)))]
     _menu: objc2::rc::Retained<objc2::runtime::AnyObject>,
     #[cfg(all(target_os = "macos", not(test)))]
@@ -23,6 +24,12 @@ unsafe extern "C-unwind" fn perform(
         let pair: *mut AnyObject = msg_send![sender, representedObject];
         let service: *mut AnyObject = msg_send![pair, objectAtIndex: 0usize];
         let items: *mut AnyObject = msg_send![pair, objectAtIndex: 1usize];
+        let count: usize = msg_send![pair, count];
+        if count > 2 {
+            let marker: *mut AnyObject = msg_send![pair,objectAtIndex:2usize];
+            let yes: *mut AnyObject = msg_send![objc2::runtime::AnyClass::get(c"NSNumber").unwrap(),numberWithBool:objc2::runtime::Bool::YES];
+            let _: () = msg_send![marker,replaceObjectAtIndex:0usize withObject:yes];
+        }
         let _: () = msg_send![service, performWithItems: items];
     }
 }
@@ -38,6 +45,7 @@ pub(crate) fn show(
     {
         let _ = (view, anchor);
         return Some(SharePicker {
+            selected: false,
             urls: urls.to_vec(),
             anchor,
         });
@@ -100,6 +108,9 @@ pub(crate) fn show(
         let menu: Retained<AnyObject> =
             Retained::from_raw(msg_send![AnyClass::get(c"NSMenu")?, new])?;
         let _: () = msg_send![&*menu, setAutoenablesItems: Bool::NO];
+        let marker: Retained<AnyObject> = Retained::from_raw(msg_send![array, new])?;
+        let no: *mut AnyObject = msg_send![AnyClass::get(c"NSNumber")?,numberWithBool:Bool::NO];
+        let _: () = msg_send![&*marker,addObject:no];
         for index in 0..count {
             let service: *mut AnyObject = msg_send![services, objectAtIndex: index];
             let title: *mut AnyObject = msg_send![service, title];
@@ -116,6 +127,7 @@ pub(crate) fn show(
             let pair: Retained<AnyObject> = Retained::from_raw(msg_send![array, new])?;
             let _: () = msg_send![&*pair, addObject: service];
             let _: () = msg_send![&*pair, addObject: &*items];
+            let _: () = msg_send![&*pair, addObject: &*marker];
             let _: () = msg_send![&*item, setRepresentedObject: &*pair];
             let _: () = msg_send![&*item, setTarget: &*target];
             let image: *mut AnyObject = msg_send![service, image];
@@ -141,7 +153,10 @@ pub(crate) fn show(
             y = bounds.size.height - y - height;
         }
         let _: Bool = msg_send![&*menu, popUpMenuPositioningItem: std::ptr::null_mut::<AnyObject>() atLocation: NSPoint::new(x, y) inView: view];
+        let picked: *mut AnyObject = msg_send![&*marker, objectAtIndex:0usize];
+        let picked: Bool = msg_send![picked, boolValue];
         Some(SharePicker {
+            selected: picked.as_bool(),
             _menu: menu,
             close_on_drop: false,
         })
@@ -168,6 +183,7 @@ pub(crate) fn show_page(
     {
         let _ = (view, anchor);
         return Some(SharePicker {
+            selected: false,
             urls: vec![url.to_owned()],
             anchor,
         });
@@ -210,6 +226,7 @@ pub(crate) fn show_page(
         let _: () =
             msg_send![&*picker, showRelativeToRect: rect, ofView: view, preferredEdge: edge];
         Some(SharePicker {
+            selected: false,
             _menu: picker,
             close_on_drop: true,
         })

@@ -52,6 +52,8 @@ mod page_loading_tests;
 mod site_controls_tests;
 #[path = "site_settings_page_tests.rs"]
 mod site_settings_page_tests;
+#[path = "address_actions_tests.rs"]
+mod address_actions_tests;
 #[path = "scripting_tests.rs"]
 mod scripting_tests;
 #[path = "save_page_tests.rs"]
@@ -6835,7 +6837,7 @@ fn sidebar_context_menus_follow_the_reference_layout(cx: &mut TestAppContext) {
     // The address field has its own menu; Copy URL copies the current page.
     right_click(cx, "address");
     let mut menu = tab_menu(&view, cx);
-    for row in ["tab-menu-copy", "tab-menu-share", "tab-menu-capture", "tab-menu-capture-full-page", "tab-menu-toggle-toolbar", "tab-menu-disable-shared-quotes"] {
+    for row in ["tab-menu-copy", "tab-menu-share", "tab-menu-capture", "tab-menu-capture-full-page", "tab-menu-toggle-toolbar"] {
         assert!(menu.debug_bounds(row).is_some(), "{row}");
     }
     click(&mut menu, "tab-menu-copy");

@@ -1,4 +1,4 @@
-# Site settings
+# Site settings and address actions
 
 ## Installed Arc reference (2026-10-25)
 
@@ -42,6 +42,12 @@ All paths are relative to this worktree's `target/parity/site-controls/`:
 - Echo: `echo-settings-native8/echo-settings.png`, `echo-dropdown.png`,
   `echo-camera-blocked.png`, `echo-reset-dialog.png`, `echo-reset.png`,
   `echo-delete-dialog.png`, `echo-deleted.png`.
+- Address Share: Arc `scc-controls-r2/share-submenu.png`; Echo
+  `echo-settings-native8/echo-share-submenu.png`. The address Share submenu uses
+  macOS sharing services with their own icons, not a browser-created service list.
+  Opening it releases application/entity/engine borrows before native tracking.
+  Address Capture opens the existing local capture flow; both actions reject a
+  document replaced before presentation. Arc-hosted Shared Quotes remains excluded.
 
 ## Remaining parity limits
 
@@ -62,6 +68,8 @@ All paths are relative to this worktree's `target/parity/site-controls/`:
   conferencing pages or background tabs; no speculative replacement badge was
   added. The test stream was stopped and Camera restored to Ask (default), verified
   in `media-permissions-restored.png`; Developer Mode and toolbar mode were restored.
+- Native Share submenu pointer handoff back to parent rows and non-macOS service
+  pickers remain unqualified.
 - Full-page/Portrait capture and extension actions retain their separately
   documented limitations. The extension source-build experiment remains on hold.
 
@@ -77,3 +85,9 @@ Command-N check produced exactly one additional window: 4 → 5 → 4.
 Evidence: `cleanup-round2/before.json`, `headers.png`, `after.json`,
 `after-headers.png`, `resume.log`. Later reference sessions used the existing
 Echo Test Space and closed their owned windows/tabs. No new Space was created.
+
+A final bounded AX/CG census after Arc restarted again found the same four owner
+Spaces by their rendered headers. One additional 500 × 500 off-screen CG surface
+had no AX window and was excluded from the browser-window count. See
+`final-cleanup/browser-before.json`, `headers.png`, `excluded-surfaces.json` and
+`inventory-qualified.log`. No additional browser-window closure was needed.
