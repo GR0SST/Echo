@@ -35,7 +35,7 @@ pub(crate) struct LibraryDownloadsHost {
     artwork: Rc<RefCell<crate::download_files::FileArtwork>>,
     visible_transfers:Vec<(crate::downloads_view::TransferId,UserProfileId)>,
     query: String,
-    // Native single-chip on/off is observed. Other live-chip combinations stay gated.
+    // Arc 1.170 replaces the selected profile when another chip is clicked.
     // A removed selection stays a tombstone, never silently broadens to All.
     selected: Option<UserProfileId>,
     generation: u64,
@@ -208,14 +208,6 @@ impl LibraryDownloadsHost {
                     return false;
                 };
                 if !profiles.iter().any(|(actual, _)| actual == id) {
-                    return false;
-                }
-                // A second live Profile chip has unobserved combination semantics.
-                // Do not invent exclusive replacement or multi-selection. An
-                // explicit click may replace a tombstone after inventory removal.
-                if self.selected.is_some_and(|selected| {
-                    selected != *id && profiles.iter().any(|(actual, _)| *actual == selected)
-                }) {
                     return false;
                 }
                 self.selected = if self.selected == Some(*id) {

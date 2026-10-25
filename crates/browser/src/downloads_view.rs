@@ -81,8 +81,7 @@ pub(crate) enum DownloadsIntent<Token> {
     TransferOpened { id: TransferId, profile: UserProfileId },
     TransferMenuRequested { id: TransferId, profile: UserProfileId, position: gpui::Point<gpui::Pixels> },
     FilterVisibilityChanged(bool),
-    /// Host applies its policy, then replaces the projection. Native
-    /// multi-selection/persistence semantics remain unverified.
+    /// Host toggles the same profile off, or replaces it with the clicked profile.
     ToggleProfile(UserProfileId),
     /// Select a completed row without opening its system application.
     RowPressed { token: Token, profile: UserProfileId },

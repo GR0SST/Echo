@@ -235,10 +235,12 @@ fn query_and_filter_intents_use_canonical_ids_and_survive_section_reopen(cx: &mu
         assert_eq!(rows(h), vec![second]);
     });
     click(&mut visual, "downloads-profile-0");
-    assert_eq!(
-        host.read_with(&visual, |h, _| h.controller.selected_profile()),
-        Some(work)
-    );
+    host.read_with(&visual, |h, _| {
+        assert_eq!(h.controller.selected_profile(), Some(default));
+        assert_eq!(rows(h), vec![first], "a different live profile replaces the previous selection");
+        let projection = h.controller.projection().unwrap();
+        assert!(projection.profiles.iter().all(|profile| profile.selected == (profile.id == default)));
+    });
     let presenter = host.read_with(&visual, |h, _| h.controller.view());
     visual.update(|window, cx| host.update(cx, |h, cx| h.activate(false, window, cx)));
     visual.run_until_parked();
@@ -254,6 +256,8 @@ fn query_and_filter_intents_use_canonical_ids_and_survive_section_reopen(cx: &mu
         assert_eq!(h.controller.query(), "SOURCE-TAB")
     });
     click(&mut visual, "downloads-filter");
+    click(&mut visual, "downloads-profile-1");
+    assert_eq!(host.read_with(&visual, |h, _| rows(h)), vec![second]);
     click(&mut visual, "downloads-profile-1");
     assert_eq!(host.read_with(&visual, |h, _| rows(h)), vec![first, second]);
 }
