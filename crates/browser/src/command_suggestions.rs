@@ -86,7 +86,7 @@ impl BrowserWindow {
                     && this.browser.active_user_profile().settings.search.suggestions
                     && this.browser.active_user_profile().settings.search.engine == engine
                     && this.command_bar.as_ref().is_some_and(|bar| bar.input == input
-                        && bar.remote_generation == generation && bar.input.read(cx).text() == query)
+                        && bar.remote_generation == generation && bar.query(cx) == query)
             }).unwrap_or(false);
             if !allowed { return; }
             let requested = query.clone();
@@ -96,7 +96,7 @@ impl BrowserWindow {
                     || !this.browser.active_user_profile().settings.search.suggestions
                     || this.browser.active_user_profile().settings.search.engine != engine { return; }
                 let Some(bar) = &mut this.command_bar else { return; };
-                if bar.input != input || bar.remote_generation != generation || bar.input.read(cx).text() != query { return; }
+                if bar.input != input || bar.remote_generation != generation || bar.query(cx) != query { return; }
                 bar.remote = rows;
                 cx.notify();
             });

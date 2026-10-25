@@ -188,6 +188,17 @@ impl TextInput {
         &self.content
     }
 
+    /// Keyboard result navigation previews a URL without issuing an edit. The
+    /// Command Bar keeps its draft for filtering until the next actual edit.
+    pub(crate) fn preview_navigation_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.content = single_line_text(text).into_owned().into();
+        self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.complete_after_edit = false;
+        cx.notify();
+    }
+
     /// Complete only a fresh insertion at the end, never a deletion, selection,
     /// mid-string edit or provisional IME composition. Select the suffix so the
     /// next character replaces it and Right accepts it using normal input rules.

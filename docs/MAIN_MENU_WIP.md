@@ -493,3 +493,36 @@ Find pasteboards are restored by the reference helper.
 This change passes the complete suite: 1,127 browser, 242 core, 157 engine,
 18 AI tests, importer and bundle checks; one existing native credential test
 is ignored. Native acceptance uses the final fitted-shadow bundle.
+
+
+## Audit continuation: Find and Command Bar selection
+
+The interrupted Find commit was rebased to `412fca5` and pushed after a fresh
+full green run and `echo-find-resume/` native acceptance (strict exit zero).
+The fresh source pair is `arc-find-two-reference/` versus `echo-find-resume/`:
+`find-words.png` shows `1/2`, `find-second.png` shows `2/2`, and the current
+match is orange while the other match remains yellow. Magnified panel crops
+are `pairs/find-two-{words,second,missing}-{arc,echo}-zoom.png`. Both source
+and Echo fixture sessions were cleaned up. The standalone full suite passed 1,134 browser, 242 core, 157 engine and
+18 AI tests; after rebasing, the push gate passed 1,141 browser, 246 core,
+161 engine and 18 AI tests, plus import and doc tests. The existing native
+credential integration remains ignored.
+
+Fresh guarded Command Bar references are `arc-command-selection-reference/`
+and `arc-command-edit-reference/`. A selected open-tab result uses the same
+blue as the search result, including its arrow on the white key tile. Arrow
+navigation replaces the field with the selected URL and a page icon, retaining
+the original title query for the result list. Up returns the original query.
+Typing appends to the displayed URL and begins a new query; this was observed
+with `-edited`, without navigating the fixture. Source cleanup inventories are
+empty. Echo now retains a navigation draft separately from its displayed input,
+and no longer drops a pending remote response merely because a page URL is
+being previewed. Editing replaces that draft and invalidates the old generation.
+Only Command Bar page results change color/icons; Space materials and sidebar
+favicon placeholders retain their existing APIs. Native acceptance is
+`echo-audit-drive/accepted.json` with strict native exit zero. Its
+`command-{query,next,previous,edited}.png` captures exercise the complete
+preview/edit sequence. Inspected final crops are
+`pairs/command-row-{arc,echo}.png`. Two GPUI regressions cover draft restoration,
+editing and confirmation without renderer replacement. The key-tile arrow and
+fine text/globe raster still differ; remaining material states are partial.

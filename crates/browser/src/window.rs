@@ -514,6 +514,8 @@ fn command_match_score(query: &str, names: &str) -> Option<usize> {
 
 pub struct CommandBar {
     pub input: Entity<TextInput>,
+    /// The user's draft while arrow navigation displays a selected page URL.
+    pub(crate) navigation_query: Option<String>,
     pub target: Target,
     pub selected: usize,
     pub(crate) site_search: Option<omnibox::SiteSearch>,
@@ -534,6 +536,12 @@ pub struct CommandBar {
     pub overlay: Option<WindowHandle<Overlay>>,
     _changed: Subscription,
     _empty_backspace: Subscription,
+}
+
+impl CommandBar {
+    pub(crate) fn query<'a>(&'a self, cx: &'a App) -> &'a str {
+        self.navigation_query.as_deref().unwrap_or_else(|| self.input.read(cx).text())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1547,6 +1555,7 @@ impl BrowserWindow {
         });
         let changed = cx.subscribe(&input, |this, _, _: &text_input::Changed, cx| {
             if let Some(bar) = &mut this.command_bar {
+                bar.navigation_query = None;
                 bar.selected = 0;
                 bar.rows_scroll.set_offset(point(px(0.), px(0.)));
                 bar.archive_limit = 8;
@@ -1565,6 +1574,7 @@ impl BrowserWindow {
         });
         self.command_bar = Some(CommandBar {
             input: input.clone(),
+            navigation_query: None,
             target,
             selected: 0,
             site_search: None,
@@ -1783,7 +1793,7 @@ impl BrowserWindow {
         let Some(bar) = &self.command_bar else {
             return Vec::new();
         };
-        let text = bar.input.read(cx).text();
+        let text = bar.query(cx);
         if let Target::Split { anchor, .. } = bar.target { return self.split_suggestions(anchor, text); }
         if let Target::Archive(space) = bar.target {
             return self.archive_suggestions(space, text);
@@ -2016,11 +2026,22 @@ impl BrowserWindow {
     }
 
     fn select(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.suggestions(cx).len() as isize;
+        let suggestions = self.suggestions(cx);
+        let count = suggestions.len() as isize;
         if let Some(bar) = &mut self.command_bar {
             if count > 0 {
                 bar.selected = (bar.selected as isize + delta).rem_euclid(count) as usize;
                 bar.rows_scroll.scroll_to_item(bar.selected);
+                if matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() {
+                    let query = bar.navigation_query.get_or_insert_with(|| bar.input.read(cx).text().to_owned());
+                    let preview = match &suggestions[bar.selected] {
+                        Suggestion::SwitchToTab { url, .. } | Suggestion::History { url, .. }
+                        | Suggestion::Load(Resolved::Url(url)) => display_url(url),
+                        Suggestion::Load(Resolved::Search { query, .. }) => query.clone(),
+                        _ => query.clone(),
+                    };
+                    bar.input.update(cx, |input, cx| input.preview_navigation_text(&preview, cx));
+                }
                 cx.notify();
             }
         }
@@ -3237,6 +3258,18 @@ impl BrowserWindow {
 
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, self.browser.is_private()) }
 
+    fn render_command_page_icon(&self, url: &str, tab: Option<TabId>, dark: bool) -> AnyElement {
+        if let Some(tab) = tab.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id && tab.custom_icon.is_some())) {
+            return self.render_favicon_on(tab, self.accent(), dark);
+        }
+        if let Some(png) = self.browser.favicon(self.browser.active_user_profile_id(), url) {
+            let style = self.favicon_styles.borrow_mut().get(png);
+            return gpui::img(if dark { style.on_dark } else { style.image })
+                .size(px(16.)).flex_none().object_fit(gpui::ObjectFit::Contain).into_any_element();
+        }
+        crate::icons::control_sized(crate::icons::Icon::Globe, 16.)
+    }
+
     /// `tab`'s favicon for a light surface, or a dark one when `dark`.
     pub(crate) fn render_favicon_on(&self, tab: &Tab, _hue: f32, dark: bool) -> AnyElement {
         self.render_favicon_for_profile(tab,self.browser.active_user_profile_id(),dark)
@@ -4122,6 +4155,11 @@ impl BrowserWindow {
         self.edit_browser(|browser| {
             if browser.active_user_profile_id() == owner { browser.delete_history_entry(owner, url); }
         });
+        if let Some(bar) = &mut self.command_bar {
+            if let Some(query) = bar.navigation_query.take() {
+                bar.input.update(cx, |input, cx| input.preview_navigation_text(&query, cx));
+            }
+        }
         let count = self.suggestions(cx).len();
         if let Some(bar) = &mut self.command_bar { bar.selected = bar.selected.min(count.saturating_sub(1)); }
         cx.notify();
@@ -4157,7 +4195,7 @@ impl BrowserWindow {
         let row_selection = self.command_bar_selection();
         let chatgpt_keyword = matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none()
             && self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar))
-            && bar.input.read(cx).text().trim().eq_ignore_ascii_case("chatgpt");
+            && bar.query(cx).trim().eq_ignore_ascii_case("chatgpt");
         let scope_color = if bar.site_search == Some(omnibox::SiteSearch::ChatGpt) { 0x64ab9c } else { 0xffa000 };
         let accent = self.accent();
         // Arc's split draft uses the ordinary window-wide Command Bar, even
@@ -4172,6 +4210,15 @@ impl BrowserWindow {
         let mut previous_date = None;
         let suggestions = self.suggestions(cx);
         let atc_selected = matches!(suggestions.get(bar.selected), Some(Suggestion::Action { command: Command::AirTrafficControl, .. }));
+        let preview_url = match suggestions.get(bar.selected) {
+            Some(Suggestion::SwitchToTab { id, url, .. }) => Some((url.clone(), Some(*id))),
+            Some(Suggestion::History { url, .. }) => Some((url.clone(), None)),
+            Some(Suggestion::Load(Resolved::Url(url))) => Some((url.clone(), match bar.target {
+                Target::Tab(id) if self.browser.all_tabs().any(|tab| tab.id == id && tab.url == *url) => Some(id),
+                _ => None,
+            })),
+            _ => None,
+        };
         let rows: Vec<_> = suggestions.into_iter()
             .enumerate()
             .map(|(index, suggestion)| {
@@ -4184,11 +4231,12 @@ impl BrowserWindow {
                     (Suggestion::Load(Resolved::Url(url)), Target::Tab(id)) => self.browser.all_tabs().find(|tab| tab.id == id && tab.url == *url),
                     _ => None,
                 };
+                let page_result = matches!(&suggestion, Suggestion::SwitchToTab { .. } | Suggestion::History { .. } | Suggestion::Load(Resolved::Url(_)));
                 let page = match &suggestion {
-                    Suggestion::Load(Resolved::Url(_)) if current_url_tab.is_some() => current_url_tab.map(|tab| self.render_favicon_on(tab, accent, !selected)),
-                    Suggestion::SwitchToTab { id, .. } | Suggestion::SplitTab { id, .. } => self.browser.all_tabs().find(|tab| tab.id == *id).map(|tab| self.render_favicon_on(tab, accent, !selected)),
-                    Suggestion::History { url, .. } => self.browser.favicon(self.browser.active_user_profile_id(), url).map(|png| self.favicon_styles.borrow_mut().get(png)).map(|style| gpui::img(if selected { style.image } else { style.on_dark })
-                        .size(px(16.0)).flex_none().object_fit(gpui::ObjectFit::Contain).into_any_element()),
+                    Suggestion::Load(Resolved::Url(url)) => Some(self.render_command_page_icon(url, current_url_tab.map(|tab| tab.id), dark && !selected)),
+                    Suggestion::SwitchToTab { id, url, .. } => Some(self.render_command_page_icon(url, Some(*id), dark && !selected)),
+                    Suggestion::History { url, .. } => Some(self.render_command_page_icon(url, None, dark && !selected)),
+                    Suggestion::SplitTab { id, .. } => self.browser.all_tabs().find(|tab| tab.id == *id).map(|tab| self.render_favicon_on(tab, accent, !selected)),
                     _ => None,
                 };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
@@ -4246,7 +4294,7 @@ impl BrowserWindow {
                     .mx_2()
                     .rounded(px(8.0))
                     .text_color(hsla(0.0, 0.0, if selected { 1. } else { ink }, if selected { 1.0 } else { 0.82 }))
-                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if direct_search || (chatgpt_keyword && index == 0) { gpui::rgb(0x4248d8).into() } else { row_selection }))
+                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if page_result || direct_search || (chatgpt_keyword && index == 0) { gpui::rgb(0x4248d8).into() } else { row_selection }))
                     .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, ink, if direct_search || ask_chatgpt { 0.05 } else { 0.04 }))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
@@ -4288,7 +4336,7 @@ impl BrowserWindow {
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when(!search_row && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
                         .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, ink, 0.06) })
-                        .text_color(if selected && ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
+                        .text_color(if selected && ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if selected && page_result { gpui::rgb(0x4248d8).into() } else if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
                         .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0))));
                 div().flex().flex_col().flex_none()
                     .children(date.map(|date| div().debug_selector(|| self.sidebar_debug_name((move || format!("archive-date-{index}"))())).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
@@ -4392,7 +4440,9 @@ impl BrowserWindow {
                             .flex().items_center().gap(px(13.0))
                             .pl(px(22.0)).pr(px(21.0))
                             .child(div().text_color(hsla(0.0, 0.0, ink, 0.75)).child(
-                                if atc_selected { crate::icons::control_sized(crate::icons::Icon::AirTraffic, 16.0) } else if let Target::Tab(id) = bar.target {
+                                if atc_selected { crate::icons::control_sized(crate::icons::Icon::AirTraffic, 16.0) } else if let Some((url, tab)) = &preview_url {
+                                    self.render_command_page_icon(url, *tab, dark)
+                                } else if let Target::Tab(id) = bar.target {
                                     self.browser.all_tabs().find(|tab| tab.id == id)
                                         .map(|tab| self.render_favicon_on(tab, accent, dark))
                                         .unwrap_or_else(|| crate::icons::control_sized(crate::icons::Icon::Search, 16.0))
@@ -4428,7 +4478,7 @@ impl BrowserWindow {
                     .when(!has_rows && matches!(bar.target, Target::Archive(_)), |this| this.child(div().px_4().py_3().text_sm().child("No archived tabs match your search.")))
                     .when(has_rows, |this| {
                         this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, ink, 0.1)))
-                            .text_size(px(14.0))
+                            .text_size(px(if archive { 14.0 } else { 13.0 }))
                             .child(div().id("command-suggestions").debug_selector(|| self.sidebar_debug_name((|| "command-suggestions".into())()))
                                 .flex().flex_col().gap_1().pt(px(6.0)).pb(px(10.0)).max_h(px(rows_height + 16.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
                     })

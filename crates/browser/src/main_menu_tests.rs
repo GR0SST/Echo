@@ -528,3 +528,51 @@ fn find_panel_matches_reference_inset_and_only_shows_navigation_for_a_query(cx: 
     find.simulate_keystrokes("escape");
     assert!(view.read_with(visual, |view, _| view.find_bar.is_none()));
 }
+
+#[gpui::test]
+fn command_page_navigation_previews_urls_restores_the_draft_and_edits_the_preview(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    record_history_fixture(&fake, visual);
+    fake.take_calls();
+    visual.simulate_keystrokes("cmd-t");
+    let mut command = bar(&view, visual);
+    command.simulate_input("first page");
+    let original = view.read_with(visual, |view, cx| view.suggestions(cx));
+    command.simulate_keystrokes("down");
+    assert_eq!(bar_text(&view, visual).as_deref(), Some("example.com/one"));
+    view.read_with(visual, |view, cx| {
+        assert_eq!(view.command_bar.as_ref().unwrap().selected, 1);
+        assert_eq!(view.command_bar.as_ref().unwrap().query(cx), "first page");
+        assert_eq!(view.suggestions(cx), original);
+    });
+    command.simulate_keystrokes("up");
+    assert_eq!(bar_text(&view, visual).as_deref(), Some("first page"));
+    command.simulate_keystrokes("down");
+    command.simulate_input("-edited");
+    assert_eq!(bar_text(&view, visual).as_deref(), Some("example.com/one-edited"));
+    view.read_with(visual, |view, cx| {
+        let bar = view.command_bar.as_ref().unwrap();
+        assert_eq!(bar.selected, 0);
+        assert!(bar.navigation_query.is_none());
+        assert!(matches!(&view.suggestions(cx)[0], Suggestion::Load(browser_core::omnibox::Resolved::Url(url)) if url == "https://example.com/one-edited"));
+    });
+    command.simulate_keystrokes("escape");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..) | Call::Create(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn command_open_tab_preview_keeps_the_original_result_and_confirms_the_tab(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    record_history_fixture(&fake, visual);
+    let tab = view.read_with(visual, |view, _| view.browser.active_tab().unwrap().id);
+    visual.simulate_keystrokes("cmd-t");
+    let mut command = bar(&view, visual);
+    command.simulate_input("second page");
+    assert!(view.read_with(visual, |view, cx| matches!(&view.suggestions(cx)[1], Suggestion::SwitchToTab { id, .. } if *id == tab)));
+    fake.take_calls();
+    command.simulate_keystrokes("down");
+    assert_eq!(bar_text(&view, visual).as_deref(), Some("example.com/two"));
+    command.simulate_keystrokes("enter");
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none() && view.browser.active_tab().unwrap().id == tab));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..) | Call::Create(..) | Call::Reload(..))));
+}

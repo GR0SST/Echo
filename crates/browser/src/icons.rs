@@ -69,7 +69,7 @@ pub(crate) fn more() -> AnyElement {
 #[derive(Clone, Copy)]
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
-    Search, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, AirTraffic, Link, Calculator,
+    Search, Globe, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, AirTraffic, Link, Calculator,
     HapticFeedback, SoundEffects,
     SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab, Incognito,
 }
@@ -214,6 +214,7 @@ pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement { zoomed(icon, 
 /// slot keeps its layout size so animated zoom stays smooth and sub-pixel.
 fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
     let name = match icon {
+        Icon::Globe => return command_globe(size, zoom),
         Icon::HapticFeedback | Icon::SoundEffects => return feedback_glyph(matches!(icon,Icon::HapticFeedback),size,zoom),
         Icon::Back => "arrow-back-outline", Icon::Forward => "arrow-forward-outline",
         Icon::Reload => "reload-outline", Icon::Close => "close-outline",
@@ -233,6 +234,23 @@ fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
         Icon::AirTraffic | Icon::Link | Icon::SiteControls | Icon::Library | Icon::Tidy | Icon::NewTab => return drawn(icon, size, zoom),
     };
     ionicon(name, size, zoom)
+}
+
+/// The Command Bar's neutral page symbol has one equator and one meridian.
+fn command_globe(size: f32, zoom: f32) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let scale = size / 16. * zoom;
+        let mut meridian = arc(8., 8., 5.75, 0., std::f32::consts::TAU);
+        for (x, _) in &mut meridian { *x = 8. + (*x - 8.) * 0.43; }
+        for points in [arc(8., 8., 5.75, 0., std::f32::consts::TAU), meridian, vec![(2.25, 8.), (13.75, 8.)]] {
+            let mut path = gpui::PathBuilder::stroke(px(1.25 * scale));
+            for (index, (x, y)) in points.into_iter().enumerate() {
+                let point = bounds.center() + gpui::point(px((x - 8.) * scale), px((y - 8.) * scale));
+                if index == 0 { path.move_to(point); } else { path.line_to(point); }
+            }
+            if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+        }
+    }).size(px(size)).flex_none().into_any_element()
 }
 
 /// Reference-specific frame/key controls absent from the Ionicons catalog.
