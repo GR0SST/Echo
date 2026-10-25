@@ -24,6 +24,8 @@ pub fn preload_framework() -> Result<bool, String> {
 }
 
 mod devtools;
+mod extensions;
+pub use extensions::{ExtensionBridge, ExtensionEvent, ExtensionPopup, ExtensionPopupEvent};
 mod downloads;
 mod retirement;
 #[cfg(any(target_os = "linux", test))]
@@ -1915,9 +1917,12 @@ wrap_app! {
         ) {
             // Development builds are unsigned, so macOS asks for the keychain
             // password after every rebuild. Release builds use the real keychain.
-            if cfg!(debug_assertions) {
-                if let Some(command_line) = command_line {
+            if let Some(command_line) = command_line {
+                if cfg!(debug_assertions) {
                     command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
+                }
+                if std::env::var_os("ECHO_CEF_EXTENSIONS_BRIDGE").as_deref() == Some(std::ffi::OsStr::new("1")) {
+                    command_line.append_switch(Some(&CefString::from("echo-enable-extensions-bridge")));
                 }
             }
         }

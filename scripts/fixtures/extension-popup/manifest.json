@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Echo isolated popup gate",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "storage"],
+  "action": {
+    "default_title": "Echo popup gate",
+    "default_popup": "popup.html"
+  }
+}

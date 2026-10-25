@@ -1,7 +1,10 @@
 # CEF 154 extension feasibility
 
-Investigation for Arc extension parity, 2026-10-25. No Chromium/CEF source
-changes or extension UI implementation are included in this investigation.
+Baseline investigation for Arc extension parity, 2026-10-25. The findings below
+describe upstream CEF. An owner-approved, opt-in source bridge now proves a real
+Alloy MV3 popup, profile isolation, catalog/toggle callbacks and verified Web Store
+installation. Build, qualification evidence and remaining limits are recorded in
+[CEF_BUILD.md](CEF_BUILD.md#opt-in-extension-bridge). GPUI extension UI is a separate task.
 
 Echo pins `cef = 154.5.0`, backed by CEF
 `154.0.34+g14c5a08+chromium-154.0.8037.98` (CEF commit
@@ -40,7 +43,7 @@ The [pinned Alloy allowlist](https://github.com/chromiumembedded/cef/blob/14c5a0
 and [Chrome-only toolbar API](https://github.com/chromiumembedded/cef/blob/14c5a089e8452874cb1a556dc3fde26ed2d87723/include/views/cef_browser_view.h)
 confirm the UI boundary.
 
-## Smallest useful source-patch experiment — approval required
+## Approved source-patch experiment
 
 Keep GPUI and Alloy embedding. Add an opt-in CEF bridge backed by Chromium's
 existing extension services, rather than restoring the removed old Alloy API or

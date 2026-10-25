@@ -51,6 +51,18 @@ SRC="$DOWNLOAD/chromium/src"
 if [[ "$MODE" == all || "$MODE" == build || "$MODE" == distrib ]]; then
   [[ "$(git -C "$SRC" rev-parse HEAD)" == "$CHROMIUM_COMMIT" ]]
   [[ "$(git -C "$SRC/cef" rev-parse HEAD)" == "$CEF_COMMIT" ]]
+  BRIDGE_PATCH="$ROOT/patches/cef154/extensions-bridge.patch"
+  if [[ "${ECHO_CEF_EXTENSIONS_BRIDGE:-0}" == 1 ]]; then
+    if git -C "$SRC" apply --check "$BRIDGE_PATCH" 2>/dev/null; then
+      git -C "$SRC" apply "$BRIDGE_PATCH"
+    else
+      git -C "$SRC" apply --reverse --check "$BRIDGE_PATCH"
+      echo "Verified extension bridge patch is already applied"
+    fi
+  elif [[ -f "$SRC/cef/include/echo_cef_extensions_v1.h" ]]; then
+    echo "Source contains the experimental bridge; explicitly set ECHO_CEF_EXTENSIONS_BRIDGE=1 or use a separate stock checkout" >&2
+    exit 1
+  fi
 fi
 if [[ "$MODE" == all || "$MODE" == build ]]; then
   (cd "$SRC/cef" && python3 tools/gclient_hook.py)
@@ -59,12 +71,18 @@ if [[ "$MODE" == all || "$MODE" == build ]]; then
   ninja -C "$SRC/out/Release_GN_arm64" -j 8 cefclient
 fi
 if [[ "$MODE" == all || "$MODE" == distrib ]]; then
+  DISTRIB_ROOT="$SRC/cef/binary_distrib"
+  STAGED="$DOWNLOAD/echo-dist"
+  if [[ "${ECHO_CEF_EXTENSIONS_BRIDGE:-0}" == 1 ]]; then
+    DISTRIB_ROOT="$DOWNLOAD/bridge-binary-distrib"
+    STAGED="$DOWNLOAD/echo-extensions-dist"
+  fi
   # automate-git's --no-distrib-symbols does not pass --no-symbols to a
   # minimal distribution. Call the official packager with that flag explicitly.
   (cd "$SRC/cef/tools" && python3 make_distrib.py \
-    "--output-dir=$SRC/cef/binary_distrib" --allow-partial --ninja-build \
+    "--output-dir=$DISTRIB_ROOT" --allow-partial --ninja-build \
     --arm64-build --minimal --no-symbols --no-docs)
-  DIST="$SRC/cef/binary_distrib/cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal"
-  bun "$ROOT/scripts/cef-dist.ts" stage "$DIST" "$DOWNLOAD/echo-dist"
-  echo "Use: ECHO_CEF_DIST='$DOWNLOAD/echo-dist' scripts/with-cef.sh cargo test"
+  DIST="$DISTRIB_ROOT/cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal"
+  bun "$ROOT/scripts/cef-dist.ts" stage "$DIST" "$STAGED"
+  echo "Use: ECHO_CEF_DIST='$STAGED' scripts/with-cef.sh cargo test"
 fi

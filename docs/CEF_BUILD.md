@@ -249,3 +249,131 @@ the GN flags does not grant codec patent licenses: Google's
 states that the additional codecs require licensing agreements and fees to
 codec patent holders. Preserve CEF/Chromium/FFmpeg licenses and third-party
 notices; this recipe is not approval to redistribute the resulting binaries.
+
+## Opt-in extension bridge
+
+`patches/cef154/extensions-bridge.patch` is a separate, experimental source
+patch on the same pinned CEF/Chromium revisions. It adds an additive C ABI;
+stock `cef` Rust bindings and their API hashes stay unchanged. The build script
+requires explicit opt-in and verifies either a clean application or the exact
+already-applied patch. It refuses a codec-only build from a patched checkout.
+
+```sh
+ECHO_CEF_EXTENSIONS_BRIDGE=1 scripts/build-cef.sh build
+ECHO_CEF_EXTENSIONS_BRIDGE=1 scripts/build-cef.sh distrib
+ECHO_CEF_DIST="$HOME/Documents/Bot/cef-src/echo-extensions-dist" \
+  scripts/with-cef.sh cargo test
+ECHO_CEF_DIST="$HOME/Documents/Bot/cef-src/echo-extensions-dist" \
+  scripts/with-cef.sh cargo run -p bundle
+ECHO_CEF_EXTENSIONS_BRIDGE=1 target/bundle/Echo.app/Contents/MacOS/Echo
+```
+
+The experimental distribution goes to `cef-src/bridge-binary-distrib` and its
+adapter to `cef-src/echo-extensions-dist`. The qualified codec-only archive and
+`cef-src/echo-dist` remain separate. All distributions stay outside Git.
+
+`bun scripts/check-cef-extensions.ts` runs the source-built `cefclient` native
+harness under the shared screen lock and a 90-second hard timeout. It uses
+fresh canonicalized private profile paths, two actual Alloy pages and no Chrome
+toolbar. Its fixture calls `chrome.extension.getViews({type:"popup"})` and
+`chrome.storage.local` inside a real `ExtensionViewHost`. It checks registry,
+action and close isolation, then profile catalog callbacks and enable/disable
+results. Screenshots use WindowServer capture because bitmap-caching an NSView
+omits Chromium GPU layers.
+
+The final popup gate passed on 2026-10-25 at 10:36 UTC. Evidence:
+`cef-src/qualification/extensions-2026-10-25T10-36-09.454Z/` (result, native log,
+and visually reviewed popup screenshot). The fixture appeared over the Alloy
+page; popup count was 1, profile A saw its extension, profile B did not; invoking
+from B returned NOT_FOUND and closing from B returned WRONG_OWNER. Both browsers
+reported Alloy and the process exited cleanly. This establishes a narrow native
+host, not full extension API or Arc UI parity.
+
+The Rust engine interface is `Engine::extension_bridge(view)`. A bridge binds to
+the actual live Alloy page, reports owned JSON events, exposes enable/disable
+and Web Store installation permission continuations, and cancels installations
+when the originating page navigates, closes or its watcher is dropped. Native
+popup attachment is an explicitly unsafe embedding boundary: detach the borrowed
+view synchronously on CLOSED; do not retain it or reenter CEF from callbacks.
+Host the borrowed popup view in a client-owned child window above the page, as
+Echo does for overlays. Attaching below CEF's managed page view has unstable
+stacking; the final fixture uses a child NSPanel with no Chrome toolbar.
+Drop bridges/popups before engine shutdown. Stock distributions return an
+unavailable error without introducing a required native symbol.
+
+Cancellation is ordered against a verified install's commit using an optional
+shared atomic request state. Before commit it prevents the CRX installer from
+installing assets. Once commit starts, cancellation returns UNSUPPORTED rather
+than claiming rollback. Approved downloads retain the originating profile until
+the underlying Chromium installer actually finishes. Ordinary Chromium installs
+leave this guard unset. Only browser-initiated EXTENSION_INSTALLER downloads
+bypass CEF's generic Save As callbacks; Chromium's ordinary download target and
+CRX path still handle them.
+
+The installation path subclasses Chromium's `WebstoreStandaloneInstaller`.
+A small virtual prompt-callback hook preserves the ordinary metadata fetch,
+policy, approval, download and signed-CRX verification flow; no verification or
+provenance flag is relaxed. Permission messages and their detailed warnings are
+Chromium-generated. Approval is a separate, owner-validated continuation;
+there is no automatic approval in Echo. The disposable native test can explicitly
+approve an installation when `ECHO_CEF_TEST_STORE_ID` is supplied. Supervised,
+parental and withheld-permission prompts fail closed instead of being treated
+as ordinary approval.
+
+Limitations: native popup attachment is currently macOS only; other platforms
+return UNSUPPORTED. Full Chrome window/currentWindow semantics, external popup
+navigation, eyedropper, action/icon/badge live-update coverage, command dispatch,
+uninstall and the GPUI extension surfaces are not implemented by this slice.
+The catalog includes installed packaged/unpacked extensions and manifest data;
+this is not yet the complete metadata contract proposed in CEF154_EXTENSIONS.md.
+
+Reproduce the management/store qualifications (each invocation owns new private
+profiles and takes the screen lock):
+
+```sh
+ECHO_CEF_TEST_POPUP_ONLY=1 bun scripts/check-cef-extensions.ts
+ECHO_CEF_TEST_STORE_ID=ddkjiahejlhfcafbddmgiahcphecmpfh \
+  bun scripts/check-cef-extensions.ts
+ECHO_CEF_TEST_STORE_ID=ddkjiahejlhfcafbddmgiahcphecmpfh \
+  ECHO_CEF_TEST_STORE_MODE=cancel-after-approval \
+  bun scripts/check-cef-extensions.ts
+```
+
+The store fixture is [uBlock Origin Lite](https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh),
+linked by its [official project](https://github.com/uBlockOrigin/uBOL-home/blob/main/README.md?plain=1).
+The 2026-10-25 native installation fetched version `2026.1021.1354`, presented
+Chromium's generated "Read and change all your data on all websites" warning,
+and completed with `success=true`, result `0`. It was enabled in A and absent
+from B. Evidence (final child-window harness):
+`qualification/extensions-2026-10-25T10-36-32.131Z/`.
+The explicit after-approval cancellation run completed with `success=false`,
+result `2` (ABORTED), error `Installation cancelled before commit`; the extension
+remained absent. Evidence: `qualification/extensions-2026-10-25T10-33-45.169Z/`.
+Wrong-owner permission decisions were rejected in both runs. These tests
+approve only a disposable native fixture; no GPUI automatic approval is added.
+
+Known native diagnostics: the bare ExtensionViewHost currently produces CEF's
+"Timeout of new browser info response" and the fallback-renderer task warning.
+Popup scripting and the qualified install flows complete despite those logs.
+CEF browser-wrapper association and complete extension API compatibility remain
+follow-up work; this build does not claim general extension parity.
+
+Final phase-two incremental framework rebuild: **64 seconds**, followed by a
+**54-second fixture-only rebuild** for stable child-window hosting. Minimal
+packaging took **66 seconds**. Source/build/distribution tree after packaging:
+**42,144,948 KiB (40.19 GiB)**, including the preserved codec-only distribution;
+the additional minimal archive is approximately **131 MiB**. Both phases use
+the exact GN configuration above. The bridge archive SHA-1 is
+`7e1dc0c5b56ff04fc94f0ba660c77773a3d33834`; its framework SHA-256 is
+`ac425004c299a009d300cc190c12df09cd246dcf9d113e27a6d790ea17657541`.
+The patched distribution passed full `cargo test`: **1,602 passed, zero failed,
+one existing ignored**; all four Bun adapter tests passed. A clean pinned-source
+mirror accepted the complete 18-file patch and reverse-check, and its patched
+contents matched the working source exactly.
+
+The rebuilt Echo bundle also passed the final native H.264/AAC check with the
+bridge enabled at `qualification/2026-10-25T10-40-55.900Z/`: custom framework hash
+matched, playback advanced from 0.032 to 3.998 seconds, 101 frames rendered with
+zero drops, 68,287 audio bytes decoded, and stereo 48 kHz AAC decoded to
+2,492,416 samples. The screenshot was visually reviewed; the process exited
+cleanly. Thus the extension build retains the independently delivered codecs.
