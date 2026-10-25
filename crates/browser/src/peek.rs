@@ -304,8 +304,9 @@ impl BrowserWindow {
                 target_width * (0.82 + 0.18 * amount), (f32::from(extent.height) - top * 2.).max(0.))
         };
         let control = self.command_bar_panel_fill(false);
+        let control_ink = if self.theme_is_dark() { gpui::white() } else { gpui::rgb(0x2f39ff).into() };
         let button = |id: &'static str, icon: AnyElement| div().id(id).debug_selector(move || id.into())
-            .size(px(34.)).flex_none().rounded_full().bg(control).text_color(gpui::white())
+            .size(px(34.)).flex_none().rounded_full().bg(control).text_color(control_ink)
             .flex().items_center().justify_center().shadow_md()
             .hover(|style| style.bg(gpui::hsla(control.h, control.s, (control.l + 0.08).min(1.), 1.)))
             .child(icon);

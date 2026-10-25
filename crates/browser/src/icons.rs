@@ -207,6 +207,21 @@ pub(crate) fn media_speaker(volume: f32, muted: bool) -> AnyElement {
     }).size(px(20.)).flex_none().into_any_element()
 }
 
+/// The mini-player header's two overlapping 18 px window outlines.
+pub(crate) fn media_pip() -> AnyElement {
+    gpui::canvas(|_,_,_|(),move|bounds,_,window,_|{
+        let at=|x,y|bounds.origin+gpui::point(px(x),px(y));
+        let mut back=gpui::PathBuilder::stroke(px(1.15));
+        back.move_to(at(7.,11.));back.line_to(at(3.,11.));back.curve_to(at(1.5,9.5),at(1.5,11.));
+        back.line_to(at(1.5,4.));back.curve_to(at(3.,2.5),at(1.5,2.5));
+        back.line_to(at(11.5,2.5));back.curve_to(at(13.,4.),at(13.,2.5));back.line_to(at(13.,7.));
+        if let Ok(path)=back.build(){window.paint_path(path,window.text_style().color);}
+        let mut front=gpui::PathBuilder::stroke(px(1.15));
+        for(index,(x,y))in rounded_rect(7.,7.,9.5,7.5,1.5).into_iter().enumerate(){if index==0{front.move_to(at(x,y));}else{front.line_to(at(x,y));}}
+        if let Ok(path)=front.build(){window.paint_path(path,window.text_style().color);}
+    }).size(px(18.)).flex_none().into_any_element()
+}
+
 /// A catalog-backed control scaled to `size`; frame controls keep the 18 px grid.
 pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement { zoomed(icon, size, 1.) }
 

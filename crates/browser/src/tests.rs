@@ -11074,3 +11074,6 @@ fn toolbar_canvas_color_tracks_its_document_and_rejects_stale_navigation_reports
     assert_eq!(color(&view, cx), None);
     assert_eq!(crate::window::toolbar_colors(color(&view, cx), true), (gpui::rgb(0x222222).into(), 1.));
 }
+
+#[path = "mini_player_audit_tests.rs"]
+mod mini_player_audit_tests;

@@ -55,7 +55,7 @@ impl BrowserWindow {
         let eligible=|id:TabId| {
             if self.mini_player.dismissed.contains(&id) || !self.browser.all_tabs().any(|tab|tab.id==id) { return None; }
             let state=pages.owned_media(id)?;
-            (state.active && !state.video && !pages.is_visible(id)).then_some((id,state))
+            (state.active && !pages.is_visible(id)).then_some((id,state))
         };
         self.mini_player.tab.and_then(eligible).or_else(||self.browser.all_tabs().find_map(|tab|eligible(tab.id)))
     }
@@ -176,15 +176,19 @@ impl BrowserWindow {
         let (id,state)=self.mini_player_source()?;
         let tab=self.browser.all_tabs().find(|tab|tab.id==id)?;
         let identity=self.pages.as_ref()?.borrow().media_identity(id)?;
+        let epoch=self.pages.as_ref()?.borrow().page_document_epoch(id)?;
         let volume=self.pages.as_ref()?.borrow().media_volume(id);
-        let ink=gpui::Hsla::from(gpui::rgb(0xaaaab5));
+        let dark=self.theme_is_dark();
+        let ink=gpui::Hsla::from(gpui::rgb(if dark{0xaaaab5}else{0x7c7c7d}));
+        let hover=gpui::hsla(0.,0.,if dark{1.}else{0.},0.075);
+        let hover_ink=gpui::rgb(if dark{0xafb0ba}else{0x7c7c7d});
         let button=|name:&'static str,label:&'static str,enabled:bool,icon:AnyElement| {
             div().flex_1().h(px(ROW)).flex().items_center().justify_center()
                 // A playback transition discards the old tooltip rather than
                 // leaving “Pause” visible over the newly paused control.
                 .child(div().id((name,usize::from(name=="media-toggle" && state.playing))).debug_selector(move||name.into()).size(px(24.)).rounded(px(4.))
                     .flex().items_center().justify_center().text_color(ink.opacity(if enabled{1.}else{0.32}))
-                    .when(enabled,|this|this.hover(|style|style.bg(gpui::hsla(0.,0.,1.,0.075)).text_color(gpui::rgb(0xafb0ba))))
+                    .when(enabled,|this|this.hover(move|style|style.bg(hover).text_color(hover_ink)))
                     .tooltip(move|_,cx|cx.new(|_|MediaTooltip(label)).into())
                     .on_click(cx.listener(move|this,_,_,cx|{
                         cx.stop_propagation();
@@ -220,29 +224,44 @@ impl BrowserWindow {
             .child(canvas(move|bounds,_,_|{paint_bounds.set(Some(bounds));},move|bounds,_,window,_|{
                 let x=bounds.left()+px(10.)+px((f32::from(bounds.size.width)-20.).max(0.)*volume);
                 let y=px(f32::from(bounds.center().y).round());
-                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(bounds.size.width,px(6.))),gpui::rgb(0x20203e)).corner_radii(px(3.)));
-                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(x-bounds.left(),px(6.))),gpui::rgb(0xedeeff)).corner_radii(px(3.)));
-                window.paint_quad(gpui::fill(Bounds::new(gpui::point(x-px(10.),y-px(8.)),gpui::size(px(20.),px(16.))),gpui::rgb(0xdadade)).corner_radii(px(8.)));
+                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(bounds.size.width,px(6.))),gpui::rgb(if dark{0x20203e}else{0xe3e3e5})).corner_radii(px(3.)));
+                window.paint_quad(gpui::fill(Bounds::new(gpui::point(bounds.left(),y-px(3.)),gpui::size(x-bounds.left(),px(6.))),gpui::rgb(if dark{0xedeeff}else{0x1f29ff})).corner_radii(px(3.)));
+                let thumb=Bounds::new(gpui::point(x-px(10.),y-px(8.)),gpui::size(px(20.),px(16.)));
+                if !dark {window.paint_shadows(thumb,gpui::Corners::all(px(8.)),&[gpui::BoxShadow{color:gpui::hsla(0.,0.,0.,0.2),offset:gpui::point(px(0.),px(1.)),blur_radius:px(5.),spread_radius:px(0.)}]);}
+                window.paint_quad(gpui::fill(thumb,gpui::rgb(if dark{0xdadade}else{0xffffff})).corner_radii(px(8.)));
             }).size_full());
         let profile=self.browser.user_profile_id_for_tab(id).unwrap_or(self.browser.active_user_profile_id());
+        let favicon=if dark{self.render_media_favicon(tab,profile)}else if tab.custom_icon.is_none()&&self.browser.favicon(profile,&tab.url).is_none(){
+            div().size(px(14.)).flex_none().rounded(px(3.)).bg(gpui::rgb(0xd7d7d9)).into_any_element()
+        }else{self.render_favicon_for_profile(tab,profile,false)};
         let card_bounds=self.mini_player.bounds.clone();
         let card=div().id("mini-player").debug_selector(||"mini-player".into()).absolute().bottom_0().left_0().right_0()
             .h(px(ROW*(1.+self.mini_player.header+self.mini_player.volume))).rounded(px(8.))
-            .bg(gpui::rgb(0x050627)).flex().flex_col().overflow_hidden()
+            .bg(gpui::rgb(if dark{0x050627}else{0xfdfdff})).flex().flex_col().overflow_hidden()
             .child(canvas(move|bounds,_,_|{card_bounds.set(Some(bounds));},|_,_,_,_|{}).absolute().size_full())
             .on_hover(cx.listener(|this,hovered:&bool,_,cx|this.hover_mini_player(*hovered,cx)))
             .child(div().relative().h(px(ROW*self.mini_player.header)).flex_none().overflow_hidden()
                 .child(div().absolute().bottom_0().left_0().right_0().h(px(ROW)).flex().items_center().pl(px(14.)).pr(px(10.)).gap(px(8.))
-                    .child(div().id("media-title").debug_selector(||"media-title".into()).flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(gpui::rgb(0xcdcdd4)).child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
+                    .child(div().id("media-title").debug_selector(||"media-title".into()).flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(gpui::rgb(if dark{0xcdcdd4}else{0x262727})).child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
+                    .child(div().flex().flex_none()
+                        .when(state.video,|group|group.child(div().id("media-pip").debug_selector(||"media-pip".into()).size(px(24.)).flex().items_center().justify_center().rounded(px(4.)).text_color(ink)
+                            .hover(move|style|style.bg(hover).text_color(hover_ink))
+                            .tooltip(|_,cx|cx.new(|_|MediaTooltip("Open Picture in Picture")).into())
+                            .on_click(cx.listener(move|this,_,_,cx|{
+                                cx.stop_propagation();
+                                if this.mini_player_source().is_some_and(|(current,state)|current==id&&state.video) {
+                                    if let Some(pages)=&this.pages{pages.borrow_mut().open_media_pip(id,identity,epoch);}
+                                }
+                            })).child(crate::icons::media_pip())))
                     .child(div().id("media-dismiss").debug_selector(||"media-dismiss".into()).size(px(24.)).flex().items_center().justify_center().rounded(px(4.)).text_color(ink)
-                        .hover(|style|style.bg(gpui::hsla(0.,0.,1.,0.075)).text_color(gpui::rgb(0xafb0ba)))
+                        .hover(move|style|style.bg(hover).text_color(hover_ink))
                         .on_click(cx.listener(move|this,_,_,cx|{cx.stop_propagation();if !this.pages.as_ref().is_some_and(|pages|pages.borrow().media_identity(id)==Some(identity)){return;}
                             this.mini_player.dismissed.insert(id);this.mini_player.hovered=false;this.mini_player.drag=None;
                             this.mini_player.header=0.;this.mini_player.volume=0.;this.mini_player.volume_open=false;
                             this.mini_player.animation=None;this.mini_player.collapse=None;cx.notify();}))
-                        .child(crate::icons::control_sized(crate::icons::Icon::Close,22.)))))
+                        .child(crate::icons::control_sized(crate::icons::Icon::Close,22.))))))
             .child(div().flex().h(px(ROW)).flex_none()
-                .child(button("media-return","Back to Tab",true,self.render_media_favicon(tab,profile)))
+                .child(button("media-return","Back to Tab",true,favicon))
                 .child(button("media-previous","Previous Track",state.previous,crate::icons::media_transport("previous")))
                 .child(button("media-toggle",if state.playing{"Pause"}else{"Play"},true,crate::icons::media_transport(if state.playing{"pause"}else{"play"})))
                 .child(button("media-next","Next Track",state.next,crate::icons::media_transport("next")))

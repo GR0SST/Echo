@@ -526,3 +526,51 @@ preview/edit sequence. Inspected final crops are
 `pairs/command-row-{arc,echo}.png`. Two GPUI regressions cover draft restoration,
 editing and confirmation without renderer replacement. The key-tile arrow and
 fine text/globe raster still differ; remaining material states are partial.
+
+
+## Audit continuation: light Peek and media
+
+Source light Peek is `arc-peek-light-reference/peek-light.png`; its blue glyphs
+are compared with `echo-audit-drive/peek-light.png`. The shared light material
+API is retained; only control ink changes. Inspected 3× crops are
+`pairs/peek-light-controls-{arc,echo}.png`. Stroke weight, antialiasing and
+shadow details still differ, so the broad Peek row remains partial.
+
+Light mini-player references are `arc-mini-light-reference/` and
+`arc-mini-volume-half/mini-volume-half.png`, compared with
+`echo-audit-drive/mini-{light,hover,volume,volume-half}.png`. The card, text,
+controls, fallback favicon, volume track/fill/thumb and thumb shadow follow
+color-managed source samples. The inspected crops are
+`pairs/mini-light-{arc,echo}.png`; source sidebar width is 228 px and the first
+Echo audio actor uses 240 px. This configuration difference is not a card-width
+change. Fine control/slider raster, tooltip materials and other palettes remain
+partial. That combined native actor exits zero.
+
+A genuinely playing own video is required for the PiP reference; merely opening
+the earlier video fixture did not exercise it. `arc-video-pip-reference/hover.png`
+shows the overlapping-window control between title and Close, and `pip.png`
+shows its owned native surface. The guarded source actor cleans its fixture
+tabs and root, with empty cleanup-error/remaining-owned inventories. The new
+Echo control targets only the retained background-video identity and document
+epoch. Two GPUI regressions cover the target and same-URL document replacement.
+Paused-video entry and the active-PiP header state remain unqualified.
+Native acceptance is `echo-mini-pip-validated/accepted.json`, with source and
+Echo header crops `pairs/mini-pip-{arc,echo}.png`. The dump records PiP false
+before the manual click, true afterward, then false after the own website
+closes it. Closing the own video and native application quit both complete;
+strict exit is zero. `native-pip.png` and `pip-window.json` record the owned
+224 × 149 px CEF surface versus Arc's 224 × 150 px. Native PiP chrome and
+placement remain separate partial work, not a claimed match from this button.
+
+Earlier PiP attempts were rejected: one reached the requested PiP state but
+failed CEF cookie-flush teardown, and three stopped before the scenario on
+focus loss. A read-only locked diagnostic identified SecurityAgent on top;
+the orchestrator canceled another agent's Developer Tools Access prompt.
+No debugger was attached here. The accepted actor ran after that cancellation,
+uses exact private-PID activation and checks, and exits zero.
+A later default-dark actor (`echo-mini-pip-dark/`) supplies the inspected
+same-appearance glyph crop `pairs/mini-pip-header-{arc,echo}.png`, but repeats
+the cookie-flush watchdog failure at native quit. Its visuals are retained,
+its exit is rejected, and the recurrence was reported to the orchestrator's
+shutdown investigation. The successful light actor remains recorded separately;
+this is not a waiver for a failed exit or any test.

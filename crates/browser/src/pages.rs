@@ -1126,6 +1126,12 @@ impl Pages {
         store.pages.get(&tab).filter(|page|page.owner==self.host)
             .map_or(1.,|page|store.engine.audio_volume(page.view).unwrap_or(page.state.media.volume as f32))
     }
+    pub(crate) fn open_media_pip(&mut self, tab: TabId, identity: PageIdentity, epoch: u64) -> bool {
+        let mut store=self.store.borrow_mut();
+        let Some(view)=store.pages.get(&tab).filter(|page|page.owner==self.host && page.identity==identity && page.state.media.active && page.state.media.video && !page.visible).map(|page|page.view)else{return false;};
+        if store.engine.page_document_epoch(view)!=Some(epoch){return false;}
+        store.engine.set_picture_in_picture(view,true)
+    }
     pub(crate) fn set_media_volume(&mut self, tab: TabId, volume: f32) -> bool {
         if !volume.is_finite() || !(0. ..=1.).contains(&volume) {return false;}
         let mut store=self.store.borrow_mut();
