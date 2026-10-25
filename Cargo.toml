@@ -6,3 +6,8 @@ members = ["crates/*"]
 edition = "2021"
 version = "0.1.0"
 publish = false
+
+# GPUI's zed-async-tar still needs xattr 0.2. Preserve its API while using the
+# Linux ENODATA spelling required by current libc; see the vendored patch note.
+[patch.crates-io]
+xattr = { path = "third_party/rust/xattr" }
