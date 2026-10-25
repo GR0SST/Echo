@@ -21,7 +21,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 7 | L99: Save Page As | S | **Fixed:** accepted format persists per local profile, initializes the picker/extension, survives native relaunch, and is unchanged by Cancel. Native NSEvent shortcut and File action pass; the physical System Events chord also fails in the saved Arc reference and remains unqualified. See [format evidence](SAVE_PAGE_FORMAT.md). |
 | 8 | L129: Reveal Current Tab | S | **Fixed:** Control-Space now reaches the existing reveal/unfold/scroll action in both GPUI and renderer focus; see delivery evidence. |
 | 9 | L410: Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | M | Complete user link-disposition routing while preserving source pages, focus and profile storage. |
-| 10 | L399: Shift-click opens a link in Peek (option) | M | Handle links opened inside Peek/Little without losing or replacing the wrong retained document. |
+| 10 | L399: Shift-click opens a link in Peek (option) | M | **Fixed sub-gap:** ordinary/target-blank lookup navigation and live Peek source return retain the correct document/profile. Nested Shift-click remains unqualified; see [nested lookup evidence](NESTED_LOOKUP_NAVIGATION.md). |
 | 11 | L599: Quiet downloads and the downloads tray | M | **Fixed sub-gap:** accepted native replacement and quiet keep-both pass file-byte, canonical-record and native-shutdown checks; staging/provenance authority is retained. See delivery evidence. |
 | 12 | L440: General → Arc is not the default browser ("Set as default" button) | S | **Fixed:** General shows the conditional callout, uses the existing serialized registration interface, handles declined requests and refreshes OS status on activation. Native test-adapter acceptance preserves the owner’s real OS default; non-default Arc layout remains B. See [General evidence](DEFAULT_BROWSER_GENERAL.md). |
 | 13 | L298: **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | S | **Sub-gap fixed:** About Echo, Import and conditionally available Set as Default Browser now route to existing handlers; the complete in-scope action catalogue remains partial. |
@@ -329,3 +329,24 @@ Formats follow [Apple’s Safari export specification](https://developer.apple.c
 Remaining functional scope: cookie and autofill import have no destination adapters; encrypted Chromium source passwords/OS-bound keys, Firefox NSS/Primary Password and opaque Safari/Chromium encrypted live sessions are not decoded. They need separate consent/key-unlocking and destination publication contracts. Safari payment cards/extensions/OTP notes are not imported by these adapters. The canonical import row remains partial, including existing later-screen visual qualification.
 
 Validation: full workspace suite green before publication (1,307 browser, 276 core, 193 engine and all remaining enabled suites). Four new importer integration cases cover localized ZIP/HTML/history/password access, Firefox direct/profile-backup recovery, path/schema failures and nesting/password/ambiguous-CSV limits. A GPUI test follows export selection through the existing sheet and rejects retargeting after leaving Sources. The native external-file drag publishes the synthetic Safari folder/bookmark and history; source SHA-256 stays unchanged, drag operation is Copy, CEF reaches Complete and the private process exits zero. Inspected screenshots and machine-readable proof: `target/parity/blocker-verification/native-import/{echo-export-bookmarks.png,echo-export-published.png,verified.json,drag-ended.json}`. No owner files or credentials were imported.
+
+### Nested lookup navigation — functional sub-gap completed
+
+Little target-blank navigation retains its one live document and history. Peek
+opens a normal owner tab, parks its live child and restores the same lookup when
+returning to the source. Profile/document/attachment checks reject stale routing;
+source retirement and owner teardown release retained pages. Covered-source
+hover/focus cannot order a sibling window over the restored lookup. Internal
+Site Settings sheets retain their existing stale-action behavior.
+
+- Seven GPUI regressions pass, alongside the five Site Settings regressions.
+- Native Peek: `target/parity/nested-navigation/echo-native-v5/accepted.json`,
+  physical `return-source-screen.png`, original/new/restored window IDs,
+  retained Back, CEF Complete and exit zero. Native Little:
+  `echo-little-v2/accepted.json`, four single-tab URL states and clean shutdown.
+- Arc/Echo pairs and inspected crops are listed in
+  [nested lookup evidence](NESTED_LOOKUP_NAVIGATION.md). Nested Shift-click,
+  background-focus reference cases, broader popup insertion order and other-OS
+  native acceptance remain qualified; the parent parity row stays partial.
+- Arc cleanup guard ambiguity prevented archiving a remaining synthetic Root
+  fixture; no unknown/owner window was used as a cleanup target.

@@ -731,6 +731,7 @@ pub struct BrowserWindow {
     pub sidebar_visible: bool,
     pub(crate) transient: Option<crate::transient::Transient>,
     pub(crate) peek_child: Option<WindowHandle<BrowserWindow>>,
+    pub(crate) parked_peeks: HashMap<crate::peek::Source, WindowHandle<BrowserWindow>>,
     pub(crate) peek_owner: Option<crate::peek::PeekOwner>,
     pub(crate) sidebar_width: f32,
     pub(crate) restore_window: Option<browser_core::window_restore::RestoredWindow>,
@@ -1049,7 +1050,7 @@ impl BrowserWindow {
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
-            transient: None, peek_child: None, peek_owner: None,
+            transient: None, peek_child: None, parked_peeks: HashMap::new(), peek_owner: None,
             sidebar_width: SIDEBAR_WIDTH,
             restore_window: None, restore_dormant: false,
             sidebar_resize: None,
@@ -1292,6 +1293,9 @@ impl BrowserWindow {
         let profile_child = self.take_user_profile_child(cx);
         let setup_child = self.take_setup_child(cx);
         let theme_child = self.take_theme_editor();
+        for (_, child) in self.parked_peeks.drain() {
+            cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.close_window(cx)); });
+        }
         if let Some(child) = self.peek_child.take() {
             // Peek owns native pages, so it needs its own retirement boundary.
             cx.defer(move |cx| { let _ = child.update(cx, |view, _, cx| view.close_window(cx)); });
@@ -1458,6 +1462,9 @@ impl BrowserWindow {
                 event @ (Event::OpenInNewTab { .. } | Event::OpenInBackgroundTab { .. }) => {
                     let requested_background = matches!(event, Event::OpenInBackgroundTab { .. });
                     let (Event::OpenInNewTab { url, .. } | Event::OpenInBackgroundTab { url, .. }) = event else { unreachable!() };
+                    if let Some(identity) = identity {
+                        if self.route_lookup_link(identity, input_origin, url.clone(), requested_background, cx) { continue 'drain; }
+                    }
                     let Some(source) = source_space.and_then(|id| self.browser.spaces.iter().position(|space| space.id == id && Some(space.user_profile_id) == page_profile)) else { continue; };
                     let id = self.edit_browser(|browser| {
                         let mut selection = browser.window_selection();
@@ -4821,6 +4828,7 @@ impl Render for BrowserWindow {
         self.start_max_title_jobs(cx);
         self.sync_site_settings(window,cx);
         if self.peek_owner.is_some() { return self.render_peek(window, cx); }
+        self.sync_parked_peeks(window.viewport_size(), cx);
         self.sync_library_geometry(window.viewport_size(), cx);
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {
             use crate::material::*;

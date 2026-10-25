@@ -512,6 +512,27 @@ mod mac {
             let _: () = msg_send![header, release];
         }
     }
+    pub fn set_overlay_visible(parent_view: *mut c_void, child_view: *mut c_void, visible: bool) -> bool {
+        let parent = window(parent_view);
+        let child = window(child_view);
+        if parent.is_null() || child.is_null() { return false; }
+        unsafe {
+            let actual: *mut AnyObject = msg_send![child, parentWindow];
+            if actual != parent { return false; }
+            if visible {
+                // Reinsert at the top of the owned child order. Ordering an
+                // already-attached, previously hidden child relative to its
+                // parent alone can leave it below the parent's native surface.
+                let _: () = msg_send![parent, removeChildWindow: child];
+                let _: () = msg_send![parent, addChildWindow: child, ordered: 1isize];
+                let _: () = msg_send![child, orderFront: std::ptr::null::<AnyObject>()];
+            } else {
+                let _: () = msg_send![child, orderOut: std::ptr::null::<AnyObject>()];
+            }
+        }
+        true
+    }
+
     pub fn prepare_toast_window(view: *mut c_void) {
         let overlay = window(view);
         if !overlay.is_null() {
@@ -530,6 +551,17 @@ mod mac {
             unsafe { let _: () = msg_send![overlay, setIgnoresMouseEvents: Bool::YES]; }
         }
     }
+}
+
+/// Park a live lookup without closing its GPUI/CEF host. Ownership is checked
+/// by the platform before hiding/showing; never change an unrelated window.
+pub(crate) fn set_overlay_visible(parent: *mut c_void, child: *mut c_void, visible: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    { mac::set_overlay_visible(parent, child, visible) }
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    { desktop::visible(parent, child, visible) }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    { let _ = (parent, child, visible); false }
 }
 
 /// Borderless toast windows use a shadow that follows the rendered surface.

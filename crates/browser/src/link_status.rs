@@ -16,6 +16,9 @@ pub(crate) struct LinkStatus {
 
 impl BrowserWindow {
     pub(crate) fn update_link_status(&mut self, view: ViewId, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        // The source page is covered by Peek. Its delayed hover callback must
+        // not create a sibling overlay above the active lookup window.
+        if self.peek_child.is_some() { self.close_link_status(cx); return; }
         let Some(tab) = self.pages.as_ref().and_then(|pages| {
             let pages = pages.borrow();
             pages.tab_for(view).filter(|tab| pages.is_visible(*tab))

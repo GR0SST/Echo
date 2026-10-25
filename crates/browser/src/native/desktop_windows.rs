@@ -19,6 +19,7 @@ unsafe extern "system" {
     fn GetClientRect(window: *mut c_void, rect: *mut Rect) -> i32;
     fn ClientToScreen(window: *mut c_void, point: *mut Point) -> i32;
     fn IsWindow(window: *mut c_void) -> i32;
+    fn ShowWindow(window: *mut c_void, command: i32) -> i32;
     fn GetWindowLongPtrW(window: *mut c_void, index: i32) -> isize;
     fn SetWindowLongPtrW(window: *mut c_void, index: i32, value: isize) -> isize;
     fn SetWindowPos(
@@ -119,4 +120,11 @@ pub(super) fn prepare_windowing() -> Result<(), String> {
 
 pub(super) fn is_owned(parent: *mut c_void, child: *mut c_void) -> bool {
     unsafe { IsWindow(child) != 0 && GetWindowLongPtrW(child, -8) == parent as isize }
+}
+
+pub(super) fn set_visible(child: *mut c_void, visible: bool) -> Result<(), String> {
+    if unsafe { IsWindow(child) } == 0 { return Err("Overlay was destroyed".into()); }
+    // SW_SHOWNOACTIVATE / SW_HIDE; foreground focus is routed separately.
+    unsafe { ShowWindow(child, if visible { 4 } else { 0 }); }
+    Ok(())
 }

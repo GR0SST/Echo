@@ -90,3 +90,12 @@ pub(super) fn set_popup_bounds(view: *mut c_void, previous: gpui::Bounds<gpui::P
     }
     if !platform::position(view,rect) {eprintln!("[extension-popup] native positioning failed");}
 }
+
+pub(super) fn visible(parent: *mut c_void, child: *mut c_void, visible: bool) -> bool {
+    if !platform::is_owned(parent, child) { return false; }
+    if let Err(error) = platform::set_visible(child, visible) {
+        eprintln!("[overlay] visibility change failed: {error}");
+        return false;
+    }
+    true
+}

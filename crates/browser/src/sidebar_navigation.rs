@@ -177,6 +177,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn page_content_visible(&self) -> bool {
+        if self.peek_owner.as_ref().is_some_and(|s| s.parked) { return false; }
         self.browser.is_blank()
             || self.browser.is_private()
             || matches!(

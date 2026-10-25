@@ -11639,3 +11639,6 @@ fn local_import_dropped_firefox_export_uses_the_existing_sheet_and_cannot_replac
     view.read_with(cx,|v,_|assert!(v.browser.space().pinned.iter().any(|t|t.title=="Exported fixture")));
     assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..))));
 }
+
+#[path = "nested_navigation_tests.rs"]
+mod nested_navigation_tests;

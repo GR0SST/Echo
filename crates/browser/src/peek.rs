@@ -7,7 +7,15 @@ use crate::{icons::{self, Icon}, native, new_window::NormalProfile, pages::Stora
     profile::ProfileHandle, transient::Transient, window::BrowserWindow};
 
 actions!(peek, [ExitPeek]);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Source {
+    pub space: browser_core::SpaceId,
+    pub tab: browser_core::TabId,
+    pub profile: browser_core::UserProfileId,
+}
 pub(crate) struct PeekOwner {
+    pub(crate) source: Option<Source>,
+    pub(crate) parked: bool,
     pub(crate) owner: WeakEntity<BrowserWindow>,
     pub(crate) history_token: Option<u64>,
     pub(crate) redo_close: Option<u64>,
@@ -16,7 +24,7 @@ pub(crate) struct PeekOwner {
     pub(crate) origin: gpui::Point<gpui::Pixels>,
     closing: Option<Instant>,
     pub(crate) detached: bool,
-    close_requested: bool,
+    pub(crate) close_requested: bool,
     close_image: Option<std::sync::Arc<gpui::RenderImage>>,
 }
 
@@ -81,7 +89,11 @@ impl BrowserWindow {
     fn open_peek_document(&mut self,url:url::Url,profile:Option<browser_core::UserProfileId>,window:&mut Window,cx:&mut Context<Self>) {
         if self.peek_owner.is_some() || self.transient.is_some() || self.peek_child.is_some() || crate::quit::is_quitting(){return;}
         self.close_command_bar(cx);
+        self.close_link_status(cx);
         let site_settings_source=if crate::site_settings_page::is_site_url(url.as_str()){crate::site_settings_page::DataSource::capture(self,cx)}else{None};
+        // Internal settings sheets keep their existing unavailable/stale-action
+        // behavior; website-document parking must not close those utilities.
+        let source_key = if crate::site_settings_page::is_site_url(url.as_str()) { None } else { self.capture_peek_source() };
         let source = NormalProfile { profile: self.profile.handle.clone(), pages: self.pages.clone() };
         let space = self.browser.space().id;
         let theme = self.browser.space().theme.clone();
@@ -120,7 +132,7 @@ impl BrowserWindow {
                     view.site_settings_page.source=site_settings_source;
                     view.sidebar_visible = false;
                     view.transient = Some(Transient { source, space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true,archive_retained:false,archive_reason:browser_core::ArchiveReason::Manual });
-                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: None, redo_close: None, sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
+                    view.peek_owner = Some(PeekOwner { source: source_key, parked: false, owner: owner.clone(), history_token: None, redo_close: None, sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);
                     view
                 })
@@ -137,6 +149,7 @@ impl BrowserWindow {
         let parent = self.native_view;
         let owner = cx.weak_entity();
         let history = self.profile.handle.clone();
+        let source_key = self.capture_peek_source();
         if let Some(pages) = &self.pages { pages.borrow_mut().request_ui_focus(); }
         cx.defer(move |cx| {
             if owner.upgrade().is_none() || crate::quit::is_quitting() { crate::peek_history::discard(token, cx); return; }
@@ -160,7 +173,8 @@ impl BrowserWindow {
                     let mut view = BrowserWindow::with_profile_pages(document.profile, Some(document.selection), pages, window, cx);
                     view.sidebar_visible = false;
                     view.transient = Some(Transient { source: document.source, space: document.space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true,archive_retained:false,archive_reason:browser_core::ArchiveReason::Manual });
-                    view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: Some(token), redo_close: None,
+                    let source_key = if view.browser.active_tab().is_some_and(|tab| crate::site_settings_page::is_site_url(&tab.url)) { None } else { source_key };
+                    view.peek_owner = Some(PeekOwner { source: source_key, parked: false, owner: owner.clone(), history_token: Some(token), redo_close: None,
                         sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);
                     view
@@ -240,6 +254,7 @@ impl BrowserWindow {
         let handle = self.main_window;
         cx.defer(move |cx| {
             let _ = owner.update(cx, |view, cx| {
+                view.parked_peeks.retain(|_, child| child.window_id() != handle.window_id());
                 if view.peek_child.is_some_and(|child| child.window_id() == handle.window_id()) {
                     view.peek_child = None;
                     if let Some(pages) = &view.pages { pages.borrow_mut().request_page_focus(); }
@@ -284,6 +299,11 @@ impl BrowserWindow {
     }
 
     pub(crate) fn render_peek(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.peek_owner.as_ref().is_some_and(|s| s.parked) {
+            if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, false); }
+            return div().size_full().into_any_element();
+        }
+
         let state = self.peek_owner.as_ref().unwrap();
         let now = cx.background_executor().now();
         let elapsed = now.saturating_duration_since(state.opened).as_secs_f32();

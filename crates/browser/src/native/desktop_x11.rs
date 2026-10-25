@@ -159,3 +159,11 @@ pub(super) fn is_owned(parent: *mut c_void, child: *mut c_void) -> bool {
     })
     .unwrap_or(false)
 }
+
+pub(super) fn set_visible(child: *mut c_void, visible: bool) -> Result<(), String> {
+    connection(|c, _| {
+        let request = if visible { c.map_window(xid(child)) } else { c.unmap_window(xid(child)) };
+        request.map_err(|e| e.to_string())?.check().map_err(|e| e.to_string())?;
+        c.flush().map_err(|e| e.to_string())
+    })
+}
