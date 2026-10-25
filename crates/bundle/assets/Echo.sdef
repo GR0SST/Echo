@@ -1,0 +1,128 @@
+<?xml version='1.0' encoding='utf-8'?>
+<dictionary title="Echo Scripting Dictionary">
+  <suite name="Standard Suite" code="core" description="Common classes and commands for all applications.">
+    <command name="make" code="corecrel" description="Make a new object.">
+      <parameter name="new" code="kocl" description="The class of the new object." type="type">
+          </parameter>
+      <parameter name="with properties" code="prdt" type="record" optional="yes" description="The initial values for properties of the object.">
+          </parameter>
+      <result description="to the new object" type="specifier" />
+    </command>
+    <command name="count" code="corecnte" description="Return the number of elements of a particular class within an object.">
+      <direct-parameter description="the object whose elements are to be counted" type="specifier" />
+      <parameter name="each" code="kocl" description="The class of objects to be counted." type="type" optional="yes">
+            </parameter>
+      <result description="the number of elements" type="integer" />
+    </command>
+    <class name="application" code="capp" description="The application's top-level scripting object.">
+      <element description="The windows contained within this application, ordered front to back." type="window">
+            </element>
+      <property name="name" code="pnam" description="The name of the application." type="text" access="r" />
+      <property name="frontmost" code="pisf" description="Is this the frontmost (active) application?" type="boolean" access="r">
+            </property>
+      <property name="version" code="vers" description="The version of the application." type="text" access="r" />
+      <responds-to command="quit">
+            </responds-to>
+      <element description="The tabs associated with this window. This is a write-only collection that allows you to create new Little Echo tabs." type="tab" access="w">
+            </element>
+    </class>
+    <command name="close" code="coreclos" description="Close">
+      <direct-parameter description="The object to execute the command on." type="specifier" />
+    </command>
+    <class name="window" code="WiND" description="An application's window" plural="windows">
+      <element description="The tabs contained within this window." type="tab" access="rw">
+            </element>
+      <element description="The spaces accessible within this window." type="space">
+            </element>
+      <property name="id" code="ID  " type="text" access="r" description="The unique identifier of the window.">
+            </property>
+      <property name="name" code="pnam" type="text" access="r" description="The full title of the window.">
+            </property>
+      <property name="index" code="pidx" type="integer" description="The index of the window, ordered front to back.">
+                </property>
+      <property name="closeable" code="hclb" description="Whether the window has a close box." type="boolean" access="r">
+          </property>
+      <property name="minimizable" code="ismn" description="Whether the window can be minimized." type="boolean" access="r">
+          </property>
+      <property name="minimized" code="pmnd" description="Whether the window is currently minimized." type="boolean">
+          </property>
+      <property name="resizable" code="prsz" description="Whether the window can be resized." type="boolean" access="r">
+          </property>
+      <property name="visible" code="pvis" description="Whether the window is currently visible." type="boolean">
+          </property>
+      <property name="zoomable" code="iszm" description="Whether the window can be zoomed." type="boolean" access="r">
+          </property>
+      <property name="zoomed" code="pzum" description="Whether the window is currently zoomed." type="boolean">
+          </property>
+      <property name="active tab" code="acTa" description="Returns the currently selected tab" type="tab" access="r">
+          </property>
+      <property name="active space" code="acSp" description="Returns the currently active space" type="space" access="r">
+          </property>
+      <property name="incognito" code="inco" description="Whether the window is an incognito window." type="boolean">
+          </property>
+      <property name="mode" code="mode" description="Represents the mode of the window which can be 'normal' or 'incognito', can be set only once during creation of the window." type="text">
+          </property>
+      <responds-to command="close">
+            </responds-to>
+    </class>
+    <command name="select" code="CrSelect" description="Select the tab.">
+      <direct-parameter description="The tab to execute the command in." type="specifier" />
+    </command>
+    <command name="go back" code="CrSuBack" description="Go Back (If Possible).">
+      <direct-parameter description="The tab to execute the command in." type="specifier" />
+    </command>
+    <command name="go forward" code="CrSuFwd " description="Go Forward (If Possible).">
+      <direct-parameter description="The tab to execute the command in." type="specifier" />
+    </command>
+    <command name="reload" code="CrSuRlod" description="Reload a tab.">
+      <direct-parameter description="The tab to execute the command in." type="specifier" />
+    </command>
+    <command name="stop" code="CrSustop" description="Stop the current tab from loading.">
+      <direct-parameter description="The tab to execute the command in." type="specifier" />
+    </command>
+    <command name="execute" code="CrSuExJa" description="Execute a piece of javascript.">
+      <direct-parameter description="The tab to execute the command in." type="specifier" />
+      <parameter name="javascript" code="JvSc" description="The javascript code to execute." type="text">
+            </parameter>
+      <result type="text" />
+    </command>
+    <class name="tab" code="tAbB" description="A window's tab" plural="tabs">
+      <property name="id" code="ID  " type="text" access="r" description="The unique identifier of the tab.">
+            </property>
+      <property name="title" code="pnam" type="text" access="r" description="The full title of the tab.">
+            </property>
+      <property name="URL" code="URL " description="The url of the tab." type="text" access="rw">
+            </property>
+      <property name="loading" code="ldng" description="Is loading?" type="boolean" access="r" />
+      <property name="location" code="loca" description="Represents the location of the tab in the sidebar. Can be 'topApp', 'pinned', or 'unpinned'." type="text">
+          </property>
+      <responds-to command="select">
+            </responds-to>
+      <responds-to command="go back">
+            </responds-to>
+      <responds-to command="go forward">
+            </responds-to>
+      <responds-to command="reload">
+            </responds-to>
+      <responds-to command="stop">
+            </responds-to>
+      <responds-to command="execute">
+            </responds-to>
+      <responds-to command="close">
+            </responds-to>
+    </class>
+    <command name="focus" code="SpaFocus" description="Focus on a space.">
+      <direct-parameter description="The space to focus." type="specifier" />
+    </command>
+    <class name="space" code="sPaC" description="A space" plural="spaces">
+      <property name="id" code="ID  " type="text" access="r" description="The unique identifier of the space.">
+            </property>
+      <property name="title" code="pnam" type="text" access="r" description="The full title of the space.">
+            </property>
+      <element description="The tabs contained within this window." type="tab" access="rw">
+            </element>
+      <responds-to command="focus">
+            </responds-to>
+    </class>
+  </suite>
+</dictionary>

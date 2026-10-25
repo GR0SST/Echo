@@ -25,6 +25,7 @@ fn main() {
     match build_bundle(Path::new("target/bundle"), "Echo", info) {
         Ok(path) => {
             install_icon(&path);
+            install_scripting(&path);
             install_icon_notices(&path);
             acknowledgements::install(&path);
             println!("Bundle: {}", path.display());
@@ -75,4 +76,14 @@ fn install_icon(app: &Path) {
             r#"[{"CFBundleURLName":"Web URLs","CFBundleTypeRole":"Viewer","CFBundleURLSchemes":["http","https"]}]"#])
         .arg(&plist).status().expect("cannot register web URL handling");
     assert!(status.success(), "cannot register web URL handling");
+}
+
+fn install_scripting(app: &Path) {
+    let resources = app.join("Contents/Resources");
+    std::fs::write(resources.join("Echo.sdef"), include_bytes!("../assets/Echo.sdef")).expect("cannot install scripting dictionary");
+    let plist = app.join("Contents/Info.plist");
+    for (key, kind, value) in [("NSAppleScriptEnabled", "-bool", "true"), ("OSAScriptingDefinition", "-string", "Echo.sdef")] {
+        let status = std::process::Command::new("plutil").args(["-replace", key, kind, value]).arg(&plist).status().expect("cannot register scripting dictionary");
+        assert!(status.success(), "cannot register scripting dictionary");
+    }
 }

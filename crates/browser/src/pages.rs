@@ -67,6 +67,7 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
 pub trait WebEngine {
+    fn evaluate_script(&mut self, _view: ViewId, _url: &str, _source: &str) -> Result<engine::ScriptTicket,String> { Err("Script evaluation is unsupported".into()) }
     fn permission_pending(&self, _view: ViewId, _request: engine::PermissionRequestId) -> bool { false }
     fn respond_permission(&mut self, _view: ViewId, _request: engine::PermissionRequestId, _decision: engine::PermissionDecision) -> bool { false }
     fn request_quote(&mut self, _view: ViewId, _request: u64) -> bool { false }
@@ -188,6 +189,7 @@ impl Chromium {
 impl WebEngine for Chromium {
     fn permission_pending(&self, view: ViewId, request: engine::PermissionRequestId) -> bool { self.engine.permission_pending(view, request) }
     fn respond_permission(&mut self, view: ViewId, request: engine::PermissionRequestId, decision: engine::PermissionDecision) -> bool { self.engine.respond_permission(view, request, decision) }
+    fn evaluate_script(&mut self, view: ViewId, url: &str, source: &str) -> Result<engine::ScriptTicket,String> { self.engine.evaluate_script(view,url,source) }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_quote(view, request) }
     fn site_info(&self, view: ViewId) -> Option<engine::SiteInfo> { self.engine.site_info(view) }
     fn set_site_permission(&mut self, view: ViewId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool { self.engine.set_site_permission(view, origin, kind, value) }
@@ -1550,6 +1552,13 @@ impl Pages {
 
     pub(crate) fn request_quote(&mut self, tab: TabId, request: u64) -> bool { self.view(tab).is_some_and(|view| self.store.borrow_mut().engine.request_quote(view, request)) }
     pub(crate) fn set_boost_picker(&mut self, tab: TabId, enabled: bool) { if let Some(view)=self.view(tab) { self.store.borrow_mut().engine.set_boost_picker(view,enabled); } }
+
+    pub(crate) fn evaluate_script(&mut self, tab: TabId, profile:UserProfileId, url:&str, source: &str) -> Result<engine::ScriptTicket,String> {
+        let view=self.view(tab).ok_or("The tab is not loaded in this window")?;
+        let mut store=self.store.borrow_mut();
+        if !store.pages.get(&tab).is_some_and(|p|p.identity.profile==profile&&p.url==url){return Err("The scripted document was replaced".into())}
+        store.engine.evaluate_script(view,url,source)
+    }
 
     pub fn reload(&mut self, tab: TabId) {
         if let Some(view) = self.view(tab) {

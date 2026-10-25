@@ -378,6 +378,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     }
                     cx.background_executor().timer(Duration::from_millis(300)).await;
                 }
+                "scripting-file" => {
+                    let path=arg.to_string();
+                    let result=cx.background_executor().spawn(async move {crate::native::scripting::execute_file(&path)}).await;
+                    match result {
+                        Ok(output)=>eprintln!("[scripting-native] {output}"),
+                        Err(error)=>{eprintln!("[automation] aborted: scripting-file failed: {error}");let _=cx.update(|cx|crate::quit::request(cx));return;}
+                    }
+                }
                 "activate" => {
                     source_native!(|native| unsafe { make_key(native) });
                     cx.background_executor().timer(Duration::from_millis(300)).await;

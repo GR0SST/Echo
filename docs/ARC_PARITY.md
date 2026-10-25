@@ -136,7 +136,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Cast | — | missing | — |
 | Developer: View Source | ⌥⌘U | done | Opens a new Today tab using Chromium's source viewer, retaining the original page or Split View. View → Developer and Command Bar actions; disabled on internal/source pages. Native-page shortcut routing and CEF rendering verified |
 | Developer: Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | ⌥⌘I, ⌥⌘C, ⌥⌘J, — | partial | Menus, page/frontend shortcuts (including F12) and Command Bar route to the focused live pane. The original CEF frontend is embedded in a GPUI-owned right dock through an authenticated local protocol bridge. Bundled macOS checks cover live DOM/styles, Console evaluation, Network requests, element picking, repeated toggles, document/input retention and closing the inspected Split pane after frontend focus. Other dock positions, resizing and remembered dimensions, complete host services and remaining platform/private native checks are unfinished |
-| Developer: Allow JavaScript from Apple Events | — | missing | — |
+| Developer: Allow JavaScript from Apple Events | — | partial | Reference menu label, persisted default-off opt-in, native checkmark and scoped CEF evaluation gate. Enabled/error paths verified through real AppleScript in an isolated Echo bundle; remaining menu-state/profile fidelity is unverified. [Scripting](SCRIPTING.md) |
 | Toggle Developer Mode (per site) | ⌃D | missing | — |
 | Enter/Exit Full Screen | ⌃⌘F | partial | View menu, page shortcuts and overlays target the main window; Enter/Exit commands work in GPUI tests. macOS bundle entry/exit verified with guarded input, native fullscreen state and inspected screenshots; native toolbar buttons stay under AppKit control. Other platforms and exact Arc transition presentation remain unverified |
 | Exit (leave a context: Peek, full screen) | ⌘Esc | partial | Peek closes with Escape. Guarded Arc 1.170.0 leaves Peek open on Cmd+Escape, which Echo now matches; full-screen exit remains unfinished |
@@ -573,8 +573,8 @@ Max download rename/revert feedback awaits the later Max implementation.
 
 | Feature | Status | What's missing |
 |---|---|---|
-| Classes: window (active tab, active space, incognito, mode), tab (id, title, URL, loading, location: topApp/pinned/unpinned), space (id, title) | missing | macOS-specific. Could be replaced by a cross-platform automation API (?) |
-| Commands: make, close, select, go back, go forward, reload, stop, execute (JavaScript), focus (space) | missing | — |
+| Classes: window (active tab, active space, incognito, mode), tab (id, title, URL, loading, location: topApp/pinned/unpinned), space (id, title) | partial | Bundled dictionary keeps Arc’s term codes; portable Rust snapshots/references expose these classes and properties through an isolated macOS AppleEvent transport. Native read/count/property/reference checks passed. Range/predicate selectors, arbitrary window ordering and broader window-state fidelity remain. [Scripting](SCRIPTING.md) |
+| Commands: make, close, select, go back, go forward, reload, stop, execute (JavaScript), focus (space) | partial | Canonical profile mutations and scoped page commands implemented; JavaScript requires the Developer-menu opt-in and returns text/errors through asynchronous owned requests. Native tab creation/selection/URL/location/navigation/execute/close and incognito-window creation/close passed; Space focus is GPUI-tested. Normal/Little creation, unloaded targets and remaining selector/window behavior need native coverage. [Scripting](SCRIPTING.md) |
 
 ## 23. Other
 

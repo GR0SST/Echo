@@ -34,6 +34,8 @@ mod page_zoom_tests;
 mod page_loading_tests;
 #[path = "site_controls_tests.rs"]
 mod site_controls_tests;
+#[path = "scripting_tests.rs"]
+mod scripting_tests;
 #[path = "main_menu_tests.rs"]
 mod main_menu_tests;
 #[path = "tab_switcher_tests.rs"]
@@ -292,6 +294,7 @@ struct FakeState {
     snapshots: Vec<engine::PageSnapshot>,
     site_infos: std::collections::HashMap<u64,engine::SiteInfo>,
     permission_requests: std::collections::HashSet<(u64,engine::PermissionRequestId)>,
+    script_calls: Vec<(ViewId,String)>,
 }
 
 #[derive(Clone, Default)]
@@ -323,6 +326,7 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn evaluate_script(&mut self,view:ViewId,_url:&str,source:&str)->Result<engine::ScriptTicket,String>{self.0.borrow_mut().script_calls.push((view,source.into()));Ok(engine::ScriptTicket::completed(Ok("3".into())))}
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.0.borrow_mut().context_images.push((raw(view),request,page_url.into(),url.into()));true}
     fn permission_pending(&self,view:ViewId,request:engine::PermissionRequestId)->bool {self.0.borrow().permission_requests.contains(&(raw(view),request))}
     fn respond_permission(&mut self,view:ViewId,request:engine::PermissionRequestId,decision:engine::PermissionDecision)->bool {
@@ -7478,7 +7482,9 @@ fn developer_menu_preserves_observed_arc_order_without_visible_f12_duplicate() {
         gpui::MenuItem::Action { name, .. } => Some(name.to_string()),
         _ => None,
     }).collect();
-    assert_eq!(labels, ["View Source", "Developer Tools", "Inspect Elements", "JavaScript Console", "Network Inspector"]);
+    let mut expected=vec!["View Source", "Developer Tools", "Inspect Elements", "JavaScript Console", "Network Inspector"];
+    #[cfg(target_os="macos")]expected.push("Allow JavaScript from Apple Events");
+    assert_eq!(labels, expected);
 }
 
 fn accept_recording_inspector(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, fake: &FakeEngine) {

@@ -32,7 +32,8 @@ actions!(
         ReplacePinnedUrl,
         ResetSpace,
         ViewArchive,
-        ClearArchive
+        ClearArchive,
+        AllowJavaScriptFromAppleEvents
     ]
 );
 
@@ -44,6 +45,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &NewWindow, cx| { cx.defer(|cx| crate::new_window::open(true, cx)); });
     cx.on_action(|_: &NewIncognitoWindow, cx| { cx.defer(crate::open_incognito_window); });
     cx.on_action(|_: &Quit, cx| crate::quit::request(cx));
+    cx.on_action(|_: &AllowJavaScriptFromAppleEvents,cx|crate::scripting::toggle_javascript(cx));
     cx.on_action(|_: &HideApp, cx| native::set_app_visibility(native::AppVisibility::Hide, cx));
     cx.on_action(|_: &HideOthers, cx| {
         native::set_app_visibility(native::AppVisibility::HideOthers, cx)
@@ -165,13 +167,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::separator(),
                 MenuItem::Submenu(Menu {
                     name: "Developer".into(),
-                    items: vec![
-                        MenuItem::action("View Source", window::ViewSource),
-                        MenuItem::action("Developer Tools", window::DeveloperTools),
-                        MenuItem::action("Inspect Elements", window::InspectElements),
-                        MenuItem::action("JavaScript Console", window::JavaScriptConsole),
-                        MenuItem::action("Network Inspector", window::NetworkInspector),
-                    ],
+                    items: developer_items(),
                 }),
                 MenuItem::action("Enter/Exit Full Screen", ToggleFullscreen),
             ],
@@ -286,4 +282,11 @@ impl window::BrowserWindow {
             });
         });
     }
+}
+
+fn developer_items()->Vec<MenuItem>{
+    let mut items=vec![MenuItem::action("View Source",window::ViewSource),MenuItem::action("Developer Tools",window::DeveloperTools),MenuItem::action("Inspect Elements",window::InspectElements),MenuItem::action("JavaScript Console",window::JavaScriptConsole),MenuItem::action("Network Inspector",window::NetworkInspector)];
+    #[cfg(target_os="macos")]
+    items.push(MenuItem::action("Allow JavaScript from Apple Events",AllowJavaScriptFromAppleEvents));
+    items
 }

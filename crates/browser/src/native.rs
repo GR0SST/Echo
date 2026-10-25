@@ -829,3 +829,5 @@ pub(crate) fn application_active() -> bool {
     #[cfg(any(not(target_os = "macos"), test))]
     { true }
 }
+#[cfg(target_os = "macos")]
+pub(crate) mod scripting;

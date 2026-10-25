@@ -264,8 +264,7 @@ pub(crate) fn complete(status: &engine::ShutdownStatus) -> Result<(), String> {
 const fn fourcc(value: &[u8; 4]) -> u32 { u32::from_be_bytes(*value) }
 
 // AEDataModel.h uses #pragma pack(push, 2), including on 64-bit macOS.
-#[repr(C, packed(2))]
-struct RawDesc { kind: u32, data: *mut *mut c_void }
+use crate::native::scripting::RawDesc;
 type AppleEventHandler = unsafe extern "C" fn(*const RawDesc, *mut RawDesc, *mut c_void) -> i16;
 struct OwnedDesc(RawDesc);
 impl OwnedDesc {
