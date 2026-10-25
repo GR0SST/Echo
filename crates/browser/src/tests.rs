@@ -6401,14 +6401,14 @@ fn split_headers_and_pages_share_one_outer_corner_contour_without_recreating_vie
         let frame = cx.debug_bounds(test_selector(format!("split-pane-{}", pane.get()))).unwrap();
         let header = cx.debug_bounds(test_selector(format!("pane-header-{}", pane.get()))).unwrap();
         let body = cx.debug_bounds(test_selector(format!("pane-body-{}", pane.get()))).unwrap();
-        assert_eq!(frame.origin + gpui::point(gpui::px(1.), gpui::px(1.)), header.origin);
+        assert_eq!(frame.origin + gpui::point(gpui::px(2.), gpui::px(2.)), header.origin);
         assert_eq!(header.bottom(), body.origin.y);
         assert_eq!(body.origin.y - frame.origin.y, gpui::px(32.));
         let address = cx.debug_bounds(test_selector(format!("pane-address-{}",pane.get()))).unwrap();
         assert!((f32::from(address.center().x - frame.center().x)).abs() < 0.1);
-        assert_eq!(frame.bottom() - gpui::px(1.), body.bottom());
-        assert_eq!(frame.size.width - gpui::px(2.), header.size.width);
-        assert_eq!(frame.size.width - gpui::px(2.), body.size.width);
+        assert_eq!(frame.bottom() - gpui::px(2.), body.bottom());
+        assert_eq!(frame.size.width - gpui::px(4.), header.size.width);
+        assert_eq!(frame.size.width - gpui::px(4.), body.size.width);
     }
     run_named_command(&view, cx, "convert to vertical split");
     assert!(fake.0.borrow().rounded_top.values().all(|rounded| !rounded));
@@ -8300,9 +8300,9 @@ fn split_focus_contour_stays_outside_native_pages_and_focusing_does_not_reflow_t
     let before = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_layout());
     for (id, page) in &before {
         let pane = cx.debug_bounds(test_selector(format!("split-pane-{}", id.get()))).unwrap();
-        assert!((page.x - f64::from(f32::from(pane.left())) - 1.).abs() < 0.6);
-        assert!((f64::from(f32::from(pane.right())) - page.x - page.width - 1.).abs() < 0.6);
-        assert!((f64::from(f32::from(pane.bottom())) - page.y - page.height - 1.).abs() < 0.6);
+        assert!((page.x - f64::from(f32::from(pane.left())) - 2.).abs() < 0.6);
+        assert!((f64::from(f32::from(pane.right())) - page.x - page.width - 2.).abs() < 0.6);
+        assert!((f64::from(f32::from(pane.bottom())) - page.y - page.height - 2.).abs() < 0.6);
     }
     fake.take_calls();
     click(cx, "pane-header-2");

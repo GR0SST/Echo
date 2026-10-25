@@ -2031,3 +2031,25 @@ The capture harness's final check was corrected to accept serde's omitted
 optional theme field; the saved sessions and phase evidence were revalidated.
 All Arc test pigments and appearance changes were restored; guarded session
 cleanup logs report no remaining owned windows.
+
+### Partial-row review: Split contour and resting addresses (2026-10-25)
+
+The guarded Arc 1.170 `Echo Test` session captured both appearances at
+`{100,100,1000,760}` with two independently loaded public fixture documents.
+`target/parity/partial-sections/arc_split_{Light,Dark}.png` shows a 2 px focused
+contour, a 10 px gap and a 32 px outer header. Display P3 samples convert to
+sRGB `#1f2aff` in Light and `#3039ff` in Dark. The resting address is
+`127.0.0.1`, omitting both the fixture port and `/second.html`.
+
+Echo now reserves that same contour around every pane, including inactive
+panes, so changing focus never resizes the retained document. The address
+label uses the existing hostname formatter; editing/navigation still uses the
+complete URL. `echo_split_contour_split_{Light,Dark}.png` and the
+`split_focus_left`/`split_focus_right` captures qualify the native result.
+The corresponding GPUI checks retain the existing engine objects and compare
+page bounds across a focus change. All six broader Split rows remain partial:
+the focused header still lacks Arc's Site Controls target, the inner corner
+raster and hover controls are not fully calibrated, draft fills are hue-only,
+and resize/expansion/drag timing and several overflow/group states remain
+unqualified. Existing drag reference and acceptance limits remain as documented
+above; these static pairs do not prove transition timing.

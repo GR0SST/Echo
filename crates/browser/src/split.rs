@@ -277,7 +277,7 @@ impl BrowserWindow {
                 Some(pane
                     .child(div().absolute().inset_0().rounded(px(crate::pages::CONTENT_CORNER_RADIUS))
                         .border(px(crate::split_layout::BORDER as f32))
-                        .border_color(hsla(self.accent(), 0.75, 0.4, if active { 1. } else { 0. })))
+                        .border_color(pane_focus_color(self.theme_is_dark(), active)))
                     .child(div().id(("pane-header", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-header-{key}"))()))
                         .mx(px(crate::split_layout::BORDER as f32)).mt(px(crate::split_layout::BORDER as f32))
                         .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
@@ -304,7 +304,7 @@ impl BrowserWindow {
                             .when(!active, |this| this.group_hover(header_group.clone(), |style| style.left(px(94.)).right(px(94.))))
                             .flex().items_center().justify_center().gap(px(6.)).text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
                             .when(tab.url != EMPTY_PANE_URL, |this| this.child(crate::icons::control_sized(crate::icons::Icon::Link,14.)))
-                            .child(div().min_w_0().truncate().child(if tab.url == EMPTY_PANE_URL { "Search…".into() } else { crate::window::display_url(&tab.url) }))
+                            .child(div().min_w_0().truncate().child(if tab.url == EMPTY_PANE_URL { "Search…".into() } else { pane_address(&tab.url) }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 if this.page_content_visible() {
@@ -389,5 +389,33 @@ fn split_header_keeps_light_document_fill_and_dark_controls_in_both_appearances(
             assert_eq!(fill, gpui::rgb(0xf5f5f5).into());
             assert_eq!(ink.l, 0.);
         }
+    }
+}
+
+/// The captured contour is display-P3; these values are converted to sRGB.
+fn pane_focus_color(dark: bool, active: bool) -> gpui::Hsla {
+    let mut color: gpui::Hsla = gpui::rgb(if dark { 0x3039ff } else { 0x1f2aff }).into();
+    color.a = if active { 1. } else { 0. };
+    color
+}
+
+fn pane_address(url: &str) -> String {
+    crate::window::address_host(url)
+}
+
+#[test]
+fn split_addresses_hide_ports_and_paths_without_changing_the_navigation_url() {
+    for url in ["http://127.0.0.1:8159/second.html", "https://www.example.com:8443/path?q=1#title"] {
+        let address = pane_address(url);
+        assert_eq!(address, if url.contains("127.0.0.1") { "127.0.0.1" } else { "example.com" });
+        assert!(url.contains('/'));
+    }
+}
+
+#[test]
+fn split_focus_uses_measured_appearance_colors_and_a_transparent_inactive_contour() {
+    for (dark, expected) in [(false, 0x1f2aff), (true, 0x3039ff)] {
+        assert_eq!(pane_focus_color(dark, true), gpui::rgb(expected).into());
+        assert_eq!(pane_focus_color(dark, false).a, 0.);
     }
 }
