@@ -297,3 +297,38 @@ Two GPUI tests cover JSON scope/counts, retained-page behavior, Command Bar
 dismissal and the compact toast without a Share action. The final full local
 suite passes 1,085 browser, 239 core, 148 engine and 18 AI tests plus importer
 and bundle checks; one existing native-credential integration test is ignored.
+
+
+## Reveal Echo Data
+
+The installed reference opens inside `~/Library/Application Support/Arc` in
+Finder, rather than selecting that folder in its parent. The captured source
+is `arc-reveal-data-cg/finder.png`. Owned Finder setup/result windows are closed
+by exact CG IDs, leaving the previous Finder windows intact; the final owned
+inventories and Arc cleanup errors are empty.
+
+Help → Troubleshooting → Reveal Echo Data and the matching Command Bar command
+open Echo's startup-resolved data directory through GPUI's platform URL opener.
+This honors `BROWSER_DATA_DIR` and keeps profile migration/environment lookup
+out of the action. The action dismisses drafts and suppresses deferred page
+focus restoration so the platform file manager can take focus. No files are
+modified by the action. Three GPUI tests verify directory URL escaping, retained
+page identity, no reload/creation/late focus, and use without a browser window.
+The final native run is `echo-reveal-data/`: its inspected Finder pair against
+`arc-reveal-data-cg/finder.png` uses the same 920 × 492 px OS window, with the
+private test data directory substituted for Arc's directory. Menu opening,
+exact owned-window cleanup and zero-status CEF shutdown pass. The original
+Finder window is preserved. The first two harness attempts needed fixes for
+Cocoa metadata serialization and asynchronous Finder closure; the second
+also hit the CEF shutdown watchdog while the harness had not restored Echo
+focus. The corrected run exits zero, and no failed run is counted as acceptance.
+
+The original no-window test incorrectly dispatched after closing the final
+browser, which correctly begins shutdown. Separate Command Bar and freshly
+initialized no-window tests now exercise the intended lifecycle. Native folder
+opening on Windows/Linux remains unverified.
+
+
+The corrected full local suite passes 1,095 browser, 241 core, 151 engine and
+18 AI tests plus importer/bundle checks (one existing native-credential
+integration test ignored). No handoff waiver is used.

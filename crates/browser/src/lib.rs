@@ -338,6 +338,7 @@ pub fn run() {
     });
     app.run(move |cx: &mut App| {
         init(cx);
+        cx.set_global(diagnostics::DataDirectory(profile_dir()));
         open_browser_window(cx);
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(std::time::Duration::from_millis(50)).await;

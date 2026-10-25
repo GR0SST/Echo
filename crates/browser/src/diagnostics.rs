@@ -1,6 +1,19 @@
 //! Local, explicit clipboard diagnostics. No account or telemetry identifiers.
 use crate::window::BrowserWindow;
-use gpui::{ClipboardItem, Context};
+use gpui::{App, ClipboardItem, Context, Global};
+
+/// Resolved once at startup, including an explicitly overridden data directory.
+/// Utility actions must not re-run profile migration or consult changing env vars.
+pub(crate) struct DataDirectory(pub std::path::PathBuf);
+impl Global for DataDirectory {}
+
+pub(crate) fn reveal_data(cx: &mut App) {
+    if crate::quit::is_quitting() { return; }
+    let Some(directory) = cx.try_global::<DataDirectory>() else { return; };
+    if let Ok(url) = url::Url::from_directory_path(&directory.0) {
+        cx.open_url(url.as_str());
+    }
+}
 
 impl BrowserWindow {
     pub(crate) fn copy_browser_info(&mut self, cx: &mut Context<Self>) {

@@ -393,3 +393,51 @@ fn copy_info_command_closes_its_draft_and_keeps_the_same_page_and_clipboard_sche
     assert!(view.read_with(visual, |view, _| !view.toast.as_ref().unwrap().copied_link));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
 }
+
+
+#[gpui::test]
+fn reveal_data_menu_opens_the_configured_folder_without_navigation_or_late_focus(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Data with spaces #1");
+    std::fs::create_dir(&path).unwrap();
+    let expected = url::Url::from_directory_path(&path).unwrap().to_string();
+    let (view, visual, fake) = open_pages(cx);
+    visual.update(|_, cx| cx.set_global(crate::diagnostics::DataDirectory(path)));
+    let original = active_url(&view, visual);
+    visual.simulate_keystrokes("cmd-t");
+    let mut command = bar(&view, visual);
+    command.simulate_input("unfinished query");
+    fake.take_calls();
+    dispatch_menu(&mut command, "Help", "Reveal Echo Data");
+    visual.executor().advance_clock(Duration::from_secs(1));
+    visual.run_until_parked();
+    assert_eq!(visual.cx.opened_url(), Some(expected));
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+    assert_eq!(active_url(&view, visual), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::FocusPage(_))));
+}
+
+#[gpui::test]
+fn reveal_data_command_uses_the_startup_directory(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let expected = url::Url::from_directory_path(directory.path()).unwrap().to_string();
+    let (view, visual, _) = open_pages(cx);
+    visual.update(|_, cx| cx.set_global(crate::diagnostics::DataDirectory(directory.path().into())));
+    run_named_command(&view, visual, "reveal echo data");
+    assert_eq!(visual.cx.opened_url(), Some(expected.clone()));
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+}
+
+#[gpui::test]
+fn reveal_data_without_a_browser_uses_the_configured_directory(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("another folder");
+    let expected = url::Url::from_directory_path(&path).unwrap().to_string();
+    cx.update(init);
+    cx.update(|cx| {
+        cx.set_global(crate::diagnostics::DataDirectory(path));
+        cx.dispatch_action(&crate::menus::RevealData);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.opened_url(), Some(expected));
+}

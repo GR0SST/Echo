@@ -7,6 +7,7 @@ actions!(
     [
         About,
         CopyBrowserInfo,
+        RevealData,
         AppearanceHeading,
         AutomaticAppearance,
         LightAppearance,
@@ -47,6 +48,7 @@ actions!(
 );
 
 pub(crate) fn init(cx: &mut App) {
+    cx.on_action(|_: &RevealData, cx| cx.defer(crate::diagnostics::reveal_data));
     cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None), KeyBinding::new("cmd-,", Settings, None), KeyBinding::new("cmd-alt-n", crate::transient::NewLittleWindow, None)]);
     cx.on_action(|_: &crate::transient::NewLittleWindow, cx| { cx.defer(|cx| crate::transient::open(None, cx)); });
     cx.bind_keys([KeyBinding::new("ctrl-cmd-n", BlankWindow, None)]);
@@ -288,7 +290,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
         },
         Menu {
             name: "Help".into(),
-            items: vec![MenuItem::action("Essential Keyboard Shortcuts", crate::essential_shortcuts::EssentialShortcuts), MenuItem::separator(), MenuItem::Submenu(Menu { name: "Troubleshooting".into(), items: vec![MenuItem::action("Open Task Manager", crate::task_manager::OpenTaskManager), MenuItem::separator(), MenuItem::action("Copy Echo Info", CopyBrowserInfo)] })],
+            items: vec![MenuItem::action("Essential Keyboard Shortcuts", crate::essential_shortcuts::EssentialShortcuts), MenuItem::separator(), MenuItem::Submenu(Menu { name: "Troubleshooting".into(), items: vec![MenuItem::action("Open Task Manager", crate::task_manager::OpenTaskManager), MenuItem::separator(), MenuItem::action("Reveal Echo Data", RevealData), MenuItem::action("Copy Echo Info", CopyBrowserInfo)] })],
         },
     ]
 }
