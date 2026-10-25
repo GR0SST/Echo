@@ -72,6 +72,9 @@ impl MediaInventory {
             .as_ref()
             .and_then(|stamp| self.items.iter().find(|item| &item.stamp == stamp))
     }
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+    }
     pub fn select(&mut self, stamp: &MediaStamp) -> bool {
         if !self.items.iter().any(|item| &item.stamp == stamp) {
             return false;
@@ -79,7 +82,7 @@ impl MediaInventory {
         self.selected = Some(stamp.clone());
         true
     }
-    pub fn replace(&mut self, mut items: Vec<MediaItem>) {
+    pub fn replace(&mut self, mut items: Vec<MediaItem>) -> bool {
         // Capture metadata wins over duplicate filesystem discovery.
         items.sort_by_key(|item| !matches!(item.source, MediaSource::Capture { .. }));
         let mut seen = std::collections::HashSet::new();
@@ -90,6 +93,9 @@ impl MediaInventory {
                 .cmp(&a.stamp.modified)
                 .then_with(|| a.stamp.path.cmp(&b.stamp.path))
         });
+        if self.items == items {
+            return false;
+        }
         if self
             .selected
             .as_ref()
@@ -98,6 +104,7 @@ impl MediaInventory {
             self.selected = None;
         }
         self.items = items;
+        true
     }
 }
 
@@ -159,5 +166,117 @@ mod tests {
         model.replace(vec![b, replacement]);
         assert!(model.selected().is_none());
         assert!(!model.select(&a.stamp));
+    }
+}
+
+/// Folder access is local to a browser profile. Cancelling or revoking a grant
+/// stays denied until the user explicitly enables it again in Settings.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub enum MediaFolder {
+    Documents,
+    Desktop,
+    Downloads,
+}
+impl MediaFolder {
+    pub const ALL: [Self; 3] = [Self::Documents, Self::Desktop, Self::Downloads];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Documents => "Documents",
+            Self::Desktop => "Desktop",
+            Self::Downloads => "Downloads",
+        }
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FolderGrant {
+    #[default]
+    Unknown,
+    Denied,
+    Granted(PathBuf),
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MediaAccess {
+    pub folders: std::collections::BTreeMap<MediaFolder, FolderGrant>,
+    pub revision: u64,
+}
+impl MediaAccess {
+    pub fn grant(&self, folder: MediaFolder) -> FolderGrant {
+        self.folders.get(&folder).cloned().unwrap_or_default()
+    }
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.folders
+            .values()
+            .filter_map(|g| {
+                if let FolderGrant::Granted(p) = g {
+                    Some(p.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+    /// Reserve before opening the OS panel; reopening Media cannot stack prompts.
+    pub fn begin(&mut self, folder: MediaFolder, explicit: bool) -> Option<u64> {
+        if !explicit && self.grant(folder) != FolderGrant::Unknown {
+            return None;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.folders.insert(folder, FolderGrant::Denied);
+        Some(self.revision)
+    }
+    pub fn complete(&mut self, folder: MediaFolder, revision: u64, path: Option<PathBuf>) -> bool {
+        if self.revision != revision || self.grant(folder) != FolderGrant::Denied {
+            return false;
+        }
+        if let Some(path) = path.filter(|p| p.is_absolute()) {
+            self.folders.insert(folder, FolderGrant::Granted(path));
+        }
+        true
+    }
+    pub fn revoke(&mut self, folder: MediaFolder) {
+        self.revision = self.revision.wrapping_add(1);
+        self.folders.insert(folder, FolderGrant::Denied);
+    }
+}
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    #[test]
+    fn grants_are_profile_local_persisted_and_revocation_rejects_late_panels() {
+        let mut browser = crate::Browser::new();
+        let first = browser.active_user_profile_id();
+        let second = browser.create_user_profile("Other").unwrap();
+        let access = &mut browser.user_profile_mut(first).unwrap().settings.media;
+        let token = access.begin(MediaFolder::Downloads, false).unwrap();
+        assert!(access.begin(MediaFolder::Downloads, false).is_none());
+        access.revoke(MediaFolder::Downloads);
+        assert!(!access.complete(MediaFolder::Downloads, token, Some(std::env::temp_dir())));
+        let token = access.begin(MediaFolder::Downloads, true).unwrap();
+        assert!(access.complete(MediaFolder::Downloads, token, Some(std::env::temp_dir())));
+        let loaded = crate::session::from_json(&crate::session::to_json(&browser)).unwrap();
+        assert_eq!(
+            loaded.user_profile(first).unwrap().settings.media.paths(),
+            vec![std::env::temp_dir()]
+        );
+        assert!(loaded
+            .user_profile(second)
+            .unwrap()
+            .settings
+            .media
+            .paths()
+            .is_empty());
+        let mut legacy: serde_json::Value = serde_json::from_str(&crate::session::to_json(&browser)).unwrap();
+        legacy["profiles"]["1"]["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("media");
+        let loaded = crate::session::from_json(&legacy.to_string()).unwrap();
+        assert_eq!(
+            loaded.active_user_profile().settings.media,
+            MediaAccess::default()
+        );
     }
 }

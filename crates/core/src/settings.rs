@@ -136,6 +136,7 @@ pub struct ProfileSettings {
     pub download_location: String,
     pub ask_for_download_location: bool,
     pub save_page_format: crate::save_page::Format,
+    pub media: crate::media::MediaAccess,
 }
 impl Default for ProfileSettings {
     fn default() -> Self {
@@ -145,6 +146,7 @@ impl Default for ProfileSettings {
             download_location: "Downloads".into(),
             ask_for_download_location: false,
             save_page_format: crate::save_page::Format::default(),
+            media: Default::default(),
         }
     }
 }
