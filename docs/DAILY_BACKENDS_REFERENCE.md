@@ -249,3 +249,59 @@ Final manager full-suite run (`password-manager-full-tests-final.log`) passed:
 four importer and one bootstrap test. The integration rerun
 `password-flow-native-run.fKLwUW/{form,autofill}.log` also passed save → immediate
 native quit → cold-restart autofill, with both processes exiting 0.
+
+## Clear Browsing Data native integration
+
+The GPUI privacy page and 512 px deletion dialog use the inspected Arc routes,
+chips, seven categories, Show more, Manage other data and Cancel/Delete footer.
+`arc-clear-manage-other.png` records the separate Other data card. Arc's packed
+resource 21246 gates Google search-history/My Activity links on browser sign-in;
+Echo omits those account-dependent rows. Other search engines retain Arc's exact
+explanation. Passwords opens Echo's profile-owned manager; no password category
+is silently included in browsing-data removal.
+
+Each accepted operation freezes its explicit profile, category mask and Unix
+microsecond start time (`-1` for All time). It retains the storage context and
+quit write lease until the native callback finishes. Only a zero failed-data-type
+mask publishes local history/download metadata removal. Cancellation does no
+engine work; a native failure keeps the dialog and local metadata. The operation
+survives navigation away from its source tab and uses the selected Settings
+profile even when that profile owns no Space. Download history never deletes files.
+Legacy download records expose completion time rather than start time, so bounded
+local download-history removal uses completion time; unknown dates are preserved.
+Permission usage records have no dates, so their local display inventory is reset
+only for All time; Chromium remains the authority for effective permissions.
+
+The native patch is `patches/cef154/browsing-data-bridge.patch` (SHA256
+`be7e0d89282967b03e00e5ca78edfb2b76153ec4ad8fc2fa4bcc13c2eb0cc978`).
+The engine adapter loads only its own bundled framework and checks ABI size/version.
+**ABI v1 ownership:** CEF's generated `CppToC_Unwrap` consumes one incoming C
+reference. Each call transfers a cloned RequestContext reference; the registry's
+reference remains owned by Rust. Status 1/3 reject before unwrap; 0/2/4 consume
+the transferred reference. Accepted callbacks keep the runtime/context/library
+alive independently of the polling ticket. No default-context fallback exists.
+Chromium supplies site-data/cache/form/settings/app counter strings; Echo counts
+its own history and download records for the same selected range.
+
+Disposable direct-ABI tests passed for Default and named profile 2 against staged
+framework `50b56c0f28e5c5220d14b721914edced8d18d99e5fd5ee5231ea2f8ac2ec05fe`:
+`refcounted-abi-smoke/abi-smoke-t0kh_veu/result.json` and
+`named-abi-smoke/abi-smoke-5nup0pk9/result.json`. Each seeds a synthetic cookie,
+localStorage, IndexedDB and CacheStorage; the callback reports failed bits zero,
+all four values disappear, and CEF completes native termination with exit 0.
+The CEF agent owns final candidate qualification and canonical publication.
+
+Real-button native deletion also passes for Default and named profile 2:
+`ui-release-smoke/abi-smoke-vb0y7isd/result.json` and
+`ui-named-release-smoke/abi-smoke-wdksnmgq/result.json`. Those runs use Command Bar
+navigation, category clicks, More → All time and Delete from this device,
+then revisit the local fixture and require CEF Complete/exit 0. GPUI regressions
+also cover cancellation/draft reset, native failure, accepted-operation ownership
+across navigation, direct-route Enter isolation, focus after deletion, and the
+Settings entry for an unused profile.
+
+Comparison crops: `clear-dialog-pair.png`, `clear-ranges-pair.png`,
+`clear-other-pair.png`; zoomed inspection is `clear-dialog-zoom.png`. These compare the component
+at its original pixel dimensions, accounting for the existing sidebar-width
+difference. Shared sidebar/header, exact typography/icons and non-macOS rendering
+remain partial; these captures do not close those independent rows.

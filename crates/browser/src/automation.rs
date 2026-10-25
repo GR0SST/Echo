@@ -689,6 +689,24 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         }
                     }
                 }
+                #[cfg(debug_assertions)]
+                "browsing-data-probe" => {
+                    let args=arg.split_whitespace().collect::<Vec<_>>();
+                    let parsed=(||->Result<crate::pages::NativeDataClear,String>{
+                        if std::env::var("BROWSER_BROWSING_DATA_FIXTURE").ok().as_deref()!=Some("1")||std::env::var_os("BROWSER_DATA_DIR").map(std::path::PathBuf::from).as_deref().and_then(std::path::Path::file_name)!=Some(std::ffi::OsStr::new("browser-drive-profile")){return Err("Browsing-data probe requires an explicitly enabled disposable drive profile".into());}
+                        if args.len()!=3{return Err("Probe expects profile categories since".into());}
+                        let profile:browser_core::UserProfileId=serde_json::from_str(args[0]).map_err(|_|"Invalid probe profile")?;
+                        let categories:u32=args[1].parse().map_err(|_|"Invalid probe categories")?;let since:i64=args[2].parse().map_err(|_|"Invalid probe time")?;
+                        view.update(cx,|view,_|{if !view.profile.handle.read_settings(|b|b.user_profile(profile).is_some()){return Err("Unknown probe profile".into());}view.pages.as_ref().ok_or("No probe engine")?.borrow_mut().clear_browsing_data(profile,categories,since)}).map_err(|e|e.to_string())?
+                    })();
+                    let mut operation=match parsed {Ok(op)=>op,Err(error)=>{eprintln!("[automation] aborted: browsing-data probe: {error}");let _=cx.update(crate::quit::request);return;}};
+                    let deadline=std::time::Instant::now()+Duration::from_secs(15);
+                    loop {
+                        if let Some(result)=operation(){match result {Ok(())=>eprintln!("[browsing-data-probe] profile={} categories={} since={} failed_bits=0",args[0],args[1],args[2]),Err(error)=>{eprintln!("[automation] aborted: browsing-data callback: {error}");let _=cx.update(crate::quit::request);return;}}break;}
+                        if std::time::Instant::now()>=deadline{eprintln!("[automation] aborted: browsing-data callback timed out");let _=cx.update(crate::quit::request);return;}
+                        cx.background_executor().timer(Duration::from_millis(16)).await;
+                    }
+                }
                 "surfaces" => {
                     let _ = view.read_with(cx, |this, _| {
                         if let Some(pages) = &this.pages {

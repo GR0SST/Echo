@@ -51,6 +51,8 @@ mod passwords;
 pub use passwords::{PasswordEvent,PasswordToken,LoginCredential};
 mod permissions;
 pub use permissions::{PermissionRequestId, PermissionRequest, PermissionDecision};
+mod browsing_data;
+pub use browsing_data::{BrowsingDataRequest,BrowsingDataCounters};
 mod site_data;
 mod script_evaluation;
 pub use script_evaluation::ScriptTicket;

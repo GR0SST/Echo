@@ -16,6 +16,7 @@ mod toast;
 mod archive;
 mod command_suggestions;
 mod search_settings;
+mod browsing_data;
 mod menus;
 mod tab_switcher;
 mod save_dialog;
@@ -164,6 +165,7 @@ pub fn init(cx: &mut App) {
     user_profile_dialog::bind_keys(cx);
     password_prompt::bind_keys(cx);
     password_manager::bind_keys(cx);
+    browsing_data::bind_keys(cx);
     space_creation_view::bind_keys(cx);
     downloads_view::bind_keys(cx);
     shortcuts::init(cx);

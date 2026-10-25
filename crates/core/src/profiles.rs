@@ -50,6 +50,8 @@ pub struct UserProfile {
     #[serde(default)]
     pub site_settings: crate::site_settings::SiteSettings,
     #[serde(default)]
+    pub browsing_data: crate::browsing_data::BrowsingDataPreferences,
+    #[serde(default)]
     pub developer_sites: std::collections::BTreeSet<String>,
 }
 impl UserProfile {
@@ -83,6 +85,7 @@ impl UserProfile {
             boosts: crate::boosts::Boosts::default(),
             captures: crate::captures::Captures::default(),
             site_settings: crate::site_settings::SiteSettings::default(),
+            browsing_data: Default::default(),
             developer_sites: Default::default(),
         }
     }

@@ -71,6 +71,8 @@ mod managed_search_tests;
 mod password_flow_tests;
 #[path = "password_manager_tests.rs"]
 mod password_manager_tests;
+#[path="browsing_data_tests.rs"]
+mod browsing_data_tests;
 #[path = "tab_switcher_tests.rs"]
 mod tab_switcher_tests;
 
@@ -257,6 +259,7 @@ enum Call {
     ResetTranslation(crate::pages::StorageSelection),
     ProfileSiteSetting(crate::pages::StorageSelection,String,engine::PermissionKind,engine::PermissionValue),
     ClearSiteData(u64,String,engine::ClearSiteData),
+    ClearBrowsingData(crate::pages::StorageSelection,u32,i64),
     Create(u64, String),
     MoveHost(u64, usize, Bounds),
     Visible(u64, bool),
@@ -295,6 +298,7 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    data_clear_reply: Option<Rc<RefCell<Option<Result<(),String>>>>>,
     preview_tokens: std::collections::HashMap<u64,u64>,
     archive_data: Option<Vec<u8>>,
     document_epochs: std::collections::HashMap<u64,u64>,
@@ -368,6 +372,8 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn clear_browsing_data(&mut self,storage:&crate::pages::StorageSelection,mask:u32,since:i64)->Result<crate::pages::NativeDataClear,String>{self.call(Call::ClearBrowsingData(storage.clone(),mask,since));let reply=self.0.borrow().data_clear_reply.clone().unwrap_or_else(||Rc::new(RefCell::new(Some(Ok(())))));Ok(Box::new(move||reply.borrow_mut().take()))}
+
     fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.call(Call::PasswordFill(raw(view),token,origin.into(),credential.clone()));true}
     fn evaluate_script(&mut self,view:ViewId,_url:&str,source:&str)->Result<engine::ScriptTicket,String>{self.0.borrow_mut().script_calls.push((view,source.into()));Ok(engine::ScriptTicket::completed(Ok("3".into())))}
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.0.borrow_mut().context_images.push((raw(view),request,page_url.into(),url.into()));true}

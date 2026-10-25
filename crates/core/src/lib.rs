@@ -35,6 +35,7 @@ pub mod save_page;
 pub mod profiles;
 pub mod boosts;
 pub mod downloads;
+pub mod browsing_data;
 pub use profiles::UserProfileId;
 
 fn default_enabled() -> bool { true }

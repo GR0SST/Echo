@@ -67,7 +67,10 @@ pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 
 /// What the window needs from a web engine. Implemented by Chromium in the
 /// app and by a recording fake in tests.
+pub type NativeDataClear = Box<dyn FnMut() -> Option<Result<(), String>>>;
 pub trait WebEngine {
+    fn browsing_data_counters(&self,_storage:&StorageSelection,_since:i64)->Result<engine::BrowsingDataCounters,String>{Err("Browsing-data counters unavailable".into())}
+    fn clear_browsing_data(&mut self, _storage:&StorageSelection, _categories:u32, _since:i64)->Result<NativeDataClear,String> {Err("Browsing-data removal is unavailable".into())}
     fn set_password_forms_enabled(&mut self, _enabled: bool) {}
     fn fill_password(&mut self,_view:ViewId,_token:engine::PasswordToken,_origin:&str,_credential:&engine::LoginCredential)->bool {false}
     fn evaluate_script(&mut self, _view: ViewId, _url: &str, _source: &str) -> Result<engine::ScriptTicket,String> { Err("Script evaluation is unsupported".into()) }
@@ -200,6 +203,8 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn browsing_data_counters(&self,storage:&StorageSelection,since:i64)->Result<engine::BrowsingDataCounters,String>{self.resolve_storage(storage)?.browsing_data_counters(since)}
+    fn clear_browsing_data(&mut self, storage:&StorageSelection, categories:u32, since:i64)->Result<NativeDataClear,String> {let ticket=self.resolve_storage(storage)?.clear_browsing_data(categories,since)?;Ok(Box::new(move||ticket.take().map(|r|r.map_err(|mask|format!("Chromium could not remove all selected data ({mask})"))))) }
     fn permission_pending(&self, view: ViewId, request: engine::PermissionRequestId) -> bool { self.engine.permission_pending(view, request) }
     fn respond_permission(&mut self, view: ViewId, request: engine::PermissionRequestId, decision: engine::PermissionDecision) -> bool { self.engine.respond_permission(view, request, decision) }
     fn set_password_forms_enabled(&mut self,enabled:bool) {self.engine.set_password_forms_enabled(enabled);}
@@ -948,6 +953,8 @@ impl Pages {
     }
 
 
+    pub(crate) fn browsing_data_counters(&self,profile:UserProfileId,since:i64)->Result<engine::BrowsingDataCounters,String>{self.store.borrow().engine.browsing_data_counters(&StorageSelection::for_profile(profile),since)}
+    pub(crate) fn clear_browsing_data(&mut self, profile:UserProfileId, categories:u32, since:i64)->Result<NativeDataClear,String> {self.store.borrow_mut().engine.clear_browsing_data(&StorageSelection::for_profile(profile),categories,since)}
     pub(crate) fn reset_translation_prompts(&mut self, profile: UserProfileId) -> bool {
         self.store.borrow_mut().engine.reset_translation_prompts(&StorageSelection::for_profile(profile))
     }
