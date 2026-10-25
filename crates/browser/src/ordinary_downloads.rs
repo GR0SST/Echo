@@ -5,10 +5,11 @@ use crate::{
     pages::PageIdentity,
     profile::ProfileHandle,
 };
+use browser_core::UserProfileId;
 use engine::DownloadOwner;
-use gpui::{App, Global};
+use gpui::{AnyWindowHandle, App, Context, Global, Window};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     path::{Component, Path, PathBuf},
     rc::Rc,
@@ -17,13 +18,26 @@ use std::{
 type Admission = Rc<dyn Fn(PageIdentity) -> Option<DownloadOwner>>;
 thread_local! { static SOURCES: RefCell<HashMap<usize, Admission>> = RefCell::new(HashMap::new()); }
 #[derive(Clone)]
+struct SourceInfo {
+    handle: ProfileHandle,
+    profile: UserProfileId,
+    window: AnyWindowHandle,
+    explicit_url: Option<String>,
+}
+#[derive(Clone)]
 struct OrdinaryDownloads {
     downloads: AppDownloads,
-    profiles: Rc<RefCell<HashMap<u64, ProfileHandle>>>,
+    profiles: Rc<RefCell<HashMap<u64, SourceInfo>>>,
+    prompt: Rc<Cell<Option<engine::DownloadToken>>>,
 }
 impl Global for OrdinaryDownloads {}
 
-pub(crate) fn bind(parent: *mut std::ffi::c_void, handle: ProfileHandle, cx: &mut App) {
+pub(crate) fn bind(
+    parent: *mut std::ffi::c_void,
+    handle: ProfileHandle,
+    window: AnyWindowHandle,
+    cx: &mut App,
+) {
     if parent.is_null() {
         return;
     }
@@ -46,18 +60,31 @@ pub(crate) fn bind(parent: *mut std::ffi::c_void, handle: ProfileHandle, cx: &mu
         if cx.has_global::<AppDownloads>() {
             return;
         }
+        #[cfg(not(test))]
         let downloads = AppDownloads::default();
-        let profiles = Rc::new(RefCell::new(HashMap::<u64, ProfileHandle>::new()));
+        #[cfg(test)]
+        let downloads = AppDownloads::idle_for_tests();
+        let profiles = Rc::new(RefCell::new(HashMap::<u64, SourceInfo>::new()));
         let captured = profiles.clone();
         downloads
             .service
             .borrow_mut()
             .set_staged_destination_policy(Rc::new(move |profile, request| {
-                let handle = captured.borrow().get(&request.provenance.owner()).cloned();
-                let Some(handle) = handle else {
+                let source = captured.borrow().get(&request.provenance.owner()).cloned();
+                let Some(source) = source else {
                     return DestinationDecision::Reject;
                 };
-                handle.read_settings(|browser| {
+                if source.profile != profile {
+                    return DestinationDecision::Reject;
+                }
+                if let Some(url) = &source.explicit_url {
+                    return if url == &request.info.original_url {
+                        DestinationDecision::Defer
+                    } else {
+                        DestinationDecision::Reject
+                    };
+                }
+                source.handle.read_settings(|browser| {
                     let Some(settings) = browser.user_profile(profile).map(|p| &p.settings) else {
                         return DestinationDecision::Reject;
                     };
@@ -80,18 +107,32 @@ pub(crate) fn bind(parent: *mut std::ffi::c_void, handle: ProfileHandle, cx: &mu
         let state = OrdinaryDownloads {
             downloads,
             profiles,
+            prompt: Rc::new(Cell::new(None)),
         };
         cx.set_global(state.clone());
         state
     };
+    let owners = RefCell::new(HashMap::new());
     let admission: Admission = Rc::new(move |identity| {
+        if let Some(owner) = owners.borrow().get(&identity).copied() {
+            return Some(DownloadOwner::continue_normal_after_source_close(owner));
+        }
         let owner = state
             .downloads
             .service
             .borrow_mut()
-            .register_source(&handle, identity.profile)
+            .register_distinct_source(&handle, identity.profile)
             .ok()?;
-        state.profiles.borrow_mut().insert(owner, handle.clone());
+        state.profiles.borrow_mut().insert(
+            owner,
+            SourceInfo {
+                handle: handle.clone(),
+                profile: identity.profile,
+                window,
+                explicit_url: None,
+            },
+        );
+        owners.borrow_mut().insert(identity, owner);
         Some(DownloadOwner::continue_normal_after_source_close(owner))
     });
     SOURCES.with_borrow_mut(|sources| {
@@ -105,6 +146,168 @@ pub(crate) fn owner(
 ) -> Option<DownloadOwner> {
     let source = SOURCES.with_borrow(|sources| sources.get(&(parent as usize)).cloned());
     source?(identity)
+}
+
+pub(crate) fn registered(parent: *mut std::ffi::c_void) -> bool {
+    SOURCES.with_borrow(|sources| sources.contains_key(&(parent as usize)))
+}
+impl crate::window::BrowserWindow {
+    pub(crate) fn request_save_download(
+        &mut self,
+        identity: PageIdentity,
+        epoch: u64,
+        url: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.browser.is_private() || self.browser.is_blank() {
+            return;
+        }
+        let Some(state) = cx.try_global::<OrdinaryDownloads>().cloned() else {
+            return;
+        };
+        let Some(request) = self
+            .pages
+            .as_ref()
+            .and_then(|p| p.borrow_mut().prepare_file_download(identity, epoch, &url))
+        else {
+            return;
+        };
+        let Ok(owner) = state
+            .downloads
+            .service
+            .borrow_mut()
+            .register_distinct_source(&self.profile.handle, identity.profile)
+        else {
+            return;
+        };
+        state.profiles.borrow_mut().insert(
+            owner,
+            SourceInfo {
+                handle: self.profile.handle.clone(),
+                profile: identity.profile,
+                window: self.main_window,
+                explicit_url: Some(url),
+            },
+        );
+        cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(8))
+                .await;
+            if crate::quit::is_quitting() {
+                return;
+            }
+            // Native creation/start may enter AppKit. No App or page borrow.
+            if let Err(error) = request(owner) {
+                eprintln!("Cannot start Save As: {error}");
+            }
+            let _ = cx.update(|cx| state.downloads.wake(cx));
+        })
+        .detach();
+    }
+    pub(crate) fn poll_download_destinations(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.browser.is_private()
+            || self.browser.is_blank()
+            || !window.is_window_active()
+            || self.popup_owns_focus()
+            || crate::quit::is_quitting()
+        {
+            return;
+        }
+        let Some(state) = cx.try_global::<OrdinaryDownloads>().cloned() else {
+            return;
+        };
+        if state.prompt.get().is_some() {
+            return;
+        }
+        let pending = state.downloads.service.borrow().pending_destinations();
+        let Some((pending, source)) = pending.into_iter().find_map(|pending| {
+            let source = state
+                .profiles
+                .borrow()
+                .get(&pending.request.provenance.owner())
+                .cloned()?;
+            let root_live = cx
+                .windows()
+                .iter()
+                .any(|w| w.window_id() == source.window.window_id());
+            let owns_root = source.window == self.main_window
+                || (!root_live && source.handle.same_workspace(&self.profile.handle));
+            (owns_root && source.profile == pending.profile).then_some((pending, source))
+        }) else {
+            return;
+        };
+        let folder = source.handle.read_settings(|b| {
+            b.user_profile(source.profile).and_then(|p| {
+                if p.settings.download_location == "Downloads" {
+                    dirs::download_dir()
+                } else {
+                    let path = PathBuf::from(&p.settings.download_location);
+                    path.is_absolute().then_some(path)
+                }
+            })
+        });
+        let Some(folder) = folder else {
+            let _ = state
+                .downloads
+                .service
+                .borrow_mut()
+                .queue_cancel(pending.token, pending.profile);
+            state.downloads.wake(cx);
+            return;
+        };
+        let dialog = crate::download_dialog::prepare(
+            self.native_view,
+            &folder,
+            &pending.request.suggested_name,
+            cx,
+        );
+        state.prompt.set(Some(pending.token));
+        cx.spawn(async move |_, cx| {
+            let choice = dialog.choose(cx).await;
+            if !crate::quit::is_quitting() {
+                let stage = match choice {
+                    Ok(Some(path)) => path
+                        .parent()
+                        .ok_or_else(|| "Download folder is unavailable".to_owned())
+                        .and_then(|folder| {
+                            crate::downloads_publication::Staging::reserve(
+                                (pending.token, pending.request.provenance),
+                                folder,
+                                vec![path.clone()],
+                            )
+                            .map_err(|e| format!("{e:?}"))
+                        })
+                        .map(Some),
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error),
+                };
+                let mut service = state.downloads.service.borrow_mut();
+                let result = match stage {
+                    Ok(Some(stage)) => {
+                        service.retain_chosen_staging(pending.token, pending.profile, stage)
+                    }
+                    Ok(None) => service.queue_cancel(pending.token, pending.profile),
+                    Err(error) => {
+                        eprintln!("Cannot choose download destination: {error}");
+                        service.queue_cancel(pending.token, pending.profile)
+                    }
+                };
+                if let Err(error) = result {
+                    eprintln!("Cannot resolve download destination: {error}");
+                }
+                drop(service);
+                let _ = cx.update(|cx| state.downloads.wake(cx));
+            }
+            if state.prompt.get() == Some(pending.token) {
+                state.prompt.set(None);
+            }
+        })
+        .detach();
+    }
 }
 
 pub(crate) fn plan(folder: PathBuf, name: &str) -> Option<StagedDestination> {

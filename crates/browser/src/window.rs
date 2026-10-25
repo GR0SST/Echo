@@ -856,7 +856,7 @@ impl BrowserWindow {
         let profile = crate::profile::ProfileBinding::new(profile, selection, cx);
         let pages = pages.map(|mut pages| {
             if let Some(parent) = crate::native::view_of(window) {
-                crate::ordinary_downloads::bind(parent, profile.handle.clone(), cx);
+                crate::ordinary_downloads::bind(parent, profile.handle.clone(), window.window_handle(), cx);
                 pages.set_parent(parent);
             }
             Rc::new(RefCell::new(pages))
@@ -923,6 +923,7 @@ impl BrowserWindow {
                     // Reconcile both edges against the native pointer rather than
                     // leaving GPUI's cached hover stuck after a page interaction.
                     let _ = this.update_in(cx, |this, window, cx| {
+                        this.poll_download_destinations(window,cx);
                         this.poll_max_preview_modifiers(window,cx);
                         if let Some((x, y)) = this.native_view.and_then(crate::native::pointer_in_view) {
                             let hovered = (window.is_window_active() || this.peek_child.is_some())

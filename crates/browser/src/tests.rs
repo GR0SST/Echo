@@ -268,6 +268,7 @@ enum Call {
     StopFinding(u64),
     Reload(u64),
     Print(u64),
+    SaveFile(u64, String, u64),
     PasteStyle(u64),
     InspectorPasteStyle(engine::InspectorId),
     Close(u64),
@@ -431,6 +432,13 @@ impl WebEngine for FakeEngine {
     fn request_page_archive(&mut self,view:ViewId)->Option<engine::PageArchiveRequest> {
         self.call(Call::ArchivePage(raw(view)));
         Some(engine::PageArchiveRequest::completed(Ok(self.0.borrow().archive_data.clone()?)))
+    }
+    fn prepare_file_download(&mut self, view: ViewId, url: &str) -> Option<crate::pages::NativeFileDownload> {
+        let fake = self.clone(); let url=url.to_owned(); let epoch=self.page_document_epoch(view)?;
+        Some(Box::new(move |owner| {
+            if fake.page_document_epoch(view)!=Some(epoch) { return Err("Source changed".into()); }
+            fake.call(Call::SaveFile(raw(view),url,owner)); Ok(())
+        }))
     }
     fn supports_printing(&self) -> bool { true }
     fn prepare_print(&mut self, view: ViewId) -> Option<crate::pages::NativePrint> {

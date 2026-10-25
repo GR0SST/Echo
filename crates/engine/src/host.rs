@@ -260,6 +260,7 @@ pub(crate) struct RetiredHost {
     parent: *mut c_void,
 }
 impl RetiredHost {
+    pub(crate) fn parent(&self) -> *mut c_void { self.parent }
     pub(crate) fn new() -> Result<Self, String> {
         #[cfg(target_os = "macos")]
         let (owner, parent) = crate::mac::create_retired_window()?;

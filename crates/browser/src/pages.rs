@@ -47,7 +47,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PageIdentity {
     pub tab: TabId,
     pub profile: UserProfileId,
@@ -61,6 +61,7 @@ pub enum PageCreation { Created(ViewId), Pending, Failed }
 
 /// A prepared request owns native leases, never Pages or the application.
 /// Invoke and drop it outside all application/model/engine borrows.
+pub type NativeFileDownload = Box<dyn FnOnce(u64) -> Result<(), String>>;
 pub type NativePrint = Box<dyn FnMut() -> engine::PrintDispatch>;
 pub type NativePaste = Box<dyn FnMut() -> engine::PasteDispatch>;
 
@@ -93,6 +94,7 @@ pub trait WebEngine {
     fn supports_page_archiving(&self) -> bool { false }
     fn page_document_epoch(&self, _view:ViewId)->Option<u64> {Some(0)}
     fn request_page_archive(&mut self, _view:ViewId)->Option<engine::PageArchiveRequest> {None}
+    fn prepare_file_download(&mut self, _view: ViewId, _url: &str) -> Option<NativeFileDownload> { None }
     fn supports_printing(&self) -> bool { false }
     fn prepare_print(&mut self, _view: ViewId) -> Option<NativePrint> { None }
     /// Independent page/event ownership over this engine's regular storage.
@@ -246,6 +248,10 @@ impl WebEngine for Chromium {
     fn supports_page_archiving(&self)->bool {true}
     fn page_document_epoch(&self,view:ViewId)->Option<u64> {self.engine.page_document_epoch(view)}
     fn request_page_archive(&mut self,view:ViewId)->Option<engine::PageArchiveRequest> {self.engine.request_page_archive(view)}
+    fn prepare_file_download(&mut self, view: ViewId, url: &str) -> Option<NativeFileDownload> {
+        let request = self.engine.prepare_file_download(view, url)?;
+        Some(Box::new(move |owner| request.start(owner)))
+    }
     fn supports_printing(&self) -> bool { self.engine.supports_printing() }
     fn prepare_print(&mut self, view: ViewId) -> Option<NativePrint> {
         let mut request = self.engine.prepare_print(view)?;
@@ -1105,6 +1111,7 @@ impl Pages {
         let contexts: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(id, page)| (page.view, engine::page_context::Policy {
             search_name: browser.user_profile(page.identity.profile).map_or("Google", |profile| profile.settings.search.engine.label()).into(),
             can_split: browser.related_tabs(*id).len() < browser_core::splits::MAX_SPLIT_PANES,
+            can_save: !browser.is_private() && !browser.is_blank() && crate::ordinary_downloads::registered(self.parent),
             allow_little: !browser.is_private(), can_print: store.engine.supports_printing(),
         })).collect();
         for (view, policy) in contexts { store.engine.set_page_context_policy(view, policy); }
@@ -1648,6 +1655,11 @@ impl Pages {
         self.store.borrow_mut().engine.request_page_archive(view)
     }
 
+    pub(crate) fn prepare_file_download(&mut self, identity: PageIdentity, epoch: u64, url: &str) -> Option<NativeFileDownload> {
+        if self.media_identity(identity.tab) != Some(identity) || self.page_document_epoch(identity.tab) != Some(epoch) { return None; }
+        let view = self.view(identity.tab)?;
+        self.store.borrow_mut().engine.prepare_file_download(view, url)
+    }
     pub(crate) fn can_print(&self, tab: TabId) -> bool {
         // Print targets the owned document, not its last painted rectangle.
         // Library's measured viewport can arrive after the parent action tree.

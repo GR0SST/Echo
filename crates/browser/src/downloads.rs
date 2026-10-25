@@ -349,12 +349,19 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadRouter<T, H> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct PendingDestination<T> {
+    pub token: T,
+    pub profile: UserProfileId,
+    pub request: DestinationRequest,
+}
 pub(crate) type DestinationPolicy =
     Rc<dyn Fn(UserProfileId, &DestinationRequest) -> DestinationDecision>;
 pub(crate) struct DownloadService<T = DownloadToken, H = ProfileHandle> {
     router: DownloadRouter<T, H>,
     staged: staged::StagedTransfers<T, H>,
     policy: Option<DestinationPolicy>,
+    user_cancellations: Vec<(T, UserProfileId)>,
     fixture: Option<Rc<RefCell<crate::download_acceptance::FixtureAudit<T>>>>,
     pub errors: Vec<String>,
 }
@@ -364,12 +371,36 @@ impl<T, H> Default for DownloadService<T, H> {
             router: DownloadRouter::default(),
             staged: staged::StagedTransfers::default(),
             policy: None,
+            user_cancellations: Vec::new(),
             fixture: None,
             errors: Vec::new(),
         }
     }
 }
 impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
+    pub(crate) fn pending_destinations(&self) -> Vec<PendingDestination<T>> {
+        self.router.ledger.iter().filter_map(|(token, item)| {
+            if item.destination_dispatched || item.destination_blocked || item.info.phase.is_terminal() { return None; }
+            let request = item.destination_request.clone()?;
+            let owner = self.router.owners.get(&item.provenance.owner())?;
+            Some(PendingDestination { token: *token, profile: owner.profile, request })
+        }).collect()
+    }
+    pub(crate) fn retain_chosen_staging(&mut self, token: T, profile: UserProfileId,
+        stage: crate::downloads_publication::Staging<(T, DownloadProvenance)>) -> Result<(), String> {
+        let item = self.router.ledger.get(&token).ok_or("Unknown download token")?;
+        if self.router.owners.get(&item.provenance.owner()).is_none_or(|owner| owner.profile != profile) {
+            return Err("Download belongs to another profile".into());
+        }
+        if item.destination_blocked { return Err("Download destination was canceled or rejected".into()); }
+        self.retain_staging(token, stage)
+    }
+    pub(crate) fn queue_cancel(&mut self, token: T, profile: UserProfileId) -> Result<(), String> {
+        self.router.control(token, profile, DownloadControl::Cancel)?;
+        if let Some(item) = self.router.ledger.get_mut(&token) { item.destination_blocked = true; }
+        if !self.user_cancellations.contains(&(token, profile)) { self.user_cancellations.push((token, profile)); }
+        Ok(())
+    }
     /// Both running and shutdown copied ingress use this pure filter.
     fn prepare_fixture_events(&mut self, events: impl IntoIterator<Item = TransferEvent<T>>) -> (Vec<TransferEvent<T>>, Vec<String>) {
         use crate::download_acceptance::FixtureVerdict;
@@ -459,6 +490,9 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
         let (next, errors) = self.router.reduce([], &mut decide);
         self.errors.extend(errors);
         self.capture_staged_plans(next, &mut effects);
+        for (token, profile) in std::mem::take(&mut self.user_cancellations) {
+            if let Ok(effect) = self.router.control(token, profile, DownloadControl::Cancel) { effects.push(effect); }
+        }
         // Preserve batch coalescing for legacy effects: a later terminal must
         // suppress a previously planned Continue/Cancel before any native call.
         effects.retain(|effect| {
@@ -491,6 +525,11 @@ impl DownloadService {
             return Ok(*key);
         }
         self.router.register_normal(profile, handle, kind)
+    }
+    pub(crate) fn register_distinct_source(&mut self, source: &ProfileHandle, captured: UserProfileId) -> Result<u64,String> {
+        let (handle, profile, blank) = source.download_normal_owner(captured).ok_or("No normal download owner")?;
+        if blank { return Err("Blank download admission remains unavailable".into()); }
+        self.router.register_normal(profile, handle, SourceKind::Normal)
     }
     pub(crate) fn retry_destination(
         &mut self,
@@ -639,7 +678,18 @@ pub(crate) struct AppDownloads {
     test_driver: Option<Rc<dyn RunningEngineDriver>>,
 }
 impl Global for AppDownloads {}
+#[cfg(test)]
+struct IdleDriver;
+#[cfg(test)]
+impl RunningEngineDriver for IdleDriver {
+    fn download_work_pending(&self)->bool { false }
+    fn pump(&self) {}
+    fn take_download_events(&self)->Result<Vec<DownloadEvent>,String> { Ok(Vec::new()) }
+    fn prepare_download_retirements(&self)->Result<engine::DownloadRetirementPreparation,String> { Ok(engine::DownloadRetirementPreparation::Ready) }
+}
 impl AppDownloads {
+    #[cfg(test)]
+    pub(crate) fn idle_for_tests()->Self { Self { test_driver: Some(Rc::new(IdleDriver)), ..Self::default() } }
     fn download_work_pending(&self) -> bool {
         #[cfg(test)]
         if let Some(driver) = &self.test_driver { return driver.download_work_pending(); }
@@ -766,7 +816,8 @@ impl AppDownloads {
                         if crate::quit::is_quitting() || !this.consumer.is_running() {
                             return Ok(()); // Intentional suppression is not a native failure.
                         }
-                        Engine::control_download(token, command)
+                        if command == DownloadControl::Cancel { Engine::cancel_download_if_active(token).map(|_| ()) }
+                        else { Engine::control_download(token, command) }
                     },
                 );
                 {

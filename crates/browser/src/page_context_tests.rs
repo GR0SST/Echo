@@ -467,3 +467,24 @@ fn page_context_speech_rechecks_the_document_after_leaving_the_window_update(cx:
     cx.executor().advance_clock(Duration::from_millis(20));cx.run_until_parked();
     cx.read(|cx| assert!(!cx.has_global::<crate::page_context::SpeechRequests>()));
 }
+
+#[gpui::test]
+fn save_link_keeps_the_source_and_rejects_stale_document_requests(cx: &mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    view.update(cx, |view,cx| crate::ordinary_downloads::bind(1usize as *mut _, view.profile.handle.clone(), view.main_window, cx));
+    let original=active_url(&view,cx); let url="https://example.com/a%20file.dat?download=1";
+    fake.take_calls();
+    choose(&fake,&view,cx,Action::SaveAs(url.into()));
+    cx.executor().advance_clock(Duration::from_millis(20));cx.run_until_parked();
+    let calls=fake.take_calls();
+    assert_eq!(calls.iter().filter(|c|matches!(c,Call::SaveFile(1,u,_) if u==url)).count(),1);
+    assert!(!calls.iter().any(|c|matches!(c,Call::Create(..)|Call::Navigate(..)|Call::Reload(..))));
+    assert_eq!(active_url(&view,cx),original);
+    view.update_in(cx, |view, window, cx| {
+        let pages=view.pages.as_ref().unwrap().borrow(); let identity=pages.media_identity(view.browser.active_tab().unwrap().id).unwrap(); drop(pages);
+        view.confirm_page_context(identity,Request {page_url:original.clone().unwrap(),document_epoch:0,action:Action::SaveAs(url.into())},window,cx);
+    });
+    *fake.0.borrow_mut().document_epochs.entry(1).or_default()+=1;
+    cx.executor().advance_clock(Duration::from_millis(20));cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|c|matches!(c,Call::SaveFile(..))));
+}

@@ -446,6 +446,9 @@ pub(crate) fn init(cx: &mut App) {
                     || downloads.as_ref().map_or(Ok(()), |downloads|
                         downloads.drain_and_persist_with(Engine::take_download_events)),
                     || {
+                // Explicit Save As initiators are not Pages owners. Native leases
+                // retain their hidden hosts through OnBeforeClose.
+                Engine::release_file_download_initiators();
                 // Save every model before removing any native page metadata.
                 cx.update(|cx| -> Result<Vec<Box<dyn crate::pages::WebEngine>>, String> {
                     for handle in cx.windows() {

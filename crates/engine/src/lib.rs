@@ -58,6 +58,8 @@ mod preview;
 pub use preview::LinkHover;
 pub use boosts::SiteBoost;
 mod printing;
+mod file_download;
+pub use file_download::FileDownloadRequest;
 pub use printing::{PrintDispatch, PrintRequest};
 mod paste_style;
 pub use paste_style::{PasteDispatch, PasteRequest};
@@ -737,6 +739,13 @@ impl Engine {
         corner_radius: f64, role: ViewRole, context: std::rc::Rc<RequestContext>,
         download_owner: Option<DownloadOwner>,
     ) -> Option<ViewId> {
+        self.create_content_view_owned(ui_view, url, frame, corner_radius, role, context, download_owner, None)
+    }
+    fn create_content_view_owned(
+        &mut self, ui_view: *mut c_void, url: &str, frame: Bounds,
+        corner_radius: f64, role: ViewRole, context: std::rc::Rc<RequestContext>,
+        download_owner: Option<DownloadOwner>, retired_host: Option<std::rc::Rc<host::RetiredHost>>,
+    ) -> Option<ViewId> {
         if self._runtime.lifecycle.require_running().is_err() || ui_view.is_null() { return None; }
         // CreateBrowserSync rejects an uninitialized BrowserContext. Do not
         // allocate native clips or call CEF speculatively; a later normal frame
@@ -845,7 +854,7 @@ impl Engine {
         let host = page_view;
 
         self._runtime.lifecycle.register(browser.identifier(), shutdown::BrowserLease {
-            browser: browser.clone(), _context: context.clone(), host, retired_host: None,
+            browser: browser.clone(), _context: context.clone(), host, retired_host,
         });
         let id = ViewId(self.next_id);
         self.next_id += 1;

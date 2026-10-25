@@ -84,6 +84,7 @@ mod download_files;
 mod download_actions;
 mod downloads;
 mod ordinary_downloads;
+mod download_dialog;
 mod downloads_publication;
 mod download_acceptance;
 mod library_downloads_host;

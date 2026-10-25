@@ -56,6 +56,7 @@ impl BrowserWindow {
             return;
         }
         match request.action {
+            Action::SaveAs(url) => self.request_save_download(identity, request.document_epoch, url, cx),
             Action::Speak(text) => self.queue_context_speech(identity, request.document_epoch, request.page_url, Some(text), cx),
             Action::StopSpeaking => self.queue_context_speech(identity, request.document_epoch, request.page_url, None, cx),
             Action::CopyImage(url) => {

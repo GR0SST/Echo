@@ -1481,6 +1481,7 @@ impl crate::Engine {
         let work = runtime.downloads.borrow_mut().collect();
         work.execute();
         let events = runtime.downloads.borrow_mut().downloads.take_events();
+        Self::retire_file_download_initiators(&events);
         Ok(events)
     }
 
@@ -1529,6 +1530,20 @@ impl crate::Engine {
         Ok(())
     }
 
+    /// A user Cancel that loses a completion/closure race is a quiet no-op.
+    /// The snapshot is never changed into a fabricated cancellation.
+    pub fn cancel_download_if_active(token: DownloadToken) -> Result<bool, String> {
+        let runtime = running_runtime()?;
+        runtime.lifecycle.collect_closed();
+        let work = runtime.downloads.borrow_mut().collect(); work.execute();
+        let result = runtime.downloads.borrow_mut().downloads.control(token, DownloadControl::Cancel);
+        let effects = match result {
+            Ok(effects) => effects,
+            Err(DownloadError::Terminal | DownloadError::UnknownToken | DownloadError::Closed) => return Ok(false),
+            Err(error) => return Err(format!("Cannot cancel download: {error:?}")),
+        };
+        effects.execute(); Ok(true)
+    }
     /// Call outside ALL window/model/engine borrows. CEF confirms actual state.
     pub fn control_download(token: DownloadToken, command: DownloadControl) -> Result<(), String> {
         let runtime = running_runtime()?;
@@ -3204,7 +3219,7 @@ impl crate::Engine {
     /// A central app service must keep pumping while true, including without
     /// source Engine/GPUI owners, and independently drain take_download_events.
     pub fn download_work_pending() -> bool {
-        current_runtime().is_some_and(|runtime| {
+        Self::file_download_initiators_pending() || current_runtime().is_some_and(|runtime| {
             let downloads = runtime.downloads.borrow();
             let queued = !downloads.downloads.0.inbox.queue.lock().unwrap().is_empty();
             queued || !downloads.downloads.0.ready.is_empty()

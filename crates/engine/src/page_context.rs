@@ -16,6 +16,7 @@ pub enum Action {
     Open { url: String, target: OpenTarget },
     Copy(String),
     CopyImage(String),
+    SaveAs(String),
     Search(String),
     Inspect { x: i32, y: i32 },
     Print,
@@ -36,6 +37,7 @@ pub struct Policy {
     pub can_split: bool,
     pub allow_little: bool,
     pub can_print: bool,
+    pub can_save: bool,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -44,6 +46,7 @@ impl Default for Policy {
             can_split: true,
             allow_little: true,
             can_print: false,
+            can_save: false,
         }
     }
 }
@@ -150,7 +153,7 @@ fn rows(context: &Context) -> Vec<Row> {
             ),
             row(LINK_PRIVATE, "Open Link in Incognito Window", true),
             separator(),
-            row(SAVE_LINK, "Save Link As…", false),
+            row(SAVE_LINK, "Save Link As…", context.policy.can_save),
             row(COPY_LINK, "Copy Link Address", true),
         ]);
     }
@@ -160,7 +163,7 @@ fn rows(context: &Context) -> Vec<Row> {
         }
         out.extend([
             row(IMAGE_TAB, "Open Image in New Tab", true),
-            row(SAVE_IMAGE, "Save Image As…", false),
+            row(SAVE_IMAGE, "Save Image As…", context.policy.can_save),
             row(CAPTURE_IMAGE, "Capture Image…", false),
             row(COPY_IMAGE, "Copy Image", true),
             row(COPY_IMAGE_URL, "Copy Image Address", true),
@@ -230,6 +233,8 @@ fn request(command: i32, params: &ContextMenuParams, document_epoch: u64) -> Opt
             url: image,
             target: OpenTarget::BackgroundTab,
         },
+        SAVE_LINK if !link.is_empty() => Action::SaveAs(link),
+        SAVE_IMAGE if !image.is_empty() => Action::SaveAs(image),
         COPY_IMAGE if !image.is_empty() => Action::CopyImage(image),
         COPY_LINK if !link.is_empty() => Action::Copy(link),
         COPY_IMAGE_URL if !image.is_empty() => Action::Copy(image),

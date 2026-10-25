@@ -1940,3 +1940,29 @@ fn acceptance_shutdown_canceled_empty_path_never_writes_or_adds_failure_and_pres
         assert!(model.borrow().completed_downloads(audit.profile).unwrap().is_empty());
     }
 }
+
+#[test]
+fn chooser_cancellation_is_profile_bound_deduplicated_and_waits_for_native_terminal() {
+    let model=Rc::new(RefCell::new(Browser::new()));
+    let profile=model.borrow().default_user_profile_id();
+    let other=model.borrow_mut().create_user_profile("Other").unwrap();
+    let mut service=DownloadService::<u64,Model>::default();
+    let owner=register(&mut service.router,&model,profile);
+    let mut request=event(81,owner,DownloadPhase::InProgress);
+    request.destination_requested=true;
+    request.destination=DownloadDestination::Requested { suggested_name:"authoritative.dat".into() };
+    assert!(service.receive_copied([request]).is_empty());
+    assert_eq!(service.pending_destinations()[0].request.suggested_name,"authoritative.dat");
+    assert!(service.queue_cancel(81,other).is_err());
+    assert_eq!(service.pending_destinations().len(),1);
+    service.queue_cancel(81,profile).unwrap();service.queue_cancel(81,profile).unwrap();
+    assert!(service.pending_destinations().is_empty());
+    let dir=tempfile::tempdir().unwrap();
+    let stage=crate::downloads_publication::Staging::reserve((81,service.router.ledger[&81].provenance),&dir.path().canonicalize().unwrap(),vec![std::path::PathBuf::from("late-choice.dat")]).unwrap();
+    assert!(service.retain_chosen_staging(81,profile,stage).is_err());
+    assert!(matches!(service.receive_copied([]).as_slice(),[DownloadEffect::Control(81,DownloadControl::Cancel)]));
+    assert_eq!(service.router.ledger[&81].info.phase,DownloadPhase::InProgress);
+    assert!(service.receive_copied([event(81,owner,DownloadPhase::Canceled)]).is_empty());
+    assert!(service.queue_cancel(81,profile).is_err());
+    assert!(model.borrow().completed_downloads(profile).unwrap().is_empty());
+}
