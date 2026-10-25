@@ -344,6 +344,10 @@ struct FakeState {
     profile_settings: Rc<RefCell<std::collections::HashMap<(crate::pages::StorageSelection,String),Vec<engine::SiteSetting>>>>,
     permission_requests: std::collections::HashSet<(u64,engine::PermissionRequestId)>,
     script_calls: Vec<(ViewId,String)>,
+    extension_model_enabled: bool,
+    extension_model_requests: Vec<engine::ExtensionModelRequest>,
+    extension_model_expired: std::collections::HashSet<u64>,
+    extension_model_results: Vec<(u64,serde_json::Value)>,
 }
 
 #[derive(Clone, Default)]
@@ -375,6 +379,15 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn take_extension_model_requests(&mut self) -> Vec<engine::ExtensionModelRequest> {
+        std::mem::take(&mut self.0.borrow_mut().extension_model_requests)
+    }
+    fn extension_model_request_pending(&self, request: &engine::ExtensionModelRequest) -> bool {
+        let state=self.0.borrow(); state.extension_model_enabled && !state.extension_model_expired.contains(&request.token)
+    }
+    fn complete_extension_model_request(&self, request: &engine::ExtensionModelRequest, result:serde_json::Value)->Result<(),String> {
+        self.0.borrow_mut().extension_model_results.push((request.token,result)); Ok(())
+    }
     fn clear_browsing_data(&mut self,storage:&crate::pages::StorageSelection,mask:u32,since:i64)->Result<crate::pages::NativeDataClear,String>{self.call(Call::ClearBrowsingData(storage.clone(),mask,since));let reply=self.0.borrow().data_clear_reply.clone().unwrap_or_else(||Rc::new(RefCell::new(Some(Ok(())))));Ok(Box::new(move||reply.borrow_mut().take()))}
 
     fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.call(Call::PasswordFill(raw(view),token,origin.into(),credential.clone()));true}
@@ -11540,3 +11553,5 @@ fn split_header_site_controls_anchor_to_and_clear_only_the_focused_document(cx: 
 
 #[path = "menu_command_tests.rs"]
 mod menu_command_tests;
+#[path = "extensions_tests.rs"]
+mod extensions_tests;

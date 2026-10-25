@@ -162,6 +162,7 @@ pub fn init(cx: &mut App) {
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
+    extensions::bind_keys(cx);
     site_settings_page::bind_keys(cx);
     boosts::bind_keys(cx);
     capture::bind_keys(cx);
@@ -416,3 +417,6 @@ pub fn run() {
         }
     });
 }
+
+mod extensions;
+mod extension_tabs;

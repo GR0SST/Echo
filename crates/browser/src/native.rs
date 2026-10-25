@@ -24,6 +24,14 @@ pub fn view_of(window: &gpui::Window) -> Option<*mut c_void> {
     Some(view)
 }
 
+/// Native minimized state, which GPUI does not currently expose.
+pub(crate) fn window_minimized(window: &gpui::Window) -> bool {
+    #[cfg(target_os = "macos")]
+    { return scripting::state(view_of(window)).1; }
+    #[cfg(not(target_os = "macos"))]
+    { let _ = window; false }
+}
+
 /// GPUI's macOS Floating kind currently uses the normal window level. Keep
 /// utility-panel stacking at the native seam; other backends own their kind.
 pub(crate) fn float_utility_window(window: &gpui::Window) {
@@ -941,4 +949,23 @@ pub(crate) fn forget_overlay(child: *mut c_void) {
     desktop::forget(child);
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let _ = child;
+}
+
+pub(crate) fn attach_extension_view(parent: usize, view: usize, width: i32, height: i32) {
+    #[cfg(all(target_os="macos",not(test)))]
+    if parent != 0 && view != 0 { unsafe {
+        let parent=parent as *mut objc2::runtime::AnyObject;
+        let view=view as *mut objc2::runtime::AnyObject;
+        let _: ()=objc2::msg_send![parent,addSubview:view];
+        let _: ()=objc2::msg_send![view,setFrame:objc2_foundation::NSRect::new(objc2_foundation::NSPoint::new(0.,0.),objc2_foundation::NSSize::new(width as f64,height as f64))];
+        let _: ()=objc2::msg_send![view,setAutoresizingMask:18usize];
+        let window:*mut objc2::runtime::AnyObject=objc2::msg_send![parent,window];
+        let _: bool=objc2::msg_send![window,makeFirstResponder:view];
+    }}
+    let _=(parent,view,width,height);
+}
+pub(crate) fn detach_extension_view(view:usize) {
+    #[cfg(all(target_os="macos",not(test)))]
+    if view != 0 {unsafe{let _: ()=objc2::msg_send![view as *mut objc2::runtime::AnyObject,removeFromSuperview];}}
+    let _=view;
 }

@@ -778,6 +778,7 @@ dependencies = [
 name = "browser"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "block2",
  "chrono",
  "core",
@@ -795,6 +796,7 @@ dependencies = [
  "objc2-foundation",
  "raw-window-handle",
  "ring",
+ "serde",
  "serde_json",
  "tempfile",
  "trash",

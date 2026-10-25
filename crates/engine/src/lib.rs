@@ -25,7 +25,10 @@ pub fn preload_framework() -> Result<bool, String> {
 
 mod devtools;
 mod extensions;
-pub use extensions::{ExtensionBridge, ExtensionEvent, ExtensionPopup, ExtensionPopupEvent};
+mod extension_tabs;
+pub use extension_tabs::{ExtensionWindow, ExtensionWindowKind, ExtensionWindowState,
+    ExtensionTab, ExtensionTabStatus, ExtensionTabsSnapshot};
+pub use extensions::{ExtensionService, ExtensionBridge, ExtensionEvent, ExtensionPopup, ExtensionPopupEvent, ExtensionModelRequest};
 mod downloads;
 mod retirement;
 #[cfg(any(target_os = "linux", test))]
@@ -44,6 +47,7 @@ pub use page_swipe::PageSwipe;
 mod capture;
 pub use capture::MediaCaptureState;
 mod editing;
+mod extension_store;
 mod document_color;
 mod boosts;
 mod site_info;
@@ -346,6 +350,7 @@ impl Runtime {
 }
 
 pub struct Engine {
+    extension_model: extensions::ModelTransport,
     password_forms: bool,
     shortcuts: Shortcuts,
     events: EventQueue,
@@ -461,6 +466,7 @@ impl Engine {
         let events = EventQueue::default();
         Self {
             password_forms: false,
+            extension_model: extensions::ModelTransport::default(),
             shortcuts,
             events,
             views: HashMap::new(),
@@ -715,7 +721,7 @@ impl Engine {
         &mut self, context: &StorageContext, ui_view: *mut c_void, url: &str,
         frame: Bounds, corner_radius: f64,
     ) -> Result<ViewId, String> {
-        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, None)
+        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, None, None, true)
     }
 
     /// Explicit engine-only opt-in. Owner is the captured originating local
@@ -728,7 +734,23 @@ impl Engine {
         &mut self, context: &StorageContext, owner: DownloadOwner,
         ui_view: *mut c_void, url: &str, frame: Bounds, corner_radius: f64,
     ) -> Result<ViewId, String> {
-        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, Some(owner))
+        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, Some(owner), None, true)
+    }
+
+    /// Adopt the model tab's reserved session ID before extension helpers start.
+    pub fn create_tab_in_context(&mut self, context: &StorageContext, model_key: &str,
+        owner: Option<DownloadOwner>, ui_view: *mut c_void, url: &str,
+        frame: Bounds, corner_radius: f64) -> Result<ViewId, String> {
+        if model_key.is_empty() || model_key.len() > 128 || model_key.contains('\0') {
+            return Err("Invalid extension model tab key".into());
+        }
+        self.create_view_in_context_impl(context, ui_view, url, frame, corner_radius, owner, Some(model_key), true)
+    }
+
+    /// A profile service host is unlisted and must never take keyboard focus.
+    pub fn create_extension_service_host(&mut self, context: &StorageContext,
+        parent: *mut c_void, frame: Bounds) -> Result<ViewId,String> {
+        self.create_view_in_context_impl(context,parent,"about:blank",frame,0.,None,None,false)
     }
 
     fn create_view_in_context_impl(
@@ -739,12 +761,14 @@ impl Engine {
         frame: Bounds,
         corner_radius: f64,
         owner: Option<DownloadOwner>,
+        model_key: Option<&str>,
+        focusable: bool,
     ) -> Result<ViewId, String> {
         self.check_storage_context(context)?;
         if !context.is_ready() {
             return Err("Chromium storage context is still initializing; retry on a later frame".into());
         }
-        let id = self.create_content_view(ui_view, url, frame, corner_radius, ViewRole::Page, context.context.clone(), owner)
+        let id = self.create_content_view_owned(ui_view, url, frame, corner_radius, ViewRole::Page, context.context.clone(), owner, None, model_key, focusable)
             .ok_or_else(|| "Cannot create Chromium page in the selected storage context".to_string())?;
         let same_context = self.views.get(&id).and_then(|view| view.browser.host())
             .and_then(|host| host.request_context())
@@ -761,12 +785,14 @@ impl Engine {
         corner_radius: f64, role: ViewRole, context: std::rc::Rc<RequestContext>,
         download_owner: Option<DownloadOwner>,
     ) -> Option<ViewId> {
-        self.create_content_view_owned(ui_view, url, frame, corner_radius, role, context, download_owner, None)
+        self.create_content_view_owned(ui_view, url, frame, corner_radius, role, context, download_owner, None, None, true)
     }
     fn create_content_view_owned(
         &mut self, ui_view: *mut c_void, url: &str, frame: Bounds,
         corner_radius: f64, role: ViewRole, context: std::rc::Rc<RequestContext>,
         download_owner: Option<DownloadOwner>, retired_host: Option<std::rc::Rc<host::RetiredHost>>,
+        model_key: Option<&str>,
+        focusable: bool,
     ) -> Option<ViewId> {
         if self._runtime.lifecycle.require_running().is_err() || ui_view.is_null() { return None; }
         // CreateBrowserSync rejects an uninitialized BrowserContext. Do not
@@ -805,13 +831,23 @@ impl Engine {
         let weak=std::rc::Rc::downgrade(&context);
         let boost_state=if let Some((_,boosts))=self.boosts.iter().find(|(context,_)|std::rc::Weak::ptr_eq(context,&weak)){boosts.clone()}else{let state=Arc::new(Mutex::new(Vec::<SiteBoost>::new()));self.boosts.push((weak,state.clone()));state};
         let mut extra=if role==ViewRole::Page { boosts::extra(&boost_state.lock().unwrap()) } else {None};
+        if let Some(key) = model_key {
+            let dictionary = extra.take().or_else(dictionary_value_create)?;
+            dictionary.set_string(Some(&CefString::from("Echo.ModelTabKey")), Some(&CefString::from(key)));
+            extra = Some(dictionary);
+        }
+        if role == ViewRole::Page && !CefString::from(&context.cache_path()).to_string().is_empty() && extensions::ui_available() {
+            let dictionary = extra.take().or_else(dictionary_value_create)?;
+            dictionary.set_bool(Some(&CefString::from(extension_store::ROLE_KEY)), 1);
+            extra = Some(dictionary);
+        }
         let policy = Arc::new(Mutex::new(PeekPolicy::default()));
-        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture));
+        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture), focusable);
         if let ViewRole::Inspector(id) = role {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default(), None);
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default(), None, focusable);
         }
         if role == ViewRole::Page {
             if extra.is_none() { extra = dictionary_value_create(); }
@@ -834,7 +870,7 @@ impl Engine {
         if let Some(prepared) = &prepared_downloads {
             client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None,
                 runtime.lifecycle.queue.clone(), Some(prepared.registration.handler()),
-                Some(prepared.registration.gate()), policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture));
+                Some(prepared.registration.gate()), policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture), focusable);
         }
         let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
@@ -1516,6 +1552,7 @@ wrap_client! {
         policy: Arc<Mutex<PeekPolicy>>,
         boosts: Arc<Mutex<Vec<SiteBoost>>>,
         audio: Option<audio::Capture>,
+        focusable: bool,
     }
 
     impl Client {
@@ -1607,7 +1644,7 @@ wrap_client! {
             Some(EngineFindHandler::new(self.events.clone()))
         }
         fn focus_handler(&self) -> Option<FocusHandler> {
-            Some(EngineFocusHandler::new(self.events.clone()))
+            Some(EngineFocusHandler::new(self.events.clone(), self.focusable))
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
@@ -1737,9 +1774,14 @@ wrap_display_handler! {
 }
 
 wrap_focus_handler! {
-    struct EngineFocusHandler { events: EventQueue, }
+    struct EngineFocusHandler { events: EventQueue, focusable: bool, }
     impl FocusHandler {
-        fn on_got_focus(&self, browser: Option<&mut Browser>) { push(&self.events, browser, RawEvent::Focused); }
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, _source: FocusSource) -> i32 {
+            i32::from(!self.focusable)
+        }
+        fn on_got_focus(&self, browser: Option<&mut Browser>) {
+            if self.focusable {push(&self.events, browser, RawEvent::Focused);}
+        }
     }
 }
 
@@ -1969,7 +2011,10 @@ wrap_keyboard_handler! {
             }
             let escape = shortcut_for(event);
             let peek_escape = policy.capture_escape && shortcut_key_down(event.type_) && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
-            let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts.lock().unwrap())) else { return 0; };
+            let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts.lock().unwrap())) else {
+                return i32::from(shortcut_key_down(event.type_) && browser.as_ref().is_some_and(|browser|
+                    extensions::dispatch_key(browser.identifier(), event.windows_key_code, event.modifiers)));
+            };
             if shortcut.key == "z" {
                 if let Some(browser) = browser.as_ref() { self.events.push((browser.identifier(), RawEvent::EditFocus(false))); }
             }
@@ -2001,9 +2046,13 @@ wrap_app! {
                 if cfg!(debug_assertions) {
                     command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 }
-                if std::env::var_os("ECHO_CEF_EXTENSIONS_BRIDGE").as_deref() == Some(std::ffi::OsStr::new("1")) {
-                    command_line.append_switch(Some(&CefString::from("echo-enable-extensions-bridge")));
+                if cfg!(debug_assertions) && std::env::var_os("BROWSER_SCRIPT").is_some()
+                    && std::env::var_os("ECHO_EXTENSION_ACCEPTANCE").as_deref() == Some(std::ffi::OsStr::new("1")) {
+                    command_line.append_switch(Some(&CefString::from("enable-unsafe-extension-debugging")));
                 }
+                // Stock CEF ignores this switch; the source bridge remains
+                // profile-scoped and performs its own operation checks.
+                command_line.append_switch(Some(&CefString::from("echo-enable-extensions-bridge")));
             }
         }
     }
@@ -2025,6 +2074,16 @@ fn next_zoom_factor(current: f64, direction: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_host_focus_requests_are_cancelled_through_the_cef_callback() {
+        let hidden=EngineFocusHandler::new(EventQueue::default(),false);
+        let page=EngineFocusHandler::new(EventQueue::default(),true);
+        for source in [FocusSource::NAVIGATION,FocusSource::SYSTEM] {
+            assert_eq!(hidden.on_set_focus(None,source),1);
+            assert_eq!(page.on_set_focus(None,source),0);
+        }
+    }
 
     #[test]
     fn audible_state_is_preserved_when_live_callback_ownership_moves() {

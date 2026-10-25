@@ -77,6 +77,7 @@ pub trait WebEngine {
     fn permission_pending(&self, _view: ViewId, _request: engine::PermissionRequestId) -> bool { false }
     fn respond_permission(&mut self, _view: ViewId, _request: engine::PermissionRequestId, _decision: engine::PermissionDecision) -> bool { false }
     fn request_quote(&mut self, _view: ViewId, _request: u64) -> bool { false }
+    fn extension_service(&self, _view: ViewId) -> Result<Box<dyn engine::ExtensionService>, String> { Err("Extensions require the source-built CEF".into()) }
     fn site_info(&self, _view: ViewId) -> Option<engine::SiteInfo> { None }
     fn reset_translation_prompts(&mut self, _storage: &StorageSelection) -> bool { false }
     fn profile_site_settings(&self, _storage: &StorageSelection, _origin: &str) -> Option<Vec<engine::SiteSetting>> { None }
@@ -107,6 +108,9 @@ pub trait WebEngine {
     fn fork_in_storage(&self, storage: &StorageSelection) -> Option<Box<dyn WebEngine>> {
         match storage { StorageSelection::Current | StorageSelection::Default => self.fork_with_shared_storage(), StorageSelection::Named(_) => None }
     }
+    fn create_extension_service_host(&mut self, storage: &StorageSelection, parent: *mut c_void, bounds: Bounds) -> Option<ViewId> {
+        self.create_in_storage(storage,parent,"about:blank",bounds)
+    }
     fn create_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
         match storage { StorageSelection::Current | StorageSelection::Default => self.create_in_host(parent, url, bounds), StorageSelection::Named(_) => None }
     }
@@ -118,6 +122,18 @@ pub trait WebEngine {
         storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
         self.create_page_in_storage(storage, parent, url, bounds)
     }
+    fn create_model_page(&mut self, _model_key: &str, identity: PageIdentity, source_space: browser_core::SpaceId,
+        storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        self.create_page_with_identity(identity, source_space, storage, parent, url, bounds)
+    }
+    fn extension_browser_id(&self, _view: ViewId) -> Option<i32> { None }
+    fn has_extension_context_view(&self, _storage: &StorageSelection) -> bool { false }
+    fn extension_model_available(&self, _storage: &StorageSelection) -> bool { false }
+    fn sync_extension_tabs(&mut self, _storage: &StorageSelection, _owner: ViewId, _snapshot: &engine::ExtensionTabsSnapshot) -> Result<bool,String> { Ok(false) }
+    fn invalidate_extension_tab_metadata(&mut self) {}
+    fn take_extension_model_requests(&mut self) -> Vec<engine::ExtensionModelRequest> { Vec::new() }
+    fn complete_extension_model_request(&self, _request: &engine::ExtensionModelRequest, _result: serde_json::Value) -> Result<(),String> { Err("Extension model bridge unavailable".into()) }
+    fn extension_model_request_pending(&self, _request: &engine::ExtensionModelRequest) -> bool { false }
     /// Product commands stay disabled until the renderer host bridge is ready.
     fn supports_inspector(&self) -> bool { false }
     /// Reuse this page's frontend, selecting the requested panel. `inspect`
@@ -192,6 +208,45 @@ pub const CONTENT_INSET: f32 = 10.0;
 pub const CONTENT_CORNER_RADIUS: f32 = WINDOW_CORNER_RADIUS - CONTENT_INSET;
 
 impl Chromium {
+    fn create_identity_view(&mut self, context: &engine::StorageContext, model_key: Option<&str>,
+        owner: Option<engine::DownloadOwner>, parent: *mut c_void, url: &str, bounds: Bounds) -> Result<ViewId,String> {
+        match (model_key, owner) {
+            (Some(key), owner) => self.engine.create_tab_in_context(context,key,owner,parent,url,bounds,f64::from(CONTENT_CORNER_RADIUS)),
+            (None, Some(owner)) => self.engine.create_view_in_context_with_download_owner(context,owner,parent,url,bounds,f64::from(CONTENT_CORNER_RADIUS)),
+            (None, None) => self.engine.create_view_in_context(context,parent,url,bounds,f64::from(CONTENT_CORNER_RADIUS)),
+        }
+    }
+    fn create_identity_page(&mut self, model_key: Option<&str>, identity: PageIdentity, source_space: browser_core::SpaceId,
+        storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        use crate::window::download_probe::admission::{self, Decision};
+        let parent = if parent.is_null() { self.parent } else { parent };
+        let candidate = match admission::inspect(identity, source_space, storage, parent as usize, url) {
+            Decision::Ordinary => {
+                let owner = (!matches!(storage, StorageSelection::Current)).then(|| crate::ordinary_downloads::owner(parent, identity)).flatten();
+                let context = match self.resolve_storage(storage) { Ok(context) => context, Err(_) => return PageCreation::Failed };
+                if !context.is_ready() { return PageCreation::Pending; }
+                return match self.create_identity_view(&context, model_key, owner, parent, url, bounds) {
+                    Ok(view) => PageCreation::Created(view), Err(error) => { eprintln!("Cannot create download-enabled page: {error}"); PageCreation::Failed }
+                };
+            },
+            Decision::Rejected => return PageCreation::Failed,
+            Decision::Candidate(candidate) => candidate,
+        };
+        // Uses the same guarded synchronous creator as ordinary pages. No pump,
+        // destination/control effects, parking, or close preparation runs here.
+        let context = match self.resolve_storage(storage) {
+            Ok(context) => context,
+            Err(_) => { admission::fail(&candidate); return PageCreation::Failed; }
+        };
+        if !context.is_ready() { return PageCreation::Pending; }
+        let Some(owner) = admission::begin(&candidate) else { return PageCreation::Failed; };
+        let result = self.create_identity_view(&context, model_key, Some(owner), parent, url, bounds);
+        admission::finish(&candidate, result.is_ok());
+        match result {
+            Ok(view) => PageCreation::Created(view),
+            Err(_) => { eprintln!("[download-probe] explicit fixture creation failed"); PageCreation::Failed }
+        }
+        }
     fn resolve_storage(&self, storage: &StorageSelection) -> Result<engine::StorageContext, String> {
         if crate::quit::is_quitting() { return Err("Browser is quitting".into()); }
         match storage {
@@ -205,6 +260,9 @@ impl Chromium {
 impl WebEngine for Chromium {
     fn browsing_data_counters(&self,storage:&StorageSelection,since:i64)->Result<engine::BrowsingDataCounters,String>{self.resolve_storage(storage)?.browsing_data_counters(since)}
     fn clear_browsing_data(&mut self, storage:&StorageSelection, categories:u32, since:i64)->Result<NativeDataClear,String> {let ticket=self.resolve_storage(storage)?.clear_browsing_data(categories,since)?;Ok(Box::new(move||ticket.take().map(|r|r.map_err(|mask|format!("Chromium could not remove all selected data ({mask})"))))) }
+    fn extension_service(&self, view: ViewId) -> Result<Box<dyn engine::ExtensionService>, String> {
+        self.engine.extension_bridge(view).map(|service| Box::new(service) as Box<dyn engine::ExtensionService>)
+    }
     fn permission_pending(&self, view: ViewId, request: engine::PermissionRequestId) -> bool { self.engine.permission_pending(view, request) }
     fn respond_permission(&mut self, view: ViewId, request: engine::PermissionRequestId, decision: engine::PermissionDecision) -> bool { self.engine.respond_permission(view, request, decision) }
     fn set_password_forms_enabled(&mut self,enabled:bool) {self.engine.set_password_forms_enabled(enabled);}
@@ -272,6 +330,10 @@ impl WebEngine for Chromium {
         let engine = self.engine.fork_with_context(&context).ok()?;
         Some(Box::new(Self { engine, parent: std::ptr::null_mut() }))
     }
+    fn create_extension_service_host(&mut self, storage: &StorageSelection, parent: *mut c_void, bounds: Bounds) -> Option<ViewId> {
+        let context=self.resolve_storage(storage).ok()?;
+        self.engine.create_extension_service_host(&context,parent,bounds).ok()
+    }
     fn create_in_storage(&mut self, storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
         match self.create_page_in_storage(storage, parent, url, bounds) {
             PageCreation::Created(view) => Some(view), PageCreation::Pending | PageCreation::Failed => None,
@@ -292,36 +354,31 @@ impl WebEngine for Chromium {
 
     fn create_page_with_identity(&mut self, identity: PageIdentity, source_space: browser_core::SpaceId,
         storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
-        use crate::window::download_probe::admission::{self, Decision};
-        let parent = if parent.is_null() { self.parent } else { parent };
-        let candidate = match admission::inspect(identity, source_space, storage, parent as usize, url) {
-            Decision::Ordinary => {
-                let owner = (!matches!(storage, StorageSelection::Current)).then(|| crate::ordinary_downloads::owner(parent, identity)).flatten();
-                let Some(owner) = owner else { return self.create_page_in_storage(storage, parent, url, bounds); };
-                let context = match self.resolve_storage(storage) { Ok(context) => context, Err(_) => return PageCreation::Failed };
-                if !context.is_ready() { return PageCreation::Pending; }
-                return match self.engine.create_view_in_context_with_download_owner(&context, owner, parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS)) {
-                    Ok(view) => PageCreation::Created(view), Err(error) => { eprintln!("Cannot create download-enabled page: {error}"); PageCreation::Failed }
-                };
-            },
-            Decision::Rejected => return PageCreation::Failed,
-            Decision::Candidate(candidate) => candidate,
-        };
-        // Uses the same guarded synchronous creator as ordinary pages. No pump,
-        // destination/control effects, parking, or close preparation runs here.
-        let context = match self.resolve_storage(storage) {
-            Ok(context) => context,
-            Err(_) => { admission::fail(&candidate); return PageCreation::Failed; }
-        };
-        if !context.is_ready() { return PageCreation::Pending; }
-        let Some(owner) = admission::begin(&candidate) else { return PageCreation::Failed; };
-        let result = self.engine.create_view_in_context_with_download_owner(
-            &context, owner, parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS));
-        admission::finish(&candidate, result.is_ok());
-        match result {
-            Ok(view) => PageCreation::Created(view),
-            Err(_) => { eprintln!("[download-probe] explicit fixture creation failed"); PageCreation::Failed }
-        }
+        self.create_identity_page(None,identity,source_space,storage,parent,url,bounds)
+    }
+    fn create_model_page(&mut self, model_key: &str, identity: PageIdentity, source_space: browser_core::SpaceId,
+        storage: &StorageSelection, parent: *mut c_void, url: &str, bounds: Bounds) -> PageCreation {
+        self.create_identity_page(Some(model_key),identity,source_space,storage,parent,url,bounds)
+    }
+    fn extension_browser_id(&self, view: ViewId) -> Option<i32> { self.engine.extension_browser_id(view) }
+    fn has_extension_context_view(&self, storage: &StorageSelection) -> bool {
+        self.resolve_storage(storage).is_ok_and(|context|self.engine.has_extension_context_view(&context))
+    }
+    fn extension_model_available(&self, storage: &StorageSelection) -> bool {
+        self.resolve_storage(storage).is_ok_and(|context|self.engine.extension_model_available(&context))
+    }
+    fn sync_extension_tabs(&mut self, storage: &StorageSelection, owner: ViewId, snapshot: &engine::ExtensionTabsSnapshot) -> Result<bool,String> {
+        let context = self.resolve_storage(storage)?;
+        if !context.is_ready() { return Ok(false); }
+        self.engine.sync_extension_tabs(&context,owner,snapshot)
+    }
+    fn invalidate_extension_tab_metadata(&mut self) { self.engine.invalidate_extension_tab_metadata(); }
+    fn take_extension_model_requests(&mut self) -> Vec<engine::ExtensionModelRequest> { self.engine.take_extension_model_requests() }
+    fn complete_extension_model_request(&self, request: &engine::ExtensionModelRequest, result: serde_json::Value) -> Result<(),String> {
+        self.engine.complete_extension_model_request(request,result)
+    }
+    fn extension_model_request_pending(&self, request: &engine::ExtensionModelRequest) -> bool {
+        self.engine.extension_model_request_pending(request)
     }
 
     fn fork_with_shared_storage(&self) -> Option<Box<dyn WebEngine>> {
@@ -587,6 +644,8 @@ impl PageViewport {
 }
 
 pub struct Pages {
+    pub(crate) extension_namespace: Option<u64>,
+    extension_hosts: HashMap<UserProfileId,ViewId>,
     applied_shortcuts: Option<u64>,
     viewport: PageViewport,
     viewport_generation: u64,
@@ -670,6 +729,82 @@ impl WebEngine for RetiredEngine {
 }
 
 impl Pages {
+    pub(crate) fn extension_attachment(&self, tab: TabId) -> (Option<i32>, Option<PageState>) {
+        let store = self.store.borrow();
+        let Some(page) = store.pages.get(&tab).filter(|page| page.owner == self.host) else { return (None,None); };
+        (store.engine.extension_browser_id(page.view), Some(page.state.clone()))
+    }
+    pub(crate) fn publish_extension_tabs(&mut self, profile: UserProfileId, private: bool,
+        snapshot: &engine::ExtensionTabsSnapshot) -> Result<bool,String> {
+        let storage = if private { StorageSelection::Current } else { StorageSelection::for_profile(profile) };
+        let mut store = self.store.borrow_mut();
+        if snapshot.windows.is_empty() && !self.extension_hosts.contains_key(&profile) { return Ok(false); }
+        if !store.engine.extension_model_available(&storage) || self.parent.is_null() { return Ok(false); }
+        // A profile's model transport must survive closing any user tab. This
+        // unlisted service host is separate from the authoritative tab rows.
+        let owner = if let Some(view) = self.extension_hosts.get(&profile) { *view } else {
+            let bounds = Bounds {x:-10000.,y:-10000.,width:1.,height:1.};
+            let Some(view) = store.engine.create_extension_service_host(&storage,self.parent,bounds) else { return Ok(false); };
+            store.engine.set_visible(view,false);
+            self.extension_hosts.insert(profile,view);
+            view
+        };
+        store.engine.sync_extension_tabs(&storage,owner,snapshot)
+    }
+    pub(crate) fn has_extension_model_host(&self, profile: UserProfileId) -> bool {
+        self.extension_hosts.contains_key(&profile)
+    }
+    pub(crate) fn invalidate_extension_tab_metadata(&mut self) {
+        self.store.borrow_mut().engine.invalidate_extension_tab_metadata();
+    }
+    pub(crate) fn take_extension_model_requests(&mut self) -> Vec<engine::ExtensionModelRequest> {
+        self.store.borrow_mut().engine.take_extension_model_requests()
+    }
+    pub(crate) fn complete_extension_model_request(&self, request: &engine::ExtensionModelRequest,
+        result: serde_json::Value) -> Result<(),String> {
+        self.store.borrow().engine.complete_extension_model_request(request,result)
+    }
+    pub(crate) fn extension_model_request_pending(&self, request: &engine::ExtensionModelRequest) -> bool {
+        self.store.borrow().engine.extension_model_request_pending(request)
+    }
+    /// Extension-created background tabs are real model pages that must load
+    /// without selecting a Space or stealing the foreground page's responder.
+    pub(crate) fn materialize_extension_tab(&mut self, browser: &Browser, tab: TabId) -> Result<bool,String> {
+        let item = browser.all_tabs().find(|item|item.id == tab).ok_or("Extension tab closed")?;
+        if browser_core::omnibox::is_internal_url(&item.url) { return Ok(false); }
+        self.reconcile_inventory(browser);
+        let mut store = self.store.borrow_mut();
+        if store.pages.contains_key(&tab) { return Ok(false); }
+        let identity = *store.identities.get(&tab).ok_or("Extension tab identity is unavailable")?;
+        let source_space = browser.spaces.iter().find(|space|space.pinned.iter().chain(&space.today).any(|item|item.id == tab))
+            .or_else(||browser.spaces.iter().find(|space|space.user_profile_id == identity.profile))
+            .ok_or("Extension tab Space is unavailable")?.id;
+        let storage = if browser.is_private() {StorageSelection::Current} else {StorageSelection::for_profile(identity.profile)};
+        let frame = Bounds {x:-10000.,y:-10000.,width:1024.,height:768.};
+        let creation = if let Some(namespace) = self.extension_namespace {
+            store.engine.create_model_page(&format!("{namespace}:{}",tab.get()),identity,source_space,&storage,self.parent,&item.url,frame)
+        } else { store.engine.create_page_with_identity(identity,source_space,&storage,self.parent,&item.url,frame) };
+        let view = match creation {
+            PageCreation::Created(view) => view,
+            PageCreation::Pending => return Err("Extension tab storage is still initializing".into()),
+            PageCreation::Failed => return Err("Extension tab renderer could not be created".into()),
+        };
+        store.engine.set_visible(view,false);
+        if item.muted { store.engine.set_audio_muted(view,true); }
+        store.pages.insert(tab,Page { input_attachment:0, identity, source_space, owner:self.host,
+            frame, visible:false, view, url:item.url.clone(), state:PageState {loading:true,..Default::default()},
+            muted:item.muted,color_scheme:None,snapshot:None,snapshot_pending:None,snapshot_origin:None,snapshot_good_origin:None });
+        Ok(true)
+    }
+    pub(crate) fn navigate_extension_tab(&mut self, tab: TabId, url: &str) {
+        let mut store = self.store.borrow_mut();
+        let PageStore {engine,pages,..} = &mut *store;
+        if let Some(page) = pages.get_mut(&tab).filter(|page|page.owner == self.host && page.url != url) {
+            page.url = url.into();
+            page.state.loading = true;
+            engine.navigate(page.view,url);
+        }
+    }
     // Covered hosts may miss an intermediate change through their shared engine.
     // Compare revisions so returning to an earlier key vector still refreshes it.
     pub(crate) fn sync_shortcuts(&mut self, shortcuts: Option<(u64, Vec<engine::Shortcut>)>) {
@@ -682,6 +817,8 @@ impl Pages {
     pub fn new(mut engine: Box<dyn WebEngine>) -> Self {
         engine.set_password_forms_enabled(true);
         let pages = Self {
+            extension_namespace: None,
+            extension_hosts: HashMap::new(),
             applied_shortcuts: None,
             store: Rc::new(RefCell::new(PageStore {
                 #[cfg(test)]
@@ -883,7 +1020,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, viewport_clip: None, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
+        Self { extension_namespace: self.extension_namespace, extension_hosts: HashMap::new(), applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, viewport_clip: None, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
@@ -918,6 +1055,7 @@ impl Pages {
     pub fn release_host(&mut self) {
         let mut store = self.store.borrow_mut();
         store.capture_pending_engine_events();
+        for (_,view) in self.extension_hosts.drain() {store.engine.close(view);}
         if store.devtools.is_some_and(|dock| dock.host == self.host) { store.close_devtools(); }
         if store.inspector_probe.is_some_and(|probe| probe.host == self.host) { store.close_inspector_probe(); }
         if store.hosts.remove(&self.host).is_none() { return; }
@@ -966,6 +1104,26 @@ impl Pages {
     pub(crate) fn set_profile_site_setting(&mut self, profile: UserProfileId, private: bool, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
         let storage=if private {StorageSelection::Current} else {StorageSelection::for_profile(profile)};
         self.store.borrow_mut().engine.set_profile_site_setting(&storage,origin,kind,value)
+    }
+    pub(crate) fn extension_service(&mut self, profile: UserProfileId, preferred: Option<TabId>)
+        -> Result<(Option<PageIdentity>, Box<dyn engine::ExtensionService>), String> {
+        let mut store = self.store.borrow_mut();
+        let page = preferred.and_then(|tab| store.pages.get(&tab))
+            .filter(|page| page.owner == self.host && page.identity.profile == profile)
+            .or_else(|| store.pages.values().find(|page| page.owner == self.host && page.identity.profile == profile))
+            .map(|page|(page.identity,page.view));
+        if let Some((identity,view))=page {
+            return Ok((Some(identity),store.engine.extension_service(view)?));
+        }
+        if self.parent.is_null() {return Err("The extension host is not ready".into());}
+        let view=if let Some(view)=self.extension_hosts.get(&profile){*view}else{
+            let bounds=Bounds{x:-10000.,y:-10000.,width:1.,height:1.};
+            let view=store.engine.create_extension_service_host(&StorageSelection::for_profile(profile),self.parent,bounds)
+                .ok_or("The extension host could not be created")?;
+            store.engine.set_visible(view,false);
+            self.extension_hosts.insert(profile,view);view
+        };
+        Ok((None,store.engine.extension_service(view)?))
     }
     pub fn site_info(&self, tab: TabId) -> Option<engine::SiteInfo> {
         let store = self.store.borrow();
@@ -1346,7 +1504,10 @@ impl Pages {
                 None => {
                     if !active { continue; }
                     if retry_requires_model { continue; }
-                    let view = match engine.create_page_with_identity(identity, source_space, &storage, self.parent, &url, bounds) {
+                    let creation = if let Some(namespace) = self.extension_namespace {
+                        engine.create_model_page(&format!("{namespace}:{}",identity.tab.get()), identity, source_space, &storage, self.parent, &url, bounds)
+                    } else { engine.create_page_with_identity(identity, source_space, &storage, self.parent, &url, bounds) };
+                    let view = match creation {
                         PageCreation::Created(view) => view,
                         PageCreation::Pending => { self.creation_pending = true; continue; }
                         PageCreation::Failed => continue,

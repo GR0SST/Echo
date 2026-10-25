@@ -427,6 +427,7 @@ pub(crate) fn init(cx: &mut App) {
         // Retain the non-Clone capability independently of every source window.
         let mut downloads = None;
         let mut preparing = false;
+        let mut extension_retirements: Option<Vec<Rc<Cell<usize>>>> = None;
         let mut final_downloads = FinalDownloadBarrier::default();
         loop {
             cx.background_executor().timer(Duration::from_millis(10)).await;
@@ -460,6 +461,21 @@ pub(crate) fn init(cx: &mut App) {
             if preparing && state.borrow().failure.is_none()
                 && !cx.update(|cx| crate::password_flow::writes_pending(cx)).unwrap_or(true)
                 && !cx.update(|cx| crate::max_downloads::file_moves_pending(cx)).unwrap_or(true) {
+                // Popup native callbacks detach borrowed views synchronously.
+                // Run their deferred closes before begin_shutdown seals CEF calls.
+                if extension_retirements.is_none() {
+                    match cx.update(|cx| cx.windows().into_iter()
+                        .filter_map(|handle|handle.downcast::<crate::window::BrowserWindow>())
+                        .map(|handle|handle.update(cx,|view,_,cx|view.retire_extensions_for_quit(cx))
+                            .map_err(|error|error.to_string()))
+                        .collect::<Result<Vec<_>, String>>()) {
+                        Ok(Ok(counts)) => extension_retirements = Some(counts),
+                        Ok(Err(error)) => state.borrow_mut().fail(error),
+                        Err(error) => state.borrow_mut().fail(error.to_string()),
+                    }
+                    continue;
+                }
+                if extension_retirements.as_ref().is_some_and(|counts|counts.iter().any(|count|count.get()!=0)) {continue;}
                 // Exactly one running drain under the SHUTDOWN consumer lease,
                 // before detachment/begin_shutdown. No service means no drain:
                 // the disposable probe remains the sole running consumer.

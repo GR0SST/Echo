@@ -28,8 +28,30 @@ struct Api {
     install_store: unsafe extern "C" fn(i32, *const c_char, *mut u64) -> u32,
     decide_store: unsafe extern "C" fn(i32, u64, i32) -> u32,
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Api2 {
+    size: u32,
+    version: u32,
+    remove: unsafe extern "C" fn(i32, *const c_char, u64) -> u32,
+    set_shortcut: unsafe extern "C" fn(i32, *const c_char, *const c_char, *const c_char, u64) -> u32,
+    dispatch_key: unsafe extern "C" fn(i32, i32, u32) -> u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Api3 {
+    size: u32,
+    version: u32,
+    watch: unsafe extern "C" fn(i32, ManagementCallback, *mut c_void) -> u32,
+    unwatch: unsafe extern "C" fn(i32) -> u32,
+    sync: unsafe extern "C" fn(i32, *const c_char) -> u32,
+    complete: unsafe extern "C" fn(i32, u64, *const c_char) -> u32,
+    pending: unsafe extern "C" fn(i32, u64) -> u32,
+}
 struct Native {
     api: Api,
+    ui: Option<Api2>,
+    model: Option<Api3>,
     _library: libloading::Library,
 }
 impl Native {
@@ -67,12 +89,162 @@ impl Native {
             if api.version != 1 || api.size as usize != std::mem::size_of::<Api>() {
                 return Err("Unsupported extension bridge ABI".into());
             }
-            Ok(Rc::new(Self {
-                api,
-                _library: library,
-            }))
+            let ui = library.get::<unsafe extern "C" fn(u32, *mut Api2) -> u32>(
+                b"cef_echo_extensions_get_api_v2\0").ok().and_then(|getter| {
+                    let mut ui = std::mem::MaybeUninit::<Api2>::uninit();
+                    if getter(std::mem::size_of::<Api2>() as u32, ui.as_mut_ptr()) != 0 { return None; }
+                    let ui = ui.assume_init();
+                    (ui.version == 2 && ui.size as usize == std::mem::size_of::<Api2>()).then_some(ui)
+                });
+            let model = library.get::<unsafe extern "C" fn(u32, *mut Api3) -> u32>(
+                b"cef_echo_extensions_get_api_v3\0").ok().and_then(|getter| {
+                    let mut api = std::mem::MaybeUninit::<Api3>::uninit();
+                    if getter(std::mem::size_of::<Api3>() as u32, api.as_mut_ptr()) != 0 { return None; }
+                    let api = api.assume_init();
+                    (api.version == 3 && api.size as usize == std::mem::size_of::<Api3>()).then_some(api)
+                });
+            Ok(Rc::new(Self { api, ui, model, _library: library }))
         }
     }
+}
+
+/// A native extension mutation, still bound to the exact submitting page and
+/// profile. GPUI must validate opaque model keys before editing its model.
+#[derive(Clone, Debug)]
+pub struct ExtensionModelRequest {
+    pub owner: ViewId,
+    pub token: u64,
+    pub data: Value,
+}
+#[derive(Default)]
+struct ModelEvents {
+    closed: bool,
+    pending: Vec<(u64, Value)>,
+}
+unsafe extern "C" fn model_event(data: *mut c_void, event: u32, token: u64, json: *const c_char) {
+    let state = unsafe { &*(data as *const RefCell<ModelEvents>) };
+    if event == 11 {
+        { let mut state = state.borrow_mut(); state.closed = true; state.pending.clear(); }
+        drop(unsafe { Rc::from_raw(data as *const RefCell<ModelEvents>) });
+    } else if event == 17 {
+        // Native bounds this queue to 128 outstanding operations and 30 seconds.
+        if let Ok(value) = serde_json::from_str(&unsafe { copied_text(json) }) {
+            state.borrow_mut().pending.push((token, value));
+        }
+    }
+}
+struct ModelEndpoint {
+    _native: Rc<Native>,
+    api: Api3,
+    runtime: Rc<Runtime>,
+    context: Rc<cef::RequestContext>,
+    owner: i32,
+    view: ViewId,
+    events: Rc<RefCell<ModelEvents>>,
+    last_snapshot: Option<String>,
+}
+impl Drop for ModelEndpoint {
+    fn drop(&mut self) {
+        if !self.events.borrow().closed && self.runtime.lifecycle.require_running().is_ok() {
+            // Unwatch synchronously cancels pending native requests and emits
+            // CLOSED before the callback's final Rc is released.
+            let _ = unsafe { (self.api.unwatch)(self.owner) };
+        }
+    }
+}
+#[derive(Default)]
+pub(crate) struct ModelTransport {
+    native: RefCell<Option<Option<Rc<Native>>>>,
+    endpoints: Vec<ModelEndpoint>,
+}
+impl ModelTransport {
+    fn native(&self) -> Option<Rc<Native>> {
+        self.native.borrow_mut().get_or_insert_with(||
+            Native::load().ok().filter(|native| native.model.is_some())).clone()
+    }
+}
+impl Engine {
+    pub fn extension_browser_id(&self, view: ViewId) -> Option<i32> {
+        self.views.get(&view).filter(|page| page.role == ViewRole::Page)
+            .map(|page| page.browser.identifier())
+    }
+    /// Publishes a complete authoritative profile without pumping CEF or holding
+    /// a GPUI borrow in a native callback. Stock CEF returns false.
+    pub fn has_extension_context_view(&self, context: &crate::StorageContext) -> bool {
+        self.extension_model.native().is_some() && self.check_storage_context(context).is_ok() && self.views.values().any(|page|
+            page.role == ViewRole::Page && Rc::ptr_eq(&page.context,&context.context))
+    }
+    pub fn extension_model_available(&self, context: &crate::StorageContext) -> bool {
+        self.extension_model.native().is_some() && self.check_storage_context(context).is_ok() && context.is_ready()
+    }
+    /// Force a fresh native projection after an accepted renderer metadata
+    /// event, even if the intended GPUI URL already matches the committed URL.
+    pub fn invalidate_extension_tab_metadata(&mut self) {
+        for endpoint in &mut self.extension_model.endpoints { endpoint.last_snapshot = None; }
+    }
+    pub fn sync_extension_tabs(&mut self, context: &crate::StorageContext, owner_view: ViewId,
+        snapshot: &crate::ExtensionTabsSnapshot) -> Result<bool, String> {
+        crate::shutdown::check_thread()?;
+        self.check_storage_context(context)?;
+        snapshot.validate()?;
+        self.extension_model.endpoints.retain(|endpoint| !endpoint.events.borrow().closed);
+        let mut index = self.extension_model.endpoints.iter()
+            .position(|endpoint| Rc::ptr_eq(&endpoint.context, &context.context));
+        if index.is_none() {
+            let Some(page) = self.views.get(&owner_view).filter(|page|
+                page.role == ViewRole::Page && Rc::ptr_eq(&page.context, &context.context)) else { return Ok(false); };
+            let view = owner_view;
+            let Some(native) = self.extension_model.native() else { return Ok(false); };
+            let Some(api) = native.model else { return Ok(false); };
+            let owner = page.browser.identifier();
+            let events = Rc::new(RefCell::new(ModelEvents::default()));
+            let data = Rc::into_raw(events.clone()) as *mut c_void;
+            let result = unsafe { (api.watch)(owner, model_event, data) };
+            if let Err(error) = status(result) {
+                drop(unsafe { Rc::from_raw(data as *const RefCell<ModelEvents>) });
+                return Err(error);
+            }
+            index = Some(self.extension_model.endpoints.len());
+            self.extension_model.endpoints.push(ModelEndpoint { _native: native, api,
+                runtime: self._runtime.clone(), context: context.context.clone(), owner,
+                view, events, last_snapshot: None });
+        }
+        let endpoint = &mut self.extension_model.endpoints[index.unwrap()];
+        let json = serde_json::to_string(snapshot).map_err(|error| error.to_string())?;
+        if endpoint.last_snapshot.as_ref() != Some(&json) {
+            let wire = text(&json)?;
+            status(unsafe { (endpoint.api.sync)(endpoint.owner, wire.as_ptr()) })?;
+            endpoint.last_snapshot = Some(json);
+        }
+        Ok(true)
+    }
+    pub fn take_extension_model_requests(&mut self) -> Vec<ExtensionModelRequest> {
+        self.extension_model.endpoints.iter().filter(|endpoint|!endpoint.events.borrow().closed).flat_map(|endpoint| {
+            let events = std::mem::take(&mut endpoint.events.borrow_mut().pending);
+            events.into_iter().map(|(token,data)| ExtensionModelRequest { owner: endpoint.view, token, data })
+        }).collect()
+    }
+    /// Complete only after publishing the resulting snapshot. A closed or
+    /// replaced owner fails without redirecting work to another profile.
+    pub fn complete_extension_model_request(&self, request: &ExtensionModelRequest,
+        result: Value) -> Result<(), String> {
+        crate::shutdown::check_thread()?;
+        self._runtime.lifecycle.require_running()?;
+        let endpoint = self.extension_model.endpoints.iter().find(|endpoint|
+            endpoint.view == request.owner && !endpoint.events.borrow().closed)
+            .ok_or("Extension model owner closed")?;
+        let json = text(&serde_json::to_string(&result).map_err(|error| error.to_string())?)?;
+        status(unsafe { (endpoint.api.complete)(endpoint.owner, request.token, json.as_ptr()) })
+    }
+    pub fn extension_model_request_pending(&self, request: &ExtensionModelRequest) -> bool {
+        if crate::shutdown::check_thread().is_err() || self._runtime.lifecycle.require_running().is_err() { return false; }
+        self.extension_model.endpoints.iter().find(|endpoint|
+            endpoint.view == request.owner && !endpoint.events.borrow().closed)
+            .is_some_and(|endpoint| unsafe { (endpoint.api.pending)(endpoint.owner,request.token) == 0 })
+    }
+}
+pub(crate) fn ui_available() -> bool {
+    Native::load().is_ok_and(|native| native.ui.is_some())
 }
 fn status(code: u32) -> Result<(), String> {
     if code == 0 {
@@ -103,6 +275,8 @@ pub enum ExtensionEvent {
     OperationComplete { request: u64, result: Value },
     InstallPrompt { request: u64, prompt: Value },
     InstallComplete { request: u64, result: Value },
+    ActionRequested { id: String },
+    OpenUrlRequested { url: String },
     Closed,
     InvalidPayload(String),
 }
@@ -138,6 +312,8 @@ unsafe extern "C" fn management(data: *mut c_void, event: u32, request: u64, jso
                 request,
                 result: value,
             },
+            15 => ExtensionEvent::ActionRequested { id: value["id"].as_str().unwrap_or_default().into() },
+            16 => ExtensionEvent::OpenUrlRequested { url: value["url"].as_str().unwrap_or_default().into() },
             _ => ExtensionEvent::InvalidPayload(format!("Unknown extension event {event}")),
         },
         Err(error) => ExtensionEvent::InvalidPayload(error.to_string()),
@@ -233,6 +409,22 @@ impl ExtensionBridge {
             Ok(())
         }
     }
+    pub fn load_unpacked(&self, path: &str, callback: Box<dyn FnOnce(Result<String, String>)>) -> Result<(), String> {
+        self.check()?;
+        let path = text(path)?;
+        type Completion = Box<dyn FnOnce(Result<String, String>)>;
+        unsafe extern "C" fn loaded(data: *mut c_void, result: u32, value: *const c_char) {
+            let callback = unsafe { Box::from_raw(data as *mut Completion) };
+            let value = unsafe { copied_text(value) };
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                callback(if result == 0 { Ok(value) } else { Err(value) });
+            }));
+        }
+        let data = Box::into_raw(Box::new(callback)) as *mut c_void;
+        let result = unsafe { (self.native.api.load)(self.owner, path.as_ptr(), loaded, data) };
+        if result != 0 { drop(unsafe { Box::from_raw(data as *mut Completion) }); }
+        status(result)
+    }
     pub fn take_events(&self) -> Vec<ExtensionEvent> {
         std::mem::take(&mut self.events.borrow_mut().pending)
     }
@@ -242,6 +434,18 @@ impl ExtensionBridge {
         status(unsafe {
             (self.native.api.set_enabled)(self.owner, id.as_ptr(), enabled.into(), request)
         })
+    }
+    pub fn remove(&self, id: &str, request: u64) -> Result<(), String> {
+        self.check()?;
+        let ui = self.native.ui.ok_or("This CEF has no extension management API")?;
+        let id = text(id)?;
+        status(unsafe { (ui.remove)(self.owner, id.as_ptr(), request) })
+    }
+    pub fn set_shortcut(&self, id: &str, command: &str, shortcut: &str, request: u64) -> Result<(), String> {
+        self.check()?;
+        let ui = self.native.ui.ok_or("This CEF has no extension shortcut API")?;
+        let (id, command, shortcut) = (text(id)?, text(command)?, text(shortcut)?);
+        status(unsafe { (ui.set_shortcut)(self.owner, id.as_ptr(), command.as_ptr(), shortcut.as_ptr(), request) })
     }
     /// Starts Chromium's metadata, policy, permission and verified CRX flow.
     pub fn install_web_store(&self, item_id: &str) -> Result<u64, String> {
@@ -365,5 +569,39 @@ mod tests {
             ExtensionEvent::InvalidPayload(_)
         ));
         assert!(text("bad\0argument").is_err());
+    }
+}
+
+thread_local! {
+    static KEY_API: std::cell::OnceCell<Option<Rc<Native>>> = const { std::cell::OnceCell::new() };
+}
+pub(crate) fn dispatch_key(owner: i32, key: i32, modifiers: u32) -> bool {
+    KEY_API.with(|cache| cache.get_or_init(|| Native::load().ok()).as_ref()
+        .and_then(|native| native.ui).is_some_and(|ui| unsafe {
+            (ui.dispatch_key)(owner, key, modifiers) == 0
+        }))
+}
+
+/// Window-independent profile operations; fakes exercise the same UI boundary.
+pub trait ExtensionService {
+    fn load_unpacked(&self, _path: &str, _callback: Box<dyn FnOnce(Result<String, String>)>) -> Result<(), String> { Err("Unpacked extension loading is unavailable".into()) }
+    fn take_events(&self) -> Vec<ExtensionEvent>;
+    fn set_enabled(&self, id: &str, enabled: bool, request: u64) -> Result<(), String>;
+    fn remove(&self, id: &str, request: u64) -> Result<(), String>;
+    fn set_shortcut(&self, id: &str, command: &str, shortcut: &str, request: u64) -> Result<(), String>;
+    fn approve_install(&self, request: u64, accepted: bool) -> Result<(), String>;
+    /// # Safety
+    /// Same borrowed-view and synchronous detachment contract as invoke_action.
+    unsafe fn invoke_action(&self, id: &str, callback: Box<dyn FnMut(ExtensionPopupEvent)>) -> Result<ExtensionPopup, String>;
+}
+impl ExtensionService for ExtensionBridge {
+    fn load_unpacked(&self, path: &str, callback: Box<dyn FnOnce(Result<String, String>)>) -> Result<(), String> { self.load_unpacked(path, callback) }
+    fn take_events(&self) -> Vec<ExtensionEvent> { self.take_events() }
+    fn set_enabled(&self, id: &str, enabled: bool, request: u64) -> Result<(), String> { self.set_enabled(id, enabled, request) }
+    fn remove(&self, id: &str, request: u64) -> Result<(), String> { self.remove(id, request) }
+    fn set_shortcut(&self, id: &str, command: &str, shortcut: &str, request: u64) -> Result<(), String> { self.set_shortcut(id, command, shortcut, request) }
+    fn approve_install(&self, request: u64, accepted: bool) -> Result<(), String> { self.approve_install(request, accepted) }
+    unsafe fn invoke_action(&self, id: &str, callback: Box<dyn FnMut(ExtensionPopupEvent)>) -> Result<ExtensionPopup, String> {
+        unsafe { self.invoke_action(id, callback) }
     }
 }

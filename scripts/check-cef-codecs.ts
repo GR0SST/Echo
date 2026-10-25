@@ -37,7 +37,7 @@ await Bun.write(join(privateRoot, "profile/session.json"), JSON.stringify({
       last_active: { secs_since_epoch: Math.floor(Date.now() / 1000), nanos_since_epoch: 0 } }], active_tab: 2 }],
 }));
 const appPath = join(privateRoot, "Echo Codec Check.app");
-const copy = Bun.spawn(["cp", "-cR", join(root, "target/bundle/Echo.app"), appPath]);
+const copy = Bun.spawn(["cp", "-cR", resolve(process.env.ECHO_CEF_TEST_BUNDLE ?? join(root, "target/bundle/Echo.app")), appPath]);
 if (await copy.exited !== 0) throw new Error("Cannot copy the Echo bundle");
 const framework = "Chromium Embedded Framework.framework/Chromium Embedded Framework";
 async function digest(path: string) {
@@ -47,6 +47,7 @@ async function digest(path: string) {
 }
 const expectedHash = await digest(join(dist, framework));
 const bundledHash = await digest(join(appPath, "Contents/Frameworks", framework));
+const executableHash = await digest(join(appPath, "Contents/MacOS/Echo"));
 if (bundledHash !== expectedHash) throw new Error("Bundle does not contain the selected custom CEF");
 const fixtureHash = await digest(fixture);
 if (fixtureHash !== "b670602fa00934ca27c4351bb0efe7ea7a07fae57284e44226025eeed7c51254") {
@@ -111,7 +112,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
 const appLog = Bun.file(join(evidence, "native.log"));
 const browser = Bun.spawn([join(appPath, "Contents/MacOS/Echo"), "--in-process-gpu", "--autoplay-policy=no-user-gesture-required"], {
   env: { ...process.env, BROWSER_DATA_DIR: join(privateRoot, "profile"),
-    BROWSER_SCRIPT: `activate; wait 3; key cmd-t; type http://127.0.0.1:${server.port}/check/${nonce}; key enter; wait 25; activate; wait 1; windows; shotstack ${join(evidence, "playback.png")}; dump; quit` },
+    BROWSER_SCRIPT: `wait 3; activate; resize 1000 760; position 100 100; requirefocus; key escape; key cmd-t; type http://127.0.0.1:${server.port}/check/${nonce}; key enter; wait 25; activate; wait 1; requirefocus; windows; shotstack ${join(evidence, "playback.png")}; dump; quit` },
   stdout: appLog, stderr: appLog,
 });
 ownedBrowser = browser;
@@ -120,7 +121,8 @@ try {
   const passed = exitCode === 0 && result && !result.error && !result.videoError &&
     result.timeAfter - result.timeBefore > 1 && result.frames > 0 && result.width > 0 && !result.muted && result.volume > 0 &&
     result.audioSamples > 0 && result.audioChannels > 0 && result.audioPeak > 0;
-  const report = { passed: Boolean(passed), exitCode, result, bundledHash, fixtureHash,
+  const report = { passed: Boolean(passed), exitCode, result, bundledHash, executableHash,
+    fixtureReported: Boolean(result), fixtureHash,
     fixtureSource: "https://media.w3.org/2010/05/sintel/trailer.mp4", privateRoot, evidence };
   await Bun.write(join(evidence, "result.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(JSON.stringify(report, null, 2));

@@ -1,8 +1,15 @@
 diff --git a/cef/BUILD.gn b/cef/BUILD.gn
-index c53f0e4..55c446d 100644
+index c53f0e4..7dca4f8 100644
 --- a/cef/BUILD.gn
 +++ b/cef/BUILD.gn
-@@ -553,6 +553,8 @@ source_set("libcef_static") {
+@@ -548,11 +548,15 @@ source_set("libcef_static") {
+     "libcef/browser/browser_contents_delegate.cc",
+     "libcef/browser/browser_contents_delegate.h",
+     "libcef/browser/browser_context.cc",
++    "libcef/browser/extensions_tabs.cc",
++    "libcef/browser/extensions_tabs.h",
+     "libcef/browser/browser_context.h",
+     "libcef/browser/browser_event_util.cc",
      "libcef/browser/browser_event_util.h",
      "libcef/browser/browser_frame.cc",
      "libcef/browser/browser_frame.h",
@@ -11,7 +18,7 @@ index c53f0e4..55c446d 100644
      "libcef/browser/browser_guest_util.cc",
      "libcef/browser/browser_guest_util.h",
      "libcef/browser/download_bridge.cc",
-@@ -1121,6 +1123,7 @@ source_set("libcef_static") {
+@@ -1121,6 +1125,7 @@ source_set("libcef_static") {
        "libcef/browser/chrome/chrome_web_contents_view_delegate_cef_mac.mm",
        "libcef/browser/native/browser_platform_delegate_native_mac.h",
        "libcef/browser/native/browser_platform_delegate_native_mac.mm",
@@ -19,7 +26,7 @@ index c53f0e4..55c446d 100644
        "libcef/browser/native/cursor_util_mac.mm",
        "libcef/browser/native/javascript_dialog_runner_mac.h",
        "libcef/browser/native/javascript_dialog_runner_mac.mm",
-@@ -1777,6 +1780,7 @@ libcef_sources_common = includes_common +
+@@ -1777,6 +1782,7 @@ libcef_sources_common = includes_common +
                          gypi_paths2.libcef_sources_common +
                          gypi_paths.autogen_library_side + [
    "libcef_dll/echo_cef_download_v1.cc",
@@ -50,10 +57,10 @@ index 46a09e6..eeea92c 100644
        'tests/cefclient/browser/browser_window_std_mac.h',
 diff --git a/cef/include/echo_cef_extensions_v1.h b/cef/include/echo_cef_extensions_v1.h
 new file mode 100644
-index 0000000..4a37d5b
+index 0000000..d6a8363
 --- /dev/null
 +++ b/cef/include/echo_cef_extensions_v1.h
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,138 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#ifndef CEF_INCLUDE_ECHO_CEF_EXTENSIONS_V1_H_
@@ -112,7 +119,8 @@ index 0000000..4a37d5b
 +  ECHO_EXT_WATCH_CLOSED = 11,
 +  ECHO_EXT_OPERATION_COMPLETE = 12,
 +  ECHO_EXT_INSTALL_PROMPT = 13,
-+  ECHO_EXT_INSTALL_COMPLETE = 14
++  ECHO_EXT_INSTALL_COMPLETE = 14,
++  ECHO_EXT_MODEL_REQUEST = 17
 +};
 +typedef void(ECHO_EXT_CALL* echo_ext_management_callback_v1)(void* userdata,
 +                                                             uint32_t event,
@@ -167,6 +175,20 @@ index 0000000..4a37d5b
 +                                        uint64_t request);
 +  uint32_t(ECHO_EXT_CALL* dispatch_key)(int owner, int key, uint32_t modifiers);
 +} echo_ext_api_v2;
++// GPUI model transport. watch owns userdata until synchronous WATCH_CLOSED.
++// Snapshots and completions are UTF-8 JSON, UI thread only. sync validates the
++// entire profile snapshot before publishing it. Never invoke from a callback.
++typedef struct echo_ext_api_v3 {
++  uint32_t size;
++  uint32_t version;
++  uint32_t(ECHO_EXT_CALL* watch)(int owner, echo_ext_management_callback_v1 callback, void* userdata);
++  uint32_t(ECHO_EXT_CALL* unwatch)(int owner);
++  uint32_t(ECHO_EXT_CALL* sync)(int owner, const char* snapshot);
++  uint32_t(ECHO_EXT_CALL* complete)(int owner, uint64_t request, const char* result);
++  uint32_t(ECHO_EXT_CALL* pending)(int owner, uint64_t request);
++} echo_ext_api_v3;
++ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
++cef_echo_extensions_get_api_v3(uint32_t size, echo_ext_api_v3* output);
 +ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
 +cef_echo_extensions_get_api_v2(uint32_t size, echo_ext_api_v2* output);
 +// Size mismatch clears nothing and returns BAD_ARGUMENT. The function table is
@@ -177,6 +199,50 @@ index 0000000..4a37d5b
 +}
 +#endif
 +#endif
+diff --git a/cef/libcef/browser/alloy/browser_platform_delegate_alloy.cc b/cef/libcef/browser/alloy/browser_platform_delegate_alloy.cc
+index 48cf8b7..52a6555 100644
+--- a/cef/libcef/browser/alloy/browser_platform_delegate_alloy.cc
++++ b/cef/libcef/browser/alloy/browser_platform_delegate_alloy.cc
+@@ -7,6 +7,7 @@
+ #include <memory>
+ 
+ #include "base/logging.h"
++#include "cef/libcef/browser/extensions_tabs.h"
+ #include "cef/libcef/browser/alloy/alloy_browser_host_impl.h"
+ #include "cef/libcef/common/net/url_util.h"
+ #include "chrome/browser/history/history_tab_helper.h"
+@@ -54,6 +55,8 @@ content::WebContents* CefBrowserPlatformDelegateAlloy::CreateWebContents(
+ 
+   auto web_contents = content::WebContents::Create(wc_create_params);
+   CHECK(web_contents);
++  cef::extension_tabs::PrepareContents(web_contents.get(), create_params.extra_info
++      ? create_params.extra_info->GetString("Echo.ModelTabKey").ToString() : std::string());
+ 
+   own_web_contents = true;
+   return web_contents.release();
+diff --git a/cef/libcef/browser/browser_info_manager.cc b/cef/libcef/browser/browser_info_manager.cc
+index 8b077f0..23732d4 100644
+--- a/cef/libcef/browser/browser_info_manager.cc
++++ b/cef/libcef/browser/browser_info_manager.cc
+@@ -13,6 +13,7 @@
+ #include "cef/libcef/browser/browser_host_base.h"
+ #include "cef/libcef/browser/browser_platform_delegate.h"
+ #include "cef/libcef/browser/context.h"
++#include "cef/libcef/browser/extensions_bridge.h"
+ #include "cef/libcef/browser/thread_util.h"
+ #include "cef/libcef/common/api_version_util.h"
+ #include "cef/libcef/common/cef_switches.h"
+@@ -623,6 +624,10 @@ bool CefBrowserInfoManager::IsExcludedFrameHost(content::RenderFrameHost* rfh) {
+   }
+ 
+   auto* web_contents = content::WebContents::FromRenderFrameHost(rfh);
++  // The bridge owns this raw ExtensionViewHost, not a CefBrowserHost. Its
++  // renderer needs the same excluded-view response as after the normal
++  // timeout, immediately. Ordinary extension tabs remain CEF-managed.
++  if (cef::extensions_bridge::IsActionPopupContents(web_contents)) return true;
+   if (WebUIContentsPreloadState::FromWebContents(web_contents)) {
+     // WebUIContentsPreloadManager creates non-tab contents for Chrome UI
+     // (omnibox popups, side panels, etc). The marker is set before navigation,
 diff --git a/cef/libcef/browser/download_manager_delegate_impl.cc b/cef/libcef/browser/download_manager_delegate_impl.cc
 index f5289c3..47004de 100644
 --- a/cef/libcef/browser/download_manager_delegate_impl.cc
@@ -229,10 +295,10 @@ index f5289c3..47004de 100644
    CefRefPtr<CefBrowserHostBase> browser = GetOrAssociateBrowser(item);
 diff --git a/cef/libcef/browser/extensions_bridge.cc b/cef/libcef/browser/extensions_bridge.cc
 new file mode 100644
-index 0000000..b2ad26a
+index 0000000..13e28ba
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge.cc
-@@ -0,0 +1,1112 @@
+@@ -0,0 +1,1136 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#include "cef/libcef/browser/extensions_bridge.h"
@@ -421,7 +487,15 @@ index 0000000..b2ad26a
 +    observer_.reset();
 +    host_.reset();
 +  }
++  bool OwnsContents(content::WebContents* contents) const { return host_->host_contents() == contents; }
 +  int owner_id() const { return owner_id_; }
++  content::WebContents* QueryOwner(content::WebContents* caller,
++                                   const extensions::Extension* extension) {
++    if (caller != host_->host_contents() || extension != host_->extension()) return nullptr;
++    auto owner = Owner(owner_id_);
++    return owner && owner->GetWebContents()->GetBrowserContext() == caller->GetBrowserContext()
++        ? owner->GetWebContents() : nullptr;
++  }
 +  void Start() {
 +    Emit(ECHO_EXT_READY);
 +    host_->host_contents()->WasShown();
@@ -439,13 +513,17 @@ index 0000000..b2ad26a
 +                             const gfx::Size& size) override {
 +    Emit(ECHO_EXT_PREFERRED_SIZE, size.width(), size.height());
 +  }
-+  void RenderFrameCreated(content::RenderFrameHost*) override {}
++  void RenderFrameCreated(content::RenderFrameHost* frame) override {
++    if (frame->IsInPrimaryMainFrame() && frame->GetView())
++      frame->GetView()->EnableAutoResize(gfx::Size(25,25),gfx::Size(800,600));
++  }
 +  bool HandleKeyboardEvent(content::WebContents*,
 +                           const input::NativeWebKeyboardEvent&) override {
 +    return false;
 +  }
 +  void OnLoaded() override {
-+    Resize(320, 240);
++    if (auto* view = host_->host_contents()->GetRenderWidgetHostView())
++      view->EnableAutoResize(gfx::Size(25,25),gfx::Size(800,600));
 +    host_->host_contents()->Focus();
 +    Emit(ECHO_EXT_LOADED);
 +  }
@@ -1327,7 +1405,19 @@ index 0000000..b2ad26a
 +  it->second->Decide(accepted);
 +  return ECHO_EXT_OK;
 +}
-+}  // namespace
++ }  // namespace
++bool IsActionPopupContents(content::WebContents* contents) {
++  if (!CefCurrentlyOn(TID_UI) || !contents) return false;
++  for (const auto& [id,popup] : Popups()) if (popup->OwnsContents(contents)) return true;
++  return false;
++}
++content::WebContents* ActionPopupOwner(content::WebContents* caller,
++                                      const extensions::Extension* extension) {
++  if (Check() || !caller || !extension) return nullptr;
++  for (const auto& [id,popup] : Popups())
++    if (auto* owner = popup->QueryOwner(caller,extension)) return owner;
++  return nullptr;
++}
 +uint32_t GetApi(uint32_t size, echo_ext_api_v1* output) {
 +  if (!output || size != sizeof(*output)) {
 +    return ECHO_EXT_BAD_ARGUMENT;
@@ -1347,10 +1437,10 @@ index 0000000..b2ad26a
 +}  // namespace cef::extensions_bridge
 diff --git a/cef/libcef/browser/extensions_bridge.h b/cef/libcef/browser/extensions_bridge.h
 new file mode 100644
-index 0000000..d31eb94
+index 0000000..dfd9aef
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge.h
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,18 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#ifndef CEF_LIBCEF_BROWSER_EXTENSIONS_BRIDGE_H_
@@ -1359,7 +1449,11 @@ index 0000000..d31eb94
 +namespace content {
 +class WebContents;
 +}
++namespace extensions { class Extension; }
 +namespace cef::extensions_bridge {
++bool IsActionPopupContents(content::WebContents* contents);
++content::WebContents* ActionPopupOwner(content::WebContents* caller,
++                                       const extensions::Extension* extension);
 +uint32_t GetApi(uint32_t size, echo_ext_api_v1* output);
 +uint32_t GetApi2(uint32_t size, echo_ext_api_v2* output);
 +uintptr_t NativeView(content::WebContents* contents);
@@ -1382,18 +1476,701 @@ index 0000000..471865d
 +      (__bridge void*)contents->GetNativeView().GetNativeNSView());
 +}
 +}  // namespace cef::extensions_bridge
+diff --git a/cef/libcef/browser/extensions_tabs.cc b/cef/libcef/browser/extensions_tabs.cc
+new file mode 100644
+index 0000000..c191677
+--- /dev/null
++++ b/cef/libcef/browser/extensions_tabs.cc
+@@ -0,0 +1,644 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. BSD-style license.
++#include "cef/libcef/browser/extensions_tabs.h"
++
++#include <map>
++#include <set>
++#include <utility>
++#include "base/command_line.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/pattern.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/timer/timer.h"
++#include "cef/include/cef_task.h"
++#include "cef/libcef/browser/browser_host_base.h"
++#include "cef/libcef/browser/browser_info.h"
++#include "cef/libcef/browser/browser_info_manager.h"
++#include "cef/libcef/browser/extensions_bridge.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/common/extensions/api/tabs.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "extensions/browser/event_router.h"
++#include "extensions/browser/extension_event_histogram_value.h"
++#include "extensions/browser/extension_function.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_util.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/mojom/context_type.mojom.h"
++#include "extensions/common/mojom/api_permission_id.mojom.h"
++#include "extensions/common/permissions/permissions_data.h"
++#include "extensions/common/url_pattern_set.h"
++
++namespace cef::extension_tabs {
++namespace {
++namespace api = extensions::api;
++using Function = ::ExtensionFunction;
++using Extension = extensions::Extension;
++using Context = extensions::mojom::ContextType;
++using Util = extensions::ExtensionTabUtil;
++const char kStateKey = 0;
++bool in_callback = false;
++uint64_t next_request = 1;
++bool Enabled() {
++  return CefCurrentlyOn(TID_UI) && !in_callback &&
++      base::CommandLine::ForCurrentProcess()->HasSwitch("echo-enable-extensions-bridge");
++}
++CefRefPtr<CefBrowserHostBase> Owner(int id) {
++  auto browser = CefBrowserHostBase::GetBrowserForBrowserId(id);
++  return browser && browser->IsAlloyStyle() && !browser->WillBeDestroyed() ? browser : nullptr;
++}
++
++std::string String(const base::DictValue& dict, const char* key) {
++  const auto* value = dict.FindString(key);
++  return value ? *value : std::string();
++}
++bool Bool(const base::DictValue& dict, const char* key) {
++  return dict.FindBool(key).value_or(false);
++}
++bool Key(const std::string& key) {
++  return !key.empty() && key.size() <= 128 && key.find('\0') == std::string::npos;
++}
++Result Arguments(base::Value value) {
++  base::ListValue args;
++  args.Append(std::move(value));
++  return args;
++}
++Result Error(std::string error) { return base::unexpected(std::move(error)); }
++struct Window {
++  SessionID id = SessionID::InvalidValue();
++  base::DictValue data;
++};
++struct Tab {
++  SessionID id = SessionID::InvalidValue();
++  base::DictValue data;
++};
++struct Pending {
++  int owner = 0;
++  scoped_refptr<Function> function;
++  base::ListValue arguments;
++  std::string extension;
++  Context context;
++  std::string method;
++  Reply reply;
++  base::OneShotTimer timer;
++};
++class Endpoint;
++struct State : base::SupportsUserData::Data {
++  explicit State(Profile* profile) : profile(profile) {}
++  ~State() override;
++  raw_ptr<Profile> profile;
++  std::map<std::string, Window> windows;
++  std::map<std::string, Tab> tabs;
++  // Last permission-scrubbed visible values, not intended navigation URLs.
++  // A WebContents may commit after GPUI has already updated its model URL.
++  std::map<std::string,std::map<std::string,base::DictValue>> event_tabs;
++  std::map<int,std::string> tabs_by_id;
++  std::map<int,std::string> windows_by_id;
++  std::map<int, std::unique_ptr<Endpoint>> endpoints;
++  std::map<uint64_t, std::unique_ptr<Pending>> pending;
++  std::string profile_key;
++  std::string focused;
++  std::string last_focused;
++  base::WeakPtrFactory<State> weak_factory{this};
++};
++State* Get(content::BrowserContext* context) {
++  return static_cast<State*>(context->GetUserData(&kStateKey));
++}
++State* Ensure(content::BrowserContext* context) {
++  if (!Get(context)) context->SetUserData(&kStateKey,
++      std::make_unique<State>(Profile::FromBrowserContext(context)));
++  return Get(context);
++}
++void Respond(State& state, uint64_t token, Result result) {
++  auto it = state.pending.find(token);
++  if (it == state.pending.end()) return;
++  auto pending = std::move(it->second);
++  state.pending.erase(it);
++  std::move(pending->reply).Run(std::move(result));
++}
++void Cancel(State& state, int owner) {
++  std::vector<uint64_t> tokens;
++  for (auto& [token, request] : state.pending)
++    if (request->owner == owner) tokens.push_back(token);
++  for (auto token : tokens) Respond(state, token, Error("Echo model owner closed"));
++}
++class Endpoint : public content::WebContentsObserver {
++ public:
++  Endpoint(State* state, int owner, content::WebContents* contents,
++           echo_ext_management_callback_v1 callback, void* userdata)
++      : content::WebContentsObserver(contents), state_(state), owner_(owner),
++        callback_(callback), userdata_(userdata) {}
++  ~Endpoint() override {
++    Cancel(*state_, owner_);
++    Emit(ECHO_EXT_WATCH_CLOSED, 0, {});
++  }
++  void WebContentsDestroyed() override { state_->endpoints.erase(owner_); }
++  void Emit(uint32_t event, uint64_t token, base::DictValue data) {
++    const auto json = base::WriteJson(data).value_or("{}");
++    const bool previous = in_callback;
++    in_callback = true;
++    callback_(userdata_, event, token, json.c_str());
++    in_callback = previous;
++  }
++ private:
++  raw_ptr<State> state_;
++  int owner_;
++  echo_ext_management_callback_v1 callback_;
++  raw_ptr<void> userdata_;
++};
++State::~State() {
++  weak_factory.InvalidateWeakPtrs();
++  endpoints.clear();
++  while (!pending.empty()) Respond(*this, pending.begin()->first,
++                                  Error("Echo profile closed"));
++}
++content::WebContents* Contents(const State& state, const Tab& tab) {
++  auto owner = Owner(tab.data.FindInt("browserId").value_or(0));
++  if (!owner || owner->GetWebContents()->GetBrowserContext() != state.profile)
++    return nullptr;
++  auto* contents = owner->GetWebContents();
++  return sessions::SessionTabHelper::IdForTab(contents) == tab.id ? contents : nullptr;
++}
++const Window* FindWindow(const State& state, int id) {
++  auto key = state.windows_by_id.find(id);
++  return key == state.windows_by_id.end() ? nullptr : &state.windows.at(key->second);
++}
++const Tab* FindTab(const State& state, int id) {
++  auto key = state.tabs_by_id.find(id);
++  return key == state.tabs_by_id.end() ? nullptr : &state.tabs.at(key->second);
++}
++std::string CurrentWindow(const State& state, Function* function) {
++  auto* caller = function->GetSenderWebContents();
++  if (auto* owner = cef::extensions_bridge::ActionPopupOwner(caller, function->extension()))
++    caller = owner;
++  for (auto& [key, tab] : state.tabs)
++    if (caller && Contents(state, tab) == caller) return String(tab.data, "window");
++  return state.last_focused;
++}
++void PopulateMetadata(const State& state, const Tab& tab, api::tabs::Tab& result) {
++  result.id = tab.id.id();
++  result.index = tab.data.FindInt("index").value_or(0);
++  const auto window = state.windows.find(String(tab.data, "window"));
++  result.window_id = window == state.windows.end() ? -1 : window->second.id.id();
++  result.active = Bool(tab.data, "active");
++  result.selected = result.active;
++  result.highlighted = Bool(tab.data, "highlighted");
++  result.pinned = Bool(tab.data, "pinned");
++  result.audible = Bool(tab.data, "audible");
++  result.discarded = Bool(tab.data, "discarded");
++  result.frozen = Bool(tab.data, "frozen");
++  result.auto_discardable = Bool(tab.data, "autoDiscardable");
++  result.incognito = state.profile->IsOffTheRecord();
++  result.group_id = tab.data.FindInt("groupId").value_or(-1);
++  result.split_view_id = tab.data.FindInt("splitViewId").value_or(-1);
++  if (const auto* opener = tab.data.FindString("openerKey")) {
++    auto target = state.tabs.find(*opener);
++    if (target != state.tabs.end()) result.opener_tab_id = target->second.id.id();
++  }
++  result.status = api::tabs::ParseTabStatus(String(tab.data, "status"));
++  result.last_accessed = tab.data.FindDouble("lastAccessed").value_or(0);
++  api::tabs::MutedInfo muted;
++  muted.muted = Bool(tab.data, "muted");
++  result.muted_info = std::move(muted);
++}
++base::DictValue SerializeTab(const State& state, const Tab& tab,
++                              const Extension* extension, Context context) {
++  api::tabs::Tab result;
++  auto* contents = Contents(state, tab);
++  if (contents) {
++    result = Util::CreateTabObject(contents,
++        Util::GetScrubTabBehavior(extension, context, contents), extension);
++  } else {
++    result.url = String(tab.data, "url");
++    result.title = String(tab.data, "title");
++    if (const auto* icon = tab.data.FindString("faviconUrl")) result.fav_icon_url = *icon;
++  }
++  PopulateMetadata(state,tab,result);
++  if (!contents) {
++    Util::ScrubTabForExtension(extension, nullptr, &result,
++        Util::GetScrubTabBehavior(extension, context, GURL(String(tab.data, "url"))));
++  }
++  return result.ToValue();
++}
++base::DictValue SerializeWindow(const State& state, const Window& window,
++    const Extension* extension, Context context, bool populate) {
++  base::DictValue result;
++  const auto key = String(window.data, "key");
++  result.Set("id", window.id.id());
++  result.Set("focused", key == state.focused);
++  result.Set("incognito", state.profile->IsOffTheRecord());
++  result.Set("alwaysOnTop", false);
++  result.Set("type", String(window.data, "kind"));
++  result.Set("state", String(window.data, "state"));
++  for (const auto* name : {"left", "top", "width", "height"})
++    result.Set(name, window.data.FindInt(name).value_or(0));
++  if (populate) {
++    std::map<int, base::Value> ordered;
++    for (auto& [id, tab] : state.tabs)
++      if (String(tab.data, "window") == key)
++        ordered.emplace(tab.data.FindInt("index").value_or(0),
++                        SerializeTab(state, tab, extension, context));
++    base::ListValue tabs;
++    for (auto& [index, value] : ordered) tabs.Append(std::move(value));
++    result.Set("tabs", std::move(tabs));
++  }
++  return result;
++}
++// URL/title matching is privileged just like Chromium's MatchesTab: a query
++// must not reveal a hidden field through its result count.
++bool Matches(const State& state, const Tab& tab, Function* function,
++             const base::DictValue& query, const extensions::URLPatternSet& patterns) {
++  auto data = SerializeTab(state, tab, function->extension(), function->source_context_type());
++  const auto window_key = String(tab.data, "window");
++  const auto& window = state.windows.at(window_key);
++  for (auto [key, value] : query) {
++    if (key == "index" && value.GetInt() < 0) continue;
++    if (key == "title" && value.GetString().empty()) continue;
++    if (key == "url" && patterns.is_empty()) continue;
++    if (key == "url" || key == "title") {
++      const auto* visible_url = data.FindString("url");
++      const auto* visible_title = data.FindString("title");
++      if (!function->extension()->permissions_data()->HasAPIPermissionForTab(
++              tab.id.id(), extensions::mojom::APIPermissionID::kTab) &&
++          (!visible_url || !function->extension()->permissions_data()->HasHostPermission(GURL(*visible_url)))) return false;
++      // Match committed, permission-filtered page fields. GPUI's intended URL
++      // can already be the next navigation and must not leak through a count.
++      if (key == "url" && (!visible_url || !patterns.MatchesURL(GURL(*visible_url)))) return false;
++      if (key == "title" && (!visible_title || !base::MatchPattern(*visible_title, value.GetString()))) return false;
++    } else if (key == "currentWindow" || key == "lastFocusedWindow") {
++      const auto target = key == "currentWindow" ? CurrentWindow(state, function) : state.last_focused;
++      if (value.GetBool() != (window_key == target)) return false;
++    } else if (key == "windowType") {
++      if (value.GetString() != String(window.data, "kind")) return false;
++    } else if (key == "windowId") {
++      const int id = value.GetInt();
++      if (id == -2 ? window_key != CurrentWindow(state, function) :
++          (id != -1 && id != window.id.id())) return false;
++    } else if (key == "muted") {
++      if (value.GetBool() != Bool(tab.data, "muted")) return false;
++    } else {
++      const auto* actual = data.Find(key);
++      if (!actual || *actual != value) return false;
++    }
++  }
++  return true;
++}
++void Event(State& state, const Extension& extension,
++           extensions::events::HistogramValue histogram, const char* name,
++           base::ListValue arguments) {
++  auto* router = extensions::EventRouter::Get(state.profile);
++  if (!router) return;
++  router->DispatchEventToExtension(extension.id(), std::make_unique<extensions::Event>(
++      histogram, name, std::move(arguments), state.profile));
++}
++void Events(State& state, const std::map<std::string, base::DictValue>& old_tabs,
++            const std::map<std::string, int>& old_ids,
++            const std::map<std::string, int>& old_windows, const std::string& old_focus) {
++  auto* registry = extensions::ExtensionRegistry::Get(state.profile);
++  std::erase_if(state.event_tabs,[&](const auto& entry) {
++    return !registry->enabled_extensions().Contains(entry.first);
++  });
++  for (const auto& extension : registry->enabled_extensions()) {
++    if (state.profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(extension->id(),state.profile)) continue;
++    auto& observed = state.event_tabs[extension->id()];
++    for (auto& [key, tab] : state.tabs) {
++      auto current = SerializeTab(state, tab, extension.get(), Context::kPrivilegedExtension);
++      auto old = old_tabs.find(key);
++      if (old == old_tabs.end()) {
++        base::ListValue args; args.Append(current.Clone());
++        Event(state, *extension, extensions::events::TABS_ON_CREATED, "tabs.onCreated", std::move(args));
++      } else {
++        // Reconstruct the old metadata with the same ID, without borrowing a
++        // newly navigated WebContents that could expose the new URL as old data.
++        Tab previous;
++        previous.id = tab.id;
++        previous.data = old->second.Clone();
++        previous.data.Remove("browserId");
++        auto cached = observed.find(key);
++        auto before = cached != observed.end() ? cached->second.Clone() :
++            SerializeTab(state, previous, extension.get(), Context::kPrivilegedExtension);
++        base::DictValue changes;
++        for (const auto* name : {"status", "url", "title", "favIconUrl", "pinned",
++             "audible", "discarded", "frozen", "autoDiscardable", "mutedInfo", "groupId", "splitViewId"}) {
++          const auto* value = current.Find(name);
++          const auto* old_value = before.Find(name);
++          if (value && (!old_value || *value != *old_value)) changes.Set(name, value->Clone());
++        }
++        if (!changes.empty()) {
++          base::ListValue args;
++          args.Append(tab.id.id()); args.Append(std::move(changes)); args.Append(current.Clone());
++          Event(state, *extension, extensions::events::TABS_ON_UPDATED, "tabs.onUpdated", std::move(args));
++        }
++      }
++      if (Bool(tab.data, "active") && (old == old_tabs.end() ||
++          !Bool(old->second, "active") || String(old->second, "window") != String(tab.data, "window"))) {
++        base::DictValue info;
++        info.Set("tabId", tab.id.id()); info.Set("windowId", state.windows.at(String(tab.data, "window")).id.id());
++        base::ListValue args; args.Append(std::move(info));
++        Event(state, *extension, extensions::events::TABS_ON_ACTIVATED, "tabs.onActivated", std::move(args));
++      }
++      observed.insert_or_assign(key,current.Clone());
++    }
++    std::erase_if(observed,[&](const auto& entry) { return !state.tabs.contains(entry.first); });
++    for (auto& [key, old] : old_tabs) if (!state.tabs.contains(key)) {
++      base::DictValue info;
++      const auto window = String(old, "window");
++      info.Set("windowId", old_windows.at(window));
++      info.Set("isWindowClosing", !state.windows.contains(window));
++      base::ListValue args; args.Append(old_ids.at(key)); args.Append(std::move(info));
++      Event(state, *extension, extensions::events::TABS_ON_REMOVED, "tabs.onRemoved", std::move(args));
++    }
++    if (old_focus != state.focused) {
++      base::ListValue args;
++      args.Append(state.focused.empty() ? -1 : state.windows.at(state.focused).id.id());
++      Event(state, *extension, extensions::events::WINDOWS_ON_FOCUS_CHANGED, "windows.onFocusChanged", std::move(args));
++    }
++  }
++}
++void DispatchWaiting(State& state) {
++  if (state.endpoints.empty() || state.profile_key.empty() || state.windows.empty()) return;
++  std::vector<uint64_t> waiting;
++  for (auto& [token,request] : state.pending) if (request->owner == 0) waiting.push_back(token);
++  for (auto token : waiting) {
++    auto& request = *state.pending.at(token);
++    if (!extensions::ExtensionRegistry::Get(state.profile)->enabled_extensions().Contains(request.extension) ||
++        (state.profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(request.extension,state.profile))) {
++      Respond(state,token,Error("Extension is no longer enabled in this profile"));
++      continue;
++    }
++    request.owner = state.endpoints.begin()->first;
++    base::DictValue data;
++    data.Set("method",request.method); data.Set("arguments",request.arguments.Clone());
++    data.Set("extensionId",request.extension); data.Set("profileKey",state.profile_key);
++    base::DictValue tab_keys,window_keys;
++    for (auto& [key,tab] : state.tabs) tab_keys.Set(base::NumberToString(tab.id.id()),key);
++    for (auto& [key,window] : state.windows) window_keys.Set(base::NumberToString(window.id.id()),key);
++    data.Set("tabs",std::move(tab_keys)); data.Set("windows",std::move(window_keys));
++    const auto current = CurrentWindow(state,request.function.get());
++    data.Set("currentWindow",current);
++    for (auto& [key,tab] : state.tabs)
++      if (String(tab.data,"window") == current && Bool(tab.data,"active")) data.Set("activeTabKey",key);
++    state.endpoints.at(request.owner)->Emit(ECHO_EXT_MODEL_REQUEST,token,std::move(data));
++  }
++}
++uint32_t ECHO_EXT_CALL Watch(int owner_id, echo_ext_management_callback_v1 callback, void* userdata) {
++  if (!Enabled() || !callback) return ECHO_EXT_BAD_SEQUENCE;
++  auto owner = Owner(owner_id);
++  if (!owner) return ECHO_EXT_NOT_FOUND;
++  auto* state = Ensure(owner->GetWebContents()->GetBrowserContext());
++  if (state->endpoints.contains(owner_id)) return ECHO_EXT_BAD_ARGUMENT;
++  state->endpoints.emplace(owner_id, std::make_unique<Endpoint>(state, owner_id,
++      owner->GetWebContents(), callback, userdata));
++  return ECHO_EXT_OK;
++}
++uint32_t ECHO_EXT_CALL Unwatch(int owner_id) {
++  if (!Enabled()) return ECHO_EXT_BAD_SEQUENCE;
++  auto owner = Owner(owner_id);
++  auto* state = owner ? Get(owner->GetWebContents()->GetBrowserContext()) : nullptr;
++  if (!state || !state->endpoints.erase(owner_id)) return ECHO_EXT_NOT_FOUND;
++  return ECHO_EXT_OK;
++}
++// Snapshot validation is atomic. Renderer browser IDs can attach only to the
++// same profile and immutable reserved session ID; a hidden host is never added
++// implicitly by enumerating CefBrowserInfoManager.
++uint32_t ECHO_EXT_CALL Sync(int owner_id, const char* json) {
++  if (!Enabled() || !json) return ECHO_EXT_BAD_SEQUENCE;
++  auto owner = Owner(owner_id);
++  auto* state = owner ? Get(owner->GetWebContents()->GetBrowserContext()) : nullptr;
++  if (!state || !state->endpoints.contains(owner_id)) return ECHO_EXT_NOT_FOUND;
++  auto root = base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++  if (!root) return ECHO_EXT_BAD_ARGUMENT;
++  auto* windows = root->FindList("windows"); auto* tabs = root->FindList("tabs");
++  if (!windows || !tabs || windows->size() > 128 || tabs->size() > 10000) return ECHO_EXT_BAD_ARGUMENT;
++  std::map<std::string, Window> next_windows;
++  std::map<std::string, Tab> next_tabs;
++  std::set<std::pair<std::string,int>> positions;
++  std::set<std::string> active;
++  std::set<int> browsers;
++  for (auto& value : *windows) {
++    if (!value.is_dict()) return ECHO_EXT_BAD_ARGUMENT;
++    const auto& data = value.GetDict(); const auto key = String(data,"key");
++    const auto kind = String(data,"kind"); const auto status = String(data,"state");
++    if (!Key(key) || next_windows.contains(key) ||
++        (kind != "normal" && kind != "popup") ||
++        (status != "normal" && status != "minimized" && status != "maximized" && status != "fullscreen") ||
++        data.FindBool("incognito") != state->profile->IsOffTheRecord()) return ECHO_EXT_BAD_ARGUMENT;
++    for (const auto* field : {"left","top","width","height"})
++      if (!data.FindInt(field)) return ECHO_EXT_BAD_ARGUMENT;
++    Window window;
++    window.id = state->windows.contains(key) ? state->windows.at(key).id : SessionID::NewUnique();
++    window.data = data.Clone(); next_windows.emplace(key,std::move(window));
++  }
++  for (auto& value : *tabs) {
++    if (!value.is_dict()) return ECHO_EXT_BAD_ARGUMENT;
++    const auto& data = value.GetDict(); const auto key = String(data,"key");
++    const auto window = String(data,"window"); const auto index = data.FindInt("index");
++    if (!Key(key) || next_tabs.contains(key) || !next_windows.contains(window) ||
++        !index || *index < 0 || !positions.emplace(window,*index).second ||
++        !data.FindString("url") || !data.FindString("title") ||
++        api::tabs::ParseTabStatus(String(data,"status")) == api::tabs::TabStatus::kNone) return ECHO_EXT_BAD_ARGUMENT;
++    for (const auto* field : {"active","highlighted","pinned","muted","audible",
++         "autoDiscardable","discarded","frozen"}) if (!data.FindBool(field)) return ECHO_EXT_BAD_ARGUMENT;
++    if (Bool(data,"active") && (!Bool(data,"highlighted") || !active.insert(window).second)) return ECHO_EXT_BAD_ARGUMENT;
++    Tab tab;
++    if (state->tabs.contains(key)) tab.id = state->tabs.at(key).id;
++    if (auto browser_id = data.FindInt("browserId")) {
++      auto browser = Owner(*browser_id);
++      if (!browser || browser->GetWebContents()->GetBrowserContext() != state->profile ||
++          !browsers.insert(*browser_id).second) return ECHO_EXT_WRONG_OWNER;
++      const auto actual = sessions::SessionTabHelper::IdForTab(browser->GetWebContents());
++      if (!actual.is_valid()) return ECHO_EXT_BAD_ARGUMENT;
++      if (state->tabs.contains(key) && actual != tab.id) return ECHO_EXT_WRONG_OWNER;
++      tab.id = actual;
++    }
++    if (!tab.id.is_valid()) tab.id = SessionID::NewUnique();
++    tab.data = data.Clone(); next_tabs.emplace(key,std::move(tab));
++  }
++  const auto profile_key = String(*root,"profileKey");
++  if (!Key(profile_key) || (!state->profile_key.empty() && state->profile_key != profile_key)) return ECHO_EXT_WRONG_OWNER;
++  const auto focused = String(*root,"focusedWindow");
++  const auto last = String(*root,"lastFocusedWindow");
++  if ((!focused.empty() && (!next_windows.contains(focused) || focused != last)) ||
++      (!last.empty() && !next_windows.contains(last))) return ECHO_EXT_BAD_ARGUMENT;
++  std::map<std::string,base::DictValue> old_tabs;
++  std::map<std::string,int> old_ids, old_windows;
++  for (auto& [key, tab] : state->tabs) {old_tabs.emplace(key,tab.data.Clone());old_ids.emplace(key,tab.id.id());}
++  for (auto& [key, window] : state->windows) old_windows.emplace(key,window.id.id());
++  const auto old_focus = state->focused;
++  state->tabs = std::move(next_tabs); state->windows = std::move(next_windows);
++  state->tabs_by_id.clear(); state->windows_by_id.clear();
++  for (auto& [key,tab] : state->tabs) state->tabs_by_id.emplace(tab.id.id(),key);
++  for (auto& [key,window] : state->windows) state->windows_by_id.emplace(window.id.id(),key);
++  state->profile_key = profile_key;
++  state->focused = focused; state->last_focused = last;
++  for (auto& [key, tab] : state->tabs) if (auto* contents = Contents(*state,tab))
++    sessions::SessionTabHelper::FromWebContents(contents)->SetWindowID(state->windows.at(String(tab.data,"window")).id);
++  Events(*state,old_tabs,old_ids,old_windows,old_focus);
++  DispatchWaiting(*state);
++  return ECHO_EXT_OK;
++}
++uint32_t ECHO_EXT_CALL IsPending(int owner_id, uint64_t token) {
++  if (!Enabled()) return ECHO_EXT_BAD_SEQUENCE;
++  auto owner = Owner(owner_id);
++  auto* state = owner ? Get(owner->GetWebContents()->GetBrowserContext()) : nullptr;
++  if (!state || !state->pending.contains(token)) return ECHO_EXT_NOT_FOUND;
++  auto& request = *state->pending.at(token);
++  if (request.owner != owner_id) return ECHO_EXT_WRONG_OWNER;
++  return extensions::ExtensionRegistry::Get(state->profile)->enabled_extensions().Contains(request.extension)
++      ? ECHO_EXT_OK : ECHO_EXT_NOT_FOUND;
++}
++uint32_t ECHO_EXT_CALL Complete(int owner_id, uint64_t token, const char* json) {
++  if (!Enabled() || !json) return ECHO_EXT_BAD_SEQUENCE;
++  auto owner = Owner(owner_id);
++  auto* state = owner ? Get(owner->GetWebContents()->GetBrowserContext()) : nullptr;
++  if (!state || !state->pending.contains(token)) return ECHO_EXT_NOT_FOUND;
++  auto& pending = *state->pending.at(token);
++  if (pending.owner != owner_id) return ECHO_EXT_WRONG_OWNER;
++  auto data = base::JSONReader::ReadDict(json,base::JSON_PARSE_RFC);
++  if (!data) return ECHO_EXT_BAD_ARGUMENT;
++  if (const auto* error = data->FindString("error")) Respond(*state,token,Error(*error));
++  else if (pending.method == "tabs.create" || pending.method == "tabs.update") {
++    auto tab = state->tabs.find(String(*data,"tabKey"));
++    auto* extension = extensions::ExtensionRegistry::Get(state->profile)->enabled_extensions().GetByID(pending.extension);
++    if (!extension || tab == state->tabs.end()) Respond(*state,token,Error("Echo target tab no longer exists"));
++    else Respond(*state,token,Arguments(base::Value(SerializeTab(*state,tab->second,extension,pending.context))));
++  } else Respond(*state,token,base::ListValue());
++  return ECHO_EXT_OK;
++}
++}  // namespace
++
++void ApplyMetadata(content::WebContents* contents, api::tabs::Tab* output) {
++  if (!Enabled() || !contents || !output) return;
++  auto* state = Get(contents->GetBrowserContext());
++  if (!state || state->endpoints.empty()) return;
++  const auto* tab = FindTab(*state,sessions::SessionTabHelper::IdForTab(contents).id());
++  if (tab && Contents(*state,*tab) == contents) PopulateMetadata(*state,*tab,*output);
++}
++void PrepareContents(content::WebContents* contents, const std::string& model_key) {
++  if (!Enabled() || model_key.empty()) return;
++  auto* state = Get(contents->GetBrowserContext());
++  if (!state) return;
++  auto tab = state->tabs.find(model_key);
++  if (tab == state->tabs.end()) return;
++  // Before extensions::TabHelper caches the tab ID for activeTab permissions.
++  sessions::SessionTabHelper::CreateForWebContents(contents,
++      sessions::SessionTabHelper::DelegateLookup(), tab->second.id);
++  sessions::SessionTabHelper::FromWebContents(contents)->SetWindowID(
++      state->windows.at(String(tab->second.data,"window")).id);
++}
++
++std::optional<Result> Read(Function* function, const base::ListValue& args) {
++  if (!Enabled()) return std::nullopt;
++  auto* state = Get(function->browser_context());
++  const std::string method = function->name();
++  if (!state || state->endpoints.empty()) {
++    if (method == "tabs.query" || method == "windows.getAll") return Arguments(base::Value(base::ListValue()));
++    if (method == "tabs.getCurrent") return Result(base::ListValue());
++    return Error("Echo tab model is not ready");
++  }
++  const auto* extension = function->extension();
++  if (!extension) return Error("Echo model APIs require an extension context");
++  if (state->profile->IsOffTheRecord() && !extensions::util::IsIncognitoEnabled(extension->id(),state->profile))
++    return Error("Extension is not enabled in this private context");
++  if (method == "tabs.query") {
++    const auto& query = args[0].GetDict();
++    extensions::URLPatternSet patterns;
++    if (const auto* url = query.Find("url")) {
++      std::vector<std::string> values;
++      if (url->is_string()) values.push_back(url->GetString());
++      else for (auto& value : url->GetList()) values.push_back(value.GetString());
++      std::string error;
++      if (!patterns.Populate(values, URLPattern::SCHEME_ALL, true, &error)) return Error(error);
++    }
++    std::map<std::pair<int,int>,base::Value> ordered;
++    for (auto& [key,tab] : state->tabs) if (Matches(*state,tab,function,query,patterns)) {
++      const auto window = state->windows.at(String(tab.data,"window")).id.id();
++      ordered.emplace(std::make_pair(window,tab.data.FindInt("index").value_or(0)),
++          SerializeTab(*state,tab,extension,function->source_context_type()));
++    }
++    base::ListValue tabs;
++    for (auto& [index,value] : ordered) tabs.Append(std::move(value));
++    return Arguments(base::Value(std::move(tabs)));
++  }
++  if (method == "tabs.get" || method == "tabs.getCurrent") {
++    const Tab* tab = nullptr;
++    if (method == "tabs.get") tab = FindTab(*state,args[0].GetInt());
++    else for (auto& [key,candidate] : state->tabs)
++      if (function->GetSenderWebContents() && Contents(*state,candidate) == function->GetSenderWebContents()) {tab=&candidate;break;}
++    if (!tab) return method == "tabs.getCurrent" ? Result(base::ListValue()) : Error("No tab with the specified ID in this Echo profile");
++    return Arguments(base::Value(SerializeTab(*state,*tab,extension,function->source_context_type())));
++  }
++  if (!method.starts_with("windows.")) return std::nullopt;
++  const base::DictValue* options = nullptr;
++  for (auto& arg : args) if (arg.is_dict()) options = &arg.GetDict();
++  const auto* types = options ? options->FindList("windowTypes") : nullptr;
++  const bool populate = options && Bool(*options,"populate");
++  auto visible = [&](const Window& window) {
++    if (!types) return true;
++    for (auto& type : *types) if (type.GetString() == String(window.data,"kind")) return true;
++    return false;
++  };
++  if (method == "windows.getAll") {
++    base::ListValue result;
++    for (auto& [key,window] : state->windows) if (visible(window))
++      result.Append(SerializeWindow(*state,window,extension,function->source_context_type(),populate));
++    return Arguments(base::Value(std::move(result)));
++  }
++  const Window* window = nullptr;
++  if (method == "windows.get" && args[0].GetInt() != -2) {
++    window = FindWindow(*state,args[0].GetInt());
++  } else {
++    const auto key = method == "windows.getLastFocused" ? state->last_focused : CurrentWindow(*state,function);
++    if (state->windows.contains(key)) window = &state->windows.at(key);
++  }
++  if (!window || !visible(*window)) return Error("No matching window in this Echo profile");
++  return Arguments(base::Value(SerializeWindow(*state,*window,extension,function->source_context_type(),populate)));
++}
++
++bool Mutate(Function* function, const base::ListValue& args, Reply reply) {
++  if (!Enabled()) return false;
++  auto reject = [](Reply reply,std::string error) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
++        base::BindOnce(std::move(reply),Error(std::move(error))));
++  };
++  if (!function->extension()) {reject(std::move(reply),"Echo model APIs require an extension");return true;}
++  auto* state = Ensure(function->browser_context());
++  if (state->pending.size() >= 128) {reject(std::move(reply),"Echo model operation queue is full");return true;}
++  const auto token = next_request++;
++  auto pending = std::make_unique<Pending>();
++  pending->function = base::WrapRefCounted(function);
++  pending->arguments = args.Clone();
++  pending->extension = function->extension_id();
++  pending->context = function->source_context_type(); pending->method = function->name();
++  pending->reply = std::move(reply);
++  // Chromium validates navigation before it can reach GPUI, even when an
++  // extension starts before the first model window has been published.
++  for (auto& arg : pending->arguments) if (arg.is_dict()) {
++    auto* url = arg.GetDict().FindString("url");
++    if (!url) continue;
++    auto validated = Util::PrepareURLForNavigation(*url,function->extension(),function->browser_context());
++    if (!validated.has_value()) {reject(std::move(pending->reply),validated.error());return true;}
++    arg.GetDict().Set("url",validated->spec());
++  }
++  pending->timer.Start(FROM_HERE,base::Seconds(30),base::BindOnce(
++      [](base::WeakPtr<State> state,uint64_t token) {if (state) Respond(*state,token,Error("Echo model operation timed out"));},
++      state->weak_factory.GetWeakPtr(),token));
++  state->pending.emplace(token,std::move(pending));
++  DispatchWaiting(*state);
++  return true;
++}
++uint32_t GetApi(uint32_t size, echo_ext_api_v3* output) {
++  if (!output || size != sizeof(*output)) return ECHO_EXT_BAD_ARGUMENT;
++  *output = {sizeof(*output),3,&Watch,&Unwatch,&Sync,&Complete,&IsPending};
++  return ECHO_EXT_OK;
++}
++}  // namespace cef::extension_tabs
+diff --git a/cef/libcef/browser/extensions_tabs.h b/cef/libcef/browser/extensions_tabs.h
+new file mode 100644
+index 0000000..33e2526
+--- /dev/null
++++ b/cef/libcef/browser/extensions_tabs.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. BSD-style license.
++#ifndef CEF_LIBCEF_BROWSER_EXTENSIONS_TABS_H_
++#define CEF_LIBCEF_BROWSER_EXTENSIONS_TABS_H_
++#include <optional>
++#include <string>
++#include "base/functional/callback_forward.h"
++#include "base/types/expected.h"
++#include "base/values.h"
++#include "cef/include/echo_cef_extensions_v1.h"
++namespace content { class WebContents; }
++namespace extensions::api::tabs { struct Tab; }
++class ExtensionFunction;
++namespace cef::extension_tabs {
++// Normal Chromium serializers (including messaging sender.tab and command
++// arguments) share these non-sensitive model fields before permission scrubbing.
++void ApplyMetadata(content::WebContents* contents, extensions::api::tabs::Tab* tab);
++using Result = base::expected<base::ListValue, std::string>;
++using Reply = base::OnceCallback<void(Result)>;
++// nullopt/false means this profile has no authoritative Echo model registered.
++std::optional<Result> Read(ExtensionFunction* function, const base::ListValue& args);
++bool Mutate(ExtensionFunction* function, const base::ListValue& args, Reply reply);
++void PrepareContents(content::WebContents* contents,
++                     const std::string& model_key);
++uint32_t GetApi(uint32_t size, echo_ext_api_v3* output);
++}  // namespace cef::extension_tabs
++#endif
 diff --git a/cef/libcef_dll/echo_cef_extensions_v1.cc b/cef/libcef_dll/echo_cef_extensions_v1.cc
 new file mode 100644
-index 0000000..07ceb6b
+index 0000000..dfbe04b
 --- /dev/null
 +++ b/cef/libcef_dll/echo_cef_extensions_v1.cc
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,21 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#define ECHO_EXT_IMPLEMENTATION
 +#include "cef/include/echo_cef_extensions_v1.h"
 +
 +#include "cef/libcef/browser/extensions_bridge.h"
++#include "cef/libcef/browser/extensions_tabs.h"
 +extern "C" ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
 +cef_echo_extensions_get_api_v1(uint32_t size, echo_ext_api_v1* output) {
 +  return cef::extensions_bridge::GetApi(size, output);
@@ -1402,6 +2179,11 @@ index 0000000..07ceb6b
 +extern "C" ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
 +cef_echo_extensions_get_api_v2(uint32_t size, echo_ext_api_v2* output) {
 +  return cef::extensions_bridge::GetApi2(size, output);
++}
++
++extern "C" ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
++cef_echo_extensions_get_api_v3(uint32_t size, echo_ext_api_v3* output) {
++  return cef::extension_tabs::GetApi(size, output);
 +}
 diff --git a/cef/tests/cefclient/browser/client_handler.cc b/cef/tests/cefclient/browser/client_handler.cc
 index f7f8cb3..469c460 100644
@@ -1466,10 +2248,10 @@ index 0000000..c0653a7
 +#endif
 diff --git a/cef/tests/cefclient/browser/echo_extension_probe_mac.mm b/cef/tests/cefclient/browser/echo_extension_probe_mac.mm
 new file mode 100644
-index 0000000..c4b1649
+index 0000000..b87cc5d
 --- /dev/null
 +++ b/cef/tests/cefclient/browser/echo_extension_probe_mac.mm
-@@ -0,0 +1,445 @@
+@@ -0,0 +1,490 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +// Native-only gate instrumentation; no product UI is implemented here.
@@ -1487,6 +2269,7 @@ index 0000000..c4b1649
 +#include "include/cef_client.h"
 +#include "include/cef_command_line.h"
 +#include "include/cef_frame.h"
++#include "include/cef_parser.h"
 +#include "include/cef_render_handler.h"
 +#include "include/cef_request_context_handler.h"
 +#include "include/cef_task.h"
@@ -1501,6 +2284,7 @@ index 0000000..c4b1649
 +  NSPanel* panel = nil;
 +  CefRefPtr<CefRequestContext> other_context;
 +  echo_ext_api_v1 api{};
++  echo_ext_api_v3 model{};
 +  std::string extension_id;
 +  std::string error;
 +  std::string title;
@@ -1764,6 +2548,10 @@ index 0000000..c4b1649
 +  }
 +  if (event == ECHO_EXT_TITLE) {
 +    state->title = text ? text : "";
++    if (state->title.starts_with("POPUP_GATE:") && state->title != "POPUP_GATE:1:fixture-profile-A") {
++      LaterFinish("popup_model_probe_failed");
++      return;
++    }
 +    if (state->title == "POPUP_GATE:1:fixture-profile-A") {
 +      CefPostDelayedTask(
 +          TID_UI, base::BindOnce([] {
@@ -1819,6 +2607,33 @@ index 0000000..c4b1649
 +                }
 +              }));
 +}
++void ModelEvent(void*,uint32_t,uint64_t,const char*) {}
++std::string ModelSnapshot(CefRefPtr<CefBrowser> browser,const char* marker) {
++  auto root = CefDictionaryValue::Create();
++  root->SetString("profileKey",std::string("fixture-")+marker);
++  root->SetString("focusedWindow","fixture-window");
++  root->SetString("lastFocusedWindow","fixture-window");
++  auto windows = CefListValue::Create();
++  auto window = CefDictionaryValue::Create();
++  window->SetString("key","fixture-window"); window->SetString("kind","normal");
++  window->SetString("state","normal"); window->SetBool("incognito",false);
++  window->SetInt("left",100); window->SetInt("top",100);
++  window->SetInt("width",1000); window->SetInt("height",760);
++  windows->SetDictionary(0,window); root->SetList("windows",windows);
++  auto tabs = CefListValue::Create();
++  auto tab = CefDictionaryValue::Create();
++  tab->SetString("key",std::string("fixture-tab-")+marker);
++  tab->SetString("window","fixture-window"); tab->SetInt("browserId",browser->GetIdentifier());
++  tab->SetInt("index",0); tab->SetBool("active",true); tab->SetBool("highlighted",true);
++  for (auto* key : {"pinned","muted","audible","discarded","frozen"}) tab->SetBool(key,false);
++  tab->SetBool("autoDiscardable",true); tab->SetInt("groupId",-1); tab->SetInt("splitViewId",-1);
++  tab->SetDouble("lastAccessed",1.0); tab->SetString("status","complete");
++  tab->SetString("url",browser->GetMainFrame()->GetURL());
++  tab->SetString("title",std::string("Alloy profile ")+marker);
++  tabs->SetDictionary(0,tab); root->SetList("tabs",tabs);
++  auto value = CefValue::Create(); value->SetDictionary(root);
++  return CefWriteJSON(value,JSON_WRITER_DEFAULT).ToString();
++}
 +void Begin() {
 +  if (!state->a_loaded || !state->b || state->loading_started || state->done) {
 +    return;
@@ -1844,7 +2659,19 @@ index 0000000..c4b1649
 +    Finish("bridge_api_missing");
 +    return;
 +  }
++  auto get_model = reinterpret_cast<decltype(&cef_echo_extensions_get_api_v3)>(
++      dlsym(library,"cef_echo_extensions_get_api_v3"));
++  if (!get_model || get_model(sizeof(state->model),&state->model) != ECHO_EXT_OK) {
++    dlclose(library); Finish("model_api_missing"); return;
++  }
 +  dlclose(library);
++  const auto a = state->a->GetIdentifier(), b = state->b->GetIdentifier();
++  const auto snapshot_a = ModelSnapshot(state->a,"A"), snapshot_b = ModelSnapshot(state->b,"B");
++  if (state->model.watch(a,&ModelEvent,nullptr) || state->model.watch(b,&ModelEvent,nullptr) ||
++      state->model.sync(a,snapshot_a.c_str()) || state->model.sync(b,snapshot_b.c_str()) ||
++      state->model.sync(a,snapshot_b.c_str()) != ECHO_EXT_WRONG_OWNER) {
++    Finish("model_profile_isolation_failed"); return;
++  }
 +  uint32_t started = state->api.load_unpacked(
 +      state->a->GetIdentifier(), Switch("echo-extension-probe-fixture").c_str(),
 +      &Installed, nullptr);
@@ -1946,6 +2773,186 @@ index e804c4a..8e3c890 100644
    CefBrowserSettings settings;
    MainContext::Get()->PopulateBrowserSettings(&settings);
  
+diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
+index a6b39be..0530195 100644
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -107,6 +107,10 @@
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/extensions_tabs.h"
++#endif
++
+ namespace extensions {
+ 
+ namespace tabs = api::tabs;
+@@ -840,6 +844,14 @@ ExtensionFunction::ResponseAction WindowsGetFunction::Run() {
+   std::optional<windows::Get::Params> params =
+       windows::Get::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
++
+ 
+   tabs_internal::ApiParameterExtractor<windows::Get::Params> extractor(params);
+   WindowController* window_controller = nullptr;
+@@ -862,6 +874,14 @@ ExtensionFunction::ResponseAction WindowsGetCurrentFunction::Run() {
+   std::optional<windows::GetCurrent::Params> params =
+       windows::GetCurrent::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
++
+ 
+   tabs_internal::ApiParameterExtractor<windows::GetCurrent::Params> extractor(
+       params);
+@@ -885,6 +905,14 @@ ExtensionFunction::ResponseAction WindowsGetLastFocusedFunction::Run() {
+   std::optional<windows::GetLastFocused::Params> params =
+       windows::GetLastFocused::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
++
+ 
+   tabs_internal::ApiParameterExtractor<windows::GetLastFocused::Params>
+       extractor(params);
+@@ -917,6 +945,14 @@ ExtensionFunction::ResponseAction WindowsGetAllFunction::Run() {
+   std::optional<windows::GetAll::Params> params =
+       windows::GetAll::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
++
+ 
+   tabs_internal::ApiParameterExtractor<windows::GetAll::Params> extractor(
+       params);
+@@ -1683,6 +1719,14 @@ ExtensionFunction::ResponseAction WindowsRemoveFunction::Run() {
+ ExtensionFunction::ResponseAction TabsGetFunction::Run() {
+   std::optional<tabs::Get::Params> params = tabs::Get::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
++
+   int tab_id = params->tab_id;
+ 
+   WindowController* window = nullptr;
+@@ -1702,6 +1746,14 @@ ExtensionFunction::ResponseAction TabsGetFunction::Run() {
+ }
+ 
+ ExtensionFunction::ResponseAction TabsGetCurrentFunction::Run() {
++
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
+   DCHECK(dispatcher());
+ 
+   // If called from a tab, return the details from that tab. If not called from
+@@ -1782,6 +1834,14 @@ ExtensionFunction::ResponseAction TabsQueryFunction::Run() {
+   std::optional<tabs::Query::Params> params =
+       tabs::Query::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (auto result = cef::extension_tabs::Read(this,args())) {
++    return result->has_value()
++        ? RespondNow(ArgumentList(std::move(result->value())))
++        : RespondNow(Error(result->error()));
++  }
++#endif
++
+   query_info_ = std::move(params->query_info);
+ 
+   URLPatternSet url_patterns;
+@@ -2063,6 +2123,14 @@ ExtensionFunction::ResponseAction TabsCreateFunction::Run() {
+   std::optional<tabs::Create::Params> params =
+       tabs::Create::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (cef::extension_tabs::Mutate(this,args(),base::BindOnce(
++      [](scoped_refptr<TabsCreateFunction> function, cef::extension_tabs::Result result) {
++        if (result.has_value()) function->Respond(function->ArgumentList(std::move(result.value())));
++        else function->Respond(function->Error(result.error()));
++      },base::WrapRefCounted(this)))) return RespondLater();
++#endif
++
+ 
+   const tabs::Create::Params::CreateProperties& create_properties =
+       params->create_properties;
+@@ -2567,6 +2635,14 @@ ExtensionFunction::ResponseAction TabsUpdateFunction::Run() {
+   std::optional<tabs::Update::Params> params =
+       tabs::Update::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (cef::extension_tabs::Mutate(this,args(),base::BindOnce(
++      [](scoped_refptr<TabsUpdateFunction> function, cef::extension_tabs::Result result) {
++        if (result.has_value()) function->Respond(function->ArgumentList(std::move(result.value())));
++        else function->Respond(function->Error(result.error()));
++      },base::WrapRefCounted(this)))) return RespondLater();
++#endif
++
+ 
+   std::string error;
+   int tab_id = -1;
+@@ -3143,6 +3219,14 @@ ExtensionFunction::ResponseAction TabsReloadFunction::Run() {
+   std::optional<tabs::Reload::Params> params =
+       tabs::Reload::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (cef::extension_tabs::Mutate(this,args(),base::BindOnce(
++      [](scoped_refptr<TabsReloadFunction> function, cef::extension_tabs::Result result) {
++        if (result.has_value()) function->Respond(function->ArgumentList(std::move(result.value())));
++        else function->Respond(function->Error(result.error()));
++      },base::WrapRefCounted(this)))) return RespondLater();
++#endif
++
+ 
+   bool bypass_cache = false;
+   if (params->reload_properties && params->reload_properties->bypass_cache) {
+@@ -3208,6 +3292,14 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
+   std::optional<tabs::Remove::Params> params =
+       tabs::Remove::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
++#if BUILDFLAG(ENABLE_CEF)
++  if (cef::extension_tabs::Mutate(this,args(),base::BindOnce(
++      [](scoped_refptr<TabsRemoveFunction> function, cef::extension_tabs::Result result) {
++        if (result.has_value()) function->Respond(function->ArgumentList(std::move(result.value())));
++        else function->Respond(function->Error(result.error()));
++      },base::WrapRefCounted(this)))) return RespondLater();
++#endif
++
+ 
+   std::string error;
+   if (params->tab_ids.as_integers) {
 diff --git a/chrome/browser/extensions/extension_install_prompt.cc b/chrome/browser/extensions/extension_install_prompt.cc
 index f11c96c..d604935 100644
 --- a/chrome/browser/extensions/extension_install_prompt.cc
@@ -2012,6 +3019,28 @@ index 203636d..d5dffaf 100644
    // Callback to show the default extension install dialog.
    // The implementations of this function are platform-specific.
    static ShowDialogCallback GetDefaultShowDialogCallback();
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+index da312fc..40d360a 100644
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -89,6 +89,7 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ #if BUILDFLAG(ENABLE_CEF)
+ #include "cef/libcef/browser/chrome/extensions/chrome_extension_util.h"
++#include "cef/libcef/browser/extensions_tabs.h"
+ #endif
+ 
+ using content::NavigationEntry;
+@@ -462,6 +463,9 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
+     }
+   }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  cef::extension_tabs::ApplyMetadata(contents,&tab_object);
++#endif
+   ScrubTabForExtension(extension, contents, &tab_object, scrub_tab_behavior);
+   return tab_object;
+ }
 diff --git a/chrome/browser/extensions/webstore_standalone_installer.cc b/chrome/browser/extensions/webstore_standalone_installer.cc
 index 2465fb7..ea26c50 100644
 --- a/chrome/browser/extensions/webstore_standalone_installer.cc
@@ -2043,6 +3072,38 @@ index 335db52..13c5703 100644
 +
    // Create an approval to pass installation parameters to the CrxInstaller.
    virtual std::unique_ptr<InstallApproval> CreateApproval() const;
+ 
+diff --git a/components/sessions/content/session_tab_helper.cc b/components/sessions/content/session_tab_helper.cc
+index b1926b6..668fdac 100644
+--- a/components/sessions/content/session_tab_helper.cc
++++ b/components/sessions/content/session_tab_helper.cc
+@@ -16,11 +16,11 @@
+ namespace sessions {
+ 
+ SessionTabHelper::SessionTabHelper(content::WebContents* contents,
+-                                   DelegateLookup lookup)
++                                   DelegateLookup lookup, SessionID reserved_id)
+     : content::WebContentsObserver(contents),
+       content::WebContentsUserData<SessionTabHelper>(*contents),
+       delegate_lookup_(std::move(lookup)),
+-      session_id_(SessionID::NewUnique()),
++      session_id_(reserved_id.is_valid() ? reserved_id : SessionID::NewUnique()),
+       window_id_(SessionID::InvalidValue()) {}
+ 
+ SessionTabHelper::~SessionTabHelper() = default;
+diff --git a/components/sessions/content/session_tab_helper.h b/components/sessions/content/session_tab_helper.h
+index 8f260ba..39c0e61 100644
+--- a/components/sessions/content/session_tab_helper.h
++++ b/components/sessions/content/session_tab_helper.h
+@@ -72,7 +72,8 @@ class SESSIONS_EXPORT SessionTabHelper
+ 
+  private:
+   friend class content::WebContentsUserData<SessionTabHelper>;
+-  SessionTabHelper(content::WebContents* contents, DelegateLookup lookup);
++  SessionTabHelper(content::WebContents* contents, DelegateLookup lookup,
++                   SessionID reserved_id = SessionID::InvalidValue());
+ 
+   sessions::SessionTabHelperDelegate* GetDelegate();
  
 diff --git a/extensions/browser/api/webstore_private/webstore_private_api.cc b/extensions/browser/api/webstore_private/webstore_private_api.cc
 index ad5ac45..aa2f87e 100644

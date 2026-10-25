@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Echo model acceptance",
+  "version": "0.1.0",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Echo popup gate",
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "https://www.rfc-editor.org/*",
+    "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.rfc-editor.org/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ]
+}

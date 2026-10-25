@@ -114,3 +114,24 @@ removed, enabled, disabled, pinned, or unpinned in the owner's Arc profile.
 Own fixture, management and store tabs were archived, owned windows closed,
 and the fixture server stopped. No replacement Space was created. This
 investigation does not close the missing parity rows.
+
+## GPUI model bridge implementation
+
+The source distribution now adds Echo's versioned native interfaces: catalog,
+actions and verified Store installation in v1; removal/commands in v2; and the
+profile-scoped GPUI tab/window projection with asynchronous mutations in v3.
+The official CEF ABI and stock Rust crate remain unchanged. Chromium has no
+hidden browser window or toolbar in this implementation.
+
+[CEF_EXTENSION_TABS.md](CEF_EXTENSION_TABS.md) describes stable session IDs,
+permission scrubbing, supported reads/mutations/events and startup/close
+ownership. Its native fixture uses ordinary extension APIs and content-script
+messages in an actual GPUI window. The explicit unpacked test loader uses the
+native bridge; it does not attach a debugger or replace JavaScript APIs.
+
+Store-installed uBlock Origin Lite 2026.1021.1354 and Dark Reader 4.9.133 have
+resolved the real HTTPS tab and acted on it: uBOL's zapper removed document
+content, and Dark Reader switched the page between light and dark. The second
+Echo test profile remained empty. Full canonical qualification and GPUI Arc
+parity are separate gates; the historical investigation above does not by itself
+establish either.

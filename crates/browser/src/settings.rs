@@ -106,6 +106,7 @@ pub(crate) struct SettingsWindow {
     shortcut_search: Entity<crate::text_input::TextInput>,
     _search_changed: Subscription,
     _observe: Subscription,
+    _extensions_observe: Option<Subscription>,
 }
 
 impl SettingsWindow {
@@ -221,6 +222,7 @@ fn open(
                         profile.default_user_profile_id()
                     };
                 let observe = profile.observe_settings(cx);
+                let extensions_observe=owner.as_ref().and_then(|owner|owner.upgrade()).map(|owner|cx.observe(&owner,|_,_,cx|cx.notify()));
                 let shortcut_search = cx.new(|cx| {
                     crate::text_input::TextInput::new(
                         "Type a feature name or shortcut (like “Command T”)",
@@ -263,6 +265,7 @@ fn open(
                     shortcut_search,
                     _search_changed: search_changed,
                     _observe: observe,
+                    _extensions_observe: extensions_observe,
                 };
                 if air_traffic { view.present_atc(window, cx); }
                 view

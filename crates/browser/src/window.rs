@@ -412,6 +412,9 @@ pub enum Suggestion {
 /// Commands currently implemented by the browser, also exposed by name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
+    ManageExtensions,
+    AddExtension,
+    ExtensionAction([u8;32], browser_core::UserProfileId),
     NewBoost,
     AddSplit(Option<browser_core::splits::Placement>),
     CloseSplitPane,
@@ -592,6 +595,7 @@ pub enum OverlayKind {
     Sidebar,
     TabMenu,
     SiteControls,
+    ExtensionPrompt,
     Capture,
     NewMenu,
     UserProfileDialog,
@@ -674,6 +678,7 @@ impl Render for Overlay {
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
                     OverlayKind::SiteControls => browser.render_site_controls(window, cx),
+                    OverlayKind::ExtensionPrompt => browser.render_extension_prompt(cx),
                     OverlayKind::Capture => browser.render_capture(window, cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
@@ -783,6 +788,7 @@ pub struct BrowserWindow {
     pub(crate) page_zoom_generation: u64,
     pub(crate) page_zoom_refresh: bool,
     pub(crate) loading_indicators: crate::page_loading::LoadingIndicators,
+    pub(crate) extensions: crate::extensions::State,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) search_settings: crate::search_settings::State,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
@@ -907,6 +913,7 @@ impl BrowserWindow {
         let browser = profile.projection(&selection);
         let profile = crate::profile::ProfileBinding::new(profile, selection, cx);
         let pages = pages.map(|mut pages| {
+            pages.extension_namespace = Some(profile.handle.model_namespace());
             if let Some(parent) = crate::native::view_of(window) {
                 crate::ordinary_downloads::bind(parent, profile.handle.clone(), window.window_handle(), cx);
                 pages.set_parent(parent);
@@ -979,6 +986,9 @@ impl BrowserWindow {
                     // Reconcile both edges against the native pointer rather than
                     // leaving GPUI's cached hover stuck after a page interaction.
                     let _ = this.update_in(cx, |this, window, cx| {
+                        this.sync_extension_model(window, cx);
+                        this.poll_extension_model_requests(cx);
+                        this.poll_extensions(cx);
                         this.poll_download_ui(cx);
                         this.poll_download_destinations(window,cx);
                         this.poll_max_preview_modifiers(window,cx);
@@ -1012,6 +1022,7 @@ impl BrowserWindow {
         cx.on_release(|this, cx| {
             if let Some(parent) = this.native_view { crate::native::forget_overlay(parent); }
             this.cancel_split_draft();
+            this.forget_extension_model(cx);
             if let Some(pages) = &this.pages { pages.borrow_mut().release_host(); }
             this.profile.flush(cx);
             this.remove_child_windows(cx);
@@ -1091,6 +1102,7 @@ impl BrowserWindow {
             page_zoom_generation: 0,
             page_zoom_refresh: false,
             loading_indicators: Default::default(),
+            extensions: crate::extensions::State::new(cx),
             history_page: crate::history::HistoryPage::new(cx),
             search_settings: crate::search_settings::State::new(cx),
             pages,
@@ -1152,6 +1164,7 @@ impl BrowserWindow {
         self.retain_little_archive();
         self.detach_peek(cx);
         self.cancel_split_draft();
+        self.retire_extension_model(cx);
         // Parent remains alive. release_host only queues retirement; the
         // engine's native handoff must run in the task, outside this update.
         if let Some(pages) = &self.pages { pages.borrow_mut().release_host(); }
@@ -1253,6 +1266,8 @@ impl BrowserWindow {
     /// Child windows can outlive their parent on GPUI's test platform and
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
+        self.close_extension_surfaces(cx);
+        self.extensions.service = None;
         self.save_page_generation = self.save_page_generation.wrapping_add(1);
         self.save_prompt_active=false;
         if let Some(task)=self.save_page_task.take() {cx.spawn(async move |_| {drop(task);}).detach();}
@@ -1344,6 +1359,9 @@ impl BrowserWindow {
             }
             let page_profile = identity.map(|identity| identity.profile);
             if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            let extension_metadata_changed = matches!(&event,
+                Event::LoadingChanged { .. } | Event::TitleChanged { .. } |
+                Event::UrlChanged { .. } | Event::AudioStateChanged { .. });
             pages.borrow_mut().record(&event);
             match event {
                 Event::Password { event, .. } => { if let Some(identity)=identity {self.password_event(identity,event,cx);} },
@@ -1484,6 +1502,12 @@ impl BrowserWindow {
                     }
                 }
                 Event::RendererStateChanged {..} | Event::DocumentColor { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } => {}
+            }
+            // Preserve ordered loading/complete transitions even when a cached
+            // navigation delivers both callbacks in one engine pump.
+            if extension_metadata_changed {
+                pages.borrow_mut().invalidate_extension_tab_metadata();
+                self.sync_extension_model(window, cx);
             }
         }
         }
@@ -1925,6 +1949,14 @@ impl BrowserWindow {
         if let Some(answer) = omnibox::calculator::answer(text) {
             suggestions.push(Suggestion::Calculator { answer });
         }
+        if !query.is_empty() && self.extensions.profile==Some(self.browser.active_user_profile_id()) {
+            for extension in &self.extensions.entries {
+                let label=format!("Extension {}",extension.name);
+                if extension.enabled && label.to_lowercase().contains(&query) {
+                    if let Some(id)=extension.key() {suggestions.push(Suggestion::Action{command:Command::ExtensionAction(id,self.browser.active_user_profile_id()),label});}
+                }
+            }
+        }
         // Commands are explicit suggestions: never interpret arbitrary prose as an action.
         if !query.is_empty() {
             let active = self.browser.active_tab();
@@ -1970,6 +2002,8 @@ impl BrowserWindow {
                 (Command::Undo, "Undo", "undo", true),
                 (Command::Redo, "Redo", "redo", true),
                 (Command::KeyboardShortcuts, "Edit Keyboard Shortcuts", "edit keyboard shortcuts|keyboard shortcuts|customize shortcuts", true),
+                (Command::ManageExtensions, "Manage Extensions…", "manage extensions|extensions", !self.browser.is_private()),
+                (Command::AddExtension, "Add Extension…", "add extension|install extension|chrome web store", !self.browser.is_private()),
                 (Command::Settings, "Settings…", "settings|preferences", true),
                 (Command::AboutEcho, "About Echo", "about echo|about", true),
                 (Command::ImportBrowser, "Import from Another Browser…", "import from another browser|import browser|import bookmarks|import history", self.transient.is_none() && !self.browser.is_private() && !self.browser.is_blank()),
@@ -2382,6 +2416,9 @@ impl BrowserWindow {
                 cx.defer(move |cx| { let _ = main.update(cx, |root, window, cx| root.edit_undo(redo, window, cx)); });
             }
             Command::KeyboardShortcuts => { self.retain_normal_source(cx); self.close_command_bar(cx); crate::settings::open_shortcuts(cx); },
+            Command::ManageExtensions => self.open_extensions(cx),
+            Command::AddExtension => self.open_extension_store(cx),
+            Command::ExtensionAction(id, profile) => if let Ok(id)=std::str::from_utf8(&id) {self.close_command_bar(cx);self.invoke_extension(id,profile,None,cx)},
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
             Command::SearchSettings => self.search_settings_from_command(cx),
             Command::ManagePasswords => self.passwords_from_command(cx),
@@ -4194,6 +4231,7 @@ impl BrowserWindow {
         let panel_bounds = Bounds::new(point(px(left), px(CONTENT_INSET)),
             size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
+        let extensions_open = !virtual_page && self.extensions_is_open();
         let history_open = !virtual_page && self.history_is_open();
         let search_settings_open = !virtual_page && self.search_settings_owner().is_some();
         let password_manager_open = !virtual_page && self.password_manager_is_open();
@@ -4202,7 +4240,7 @@ impl BrowserWindow {
         let site_settings_open = !virtual_page && (self.site_settings_is_open() || more_settings_open);
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if virtual_page || split_open || history_open || search_settings_open || password_manager_open || browsing_data_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if virtual_page || split_open || extensions_open || history_open || search_settings_open || password_manager_open || browsing_data_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -4249,6 +4287,7 @@ impl BrowserWindow {
                         .when(!split_open, |this| this.px_8())
                     .children((!virtual_page && !split_open).then(||self.browser.active_tab()).flatten().and_then(|tab|self.render_crashed_tab(tab.id,cx)))
                     .when(split_open, |this| this.child(self.render_split(cx)))
+                    .when(extensions_open, |this| this.child(self.render_extensions(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .when(search_settings_open, |this| this.child(self.render_search_settings(window,cx)))
                     .when(password_manager_open, |this| this.child(self.render_password_manager(window,cx)))
@@ -4452,6 +4491,10 @@ impl BrowserWindow {
                 let ask_chatgpt = matches!(&suggestion, Suggestion::AskChatGpt { .. });
                 let direct_search = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }));
                 let search_row = direct_search || matches!(&suggestion, Suggestion::Calculator { .. });
+                let extension_row=match &suggestion {
+                    Suggestion::Action{command:Command::ExtensionAction(id,profile),..} if *profile==self.browser.active_user_profile_id()=>self.extensions.entries.iter().find(|extension|extension.key()==Some(*id)).cloned(),
+                    _=>None,
+                };
                 let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
                     Suggestion::AskChatGpt { query } => (crate::icons::Icon::Search, query, "Ask ChatGPT".into()),
                     Suggestion::Load(Resolved::Search { query, .. }) => {
@@ -4473,6 +4516,7 @@ impl BrowserWindow {
                         (crate::icons::Icon::Enter, title, hint)
                     }
                     Suggestion::Action { command: Command::KeyboardShortcuts, label } => (crate::icons::Icon::SiteControls, label, String::new()),
+                    Suggestion::Action { command: Command::ExtensionAction(..), .. } => (crate::icons::Icon::Command, "Extension".into(), String::new()),
                     Suggestion::Action { command: Command::AirTrafficControl, label } => (crate::icons::Icon::AirTraffic, label, String::new()),
                     Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, String::new()),
                     Suggestion::SaveFolderName { name } => (crate::icons::Icon::Folder, name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
@@ -4492,7 +4536,7 @@ impl BrowserWindow {
                     .when(history_result, |tile| tile.text_color(hsla(0., 0., if selected { 1. } else { ink }, 0.7)))
                     .when(selected && matches!(icon, crate::icons::Icon::AirTraffic), |this| this.text_color(gpui::rgb(0x6e74ff)))
                     .when(selected && action_page.is_some(), |tile| tile.text_color(gpui::rgb(0x6e74ff)))
-                    .child(page.unwrap_or_else(|| action_page.map(|name| crate::icons::ionicon(name,14.,1.)).unwrap_or_else(|| crate::icons::control_sized(icon, 14.0))));
+                    .child(if extension_row.is_some() { crate::icons::ionicon("extension-puzzle-outline", 16., 1.) } else { page.unwrap_or_else(|| action_page.map(|name| crate::icons::ionicon(name,14.,1.)).unwrap_or_else(|| crate::icons::control_sized(icon, 14.0))) });
                 let label_len = label.len();
                 let highlights = history_url.as_ref().map(|url| (
                     label_len - display_url(url).len() - " — ".len()..label_len,
@@ -4527,7 +4571,8 @@ impl BrowserWindow {
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(label),
+                            .child(label)
+                            .when_some(extension_row,|label,extension|label.flex().items_center().gap(px(8.)).child(div().debug_selector(||"command-extension-token".into()).flex().items_center().gap(px(6.)).px(px(5.)).h(px(25.)).rounded(px(4.)).bg(hsla(0.,0.,1.,0.06)).child(extension.icon(16.)).child(extension.name))),
                     )
                     .child(
                         div()
@@ -4775,6 +4820,7 @@ impl Render for BrowserWindow {
             self.close_find(cx);
         }
         self.sync_page_viewport();
+        self.sync_extension_model(window, cx);
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
@@ -4788,6 +4834,7 @@ impl Render for BrowserWindow {
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),
             }
         }
+        self.sync_extension_model(window, cx);
         if !cx.has_active_drag() {
             self.sidebar_drag_scroll = None;
             if self.split_drop.is_some() { self.close_split_drop(cx); }

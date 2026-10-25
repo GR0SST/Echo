@@ -334,6 +334,8 @@ impl BrowserWindow {
             return;
         };
         let _ = scope;
+        if index==4 {self.open_extensions(cx);return;}
+        if index==5 {self.open_extension_store(cx);return;}
         if index==6 {self.open_all_site_settings(cx);return;}
         match [
             SiteAction::ClearCache,
@@ -951,14 +953,7 @@ impl BrowserWindow {
                             ),
                     )
                     .child(heading("Extensions"))
-                    .child(
-                        div().flex().flex_wrap().gap(px(TILE_GAP)).child(
-                            tile("site-add-extension")
-                                .hover(|style| style.bg(hsla(0., 0., 1., 0.18)))
-                                .text_color(hsla(0., 0., 1., 0.7))
-                                .child(crate::icons::control(Icon::Plus)),
-                        ),
-                    )
+                    .child(self.render_extension_grid(cx))
                     .when(!boosts.is_empty(), |panel| {
                         panel
                             .child(heading("Boosts"))

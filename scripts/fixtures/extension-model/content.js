@@ -1,0 +1,1 @@
+chrome.runtime.onMessage.addListener((m,s,reply)=>{if(m?.probe===true){reply({url:location.href,text:document.title});}if(m?.senderProbe===true){chrome.runtime.sendMessage("sender-probe").then(reply);return true;}});

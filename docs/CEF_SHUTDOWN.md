@@ -294,11 +294,19 @@ Then run:
 python3 scripts/check-shutdown.py --keep-going
 python3 scripts/check-shutdown.py --appearance Light --case media-pip --case media-archived
 python3 scripts/check-shutdown.py --profiles 4 --case profiles --repeat 3
+# Canonical qualification: all 16 exits in one uninterrupted screen session.
+zsh scripts/check-shutdown-matrix.sh --keep-going --require-network-exit
 ```
 
 The script freezes a private coherent bundle and creates fresh fixture profiles.
-Every native launch acquires `/tmp/echo-screen.lock`; the complete holder has a
-75-second hard timeout. Arc and owner profiles are untouched. Cases cover normal
+Individual runs acquire `/tmp/echo-screen.lock` with a 120-second hard timeout.
+The canonical wrapper instead holds that lock across the entire matrix, creates
+`/tmp/echo-screen-long`, and removes the marker with an EXIT trap. Its hard timeout
+is 700 seconds, within the screen watchdog's 720-second allowance. Inner drives
+use `--screen-locked` to avoid taking the same lock again. A CGWindowList preflight
+checks for leftover Arc windows above layer zero; the explicitly authorized Arc
+restart clears those panels if necessary. It never edits Arc session files or
+owner profiles. Cases cover normal
 quit, multiple isolated profiles, a private window still open, site-data reset,
 separate GPU, combined cases, playing background media with native PiP, and
 archiving the PiP source before quit. The PiP fixture has explicit play/enter
@@ -345,7 +353,8 @@ paused, rather than discarding browsing data. GPUI currently implements app hide
 on macOS; Windows/Linux visibility parity remains unqualified.
 
 `scripts/check-quit-latency.py` copies the assembled bundle into isolated test
-profiles, acquires the screen lock with a 90-second hard holder limit, and polls
+profiles, acquires the screen lock with a 300-second hard holder limit (90 seconds
+per process, allowing the bounded background teardown), and polls
 CoreGraphics for that exact process's on-screen windows every 5 ms. The three
 native request-to-window-gone observations were **23.928, 30.363 and 32.290 ms**;
 all three processes exited zero after `CEF Complete`. These are idle development
@@ -356,3 +365,18 @@ network cleanup: `/Users/grosstgrosst/Documents/Bot/cef-src/qualification/quit-h
 The full 1,610-test suite passed after the behavior change; the added GPUI
 regression also passed, checking no ordinary progress window, one diagnostic on
 failure, retained termination gating, and repeated Quit joining that state.
+
+The metadata candidate `20261025T192350Z-5008` repeated the measurement with a
+frozen app and framework `55a60b71fd32579a392ee53f337a908cecb7b0f012971d6ad3317b4a32ec82aa`.
+Under concurrent build/test load, its three observations were **44.278, 42.471
+and 57.494 ms** (median **44.278 ms**, 5 ms polling). All three owned `Echo Test`
+processes completed normally. Evidence:
+`/Users/grosstgrosst/Documents/Bot/cef-src/qualification/final-quit-latency-192350/`.
+
+A separate real Store-extension/profile-switch session on this exact framework
+hid its window immediately and then completed CEF teardown in **23.530 seconds**.
+The network helper exited zero, `all_exited=1`, without a timeout/dirty marker.
+Its thread-pool shutdown took 21.758 seconds; the observed final atomic writes
+took 0.781–6.249 ms. This remains a background latency case, not a visible wait
+or a forced termination. The native log is
+`target/parity/extensions-ui/qualify/final-real-extensions-cef.log`.

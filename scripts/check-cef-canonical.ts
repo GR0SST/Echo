@@ -1,4 +1,4 @@
-// One acceptance run, one framework hash. Each native check owns its screen lock.
+// One acceptance run, one framework hash. The full shutdown matrix shares one screen session.
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -14,7 +14,8 @@ const evidence = join(source, 'qualification', `canonical-${new Date().toISOStri
 await mkdir(evidence, { recursive: true });
 const expected = record.framework_sha256;
 if (record.schema !== 1 || !/^[a-f0-9]{64}$/.test(expected ?? '')) throw Error('Canonical CEF has no build provenance');
-const env = { ...process.env, ECHO_CEF_DIST: dist, CARGO_BUILD_JOBS: '4' };
+const bundle = resolve(process.env.ECHO_CEF_QUALIFICATION_BUNDLE ?? join(root, 'target/bundle/Echo.app'));
+const env = { ...process.env, ECHO_CEF_DIST: dist, ECHO_CEF_TEST_BUNDLE: bundle, CARGO_BUILD_JOBS: '4' };
 async function run(name: string, command: string[], environment = env) {
   const log = join(evidence, `${name}.log`);
   console.log(`${name}: ${log}`);
@@ -38,23 +39,38 @@ try {
   await requireCurrentStack();
   await run('rust-tests', ['scripts/with-cef.sh', 'cargo', 'test']);
   report.rust_tests = { passed: true };
-  await run('bundle-candidate', ['scripts/with-cef.sh', 'cargo', 'run', '-p', 'bundle']);
-  report.candidate_bundle = { passed: true };
+  if (!process.env.ECHO_CEF_QUALIFICATION_BUNDLE) await run('bundle-candidate', ['scripts/with-cef.sh', 'cargo', 'run', '-p', 'bundle']);
+  const frozenFramework = new Bun.CryptoHasher('sha256');
+  for await (const bytes of Bun.file(join(bundle, 'Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework')).stream()) frozenFramework.update(bytes);
+  if (frozenFramework.digest('hex') !== expected) throw Error('Frozen qualification bundle contains another framework');
+  report.candidate_bundle = { passed: true, path: bundle };
   const codec = JSON.parse(await Bun.file(await run('codecs', ['bun', 'scripts/check-cef-codecs.ts'])).text());
   if (!codec.passed || codec.bundledHash !== expected) throw Error('Codec result is not for the canonical framework');
   report.codecs = codec;
   const extension = JSON.parse(await Bun.file(await run('extensions', ['bun', 'scripts/check-cef-extensions.ts'], { ...env, ECHO_CEF_TEST_POPUP_ONLY: '1' })).text());
   if (!extension.passed || extension.framework_sha256 !== expected) throw Error('Extension result is not for the canonical framework');
   report.extensions = extension;
-  const shutdownLog = await run('shutdown', ['python3', 'scripts/check-shutdown.py', '--cef-dist', dist, '--bundle', join(root, 'target/bundle/Echo.app'), '--output', join(evidence, 'shutdown'), '--require-network-exit', '--keep-going']);
+  const redacted = JSON.parse(await Bun.file(await run('extensions-redacted', ['bun', 'scripts/check-cef-extensions.ts'], { ...env, ECHO_CEF_TEST_POPUP_ONLY: '1', ECHO_CEF_TEST_REDACTED: '1' })).text());
+  if (!redacted.passed || redacted.framework_sha256 !== expected) throw Error('Redacted extension metadata gate failed');
+  report.extensions_redacted = redacted;
+  const model = JSON.parse(await Bun.file(await run('extension-model', ['bun', 'scripts/check-cef-extension-model.ts'])).text());
+  if (!model.passed || model.framework_sha256 !== expected) throw Error('GPUI extension model acceptance failed');
+  report.extension_model = model;
+  const real = await Bun.file(process.env.ECHO_CEF_REAL_EXTENSION_QUALIFICATION ?? join(dist, 'real-extension-qualification.json')).json();
+  if (real.passed !== true || real.framework_sha256 !== expected || real.executable_sha256 !== model.executable_sha256 ||
+      !['dark_reader_https', 'ubol_https', 'profile_isolation'].every(key => real.checks?.[key] === true) ||
+      !Array.isArray(real.artifacts) || !real.artifacts.length) throw Error('Real Store extension HTTPS/isolation qualification is missing or belongs to another framework');
+  for (const artifact of real.artifacts) if (!await Bun.file(artifact).exists()) throw Error(`Missing real-extension evidence: ${artifact}`);
+  report.real_extensions = real;
+  const shutdownLog = await run('shutdown', ['zsh', 'scripts/check-shutdown-matrix.sh', '--cef-dist', dist, '--bundle', bundle, '--output', join(evidence, 'shutdown'), '--require-network-exit', '--keep-going']);
   const directory = (await Bun.file(shutdownLog).text()).match(/^Evidence: (.+)$/m)?.[1];
   if (!directory) throw Error('Shutdown acceptance did not produce its evidence directory');
   const matrix = await Bun.file(join(directory, 'results.json')).json();
   const failures = await Bun.file(join(directory, 'native-failures.json')).json();
-  const bundle = await Bun.file(join(directory, 'bundle.json')).json();
-  if (matrix.length !== 8 || matrix.some((r: any) => !r.passed || !r.cookies_verified) || failures.length || bundle.framework_sha256 !== expected) throw Error('The complete 16-exit canonical shutdown matrix did not pass');
+  const shutdownBundle = await Bun.file(join(directory, 'bundle.json')).json();
+  if (matrix.length !== 8 || matrix.some((r: any) => !r.passed || !r.cookies_verified) || failures.length || shutdownBundle.framework_sha256 !== expected) throw Error('The complete 16-exit canonical shutdown matrix did not pass');
   report.shutdown = { passed: true, clean_exits: 16, directory, matrix };
-  const pip = JSON.parse(await Bun.file(await run('pip', ['python3', 'scripts/check-cef-pip.py', '--cef-dist', dist, '--bundle', join(root, 'target/bundle/Echo.app'), '--output', evidence])).text());
+  const pip = JSON.parse(await Bun.file(await run('pip', ['python3', 'scripts/check-cef-pip.py', '--cef-dist', dist, '--bundle', bundle, '--output', evidence])).text());
   if (!pip.passed || pip.framework_sha256 !== expected) throw Error('PiP result is not for the canonical framework');
   report.pip = pip;
   const recovery = JSON.parse(await Bun.file(await run('shutdown-recovery', ['python3', 'scripts/check-cef-recovery.py', '--cef-dist', dist, '--output', evidence])).text());

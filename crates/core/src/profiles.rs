@@ -52,6 +52,8 @@ pub struct UserProfile {
     #[serde(default)]
     pub browsing_data: crate::browsing_data::BrowsingDataPreferences,
     #[serde(default)]
+    pub unpinned_extensions: std::collections::BTreeSet<String>,
+    #[serde(default)]
     pub developer_sites: std::collections::BTreeSet<String>,
     #[serde(default)]
     developer_disabled_sites: std::collections::BTreeSet<String>,
@@ -106,6 +108,7 @@ impl UserProfile {
             browsing_data: Default::default(),
             developer_sites: Default::default(),
             developer_disabled_sites: Default::default(),
+            unpinned_extensions: Default::default(),
         }
     }
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Native shutdown and restart persistence matrix; build with cargo run -p bundle.
 
-Each drive run independently acquires the shared screen lock with a 120s holder
-limit. Only freshly created fixture profiles are used. No Arc input is sent.
+Each drive run acquires the shared screen lock unless --screen-locked is passed
+by the whole-matrix holder. Only freshly created fixture profiles are used.
 """
 import argparse
 import http.cookies
@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--output", default="target/parity/shutdown-watchdog/acceptance")
     parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived"], action="append")
     parser.add_argument("--keep-going", action="store_true", help="collect all scenarios even after a failing quit")
+    parser.add_argument("--screen-locked", action="store_true", help="caller owns the screen lock for the complete matrix")
     parser.add_argument("--bundle", default=str(ROOT / "target/bundle/Echo.app"))
     parser.add_argument("--cef-dist", help="require this distribution's exact framework before the matrix")
     parser.add_argument("--appearance", choices=["Light", "Dark"], default="Dark")
@@ -131,8 +132,10 @@ def main():
     def drive(directory, phase, script, gpu):
         directory.mkdir(parents=True, exist_ok=True)
         log = directory / f"{phase}.log"
-        command = ["lockf", "-k", "/tmp/echo-screen.lock", "zsh",
+        command = ["zsh",
                    str(ROOT / "scripts/check-shutdown-run.sh"), str(directory), phase, gpu, script]
+        if not args.screen_locked:
+            command = ["lockf", "-k", "/tmp/echo-screen.lock", *command]
         with log.open("w") as stream:
             environment = dict(os.environ, BROWSER_DRIVE_BUNDLE_PATH=str(frozen_bundle))
             result = subprocess.run(command, cwd=ROOT, env=environment, stdout=stream, stderr=subprocess.STDOUT)

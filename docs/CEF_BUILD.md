@@ -73,6 +73,36 @@ removes cookies, localStorage, IndexedDB and CacheStorage through patch #6.
 Every native result must carry the candidate framework hash. Screen holders use
 `/tmp/echo-screen.lock`, hard timeouts and disposable Echo Test profiles.
 
+The metadata bridge adds two mandatory automated gates: unprivileged popup
+redaction (including URL-filter result counts) and the GPUI tab/window fixture
+in [CEF_EXTENSION_TABS.md](CEF_EXTENSION_TABS.md). Before publication, also check
+Store-installed Dark Reader and uBlock Origin Lite on an actual HTTPS page and
+verify that the other test profile has neither extension. Record the viewed
+screenshots/logs in the candidate's `real-extension-qualification.json`:
+
+```json
+{
+  "passed": true,
+  "framework_sha256": "the candidate's exact SHA-256",
+  "executable_sha256": "the model fixture app's exact SHA-256",
+  "checks": {"dark_reader_https": true, "ubol_https": true, "profile_isolation": true},
+  "artifacts": ["/absolute/path/to/verified/screenshot.png", "/absolute/path/to/native.log"]
+}
+```
+
+This is a record of completed native checks, not an approval override. The runner
+requires the exact framework and model-fixture executable hashes, all three
+checks, and existing artifacts.
+`ECHO_CEF_REAL_EXTENSION_QUALIFICATION` can select an external receipt.
+Build and freeze the app before collecting that receipt. To use that same app
+throughout the automated gates without rebuilding it, set
+`ECHO_CEF_QUALIFICATION_BUNDLE=/absolute/path/to/frozen/Echo.app` when running
+`bun scripts/check-cef-canonical.ts`. The runner still runs the complete Rust
+suite, checks the framework, and requires the real-extension executable hash to
+match its GPUI model gate. Individual codec/model checks accept
+`ECHO_CEF_TEST_BUNDLE` for the same purpose. Keep the
+artifacts outside Git, with the rest of the native evidence.
+
 Only after these checks pass does the runner write a native qualification receipt
 and publish the adapter with one atomic symlink switch under the build lock. It
 then runs plain `cargo run -p bundle` without CEF overrides and verifies the default
@@ -87,7 +117,73 @@ objects, evidence and prebuilt fallback. `cleanup.json` records removed paths an
 logical disk size. Compiling the download receipt checkpoint does not enable
 production download admission.
 
-### Published six-patch generation
+### Published metadata bridge generation
+
+Generation `20261025T192350Z-5008` adds the GPUI-authoritative extension tab/window
+API to the same ordered six-patch stack. CEF/Chromium pins and GN definitions
+below are unchanged. Incremental compile/link took **190 seconds**; compilation
+and minimal packaging together took **343 seconds**. The framework SHA-256 is
+`55a60b71fd32579a392ee53f337a908cecb7b0f012971d6ad3317b4a32ec82aa`;
+minimal archive SHA-1 is `6eb300d569d61ddaf261ff74fcaed521b808f7de`.
+
+Qualification used one frozen Echo executable
+`50a987a377c608a56260d6408b9d08e586711f68d4f48bd5d70cd7103d580250`.
+Full workspace tests passed **1,763 tests, zero failed, one existing ignored**,
+including doctests. Native gates passed all 18 query filters, permission
+redaction, 20 GPUI mutation/message/event checks, Alloy popup/profile isolation,
+and real Web Store uBlock Origin Lite and Dark Reader operation on HTTPS.
+The management/pinning/shortcuts UI still has a separate Arc parity gate.
+
+The uninterrupted shutdown matrix passed **16/16 exits**, eight write/restart
+scenarios with expected HTTP cookies and private isolation, no native failures,
+and sixteen graceful network-helper exits. Full teardown median/max were
+**227/2,323 ms**. The matrix held the screen lock for its entire duration; its
+Arc CGWindowList preflight found no elevated panels and did not restart Arc.
+The final PiP run passed plain 224×126 idle/hover, Space pause, Tab reveal,
+mouse Back to Tab, manual re-entry at retained bounds, Close and clean shutdown.
+Forced-timeout recovery exited normally, reaped helper 93716, checked retained
+cookie/localStorage/IndexedDB data and rejected corrupt SQLite. Browsing-data
+removal cleared cookies, localStorage, IndexedDB and CacheStorage (`failed_bits=0`).
+
+A codec trial never navigated away from `about:blank`, so it did not exercise
+H.264/AAC decoding. The harness now waits before activation, positions its owned
+window and requires focus before typing. An A/B check used the identical frozen
+executable and W3C MP4 with the preceding `9210…` framework and this `55a6…`
+framework. Both passed; the new framework rendered **101 frames, zero drops**,
+decoded **68,663 audio bytes**, and produced **2,492,416 stereo 48 kHz samples**.
+Both playback screenshots were visually inspected. One PiP trial missed Close;
+an unchanged fresh retry passed. The final harness refreshes pointer motion after
+its screenshot and uses the project's 300 ms native-button hold; its single
+Close click and unchanged visibility/three-second dismissal assertions passed.
+The failed trials remain in the evidence.
+
+Evidence beneath `/Users/grosstgrosst/Documents/Bot/cef-src/qualification/`:
+
+- `final-long-lock-matrix/run-3g7m3id2/`: all sixteen exits and bundle hashes.
+- `final-post-long-lock/`: codec A/B reports and `collect-final.ts`, which validates
+  the individual same-executable receipts and all six patch hashes before publication.
+- `final-post-retry-1/`: unchanged PiP retry, recovery and browsing-data reports.
+- `final-pip-input-barrier/pip-kgodxm1x/`: final PiP proof; image pair `idle.png`
+  and `hover.png`, with keyboard controls in `tab-reveal.png` (visually inspected).
+- `canonical-2026-10-25T20-05-34.434Z/`: popup, redaction and model API receipts.
+- `canonical-2026-10-25T20-21-15.846Z/rust-tests.log`: full Rust suite.
+
+Immediately before cleanup, the source/build/evidence tree measured
+**103,852,788 KiB (99.04 GiB)**; the disk had **321 GiB free**. Native evidence
+contains APFS-cloned app/profile copies, so logical tree size includes those.
+The canonical adapter retains its `build.json`, `qualification.json` and cleanup
+receipt outside Git. No binaries are committed.
+Plain `cargo run -p bundle` without CEF overrides selected this framework and
+matched its hash. Qualified cleanup removed **3,000,736 KiB (2.86 GiB)** of
+superseded distributions; only this generation remains in the canonical adapter
+and package roots. Source, objects, evidence and the prebuilt fallback remain.
+After rebasing this integration onto main, full `cargo test` passed **1,798 tests,
+zero failed, one existing ignored**. The rebuilt bundle passed all 20 native
+model checks again at `qualification/extension-model-2026-10-25T20-51-48.035Z/`,
+using executable `6e778e3fa00f3e634253e3c851fc07069256e8411deaf1673473a54c7a562fce`
+and the unchanged canonical framework.
+
+### Previous six-patch generation
 
 Generation `20261025T160409Z-9401` was staged on 2026-10-25. Its incremental
 compile/link and budget regression took **92 seconds**, and complete build and

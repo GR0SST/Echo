@@ -63,6 +63,8 @@ impl FileDownloadRequest {
                 self.context,
                 Some(DownloadOwner::continue_normal_after_source_close(owner)),
                 Some(host),
+                None,
+                true,
             )
             .ok_or("Cannot create the owned download initiator")?;
         runtime.lifecycle.require_running()?;

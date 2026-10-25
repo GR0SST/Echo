@@ -220,6 +220,13 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 }
             }
             match name {
+                "extension-load-fixture" if cfg!(debug_assertions) && std::env::var_os("ECHO_EXTENSION_ACCEPTANCE").as_deref() == Some(std::ffi::OsStr::new("1")) => {
+                    let result = view.update(cx, |view, _| {
+                        view.extensions.service.as_ref().ok_or("Extension service is not ready".to_owned())?
+                            .load_unpacked(arg, Box::new(|result| eprintln!("[extension-fixture] {result:?}")))
+                    }).map_err(|error| error.to_string()).and_then(|result| result);
+                    if let Err(error) = result { eprintln!("[automation] aborted: fixture load failed: {error}"); return; }
+                }
                 "app-download-arm" => {
                     // Reservation and Config filesystem work must be outside App updates.
                     let ready = cx.update(|cx| crate::download_acceptance::preflight(cx)).ok().is_some_and(|r| r.is_ok());
@@ -754,6 +761,12 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
             .as_ref()
             .map(|bar| bar.input.read(cx).text().to_string()),
     );
+    out += &format!("[dump] extensions={}\n",serde_json::json!({
+        "profile": this.extensions.profile.map(|id|format!("{id:?}")),
+        "ready": this.extensions.service.is_some(),
+        "error": this.extensions.error,
+        "entries": this.extensions.entries.iter().map(|entry|serde_json::json!({"id":entry.id,"name":entry.name,"version":entry.version,"enabled":entry.enabled,"commands":entry.commands.iter().map(|command|serde_json::json!({"name":command.name,"shortcut":command.shortcut})).collect::<Vec<_>>()})).collect::<Vec<_>>()
+    }));
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
     out += &format!("[dump] history_count={}\n", browser.active_user_profile().history.len());
     out += &format!("[dump] password_prompt={}\n", this.passwords.prompt.is_some());

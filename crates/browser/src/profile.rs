@@ -68,6 +68,9 @@ pub(crate) struct ProfileHandle {
 }
 
 impl ProfileHandle {
+    /// Process-local model identity. Blank/Little Arc own independent TabId
+    /// allocators, even when they share a normal profile's Chromium storage.
+    pub(crate) fn model_namespace(&self) -> u64 { self.owner.entity_id().as_u64() }
     /// Data is published beside this canonical session, never via a process-wide
     /// fallback that could target another running profile or a test owner's data.
     pub(crate) fn storage_directory(&self, cx:&App)->Option<PathBuf> {

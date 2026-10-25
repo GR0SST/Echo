@@ -12,6 +12,16 @@ pub(crate) struct SidebarSelection {
     pub(crate) new_space_items: Vec<TabId>,
 }
 impl BrowserWindow {
+    pub(crate) fn extension_highlight_supported(&self, id: TabId, highlighted: bool) -> bool {
+        if self.browser.active_tab().is_some_and(|tab|tab.id == id) { return highlighted; }
+        !highlighted || self.selectable_sidebar_items().contains(&id)
+    }
+    pub(crate) fn set_extension_highlight(&mut self, id: TabId, highlighted: bool, cx: &mut Context<Self>) {
+        if self.browser.active_tab().is_some_and(|tab|tab.id == id) { return; }
+        if self.sidebar_item_selected(id) != highlighted {
+            self.select_sidebar_item(id,gpui::Modifiers {platform:true,..Default::default()},cx);
+        }
+    }
     fn selectable_sidebar_items(&self) -> Vec<TabId> {
         self.browser.pinned_rows(self.browser.space().id, false).into_iter()
             .filter_map(|row| self.browser.pinned_item_tab(self.browser.space().id, row.item).filter(|_| !matches!(row.item, PinnedItem::Folder(_))))

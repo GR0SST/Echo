@@ -51,6 +51,15 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     { headers: { "Content-Type": "text/html; charset=utf-8" } });
 } });
 const resultPath = join(evidence, "result.json");
+let fixture = resolve(import.meta.dir, "fixtures/extension-popup");
+if (process.env.ECHO_CEF_TEST_REDACTED === "1") {
+  const redacted = join(profiles, "unprivileged-fixture");
+  await copy(fixture, redacted);
+  const manifest = await Bun.file(join(redacted, "manifest.json")).json();
+  manifest.permissions = ["storage"];
+  await Bun.write(join(redacted, "manifest.json"), JSON.stringify(manifest, null, 2));
+  fixture = redacted;
+}
 const log = Bun.file(join(evidence, "native.log"));
 app = Bun.spawn([join(bundle, "MacOS/cefclient"),
   "--use-native", "--use-alloy-style", "--in-process-gpu", "--use-mock-keychain",
@@ -59,7 +68,7 @@ app = Bun.spawn([join(bundle, "MacOS/cefclient"),
   `--cache-path=${profiles}/A`, `--echo-extension-probe-root=${profiles}`,
   `--url=http://127.0.0.1:${server.port}/A`,
   `--echo-extension-probe-url-b=http://127.0.0.1:${server.port}/B`,
-  `--echo-extension-probe-fixture=${resolve(import.meta.dir, "fixtures/extension-popup")}`,
+  `--echo-extension-probe-fixture=${fixture}`,
   `--echo-extension-probe-output=${resultPath}`,
   `--echo-extension-probe-shot=${join(evidence, "popup.png")}`,
   `--echo-extension-probe-store-mode=${process.env.ECHO_CEF_TEST_STORE_MODE ?? "install"}`,
@@ -75,7 +84,8 @@ try {
     result.close_b === 4 && result.ready && result.popup_loaded && result.visible_native_view &&
     result.popup_closed && (result.management_ok || process.env.ECHO_CEF_TEST_POPUP_ONLY === "1") && result.title === "POPUP_GATE:1:fixture-profile-A" &&
     await Bun.file(join(evidence, "popup.png")).exists();
-  const report = { passed: Boolean(passed), exitCode, result, profiles, evidence, dist, framework_sha256: frameworkHash };
+  const report = { passed: Boolean(passed), exitCode, result, profiles, evidence, dist, framework_sha256: frameworkHash,
+    metadata_permissions: process.env.ECHO_CEF_TEST_REDACTED === "1" ? "redacted" : "activeTab" };
   await Bun.write(join(evidence, "qualification.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(JSON.stringify(report, null, 2));
   if (!passed) process.exitCode = 1;

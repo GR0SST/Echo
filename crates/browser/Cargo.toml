@@ -17,6 +17,8 @@ path = "src/main.rs"
 [dependencies]
 echo_updater = { path = "../updater" }
 echo_github = { path = "../github" }
+serde = { version = "1", features = ["derive"] }
+base64 = "0.22"
 echo_ai = { path = "../ai", features = ["http", "native"] }
 browser_core = { package = "core", path = "../core" }
 engine = { path = "../engine" }

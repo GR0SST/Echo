@@ -4,6 +4,8 @@ use crate::shortcuts::{self as runtime, CATALOG};
 pub(super) struct State {
     pub selected: Option<String>,
     pub armed: bool,
+    extension: Option<(String,String,browser_core::UserProfileId)>,
+    extension_error: Option<String>,
     pub focus: FocusHandle,
     _interceptor: Subscription,
 }
@@ -25,6 +27,8 @@ impl State {
         Self {
             selected: None,
             armed: false,
+            extension: None,
+            extension_error: None,
             focus: cx.focus_handle(),
             _interceptor: interceptor,
         }
@@ -147,6 +151,21 @@ impl SettingsWindow {
             cx.notify();
             return;
         }
+        if self.shortcuts.extension.is_some() {
+            if matches!(key.key.as_str(),"shift"|"control"|"alt"|"cmd"|"super"|"fn"|"meta") {return;}
+            let clear=matches!(key.key.as_str(),"backspace"|"delete")&&key.modifiers==gpui::Modifiers::default();
+            let mut parts=Vec::new();
+            if key.modifiers.platform {parts.push(if cfg!(target_os="macos"){"Command"}else{"Ctrl"}.to_owned());}
+            if key.modifiers.control {parts.push(if cfg!(target_os="macos"){"MacCtrl"}else{"Ctrl"}.to_owned());}
+            if key.modifiers.alt {parts.push("Alt".into());}
+            if key.modifiers.shift {parts.push("Shift".into());}
+            parts.push(key.key.to_uppercase());
+            let value=if clear{String::new()}else{parts.join("+")};
+            let conflict=if clear{None}else{self.shortcut_conflict("__extension",Some(&key.unparse()))};
+            if let Some(conflict)=conflict{self.shortcuts.extension_error=Some(format!("Already in use by “{conflict}”"));}
+            else {self.set_extension_shortcut(&value,cx);}
+            cx.notify();return;
+        }
         let Some(id) = self.shortcuts.selected.clone() else {
             return;
         };
@@ -172,6 +191,35 @@ impl SettingsWindow {
             self.edit_shortcut(&id, Some(key.unparse()), cx);
         }
     }
+    fn extension_shortcuts(&self,cx:&App)->Vec<(String,String,String,String,String,browser_core::UserProfileId)> {
+        self.owner.as_ref().and_then(|owner|owner.read_with(cx,|owner,_|{
+            if owner.extensions.profile!=Some(self.selected_profile){return Vec::new();}
+            owner.extensions.entries.iter().flat_map(|extension|extension.commands.iter().map(|command|(
+                extension.id.clone(),command.name.clone(),extension.name.clone(),command.description.clone(),command.shortcut.clone(),self.selected_profile))).collect()
+        }).ok()).unwrap_or_default()
+    }
+    fn set_extension_shortcut(&mut self,value:&str,cx:&mut Context<Self>) {
+        let Some((id,command,profile))=self.shortcuts.extension.clone()else{return;};
+        if profile!=self.selected_profile{return;}
+        let result=self.owner.as_ref().ok_or("Extension window closed".to_owned()).and_then(|owner|owner.update(cx,|owner,_|{
+            if owner.extensions.profile!=Some(profile)||owner.browser.active_user_profile_id()!=profile{return Err("Extension profile changed".into());}
+            owner.extensions.service.as_ref().ok_or("Extensions are unavailable".to_owned())?.set_shortcut(&id,&command,value,3)
+        }).map_err(|e|e.to_string())?);
+        self.shortcuts.extension_error=result.err();self.shortcuts.armed=false;cx.notify();
+    }
+    fn render_extension_shortcuts(&self,cx:&mut Context<Self>)->AnyElement {
+        let query=self.shortcut_search.read(cx).text().trim().to_lowercase();
+        let entries=self.extension_shortcuts(cx).into_iter().filter(|(_,_,name,description,key,_)|query.is_empty()||format!("Extension {name} {description} {key}").to_lowercase().contains(&query)).collect::<Vec<_>>();
+        let colors=self.colors;
+        div().flex().flex_col().when(!entries.is_empty(),|list|list.child(div().h(px(38.)).pt(px(12.)).text_size(px(11.)).text_color(colors.rgb(0x929494)).child("Extensions")))
+            .children(entries.into_iter().map(|(id,command,name,description,key,profile)|{
+                let selector=format!("extension-shortcut-{id}-{command}");
+                div().id(gpui::SharedString::from(selector.clone())).debug_selector(move||selector.clone()).h(px(48.)).border_b_1().border_color(colors.rgb(0x3e3f41)).flex().items_center().gap(px(8.)).px(px(8.)).cursor_pointer()
+                    .child(div().flex_1().min_w_0().flex().flex_col().child(name).child(div().text_size(px(11.)).child(description)))
+                    .child(div().text_size(px(12.)).child(if key.is_empty(){"Not Set".into()}else{key}))
+                    .on_click(cx.listener(move|this,_,window,cx|{this.shortcuts.extension=Some((id.clone(),command.clone(),profile));this.shortcuts.selected=None;this.shortcuts.extension_error=None;this.shortcuts.armed=true;this.shortcuts.focus.focus(window);cx.notify();}))
+            })).into_any_element()
+    }
     pub(super) fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = self.colors;
         let entries = self.shortcut_entries(cx);
@@ -182,7 +230,16 @@ impl SettingsWindow {
             .as_ref()
             .and_then(|id| CATALOG.iter().find(|(label, _)| label == id))
             .cloned();
-        let details = if let Some((id, default)) = selected {
+        let details = if let Some((id,command,profile)) = &self.shortcuts.extension {
+            let label=self.extension_shortcuts(cx).into_iter().find(|(extension,name,_,_,_,owner)|extension==id&&name==command&&owner==profile);
+            div().w(px(200.)).flex().flex_col().gap(px(14.))
+                .child(div().text_size(px(24.)).child(label.as_ref().map(|(_,_,_,_,key,_)|if key.is_empty(){"Not Set".into()}else{key.clone()}).unwrap_or_default()))
+                .child(label.map(|(_,_,name,description,_,_)|format!("{name} — {description}")).unwrap_or_default())
+                .when(self.shortcuts.armed,|panel|panel.child("Press a new shortcut"))
+                .when_some(self.shortcuts.extension_error.clone(),|panel,error|panel.child(error))
+                .child(self.settings_button("Clear Shortcut").id("extension-shortcut-clear").debug_selector(||"extension-shortcut-clear".into()).on_click(cx.listener(|this,_,_,cx|this.set_extension_shortcut("",cx))))
+                .into_any_element()
+        } else if let Some((id, default)) = selected {
             let value = self.shortcut_value(&id, &default);
             let text = runtime::display(value.as_deref());
             let conflict = self.shortcut_conflict(&id, value.as_deref());
@@ -362,6 +419,7 @@ impl SettingsWindow {
                                             .on_click(cx.listener({
                                                 let id = id.clone();
                                                 move |this, _, _, cx| {
+                                                    this.shortcuts.extension=None;
                                                     this.shortcuts.selected = Some(id.clone());
                                                     this.shortcuts.armed = false;
                                                     cx.notify();
@@ -480,7 +538,8 @@ impl SettingsWindow {
                                     .flex_1()
                                     .overflow_y_scroll()
                                     .px(px(15.))
-                                    .children(rows),
+                                    .children(rows)
+                                    .child(self.render_extension_shortcuts(cx)),
                             ),
                     )
                     .child(details),

@@ -103,7 +103,7 @@ def owned_pid():
         if len(parts)==2 and os.path.normpath(parts[1].split()[0])==exe: found.append(int(parts[0]))
     assert len(found)<=1,found
     return found[0] if found else None
-result={'passed':False,'framework_sha256':expected,'cef_dist':str(Path(a.cef_dist).resolve()),'evidence':str(evidence)}
+result={'passed':False,'framework_sha256':expected,'executable_sha256':hashlib.sha256((app/'Contents/MacOS/Echo').read_bytes()).hexdigest(),'cef_dist':str(Path(a.cef_dist).resolve()),'evidence':str(evidence)}
 try:
     pid=until(owned_pid,20,'Private Echo did not start')
     def pip_windows(): return [w for w in windows() if w.get('kCGWindowOwnerPID')==pid and w.get('kCGWindowLayer')==3 and w.get('kCGWindowName')=='Picture in Picture']
@@ -143,7 +143,11 @@ try:
         check(); mouse(f'c:{center[0]},{center[1]}'); key(48); time.sleep(.4); shot('tab-reveal.png')
     def press(offset, name):
         point=(x+offset,y+17); check(point); mouse(f'm:{point[0]},{point[1]}'); time.sleep(.3); shot(f'before-{name}.png')
-        check(point); mouse(f'dd:{point[0]},{point[1]}','w:200',f'du:{point[0]},{point[1]}')
+        # Capturing a screenshot can outlast Chromium's controls idle timer on
+        # a busy machine. Move immediately before the click so the photographed
+        # control is still revealed when the actual input arrives. Use the
+        # project's 300 ms hold for native window buttons.
+        check(point); mouse(f'm:{point[0]},{point[1]}',f'dd:{point[0]},{point[1]}','w:300',f'du:{point[0]},{point[1]}')
         until(lambda:not any(w.get('kCGWindowNumber')==window['kCGWindowNumber'] for w in windows()),3,f'{name} did not close owned PiP')
     reveal(); press(184,'return'); result['return_passed']=True
     manual=until(pip_windows,40,'Manual HTML PiP did not reopen'); assert len(manual)==1,manual
