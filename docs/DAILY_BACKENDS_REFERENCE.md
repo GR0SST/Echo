@@ -1,9 +1,10 @@
 # Daily-use backend reference
 
-Reference: installed Arc 1.169.0, 2026-10-25. Evidence is local under
-`target/parity/daily-backends/`. All browser inspections use the shared Echo Test
-Space and close their test tab, Settings window (when opened), and owned browser
-window in the same locked, bounded script. No owner passwords are read or exported.
+Reference: installed Arc 1.170.0, 2026-10-25. Evidence is local under
+`target/parity/daily-backends/`. Browser inspections use the shared Echo Test
+Space under locked, bounded scripts. A save-sheet closing race required a
+separate guarded recovery; it restored the Space assignment and closed the
+recorded test window while preserving every baseline owner window. No owner passwords are read or exported.
 
 ## Password storage
 
@@ -96,3 +97,54 @@ letter-spacing style) remains a documented typography gap. Title/label line
 heights come from Arc's packed shared dialog/input styles (15 / 16 px).
 Five GPUI tests cover editor input, custom default, Tab/Space policy, keyboard
 scroll/focus, cancellation, deleted owners, and a profile switch before repaint.
+
+## Password-manager metadata and isolated save reference
+
+Version 2 authenticates its format tag as well as its install/profile identity,
+while retaining version-1 reads and the existing OS-held encryption key. It adds
+encrypted notes and the per-origin never-save policy. Imports and login updates
+preserve notes; password edits/deletions preserve the independent policy. An
+identity edit is one atomic write and rejects both stale rows and collisions.
+Notes use Arc's 1,000 UTF-16-unit limit (`PASSWORD_NOTE_MAX_CHARACTER_COUNT` in
+packed resource 20047), including the correct two-unit count for supplementary
+characters. Notes and decoded credential buffers are zeroed on drop.
+
+Eight vault tests cover legacy reads/upgrades, authenticated format tags, note
+limits, import retention, stale/colliding edits, encrypted policy persistence,
+profile isolation and existing ciphertext/key/migration cases. The disposable
+native fixture now verifies notes and never-save policy across restart and
+checks that imports preserve the manager's note. It removes its two synthetic
+passwords, policy entry and legacy test Keychain item at the end.
+
+The safe live password fixture is **Echo Password Fixture 69cec731**, created
+without a new Space. Only Echo Test was temporarily assigned to it.
+`arc-password-isolated-save-prompt.png` and its AX controls record Arc's actual
+450 × 273 save card: “Save password for 127.0.0.1?”, “That way, it’ll be auto-filled
+next time”, Never on this site / No / Save. The synthetic POST was verified and
+the sheet was cancelled; no password was saved in Arc. The closing sheet's
+animation invalidated a cached popup owner, so recovery used recorded IDs.
+`arc-recovery-v31.log` confirms Echo Test restored to Grosst, all baseline
+windows preserved and the owned window closed. `arc-password-clean-sidebar.txt`
+contains neither fixture tab title nor its local host. The fixture profile is
+now unused. Owner profiles and their passwords were never edited/read/exported.
+
+## Clear-data native preflight
+
+`cef-removal-probe.log` and `extensions-2026-10-25T10-55-17.449Z/` prove the newly
+available opt-in CEF bridge can invoke `chrome.browsingData.remove` in an empty,
+disposable Alloy profile. The other test profile cannot invoke that extension.
+This is an API-capability probe, not seeded-data/time-range deletion qualification.
+A direct browser-process BrowsingDataRemover bridge was prepared in
+`data-native-source/browsing-data-bridge.patch`, but remains unapplied: the
+shared CEF source preflight rejects `Digest mismatch:
+content/browser/renderer_host/navigation_request.cc`. No shared source or
+distribution was changed. That work needs the source stack qualified before
+compilation; the GPUI clear-data dialog and production wiring remain pending.
+
+Validated metadata acceptance: `password-notes-native-run.CShUY5/{write,verify}.log`
+(each exits 0 with CEF Complete) and `password-notes-native-v2.log`. The harness
+checks ciphertext and session JSON for all synthetic password/note/policy
+markers. Full `password-notes-full-tests-v2.log` is green: 1,171 browser, 252
+core, 166 engine, 18 AI, two bundle and four importer tests, plus one native
+bootstrap test; one existing AI test remains ignored. This validates storage,
+not the still-pending GPUI save sheet, autofill or password manager.

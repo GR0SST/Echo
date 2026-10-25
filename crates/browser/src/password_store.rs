@@ -7,13 +7,16 @@ use ring::{
     rand::{SecureRandom, SystemRandom},
 };
 use std::{
+    collections::BTreeSet,
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
 use zeroize::Zeroizing;
 
-const HEADER: &[u8] = b"ECHO-PW1";
+const HEADER: &[u8] = b"ECHO-PW2";
+const LEGACY_HEADER: &[u8] = b"ECHO-PW1";
+const MAX_NOTE_UTF16: usize = 1000;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FIELD: usize = 1024 * 1024;
 const ERROR: &str = "The local password store could not be opened.";
@@ -46,6 +49,12 @@ impl Keys for NativeKeys {
 pub(crate) struct SavedPassword {
     pub credential: Credential,
     pub modified: i64,
+    pub note: Zeroizing<String>,
+}
+#[derive(Default)]
+struct VaultData {
+    passwords: Vec<SavedPassword>,
+    blocked: BTreeSet<String>,
 }
 pub(crate) struct Vault<K = NativeKeys> {
     file: PathBuf,
@@ -75,9 +84,13 @@ impl<K: Keys> Vault<K> {
             .map(|credential| SavedPassword {
                 credential,
                 modified: 0,
+                note: Zeroizing::new(String::new()),
             })
             .collect::<Vec<_>>();
-        self.save(&rows)
+        self.save(&VaultData {
+            passwords: rows,
+            blocked: BTreeSet::new(),
+        })
     }
     fn with_keys(root: &Path, profile: &str, keys: K) -> Result<Self> {
         if profile != "default" && engine::StorageKey::new(profile).is_err() {
@@ -117,10 +130,17 @@ impl<K: Keys> Vault<K> {
             aead::UnboundKey::new(&aead::AES_256_GCM, &key).map_err(|_| ERROR)?,
         ))
     }
-    fn load(&self) -> Result<Vec<SavedPassword>> {
+    fn associated_data(&self, legacy: bool) -> String {
+        if legacy {
+            self.account.clone()
+        } else {
+            format!("{}\0ECHO-PW2", self.account)
+        }
+    }
+    fn load(&self) -> Result<VaultData> {
         let metadata = match std::fs::symlink_metadata(&self.file) {
             Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(VaultData::default()),
             Err(_) => return Err(ERROR.into()),
         };
         if !metadata.is_file() || metadata.len() > MAX_BYTES as u64 {
@@ -134,31 +154,34 @@ impl<K: Keys> Vault<K> {
             .map_err(|_| ERROR)?;
         if bytes.len() > MAX_BYTES
             || bytes.len() < HEADER.len() + 12 + aead::MAX_TAG_LEN
-            || !bytes.starts_with(HEADER)
+            || !(bytes.starts_with(HEADER) || bytes.starts_with(LEGACY_HEADER))
         {
             return Err(ERROR.into());
         }
+        let legacy = bytes.starts_with(LEGACY_HEADER);
+        let associated_data = self.associated_data(legacy);
         let nonce = aead::Nonce::try_assume_unique_for_key(&bytes[HEADER.len()..HEADER.len() + 12])
             .map_err(|_| ERROR)?;
         let plaintext = self
             .key(false)?
             .open_in_place(
                 nonce,
-                aead::Aad::from(self.account.as_bytes()),
+                aead::Aad::from(associated_data.as_bytes()),
                 &mut bytes[HEADER.len() + 12..],
             )
             .map_err(|_| ERROR)?;
-        decode(plaintext)
+        decode(plaintext, !legacy)
     }
-    fn save(&self, rows: &[SavedPassword]) -> Result<()> {
+    fn save(&self, data: &VaultData) -> Result<()> {
         // Existing vaults must never silently acquire a replacement key.
         let key = self.key(!self.file.try_exists().map_err(|_| ERROR)?)?;
-        let mut payload = encode(rows)?;
+        let mut payload = encode(data)?;
         let mut nonce = [0; 12];
         SystemRandom::new().fill(&mut nonce).map_err(|_| ERROR)?;
+        let associated_data = self.associated_data(false);
         key.seal_in_place_append_tag(
             aead::Nonce::assume_unique_for_key(nonce),
-            aead::Aad::from(self.account.as_bytes()),
+            aead::Aad::from(associated_data.as_bytes()),
             &mut *payload,
         )
         .map_err(|_| ERROR)?;
@@ -175,53 +198,158 @@ impl<K: Keys> Vault<K> {
     }
     pub(crate) fn list(&self) -> Result<Vec<SavedPassword>> {
         let _lock = ACCESS.lock().map_err(|_| ERROR)?;
-        self.load()
+        self.load().map(|data| data.passwords)
     }
+    /// Imports and login updates preserve the user's existing encrypted note.
     pub(crate) fn upsert(&self, credential: &Credential, modified: i64) -> Result<()> {
+        self.upsert_note(credential, None, modified)
+    }
+    pub(crate) fn upsert_with_note(
+        &self,
+        credential: &Credential,
+        note: &str,
+        modified: i64,
+    ) -> Result<()> {
+        self.upsert_note(credential, Some(note), modified)
+    }
+    fn upsert_note(
+        &self,
+        credential: &Credential,
+        note: Option<&str>,
+        modified: i64,
+    ) -> Result<()> {
         validate(credential)?;
+        if let Some(note) = note {
+            validate_note(note)?;
+        }
         let _lock = ACCESS.lock().map_err(|_| ERROR)?;
-        let mut rows = self.load()?;
-        rows.retain(|r| {
-            r.credential.origin != credential.origin || r.credential.username != credential.username
-        });
+        let mut data = self.load()?;
+        let rows = &mut data.passwords;
+        let note = match note {
+            Some(note) => Zeroizing::new(note.to_owned()),
+            None => rows
+                .iter()
+                .find(|r| same_identity(&r.credential, credential))
+                .map(|r| r.note.clone())
+                .unwrap_or_default(),
+        };
+        rows.retain(|r| !same_identity(&r.credential, credential));
         rows.push(SavedPassword {
-            credential: Credential {
-                origin: credential.origin.clone(),
-                username: credential.username.clone(),
-                password: credential.password.clone(),
-            },
+            credential: copy_credential(credential),
             modified,
+            note,
         });
-        self.save(&rows)
+        self.save(&data)
+    }
+    /// Editing an identity is one authenticated write. A stale selection or a
+    /// conflicting identity never deletes or overwrites another credential.
+    pub(crate) fn replace(
+        &self,
+        old_origin: &str,
+        old_username: &str,
+        credential: &Credential,
+        note: &str,
+        modified: i64,
+    ) -> Result<()> {
+        validate(credential)?;
+        validate_note(note)?;
+        let _lock = ACCESS.lock().map_err(|_| ERROR)?;
+        let mut data = self.load()?;
+        let rows = &mut data.passwords;
+        let index = rows
+            .iter()
+            .position(|r| {
+                r.credential.origin == old_origin && r.credential.username == old_username
+            })
+            .ok_or(ERROR)?;
+        if rows
+            .iter()
+            .enumerate()
+            .any(|(i, r)| i != index && same_identity(&r.credential, credential))
+        {
+            return Err(ERROR.into());
+        }
+        rows[index] = SavedPassword {
+            credential: copy_credential(credential),
+            modified,
+            note: Zeroizing::new(note.to_owned()),
+        };
+        self.save(&data)
     }
     pub(crate) fn remove(&self, origin: &str, username: &str) -> Result<()> {
         let _lock = ACCESS.lock().map_err(|_| ERROR)?;
-        let mut rows = self.load()?;
+        let mut data = self.load()?;
+        let rows = &mut data.passwords;
         rows.retain(|r| r.credential.origin != origin || r.credential.username != username);
-        self.save(&rows)
+        self.save(&data)
+    }
+    pub(crate) fn is_blocked(&self, origin: &str) -> Result<bool> {
+        validate_origin(origin)?;
+        let _lock = ACCESS.lock().map_err(|_| ERROR)?;
+        Ok(self.load()?.blocked.contains(origin))
+    }
+    pub(crate) fn block(&self, origin: &str) -> Result<()> {
+        self.set_blocked(origin, true)
+    }
+    pub(crate) fn unblock(&self, origin: &str) -> Result<()> {
+        self.set_blocked(origin, false)
+    }
+    fn set_blocked(&self, origin: &str, blocked: bool) -> Result<()> {
+        validate_origin(origin)?;
+        let _lock = ACCESS.lock().map_err(|_| ERROR)?;
+        let mut data = self.load()?;
+        if blocked {
+            data.blocked.insert(origin.to_owned());
+        } else {
+            data.blocked.remove(origin);
+        }
+        self.save(&data)
     }
     pub(crate) fn clear_since(&self, since: i64) -> Result<()> {
         let _lock = ACCESS.lock().map_err(|_| ERROR)?;
-        let mut rows = self.load()?;
+        let mut data = self.load()?;
+        let rows = &mut data.passwords;
         rows.retain(|r| r.modified < since);
-        self.save(&rows)
+        self.save(&data)
     }
 }
-fn validate(c: &Credential) -> Result<()> {
-    let url = url::Url::parse(&c.origin).map_err(|_| ERROR)?;
-    if !matches!(url.scheme(), "http" | "https")
+fn same_identity(a: &Credential, b: &Credential) -> bool {
+    a.origin == b.origin && a.username == b.username
+}
+fn copy_credential(c: &Credential) -> Credential {
+    Credential {
+        origin: c.origin.clone(),
+        username: c.username.clone(),
+        password: c.password.clone(),
+    }
+}
+fn validate_note(note: &str) -> Result<()> {
+    // Arc's shared password-manager resource uses JavaScript string.length.
+    if note.encode_utf16().count() > MAX_NOTE_UTF16 {
+        return Err(ERROR.into());
+    }
+    Ok(())
+}
+fn validate_origin(origin: &str) -> Result<()> {
+    let url = url::Url::parse(origin).map_err(|_| ERROR)?;
+    if origin.len() > MAX_FIELD
+        || !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
-        || url.origin().ascii_serialization() != c.origin
-        || c.password.is_empty()
-        || [&c.origin, &c.username, &c.password]
-            .iter()
-            .any(|s| s.len() > MAX_FIELD)
+        || url.origin().ascii_serialization() != origin
     {
         return Err(ERROR.into());
     }
     Ok(())
 }
-fn encode(rows: &[SavedPassword]) -> Result<Zeroizing<Vec<u8>>> {
+fn validate(c: &Credential) -> Result<()> {
+    validate_origin(&c.origin)?;
+    if c.password.is_empty() || c.username.len() > MAX_FIELD || c.password.len() > MAX_FIELD {
+        return Err(ERROR.into());
+    }
+    Ok(())
+}
+fn encode(data: &VaultData) -> Result<Zeroizing<Vec<u8>>> {
+    let rows = &data.passwords;
     if rows.len() > 10_000 {
         return Err(ERROR.into());
     }
@@ -229,11 +357,13 @@ fn encode(rows: &[SavedPassword]) -> Result<Zeroizing<Vec<u8>>> {
     out.extend_from_slice(&(rows.len() as u32).to_le_bytes());
     for row in rows {
         validate(&row.credential)?;
+        validate_note(&row.note)?;
         out.extend_from_slice(&row.modified.to_le_bytes());
         for field in [
             &row.credential.origin,
             &row.credential.username,
             &row.credential.password,
+            &*row.note,
         ] {
             out.extend_from_slice(&(field.len() as u32).to_le_bytes());
             out.extend_from_slice(field.as_bytes());
@@ -242,9 +372,21 @@ fn encode(rows: &[SavedPassword]) -> Result<Zeroizing<Vec<u8>>> {
             return Err(ERROR.into());
         }
     }
+    if data.blocked.len() > 10_000 {
+        return Err(ERROR.into());
+    }
+    out.extend_from_slice(&(data.blocked.len() as u32).to_le_bytes());
+    for origin in &data.blocked {
+        validate_origin(origin)?;
+        out.extend_from_slice(&(origin.len() as u32).to_le_bytes());
+        out.extend_from_slice(origin.as_bytes());
+        if out.len() > MAX_BYTES - HEADER.len() - 12 - aead::MAX_TAG_LEN {
+            return Err(ERROR.into());
+        }
+    }
     Ok(out)
 }
-fn decode(mut bytes: &[u8]) -> Result<Vec<SavedPassword>> {
+fn decode(mut bytes: &[u8], has_notes: bool) -> Result<VaultData> {
     fn take<'a>(bytes: &mut &'a [u8], size: usize) -> Result<&'a [u8]> {
         if size > bytes.len() {
             return Err(ERROR.into());
@@ -280,16 +422,38 @@ fn decode(mut bytes: &[u8]) -> Result<Vec<SavedPassword>> {
             username,
             password,
         };
+        let note = Zeroizing::new(if has_notes {
+            field(&mut bytes)?
+        } else {
+            String::new()
+        });
+        validate_note(&note)?;
         validate(&credential)?;
         out.push(SavedPassword {
             credential,
             modified,
+            note,
         });
+    }
+    let mut blocked = BTreeSet::new();
+    if has_notes {
+        let count = number(&mut bytes)?;
+        if count > 10_000 {
+            return Err(ERROR.into());
+        }
+        for _ in 0..count {
+            let origin = field(&mut bytes)?;
+            validate_origin(&origin)?;
+            blocked.insert(origin);
+        }
     }
     if !bytes.is_empty() {
         return Err(ERROR.into());
     }
-    Ok(out)
+    Ok(VaultData {
+        passwords: out,
+        blocked,
+    })
 }
 
 #[cfg(test)]
@@ -335,11 +499,9 @@ mod tests {
             "echo-test-user",
             "echo-password-test.invalid",
         ] {
-            assert!(
-                !first
-                    .windows(plaintext.len())
-                    .any(|s| s == plaintext.as_bytes())
-            );
+            assert!(!first
+                .windows(plaintext.len())
+                .any(|s| s == plaintext.as_bytes()));
         }
         vault
             .upsert(&credential("test-only-password-2"), 20)
@@ -399,11 +561,9 @@ mod tests {
         *corrupt.last_mut().unwrap() ^= 1;
         std::fs::write(&vault.file, &corrupt).unwrap();
         assert!(vault.list().is_err());
-        assert!(
-            vault
-                .remove("https://echo-password-test.invalid", "echo-test-user")
-                .is_err()
-        );
+        assert!(vault
+            .remove("https://echo-password-test.invalid", "echo-test-user")
+            .is_err());
         assert_eq!(std::fs::read(&vault.file).unwrap(), corrupt);
         assert!(Vault::with_keys(root.path(), "../escape", keys).is_err());
     }
@@ -426,11 +586,9 @@ mod tests {
     fn password_vault_migrates_older_echo_imports_once_without_overwriting_saved_changes() {
         let root = tempfile::tempdir().unwrap();
         let vault = Vault::with_keys(root.path(), "default", MemoryKeys::default()).unwrap();
-        assert!(
-            vault
-                .migrate_if_absent(|| Err("Unavailable test keychain".into()))
-                .is_err()
-        );
+        assert!(vault
+            .migrate_if_absent(|| Err("Unavailable test keychain".into()))
+            .is_err());
         assert!(!vault.file.exists());
         vault
             .migrate_if_absent(|| Ok(vec![credential("older-test-password")]))
@@ -444,6 +602,159 @@ mod tests {
             vault.list().unwrap()[0].credential.password,
             "newer-test-password"
         );
+    }
+    #[test]
+    fn password_notes_are_encrypted_bounded_and_retained_by_imports() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::with_keys(root.path(), "default", MemoryKeys::default()).unwrap();
+        let note = "🗝".repeat(500);
+        vault
+            .upsert_with_note(&credential("test-original"), &note, 1)
+            .unwrap();
+        let bytes = std::fs::read(&vault.file).unwrap();
+        assert!(!bytes.windows(note.len()).any(|w| w == note.as_bytes()));
+        assert!(vault
+            .upsert_with_note(&credential("must-not-save"), &"🗝".repeat(501), 2)
+            .is_err());
+        assert_eq!(std::fs::read(&vault.file).unwrap(), bytes);
+        vault.upsert(&credential("test-import-update"), 3).unwrap();
+        let rows = vault.list().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].credential.password, "test-import-update");
+        assert_eq!(rows[0].note.as_str(), note);
+        assert_eq!(rows[0].modified, 3);
+    }
+    #[test]
+    fn password_edit_is_atomic_and_cannot_overwrite_a_different_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::with_keys(root.path(), "default", MemoryKeys::default()).unwrap();
+        let original = credential("original-test-password");
+        vault
+            .upsert_with_note(&original, "original-test-note", 1)
+            .unwrap();
+        let mut neighbor = credential("neighbor-test-password");
+        neighbor.username = "neighbor".into();
+        vault.upsert(&neighbor, 2).unwrap();
+        let bytes = std::fs::read(&vault.file).unwrap();
+        assert!(vault
+            .replace(
+                &original.origin,
+                &original.username,
+                &neighbor,
+                "conflict",
+                3
+            )
+            .is_err());
+        assert!(vault
+            .replace(&original.origin, "missing", &original, "stale", 3)
+            .is_err());
+        assert_eq!(std::fs::read(&vault.file).unwrap(), bytes);
+        let mut edited = credential("edited-test-password");
+        edited.username = "renamed-test-user".into();
+        vault
+            .replace(
+                &original.origin,
+                &original.username,
+                &edited,
+                "edited-test-note",
+                4,
+            )
+            .unwrap();
+        let rows = vault.list().unwrap();
+        assert_eq!(rows.len(), 2);
+        let changed = rows
+            .iter()
+            .find(|r| r.credential.username == edited.username)
+            .unwrap();
+        assert_eq!(changed.note.as_str(), "edited-test-note");
+        assert_eq!(changed.modified, 4);
+        assert!(!rows
+            .iter()
+            .any(|r| r.credential.username == original.username));
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.credential.username == "neighbor")
+                .unwrap()
+                .credential
+                .password,
+            "neighbor-test-password"
+        );
+    }
+    #[test]
+    fn password_v1_files_upgrade_without_changing_keys_and_versions_are_authenticated() {
+        let root = tempfile::tempdir().unwrap();
+        let keys = MemoryKeys::default();
+        let vault = Vault::with_keys(root.path(), "default", keys.clone()).unwrap();
+        let c = credential("legacy-v1-test-password");
+        let mut payload = Zeroizing::new(Vec::new());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&5i64.to_le_bytes());
+        for field in [&c.origin, &c.username, &c.password] {
+            payload.extend_from_slice(&(field.len() as u32).to_le_bytes());
+            payload.extend_from_slice(field.as_bytes());
+        }
+        let nonce = [7u8; 12];
+        vault
+            .key(true)
+            .unwrap()
+            .seal_in_place_append_tag(
+                aead::Nonce::assume_unique_for_key(nonce),
+                aead::Aad::from(vault.account.as_bytes()),
+                &mut *payload,
+            )
+            .unwrap();
+        let mut file = LEGACY_HEADER.to_vec();
+        file.extend_from_slice(&nonce);
+        file.extend_from_slice(&payload);
+        std::fs::write(&vault.file, file).unwrap();
+        let key = keys.get(&vault.account).unwrap().unwrap();
+        let rows = vault.list().unwrap();
+        assert_eq!(rows[0].credential.password, c.password);
+        assert!(rows[0].note.is_empty());
+        vault.upsert_with_note(&c, "upgraded-test-note", 6).unwrap();
+        assert!(keys.get(&vault.account).unwrap().unwrap().as_slice() == key.as_slice());
+        let mut bytes = std::fs::read(&vault.file).unwrap();
+        assert!(bytes.starts_with(HEADER));
+        assert_eq!(vault.list().unwrap()[0].note.as_str(), "upgraded-test-note");
+        bytes[..LEGACY_HEADER.len()].copy_from_slice(LEGACY_HEADER);
+        std::fs::write(&vault.file, bytes).unwrap();
+        assert!(
+            vault.list().is_err(),
+            "Changing only the format version must fail authentication"
+        );
+    }
+    #[test]
+    fn never_save_policy_is_encrypted_profile_owned_and_survives_password_edits() {
+        let root = tempfile::tempdir().unwrap();
+        let keys = MemoryKeys::default();
+        let vault = Vault::with_keys(root.path(), "default", keys.clone()).unwrap();
+        let c = credential("test-policy-password");
+        vault.block(&c.origin).unwrap();
+        vault.upsert_with_note(&c, "test-policy-note", 1).unwrap();
+        vault.upsert(&c, 2).unwrap();
+        vault
+            .replace(&c.origin, &c.username, &c, "updated-test-policy-note", 3)
+            .unwrap();
+        assert!(vault.is_blocked(&c.origin).unwrap());
+        let reopened = Vault::with_keys(root.path(), "default", keys.clone()).unwrap();
+        assert!(reopened.is_blocked(&c.origin).unwrap());
+        assert_eq!(reopened.list().unwrap().len(), 1);
+        let other = Vault::with_keys(root.path(), "profile-2", keys).unwrap();
+        assert!(!other.is_blocked(&c.origin).unwrap());
+        let bytes = std::fs::read(&vault.file).unwrap();
+        assert!(!bytes
+            .windows(c.origin.len())
+            .any(|w| w == c.origin.as_bytes()));
+        assert!(vault
+            .block("https://echo-password-test.invalid/path")
+            .is_err());
+        assert_eq!(bytes, std::fs::read(&vault.file).unwrap());
+        vault.remove(&c.origin, &c.username).unwrap();
+        vault.clear_since(0).unwrap();
+        assert!(vault.list().unwrap().is_empty());
+        assert!(vault.is_blocked(&c.origin).unwrap());
+        vault.unblock(&c.origin).unwrap();
+        assert!(!vault.is_blocked(&c.origin).unwrap());
     }
 }
 
@@ -478,15 +789,31 @@ pub(crate) fn native_fixture(phase: &str) -> Result<()> {
                 .set_secret(b"echo-legacy-test-only-password")
                 .map_err(|_| ERROR)?;
             crate::import_credentials::SystemCredentialStore.store(profile, &rows[0])?;
+            crate::import_credentials::vault(profile)?.upsert_with_note(
+                &rows[0],
+                "echo-encrypted-native-note",
+                chrono::Utc::now().timestamp(),
+            )?;
+            // Reimporting a password must keep a note written by the manager.
+            crate::import_credentials::SystemCredentialStore.store(profile, &rows[0])?;
+            crate::import_credentials::vault(profile)?
+                .block("https://echo-password-never-test-69cec731.invalid")?;
         }
         "verify" => {
             let vault = crate::import_credentials::vault(profile)?;
+            if !vault.is_blocked("https://echo-password-never-test-69cec731.invalid")?
+                || crate::import_credentials::vault("password-native-other")?
+                    .is_blocked("https://echo-password-never-test-69cec731.invalid")?
+            {
+                return Err("Password policy profile separation failed.".into());
+            }
             let saved = vault.list()?;
             if saved.len() != 2
                 || !saved.iter().any(|r| {
                     r.credential.origin == rows[0].origin
                         && r.credential.username == rows[0].username
                         && r.credential.password == rows[0].password
+                        && r.note.as_str() == "echo-encrypted-native-note"
                 })
                 || !saved.iter().any(|r| {
                     r.credential.origin == rows[0].origin
@@ -504,6 +831,7 @@ pub(crate) fn native_fixture(phase: &str) -> Result<()> {
             }
             vault.remove(&rows[0].origin, &rows[0].username)?;
             vault.remove(&rows[0].origin, "echo-legacy-user")?;
+            vault.unblock("https://echo-password-never-test-69cec731.invalid")?;
             legacy.delete_credential().map_err(|_| ERROR)?;
             if !vault.list()?.is_empty() {
                 return Err("Password fixture deletion failed.".into());
