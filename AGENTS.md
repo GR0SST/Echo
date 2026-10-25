@@ -130,6 +130,10 @@ See `README.md`. In short:
   `open target/bundle/Echo.app` (`cargo run -p browser` is UI only,
   pages are placeholders). CEF binaries live in `third_party/cef`
   (`.cargo/config.toml`) and are downloaded automatically.
+- Before pushing changes to `crates/engine` or platform-specific code, run
+  `scripts/check-targets.sh` and require both Linux GNU and Windows MSVC
+  workspace checks to pass. See `docs/PLATFORMS.md` for cross-check setup.
+  This targeted requirement is separate from the general `cargo test` push gate.
 - Dev builds run Chromium with `--use-mock-keychain`, otherwise macOS asks
   for the keychain password after every rebuild.
 - After the tests, check the change in the real app:

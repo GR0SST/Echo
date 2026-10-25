@@ -28,7 +28,9 @@ pub(crate) type KeyEvent<'a> = Option<&'a mut cef::sys::XEvent>;
 /// CEF retains the native event through the renderer acknowledgement. Keep
 /// only its identity/time here, never a borrowed event or native object.
 pub(crate) fn key_event_stamp(event: &KeyEvent<'_>) -> crate::keyboard_priority::EventStamp {
-    use crate::keyboard_priority::{EventIdentity, EventStamp};
+    use crate::keyboard_priority::EventStamp;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    use crate::keyboard_priority::EventIdentity;
     #[cfg(target_os = "macos")]
     {
         if event.is_null() { return EventStamp::default(); }
@@ -51,11 +53,9 @@ pub(crate) fn key_event_stamp(event: &KeyEvent<'_>) -> crate::keyboard_priority:
     #[cfg(target_os = "linux")]
     {
         event.as_ref().map_or_else(EventStamp::default, |event| {
-            let key = unsafe { event.xkey };
-            EventStamp {
-                identity: (key.time != 0).then_some(EventIdentity(key.time as u64, key.serial as u64)),
-                milliseconds: (key.time != 0).then_some(key.time as u32),
-            }
+            // CEF's Linux bindings make XEvent opaque. Decode its Xlib ABI
+            // inside the platform adapter rather than accessing binding fields.
+            unsafe { crate::x11_key_event::stamp((*event as *const cef::sys::XEvent).cast()) }
         })
     }
 }

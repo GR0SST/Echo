@@ -81,6 +81,8 @@ pub use paste_style::{PasteDispatch, PasteRequest};
 mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
+mod x11_key_event;
 mod native_geometry;
 mod snapshot;
 mod page_archive;
@@ -2081,7 +2083,7 @@ wrap_keyboard_handler! {
                 let configuration = self.shortcuts.lock().unwrap();
                 let priority = configuration.priority(&shortcut);
                 self.state.lock().unwrap().before(configuration.revision, shortcut.clone(), priority, stamp,
-                    event.modifiers & sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0 != 0,
+                    event.modifiers & (sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0 as u32) != 0,
                     std::time::Instant::now())
             };
 
