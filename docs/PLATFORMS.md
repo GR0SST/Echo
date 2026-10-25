@@ -97,3 +97,14 @@ validation. Unsupported integrations fail closed or have the stated no-op fallba
 The parent-handle bridge and overlay/input integrations must be implemented and
 checked on native hosts before claiming Windows/Linux browser parity. The
 macOS-only bundle implementation is isolated in `crates/bundle/src/macos.rs`.
+
+## Native engine window operations
+
+The engine's native host interface converts GPUI logical edges to device pixels
+for HWND/X11 children, notifies CEF on viewport size/DPI changes, shows/hides the
+actual native child and restores GPUI focus after blurring CEF. Hidden pages
+reject explicit focus requests; becoming visible does not restore focus by
+itself. Shared geometry/focus tests cover these policies without a native OS.
+CEF keyboard callbacks preserve platform-native event arguments inside the engine
+and support Windows/Linux key-down forms and Ctrl letter/digit normalization.
+These operations retain the existing macOS clip/responder and keyboard behavior.

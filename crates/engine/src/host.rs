@@ -49,9 +49,9 @@ pub(crate) fn set_frame(view: *mut c_void, parent: *mut c_void, frame: Bounds) {
     #[cfg(target_os = "macos")]
     crate::mac::set_frame(view, parent, frame);
     #[cfg(target_os = "windows")]
-    windows::set_frame(view, frame);
+    windows::set_frame(view, crate::native_geometry::physical_rect(frame, scale(parent)));
     #[cfg(target_os = "linux")]
-    x11::set_frame(view, frame);
+    x11::set_frame(view, crate::native_geometry::physical_rect(frame, scale(parent)));
 }
 
 /// A platform mask affects presentation only; no CEF resize notification.
@@ -73,6 +73,8 @@ mod windows {
         fn SetParent(child: *mut c_void, parent: *mut c_void) -> *mut c_void;
         fn IsWindow(window: *mut c_void) -> i32;
         fn DestroyWindow(window: *mut c_void) -> i32;
+        fn ShowWindow(window: *mut c_void, command: i32) -> i32;
+        fn SetFocus(window: *mut c_void) -> *mut c_void;
         fn MoveWindow(window: *mut c_void, x: i32, y: i32, width: i32, height: i32, repaint: i32) -> i32;
     }
     #[link(name = "kernel32")]
@@ -109,8 +111,12 @@ mod windows {
             !SetParent(view, parent).is_null() || GetLastError() == 0
         }
     }
-    pub(super) fn set_frame(view: *mut c_void, frame: Bounds) {
-        unsafe { MoveWindow(view, frame.x as i32, frame.y as i32, frame.width.max(1.) as i32, frame.height.max(1.) as i32, 1); }
+    pub(super) fn set_visible(view: *mut c_void, visible: bool) {
+        unsafe { ShowWindow(view, if visible { 8 } else { 0 }); }
+    }
+    pub(super) fn focus(view: *mut c_void) { unsafe { SetFocus(view); } }
+    pub(super) fn set_frame(view: *mut c_void, rect: [i32; 4]) {
+        unsafe { MoveWindow(view, rect[0], rect[1], rect[2], rect[3], 1); }
     }
 }
 
@@ -151,12 +157,15 @@ mod x11 {
     type Reparent = unsafe extern "C" fn(*mut c_void, u32, u32, i16, i16) -> Cookie;
     type Destroy = unsafe extern "C" fn(*mut c_void, u32) -> Cookie;
     type Configure = unsafe extern "C" fn(*mut c_void, u32, u16, *const c_void) -> Cookie;
+    type Map = unsafe extern "C" fn(*mut c_void, u32) -> Cookie;
+    type Focus = unsafe extern "C" fn(*mut c_void, u8, u32, u32) -> Cookie;
     type Check = unsafe extern "C" fn(*mut c_void, Cookie) -> *mut RequestError;
     unsafe extern "C" { fn free(value: *mut c_void); }
     struct Connection {
         connection: *mut c_void, root: u32, disconnect: Disconnect,
         connection_error: ConnectionError, generate_id: GenerateId,
         create: Create, reparent: Reparent, destroy: Destroy, configure: Configure,
+        map: Map, unmap: Map, focus: Focus,
         check: Check, _library: libloading::Library,
     }
     impl Connection {
@@ -174,6 +183,9 @@ mod x11 {
             let reparent = unsafe { *library.get(b"xcb_reparent_window_checked\0").ok()? };
             let destroy = unsafe { *library.get(b"xcb_destroy_window_checked\0").ok()? };
             let configure = unsafe { *library.get(b"xcb_configure_window_checked\0").ok()? };
+            let map = unsafe { *library.get(b"xcb_map_window_checked\0").ok()? };
+            let unmap = unsafe { *library.get(b"xcb_unmap_window_checked\0").ok()? };
+            let focus = unsafe { *library.get(b"xcb_set_input_focus_checked\0").ok()? };
             let check = unsafe { *library.get(b"xcb_request_check\0").ok()? };
             let mut preferred = 0;
             let connection = unsafe { connect(std::ptr::null(), &mut preferred) };
@@ -191,7 +203,7 @@ mod x11 {
                 (*screens.data).root
             };
             Some(Self { connection, root, disconnect, connection_error, generate_id,
-                create, reparent, destroy, configure, check, _library: library })
+                create, reparent, destroy, configure, map, unmap, focus, check, _library: library })
         }
         fn checked<R>(&self, cookie: Cookie, value: R) -> Result<R, String> {
             check_request(self.connection as usize, cookie.sequence, value, |connection, sequence| unsafe {
@@ -239,9 +251,18 @@ mod x11 {
                 view as usize as u32, parent as usize as u32, 0, 0), ()).is_ok()
         }).unwrap_or(false)
     }
-    pub(super) fn set_frame(view: *mut c_void, frame: Bounds) {
-        let values = [frame.x as i32 as u32, frame.y as i32 as u32,
-            frame.width.max(1.) as u32, frame.height.max(1.) as u32];
+    pub(super) fn set_visible(view: *mut c_void, visible: bool) {
+        let _ = with_display(|c| unsafe {
+            c.checked((if visible { c.map } else { c.unmap })(c.connection, view as usize as u32), ())
+        });
+    }
+    pub(super) fn focus(view: *mut c_void) {
+        let _ = with_display(|c| unsafe {
+            c.checked((c.focus)(c.connection, 1, view as usize as u32, 0), ())
+        });
+    }
+    pub(super) fn set_frame(view: *mut c_void, rect: [i32; 4]) {
+        let values = rect.map(|v| v as u32);
         let _ = with_display(|connection| unsafe {
             // XCB_CONFIG_WINDOW_X | Y | WIDTH | HEIGHT, protocol value order.
             connection.checked((connection.configure)(connection.connection,
@@ -358,4 +379,42 @@ mod retirement_tests {
         assert!(result.is_err());
         assert_eq!(drops.get(), 1);
     }
+}
+
+thread_local! {
+    static PARENT_SCALES: std::cell::RefCell<std::collections::HashMap<usize, f64>> = Default::default();
+}
+pub(crate) fn configure_parent(parent: *mut c_void, value: f64) {
+    #[cfg(not(target_os = "macos"))]
+    if !parent.is_null() {
+        PARENT_SCALES.with(|scales| { scales.borrow_mut().insert(parent as usize, crate::native_geometry::valid_scale(value)); });
+    }
+    #[cfg(target_os = "macos")]
+    let _ = (parent, value);
+}
+pub(crate) fn scale(parent: *mut c_void) -> f64 {
+    #[cfg(target_os = "macos")]
+    { let _ = parent; 1. }
+    #[cfg(not(target_os = "macos"))]
+    { PARENT_SCALES.with(|scales| scales.borrow().get(&(parent as usize)).copied().unwrap_or(1.)) }
+}
+pub(crate) fn set_visible(view: *mut c_void, visible: bool) {
+    if view.is_null() { return; }
+    #[cfg(target_os = "macos")]
+    crate::mac::set_hidden(view, !visible);
+    #[cfg(target_os = "windows")]
+    windows::set_visible(view, visible);
+    #[cfg(target_os = "linux")]
+    x11::set_visible(view, visible);
+}
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn focus(view: *mut c_void) {
+    if view.is_null() { return; }
+    #[cfg(target_os = "windows")]
+    windows::focus(view);
+    #[cfg(target_os = "linux")]
+    x11::focus(view);
+}
+pub(crate) fn forget_parent(parent: *mut c_void) {
+    PARENT_SCALES.with(|scales| { scales.borrow_mut().remove(&(parent as usize)); });
 }

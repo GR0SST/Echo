@@ -70,6 +70,7 @@ pub use paste_style::{PasteDispatch, PasteRequest};
 mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
+mod native_geometry;
 mod snapshot;
 mod page_archive;
 pub use page_archive::{PageArchiveError, PageArchiveRequest};
@@ -227,6 +228,8 @@ struct View<B = Browser, C = RequestContext> {
     frame: Bounds,
     /// The native view has not been positioned yet.
     needs_layout: bool,
+    native_scale: f64,
+    focus_state: native_geometry::FocusState,
     rounded_top: bool,
     link_policy: Arc<Mutex<PeekPolicy>>,
 }
@@ -778,11 +781,9 @@ impl Engine {
         #[cfg(not(target_os = "macos"))]
         let (page_parent, bounds) = (
             parent,
-            Rect {
-                x: frame.x as i32,
-                y: frame.y as i32,
-                width: frame.width as i32,
-                height: frame.height as i32,
+            {
+                let rect = native_geometry::physical_rect(frame, host::scale(parent));
+                Rect { x: rect[0], y: rect[1], width: rect[2], height: rect[3] }
             },
         );
         let window_info = WindowInfo {
@@ -890,6 +891,8 @@ impl Engine {
                 host,
                 frame,
                 needs_layout: true,
+                native_scale: host::scale(parent),
+                focus_state: Default::default(),
                 rounded_top: true,
                 link_policy: policy,
             },
@@ -915,10 +918,12 @@ impl Engine {
         let Some(view) = self.views.get_mut(&id) else {
             return;
         };
-        if view.frame == frame && !view.needs_layout {
+        let scale = host::scale(view.parent);
+        if view.frame == frame && !view.needs_layout && view.native_scale == scale {
             return;
         }
-        let resized = view.needs_layout || view.frame.width != frame.width || view.frame.height != frame.height;
+        let resized = view.native_scale != scale || view.needs_layout || view.frame.width != frame.width || view.frame.height != frame.height;
+        view.native_scale = scale;
         view.frame = frame;
         view.needs_layout = false;
         host::set_frame(view.host, view.parent, frame);
@@ -1018,9 +1023,12 @@ impl Engine {
 
     pub fn set_visible(&mut self, id: ViewId, visible: bool) {
         if !visible { if let Some(view)=self.views.get(&id) { page_swipe::cancel(view.browser.identifier()); } }
-        #[cfg(target_os = "macos")]
-        if let Some(view) = self.views.get(&id) {
-            mac::set_hidden(view.host, !visible);
+        if let Some(view) = self.views.get_mut(&id) {
+            view.focus_state.set_visible(visible);
+            if !visible && !cfg!(target_os = "macos") {
+                if let Some(browser) = view.browser.host() { browser.set_focus(0); }
+            }
+            host::set_visible(view.host, visible);
         }
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
             host.was_hidden((!visible).into());
@@ -1029,8 +1037,10 @@ impl Engine {
 
     /// Gives keyboard focus to the page.
     pub fn focus(&mut self, id: ViewId) {
-        if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
-            host.set_focus(1);
+        if let Some(view) = self.views.get_mut(&id) {
+            if cfg!(target_os = "macos") || view.focus_state.request() {
+                if let Some(host) = view.browser.host() { host.set_focus(1); }
+            }
         }
     }
 
@@ -1038,6 +1048,14 @@ impl Engine {
     pub fn focus_parent(&mut self, ui_view: *mut c_void) {
         #[cfg(target_os = "macos")]
         mac::make_first_responder(ui_view);
+        #[cfg(not(target_os = "macos"))]
+        {
+            for view in self.views.values_mut() {
+                view.focus_state.blur();
+                if let Some(browser) = view.browser.host() { browser.set_focus(0); }
+            }
+            host::focus(ui_view);
+        }
     }
 
     pub fn navigate(&mut self, id: ViewId, url: &str) {
@@ -1864,8 +1882,14 @@ const VKEY_DOWN: i32 = 0x28;
 const VKEY_F12: i32 = 0x7b;
 
 fn shortcut_for(event: &KeyEvent) -> Shortcut {
+    shortcut_for_platform(event, cfg!(target_os = "macos"))
+}
+
+fn shortcut_for_platform(event: &KeyEvent, macos: bool) -> Shortcut {
     let flags = event.modifiers;
     let has = |flag: sys::cef_event_flags_t| flags & (flag.0 as u32) != 0;
+    let chord = has(sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN)
+        || (!macos && has(sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN));
     let key = match event.windows_key_code {
         0x1b => "escape".to_string(),
         VKEY_TAB => "tab".to_string(),
@@ -1877,7 +1901,7 @@ fn shortcut_for(event: &KeyEvent) -> Shortcut {
         // CEF's unmodified character still follows the active layout and
         // Shift. Command chords use its logical virtual key so Cyrillic (and
         // shifted digit punctuation) cannot hide registered browser bindings.
-        code @ (0x30..=0x39 | 0x41..=0x5a) if has(sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN) =>
+        code @ (0x30..=0x39 | 0x41..=0x5a) if chord =>
             char::from_u32(code as u32).unwrap().to_ascii_lowercase().to_string(),
         _ => char::from_u32(u32::from(event.unmodified_character))
             .map(|c| c.to_lowercase().to_string())
@@ -1892,8 +1916,15 @@ fn shortcut_for(event: &KeyEvent) -> Shortcut {
     }
 }
 
+fn shortcut_key_down(kind: KeyEventType) -> bool {
+    shortcut_key_down_for(kind, cfg!(target_os = "macos"))
+}
+fn shortcut_key_down_for(kind: KeyEventType, macos: bool) -> bool {
+    kind == KeyEventType::RAWKEYDOWN || (!macos && kind == KeyEventType::KEYDOWN)
+}
+
 fn intercepted_shortcut(event: &KeyEvent, shortcuts: &[Shortcut]) -> Option<Shortcut> {
-    if event.type_ != KeyEventType::RAWKEYDOWN { return None; }
+    if !shortcut_key_down(event.type_) { return None; }
     let shortcut = shortcut_for(event);
     // Chromium owns text editing shortcuts. Only a non-editable page
     // delegates Undo/Redo to the browser's sidebar history.
@@ -1925,7 +1956,7 @@ wrap_keyboard_handler! {
                 if let Some(browser)=browser.as_ref(){self.events.push((browser.identifier(),RawEvent::PreviewModifiers(shift)));}
             }
             let escape = shortcut_for(event);
-            let peek_escape = policy.capture_escape && event.type_ == KeyEventType::RAWKEYDOWN && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
+            let peek_escape = policy.capture_escape && shortcut_key_down(event.type_) && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
             let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts.lock().unwrap())) else { return 0; };
             if shortcut.key == "z" {
                 if let Some(browser) = browser.as_ref() { self.events.push((browser.identifier(), RawEvent::EditFocus(false))); }
@@ -1949,6 +1980,8 @@ wrap_app! {
             // password after every rebuild. Release builds use the real keychain.
             if let Some(command_line) = command_line {
                 command_line.append_switch(Some(&CefString::from("echo-video-only-pip")));
+                #[cfg(target_os = "linux")]
+                command_line.append_switch_with_value(Some(&CefString::from("ozone-platform")), Some(&CefString::from("x11")));
                 if cfg!(debug_assertions) {
                     command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 }
@@ -2055,6 +2088,27 @@ mod tests {
     }
 
     #[test]
+    fn windows_linux_control_chords_use_logical_keys_and_both_native_down_types() {
+        let event = KeyEvent {
+            type_: KeyEventType::KEYDOWN,
+            windows_key_code: b'T'.into(),
+            unmodified_character: 20, // Ctrl-T can carry a control character.
+            modifiers: sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 as u32,
+            ..Default::default()
+        };
+        let shortcut = shortcut_for_platform(&event, false);
+        assert!(shortcut.ctrl);
+        assert!(!shortcut.cmd);
+        assert_eq!(shortcut.key, "t");
+        assert!(shortcut_key_down_for(KeyEventType::RAWKEYDOWN, false));
+        assert!(shortcut_key_down_for(KeyEventType::KEYDOWN, false));
+        assert!(!shortcut_key_down_for(KeyEventType::KEYUP, false));
+        assert!(!shortcut_key_down_for(KeyEventType::CHAR, false));
+        assert!(!shortcut_key_down_for(KeyEventType::KEYDOWN, true));
+        assert_eq!(shortcut_for_platform(&event, true).key, "\u{14}");
+    }
+
+    #[test]
     fn cef_function_key_without_a_character_maps_to_f12_on_every_platform() {
         let shortcut = Shortcut { key: "f12".into(), ..Default::default() };
         let event = KeyEvent { type_: KeyEventType::RAWKEYDOWN, windows_key_code: 0x7b, unmodified_character: 0, ..Default::default() };
@@ -2132,6 +2186,8 @@ mod view_storage_lifetime_tests {
             host: std::ptr::null_mut(),
             frame: Bounds::default(),
             needs_layout: false,
+            native_scale: 1.,
+            focus_state: Default::default(),
             rounded_top: true,
             link_policy: Arc::default(),
         }
@@ -2274,3 +2330,15 @@ impl Engine {
         task_manager::monitor(runtime)
     }
 }
+
+/// Registers GPUI's current logical-to-device scale at the native boundary.
+/// Call after obtaining a parent handle and whenever its display/DPI changes.
+pub fn configure_native_parent(parent: *mut std::ffi::c_void, scale: f64) {
+    host::configure_parent(parent, scale);
+}
+
+/// Current GPUI device scale for a registered native parent.
+pub fn native_parent_scale(parent: *mut std::ffi::c_void) -> f64 { host::scale(parent) }
+
+/// Drop only cached layout metadata; never close or reparent a native window.
+pub fn forget_native_parent(parent: *mut std::ffi::c_void) { host::forget_parent(parent); }
