@@ -26,6 +26,7 @@ actions!(extensions, [Dismiss, ConfirmRemove]);
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Dismiss, Some("ExtensionPopup")),
+        KeyBinding::new("cmd-w", Dismiss, Some("ExtensionPopup")),
         KeyBinding::new("escape", Dismiss, Some("ExtensionRemove")),
         KeyBinding::new("enter", ConfirmRemove, Some("ExtensionRemove")),
         KeyBinding::new("escape", Dismiss, Some("ExtensionManager")),
@@ -104,7 +105,7 @@ struct Prompt {
 }
 #[derive(Clone, Copy)]
 pub(crate) enum PopupAnchor {
-    Leading(Point<Pixels>),
+    Window,
     Trailing(Point<Pixels>),
 }
 #[derive(Clone, Copy)]
@@ -139,6 +140,7 @@ impl PopupPlacement {
     }
 }
 struct ActionPopup {
+    header: i32,
     placement: PopupPlacement,
     window: WindowHandle<PopupFrame>,
     // Drop this before removing its native parent window.
@@ -154,6 +156,7 @@ pub(crate) struct State {
     pub(crate) service: Option<Rc<dyn ExtensionService>>,
     pub(crate) entries: Vec<Extension>,
     pub(crate) error: Option<String>,
+    pub(crate) picker_selection: Option<String>,
     next_attempt: Instant,
     prompt: Option<Prompt>,
     prompt_focus: FocusHandle,
@@ -178,6 +181,7 @@ impl State {
             service: None,
             entries: vec![],
             error: None,
+            picker_selection: None,
             next_attempt: Instant::now(),
             prompt: None,
             prompt_focus: cx.focus_handle(),
@@ -198,18 +202,37 @@ impl State {
 struct PopupFrame {
     browser: WeakEntity<BrowserWindow>,
     focus: FocusHandle,
-    _activation: Subscription,
+    header: i32,
+    _activation: Option<Subscription>,
 }
 impl gpui::Render for PopupFrame {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let browser = self.browser.clone();
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let dismiss = self.browser.clone();
+        let close_tab = self.browser.clone();
+        let close_window = self.browser.clone();
         div()
             .key_context("ExtensionPopup")
             .track_focus(&self.focus)
             .size_full()
-            .bg(gpui::white())
+            .bg(gpui::rgb(if self.header > 0 { 0x303436 } else { 0xffffff }))
             .on_action(move |_: &Dismiss, _, cx| {
-                let _ = browser.update(cx, |view, cx| view.close_extension_popup(cx));
+                let _ = dismiss.update(cx, |view, cx| view.close_extension_popup(cx));
+            })
+            .on_action(move |_: &crate::window::CloseTab, _, cx| {
+                let _ = close_tab.update(cx, |view, cx| view.close_extension_popup(cx));
+            })
+            .on_action(move |_: &crate::menus::CloseWindow, _, cx| {
+                let _ = close_window.update(cx, |view, cx| view.close_extension_popup(cx));
+            })
+            .when(self.header > 0, |frame| {
+                frame.child(
+                    div()
+                        .h(px(self.header as f32))
+                        .w_full()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                            crate::native::start_extension_window_drag(window, cx)
+                        }),
+                )
             })
     }
 }
@@ -358,7 +381,9 @@ impl BrowserWindow {
             } else {
                 let preferred = popup.preferred.get();
                 if preferred != popup.size {
-                    let previous = popup.placement.bounds(popup.size.0, popup.size.1);
+                    let previous = popup
+                        .placement
+                        .bounds(popup.size.0, popup.size.1 + popup.header);
                     popup.size = preferred;
                     let (width, height) = preferred;
                     let _ = popup.window.update(cx, |_, window, cx| {
@@ -368,7 +393,7 @@ impl BrowserWindow {
                         popup.placement.screen = window.display(cx).map(|display| display.bounds());
                         crate::native::set_popup_bounds(
                             window,
-                            popup.placement.bounds(width, height),
+                            popup.placement.bounds(width, height + popup.header),
                         );
                     });
                     if let Some(lease) = &popup.lease {
@@ -567,10 +592,11 @@ impl BrowserWindow {
             }) else {
                 return;
             };
+            let titled = !matches!(anchor, Some(PopupAnchor::Trailing(_)));
+            let header = if titled { 32 } else { 0 };
             let (at, trailing) = match anchor {
-                Some(PopupAnchor::Leading(at)) => (at, false),
                 Some(PopupAnchor::Trailing(at)) => (at, true),
-                None => (point(px(245.), px(100.)), false),
+                _ => (point(px(40.), px(10.)), false),
             };
             let placement = PopupPlacement {
                 anchor: bounds.origin + at,
@@ -583,10 +609,16 @@ impl BrowserWindow {
             let view = Rc::new(Cell::new(0));
             let parent = Rc::new(Cell::new(0usize));
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(placement.bounds(320, 240))),
-                titlebar: None,
-                is_movable: false,
+                window_bounds: Some(WindowBounds::Windowed(placement.bounds(320, 240 + header))),
+                titlebar: titled.then(|| gpui::TitlebarOptions {
+                    title: Some("".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(9.), px(9.))),
+                    ..Default::default()
+                }),
+                is_movable: titled,
                 is_resizable: false,
+                is_minimizable: false,
                 window_background: WindowBackgroundAppearance::Opaque,
                 ..Default::default()
             };
@@ -596,21 +628,33 @@ impl BrowserWindow {
             let Ok(handle) = cx.open_window(options, |window, cx| {
                 let focus = cx.focus_handle();
                 focus.focus(window);
+                let closing = closed.clone();
+                window.on_window_should_close(cx, move |_, _| {
+                    closing.set(true);
+                    false
+                });
                 if let Some(native) = crate::native::view_of(window) {
                     host.set(native as usize);
                     if let Some(main) = main_parent {
-                        crate::native::attach_overlay(main, native, false);
+                        if titled {
+                            crate::native::attach_extension_window(main, native);
+                        } else {
+                            crate::native::attach_overlay(main, native, false);
+                        }
                     }
                 }
                 cx.new(|cx| {
-                    let activation = cx.observe_window_activation(window, move |_, window, _| {
-                        if !window.is_window_active() {
-                            flag.set(true);
-                        }
+                    let activation = (!titled).then(|| {
+                        cx.observe_window_activation(window, move |_, window, _| {
+                            if !window.is_window_active() {
+                                flag.set(true);
+                            }
+                        })
                     });
                     PopupFrame {
                         browser: weak,
                         focus,
+                        header,
                         _activation: activation,
                     }
                 })
@@ -649,6 +693,7 @@ impl BrowserWindow {
             match result {
                 Ok(lease) => {
                     let popup = ActionPopup {
+                        header,
                         placement,
                         window: handle,
                         lease: Some(lease),
@@ -1046,6 +1091,56 @@ impl BrowserWindow {
             )
             .into_any_element()
     }
+    pub(crate) fn open_extensions_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.site_controls.is_some() {
+            self.close_site_controls(cx);
+            return;
+        }
+        self.poll_extensions(cx);
+        self.toggle_site_controls(window, cx);
+        if self.site_controls.is_some() {
+            self.extensions.picker_selection =
+                Some(self.extension_picker_ids().into_iter().next().unwrap());
+            cx.notify();
+        }
+    }
+    fn extension_picker_ids(&self) -> Vec<String> {
+        self.active_extensions()
+            .filter(|entry| entry.enabled)
+            .map(|entry| entry.id.clone())
+            .chain(std::iter::once("+".into()))
+            .collect()
+    }
+    pub(crate) fn move_extension_picker(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(selected) = &self.extensions.picker_selection else {
+            return;
+        };
+        let ids = self.extension_picker_ids();
+        let index = ids.iter().position(|id| id == selected).unwrap_or(0);
+        let next = index as isize + delta;
+        if next >= 0 && (next as usize) < ids.len() {
+            self.extensions.picker_selection = Some(ids[next as usize].clone());
+            cx.notify();
+        }
+    }
+    pub(crate) fn confirm_extension_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.extensions.picker_selection.clone() else {
+            return;
+        };
+        if selected == "+" {
+            self.open_extension_store(cx);
+        } else if self
+            .active_extensions()
+            .any(|entry| entry.enabled && entry.id == selected)
+        {
+            self.invoke_extension(
+                &selected,
+                self.browser.active_user_profile_id(),
+                Some(PopupAnchor::Window),
+                cx,
+            );
+        }
+    }
     pub(crate) fn render_extension_grid(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = self.browser.active_user_profile_id();
         let entries = self
@@ -1067,11 +1162,17 @@ impl BrowserWindow {
                         let menu_id = id.clone();
                         let action_id = id.clone();
                         let label = extension.name.clone();
-                        let anchor = Rc::new(Cell::new(None::<Bounds<Pixels>>));
-                        let painted = anchor.clone();
+                        let selected =
+                            self.extensions.picker_selection.as_deref() == Some(id.as_str());
                         div()
                             .id(gpui::SharedString::from(format!("site-extension-{id}")))
                             .debug_selector(move || format!("site-extension-{id}"))
+                            .border_2()
+                            .border_color(if selected {
+                                gpui::white()
+                            } else {
+                                gpui::transparent_black()
+                            })
                             .w(px(48.))
                             .h(px(32.))
                             .rounded(px(6.))
@@ -1086,9 +1187,7 @@ impl BrowserWindow {
                                 cx.new(|_| ExtensionTooltip(label.clone())).into()
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                let at = anchor.get().map(|b| {
-                                    PopupAnchor::Leading(point(b.left(), b.bottom() + px(8.)))
-                                });
+                                let at = Some(PopupAnchor::Window);
                                 this.invoke_extension(&action_id, profile, at, cx);
                             }))
                             .on_mouse_down(
@@ -1108,20 +1207,20 @@ impl BrowserWindow {
                                 ),
                             )
                             .child(extension.icon(16.))
-                            .child(
-                                gpui::canvas(
-                                    |_, _, _| (),
-                                    move |bounds, _, _, _| painted.set(Some(bounds)),
-                                )
-                                .absolute()
-                                .inset_0(),
-                            )
                             .into_any_element()
                     }))
                     .child(
                         div()
                             .id("site-add-extension")
                             .debug_selector(|| "site-add-extension".into())
+                            .border_2()
+                            .border_color(
+                                if self.extensions.picker_selection.as_deref() == Some("+") {
+                                    gpui::white()
+                                } else {
+                                    gpui::transparent_black()
+                                },
+                            )
                             .w(px(48.))
                             .h(px(32.))
                             .rounded(px(6.))

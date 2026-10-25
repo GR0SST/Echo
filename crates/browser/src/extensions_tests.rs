@@ -662,3 +662,41 @@ fn extension_manager_never_paints_a_catalog_for_a_different_profile(cx: &mut Tes
     cx.run_until_parked();
     assert!(cx.debug_bounds("extensions-empty").is_some());
 }
+
+#[gpui::test]
+fn extension_picker_keyboard_opens_scc_and_invokes_selected_action(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let service = install(&view, cx);
+    cx.simulate_keystrokes("cmd-e");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.extensions.picker_selection.clone()).as_deref(), Some(TWO));
+    let overlay = view.read_with(cx, |view, _| view.site_controls.as_ref().unwrap().overlay.unwrap());
+    let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    panel.run_until_parked();
+    panel.simulate_keystrokes("right enter");
+    panel.run_until_parked();
+    assert!(service.0.borrow().calls.contains(&format!("invoke {ONE}")));
+    assert!(view.read_with(&panel, |view, _| view.site_controls.is_none()));
+}
+
+#[gpui::test]
+fn extension_picker_escape_and_add_tile_preserve_keyboard_routing(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    install(&view, cx);
+    cx.simulate_keystrokes("cmd-e");
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |view, _| view.site_controls.as_ref().unwrap().overlay.unwrap());
+    let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    panel.run_until_parked();
+    panel.simulate_keystrokes("escape");
+    panel.run_until_parked();
+    assert!(view.read_with(&panel, |view, _| view.site_controls.is_none() && view.extensions.picker_selection.is_none()));
+    cx.simulate_keystrokes("cmd-e");
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |view, _| view.site_controls.as_ref().unwrap().overlay.unwrap());
+    let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    panel.run_until_parked();
+    panel.simulate_keystrokes("right right enter");
+    panel.run_until_parked();
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::extensions::STORE));
+}

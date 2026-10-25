@@ -473,6 +473,45 @@ mod mac {
         }
     }
 
+    // Pass AppKit the original titlebar event. CEF may pump queued native input
+    // before GPUI's Rust callback can read NSApplication.currentEvent.
+    fn extension_header_class() -> &'static objc2::runtime::AnyClass {
+        use objc2::runtime::{AnyClass, ClassBuilder};
+        static CLASS: std::sync::OnceLock<&'static AnyClass> = std::sync::OnceLock::new();
+        CLASS.get_or_init(|| unsafe {
+            unsafe extern "C-unwind" fn mouse_down(view: &AnyObject, _: Sel, event: *mut AnyObject) {
+                let window: *mut AnyObject = msg_send![view, window];
+                if !window.is_null() {
+                    let _: () = msg_send![window, performWindowDragWithEvent: event];
+                }
+            }
+            unsafe extern "C-unwind" fn accepts_first_mouse(_: &AnyObject, _: Sel, _: *mut AnyObject) -> Bool {
+                Bool::YES
+            }
+            let mut class = ClassBuilder::new(c"EchoExtensionActionHeader", AnyClass::get(c"NSView").unwrap()).unwrap();
+            class.add_method(sel!(mouseDown:), mouse_down as unsafe extern "C-unwind" fn(_, _, _));
+            class.add_method(sel!(acceptsFirstMouse:), accepts_first_mouse as unsafe extern "C-unwind" fn(_, _, _) -> Bool);
+            class.register()
+        })
+    }
+    pub fn attach_extension_window(parent_view: *mut c_void, child_view: *mut c_void) {
+        let (parent,child)=(window(parent_view),window(child_view));
+        if parent.is_null() || child.is_null() {return;}
+        unsafe {
+            let _: ()=msg_send![parent,addChildWindow:child,ordered:WINDOW_ABOVE];
+            let _: ()=msg_send![child,setHasShadow:Bool::YES];
+            use objc2_foundation::{NSPoint, NSRect, NSSize};
+            let content = child_view as *mut AnyObject;
+            let bounds: NSRect = msg_send![content, bounds];
+            let flipped: Bool = msg_send![content, isFlipped];
+            let y = if flipped.as_bool() { 0. } else { bounds.size.height - 32. };
+            let header: *mut AnyObject = msg_send![extension_header_class(), alloc];
+            let header: *mut AnyObject = msg_send![header, initWithFrame: NSRect::new(NSPoint::new(0., y), NSSize::new(bounds.size.width, 32.))];
+            let _: () = msg_send![header, setAutoresizingMask: (2usize | if flipped.as_bool() { 32 } else { 8 })];
+            let _: () = msg_send![content, addSubview: header];
+            let _: () = msg_send![header, release];
+        }
+    }
     pub fn prepare_toast_window(view: *mut c_void) {
         let overlay = window(view);
         if !overlay.is_null() {
@@ -970,8 +1009,8 @@ pub(crate) fn detach_extension_view(view:usize) {
     let _=view;
 }
 
-/// GPUI exposes resize but no programmatic move. Keep a borderless action
-/// popup anchored while its extension changes the preferred content size.
+/// GPUI exposes resize but no programmatic move. Keep an action
+/// window anchored while its extension changes the preferred content size.
 pub(crate) fn set_popup_bounds(window: &mut gpui::Window, bounds: gpui::Bounds<gpui::Pixels>) {
     let previous = window.bounds();
     let Some(view) = view_of(window) else { window.resize(bounds.size); return; };
@@ -992,4 +1031,21 @@ pub(crate) fn set_popup_bounds(window: &mut gpui::Window, bounds: gpui::Bounds<g
     desktop::set_popup_bounds(view, previous, bounds);
     #[cfg(not(any(target_os = "macos",target_os = "windows",target_os = "linux")))]
     {let _=(view,previous);window.resize(bounds.size);}
+}
+
+/// An owned, titled extension window keeps its own close button and shadow.
+/// Unlike browser overlays, its native controls must never target the parent.
+pub(crate) fn attach_extension_window(parent: *mut c_void, child: *mut c_void) {
+    #[cfg(target_os="macos")] mac::attach_extension_window(parent,child);
+    #[cfg(any(target_os="windows",target_os="linux"))] desktop::attach(parent,child);
+    #[cfg(not(any(target_os="macos",target_os="windows",target_os="linux")))] let _=(parent,child);
+}
+
+/// Desktop backends use GPUI's compositor move; AppKit has a native header view.
+pub(crate) fn start_extension_window_drag(window: &mut gpui::Window, cx: &mut gpui::App) {
+    let _ = cx;
+    #[cfg(not(target_os = "macos"))]
+    window.start_window_move();
+    #[cfg(target_os = "macos")]
+    let _ = window;
 }

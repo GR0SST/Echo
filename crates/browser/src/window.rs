@@ -139,6 +139,7 @@ actions!(
         RevealTab,
         ToggleSidebar,
         ToggleToolbar,
+        OpenExtensions,
         ToggleDeveloperMode,
         NextSpace,
         PreviousSpace,
@@ -237,6 +238,7 @@ window_shortcuts! {
     "cmd-d" => TogglePin,
     "cmd-s" => ToggleSidebar,
     "cmd-shift-d" => ToggleToolbar,
+    "cmd-e" => OpenExtensions,
     "ctrl-d" => ToggleDeveloperMode,
     "cmd-alt-right" => NextSpace,
     "cmd-alt-left" => PreviousSpace,
@@ -2598,6 +2600,7 @@ impl BrowserWindow {
                 else { this.close_focused_tab(cx); }
             }))
             .on_action(cx.listener(|this, _: &ToggleToolbar, _, cx| this.toggle_toolbar(cx)))
+            .on_action(cx.listener(|this, _: &OpenExtensions, window, cx| this.open_extensions_picker(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleDeveloperMode, _, cx| this.toggle_developer_mode(cx)))
             .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
@@ -5012,6 +5015,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &TogglePinnedSection, _, cx| this.toggle_pinned_section(this.browser.active_space, cx)))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &ToggleToolbar, _, cx| this.toggle_toolbar(cx)))
+            .on_action(cx.listener(|this, _: &OpenExtensions, window, cx| this.open_extensions_picker(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleDeveloperMode, _, cx| this.toggle_developer_mode(cx)))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousSpace, _, cx| this.cycle_space(-1, cx)))

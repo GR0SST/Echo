@@ -10,7 +10,11 @@ catalog, verified Store installer, actions and command preferences. See
 The Site Control Center displays every enabled action in four columns of
 48×32 tiles, with 8 px gaps, 16 px icons and a trailing Store tile. Pinning is
 profile-local toolbar placement; unpinning keeps the action available in the
-grid. Toolbar pins appear with Show Toolbar (⌘⇧D). Context actions use the
+grid. Open Extensions (⌘E) opens the SCC with its first enabled action outlined;
+arrows move within the four-column grid, Enter invokes the selected action or
+opens the trailing Store tile, and Escape closes the SCC. Selection keeps the
+action's identity across catalog changes and is cleared on dismissal.
+Toolbar pins appear with Show Toolbar (⌘⇧D). Context actions use the
 existing GPUI menu, including keyboard selection and profile/target guards.
 
 `browser://extensions` is a GPUI management page. The measured Arc reference
@@ -76,14 +80,60 @@ Dark Reader 4.9.133 and uBOL subsequently operated on
 and the same log show an empty second profile, followed by restoration to the
 first profile.
 
-## Remaining presentation gates
+## Action window and keyboard entry point
 
 The fresh Arc action reference opens a small titled window from both the grid
 and the Command Bar: `arc-reference/{scc,command}-dark-reader-window.png`.
 Its observed frame is 276×612 (about 32 px of titlebar above the extension),
 positioned 40 px right and 10 px below the retained browser's top-left.
-The borderless action host still needs that window presentation and native
-close/lifetime qualification. Arc's Open Extensions shortcut opens the SCC with
-the first action highlighted; that keyboard entry point is also outstanding.
-These gaps keep the combined extensions parity row partial. Developer tooling
-remains a separate task after the common controls.
+The grid, Command Bar and extension action shortcuts now use that titled host.
+It retains its own native close button and stays open when the browser regains
+focus. Cmd+W closes the action host without closing its source tab. Toolbar
+pins retain their trailing anchored popup. AppKit window dragging uses a small
+isolated native shim because GPUI's generic window-move method has no macOS
+implementation.
+
+`qualify/action-window-initial.png` and `action-window-grid.png` show the
+276×612 host; `action-window-after-cmd-w.png`, `action-window-close-button.png`
+and `action-window-blur.png` record close and lifetime checks. Their strict
+engine logs ended with CEF Complete and exit zero.
+
+`qualify/action-window-final-picker.png` shows Cmd+E from a real HTTPS page
+with the first action outlined. Right then Enter opened the real uBOL popup
+(`action-window-final-keyboard-popup.png`); Cmd+W closed it and the strict gate
+ended with CEF Complete and exit zero.
+
+Physical titlebar dragging remains unqualified: the same native drag input left
+both Arc and Echo at their original frames. Arc's comparison is recorded in
+`arc-reference/drag-{before,after}.json` (276×612 at 140,110 in both). Echo uses
+AppKit's standard titlebar drag path with the original NSEvent. A custom pointer
+fallback was investigated and discarded; no synthetic-input workaround is shipped.
+Developer tooling remains a separate task after the common controls.
+
+
+## Common-flow closeout
+
+The final source was rebased onto `a62a15a`. Full `cargo test` passed with
+1,858 passed, zero failed and one ignored test
+(`/Users/grosstgrosst/Documents/Bot/cef-src/common-release-tests.log`).
+The frozen `qualify/Echo-common-release.app` and the completed bundle share
+executable SHA-256
+`3ecf77cd1f79ca5b177cab4e42352a9412fe41117552c6f11159e6b57cbefaf7`.
+
+`qualify/common-release-native-engine.log` records the final native close,
+blur, Cmd+W and Cmd+E → Right → Enter checks. It used the shared screen lock,
+hard timeout and unchanged visibility guard, exited zero, and completed CEF
+shutdown in 182 ms. The HTTPS source remained selected after closing both
+extension windows. Screenshots were inspected directly.
+
+| Check | Arc reference | Final Echo evidence |
+| --- | --- | --- |
+| Titled action window | `arc-reference/scc-dark-reader-window.png` | `qualify/common-release-action.png` |
+| Open Extensions focus | `arc-reference/open-extensions-keyboard.png` | `qualify/common-release-picker.png` |
+| Blur lifetime | action window retained across browser activation | `qualify/common-release-blur.png` |
+| Keyboard-selected action | real extension action | `qualify/common-release-keyboard-popup.png` |
+| Source retained after close | browser tab remains open | `qualify/common-release-retained-source.png` |
+
+The requested common flows are qualified on macOS. Physical titlebar dragging
+and native popup hosts on other platforms remain unqualified. Developer mode
+tooling remains the separate follow-up described above.

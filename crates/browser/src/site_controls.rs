@@ -21,13 +21,15 @@ const COLUMNS: f32 = 4.0;
 pub(crate) const WIDTH: f32 = PADDING * 2. + TILE_WIDTH * COLUMNS + TILE_GAP * (COLUMNS - 1.) + 2.;
 /// Space between the address field's button and the panel.
 const ANCHOR_GAP: f32 = 14.0;
-actions!(site_controls, [Dismiss, Next, Previous, Confirm]);
+actions!(site_controls, [Dismiss, Next, Previous, Left, Right, Confirm]);
 
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Dismiss, Some(PERMISSION_CONTEXT)),
         KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
         KeyBinding::new("down", Next, Some(CONTEXT)),
+        KeyBinding::new("left", Left, Some(CONTEXT)),
+        KeyBinding::new("right", Right, Some(CONTEXT)),
         KeyBinding::new("up", Previous, Some(CONTEXT)),
         KeyBinding::new("enter", Confirm, Some(CONTEXT)),
     ]);
@@ -203,6 +205,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         self.clear_site_controls_backdrop();
+        self.extensions.picker_selection = None;
         let Some(panel) = self.site_controls.take() else {
             return;
         };
@@ -879,7 +882,10 @@ impl BrowserWindow {
                 }),
             )
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.dismiss_site_controls(cx)))
+            .on_action(cx.listener(|this, _: &Left, _, cx| this.move_extension_picker(-1, cx)))
+            .on_action(cx.listener(|this, _: &Right, _, cx| this.move_extension_picker(1, cx)))
             .on_action(cx.listener(|this, _: &Next, _, cx| {
+                if this.extensions.picker_selection.is_some() { this.move_extension_picker(4, cx); return; }
                 if let Some(panel) = &mut this.site_controls {
                     if panel.more {
                         panel.selected = (panel.selected + 1) % 7;
@@ -888,6 +894,7 @@ impl BrowserWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &Previous, _, cx| {
+                if this.extensions.picker_selection.is_some() { this.move_extension_picker(-4, cx); return; }
                 if let Some(panel) = &mut this.site_controls {
                     if panel.more {
                         panel.selected = (panel.selected + 6) % 7;
@@ -896,6 +903,7 @@ impl BrowserWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &Confirm, _, cx| {
+                if this.extensions.picker_selection.is_some() { this.confirm_extension_picker(cx); return; }
                 if let Some(index) = this
                     .site_controls
                     .as_ref()
@@ -1205,6 +1213,7 @@ impl BrowserWindow {
                                     .hover(|style| style.bg(hsla(0., 0., 1., 0.18)))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(panel) = &mut this.site_controls {
+                                            this.extensions.picker_selection = None;
                                             panel.more = !panel.more;
                                             panel.selected = 0;
                                             cx.notify();
