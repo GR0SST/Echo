@@ -238,6 +238,43 @@ impl ThemePaintCache {
         (gradient, texture)
     }
 }
+/// The profile sheet previews each Space's actual pigments and texture.
+/// It uses the sidebar's field and noise functions rather than a hue swatch.
+#[derive(Clone, Default)]
+pub(crate) struct ProfileCardPreview(Rc<RefCell<Option<(Surface, Arc<RenderImage>)>>>);
+impl ProfileCardPreview {
+    pub(crate) fn image(&self, surface: Surface) -> Arc<RenderImage> {
+        if let Some((key, image)) = self.0.borrow().as_ref().filter(|(key, _)| key == &surface) {
+            return image.clone();
+        }
+        let image = image::RgbaImage::from_fn(64, 96, |x, y| {
+            let base = surface.sample(x as f32 / 63., y as f32 / 95.);
+            let (tint, alpha) = if surface.default_style {
+                default_grain(&surface, x, y)
+            } else {
+                (
+                    ThemeColor {
+                        red: 0.,
+                        green: 0.,
+                        blue: 0.,
+                    },
+                    noise_opacity(surface.theme.texture, x, y, surface.theme.noise),
+                )
+            };
+            let color = mix(base, tint, alpha);
+            image::Rgba([
+                quantize(color.blue, true),
+                quantize(color.green, true),
+                quantize(color.red, true),
+                255,
+            ])
+        });
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
+        *self.0.borrow_mut() = Some((surface, image.clone()));
+        image
+    }
+}
+
 const SHADOW_MARGIN: u32 = 160;
 #[derive(Clone, Default)]
 pub(crate) struct ThemeShadowCache(Rc<RefCell<Option<(u32, u32, Arc<RenderImage>)>>>);

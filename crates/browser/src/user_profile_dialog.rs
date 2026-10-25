@@ -6,12 +6,12 @@ use crate::{
     window::BrowserWindow,
 };
 use browser_core::{
-    Browser, SpaceId, UserProfileId,
     profiles::{UserProfileError, UserProfileTransition},
+    Browser, SpaceId, UserProfileId,
 };
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
-    Subscription, Window, actions, div, hsla, prelude::*, px, rgb,
+    actions, div, hsla, prelude::*, px, rgb, AnyElement, App, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, KeyBinding, Subscription, Window,
 };
 use std::{cell::Cell, collections::HashSet, rc::Rc};
 
@@ -163,7 +163,8 @@ impl BrowserWindow {
 struct SpaceCard {
     id: SpaceId,
     name: String,
-    hue: f32,
+    surface: crate::space_theme::Surface,
+    preview: crate::space_theme::ProfileCardPreview,
     focus: FocusHandle,
 }
 #[derive(Clone)]
@@ -186,6 +187,7 @@ pub(crate) struct UserProfileDialog {
     step: Step,
     spaces: Vec<SpaceCard>,
     selected_spaces: HashSet<SpaceId>,
+    appearance: browser_core::themes::ThemeAppearance,
     profiles: Vec<ProfileChoice>,
     switch_space: Option<(SpaceId, String, UserProfileId)>,
     selected_profile: Option<UserProfileId>,
@@ -240,8 +242,15 @@ impl UserProfileDialog {
         )
     }
 
-    pub(crate) fn switching_to(browser: &Browser, space: SpaceId, to: UserProfileId, cx: &mut Context<Self>) -> Result<Self, DialogError> {
-        browser.user_profile(to).ok_or(UserProfileError::UnknownProfile)?;
+    pub(crate) fn switching_to(
+        browser: &Browser,
+        space: SpaceId,
+        to: UserProfileId,
+        cx: &mut Context<Self>,
+    ) -> Result<Self, DialogError> {
+        browser
+            .user_profile(to)
+            .ok_or(UserProfileError::UnknownProfile)?;
         let mut dialog = Self::switching(browser, space, cx)?;
         dialog.selected_profile = Some(to);
         dialog.step = Step::ConfirmSwitch;
@@ -279,10 +288,25 @@ impl UserProfileDialog {
                 .map(|space| SpaceCard {
                     id: space.id,
                     name: space.name.clone(),
-                    hue: space.hue,
+                    surface: {
+                        let mut theme = space.theme();
+                        let picked = space.theme.is_some();
+                        if !picked {
+                            theme.intensity = 0.2;
+                            theme.noise = 0.12;
+                        }
+                        crate::space_theme::Surface {
+                            theme,
+                            dark: false,
+                            picked,
+                            default_style: !picked,
+                        }
+                    },
+                    preview: Default::default(),
                     focus: cx.focus_handle(),
                 })
                 .collect(),
+            appearance: browser.settings.theme_appearance,
             selected_spaces: match source {
                 CreationSource::File(id) => [id].into(),
                 CreationSource::Settings => HashSet::new(),
@@ -548,6 +572,7 @@ impl UserProfileDialog {
 
     fn switch_heading_extra_height(heading: &str, window: &Window) -> f32 {
         let mut style = window.text_style().clone();
+        style.font_family = "SF Pro Display".into();
         style.font_weight = gpui::FontWeight::BOLD;
         let lines = window
             .text_system()
@@ -572,7 +597,7 @@ impl UserProfileDialog {
     fn confirmation_body(&self) -> String {
         let space = &self.switch_space.as_ref().expect("switch source").1;
         format!(
-            "Each Profile has different browser data, so your {space} Space might look a little different! For example, you might get logged out of some websites, see different Favorites up top, or need to re-install an extension."
+            "Each Profile has different browser data, so your {space} Space might look a little different!\n\nFor example, you might get logged out of some websites, see different Favorites up top, or need to re-install an extension."
         )
     }
 
@@ -600,15 +625,26 @@ impl UserProfileDialog {
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                 window.prevent_default()
             })
-            .px(px(15.))
+            .px(px(12.))
             .py(px(7.))
             .when(matches!(self.step, Step::Name | Step::Spaces), |button| {
                 button.h(px(36.)).flex_none().justify_center()
             })
-            .when(self.step == Step::Switch, |button| {
-                button.h(px(36.)).px(px(12.)).flex_none().justify_center()
-            })
-            .rounded(px(7.))
+            .when(
+                matches!(self.step, Step::Switch | Step::ConfirmSwitch),
+                |button| button.h(px(36.)).px(px(12.)).flex_none().justify_center(),
+            )
+            .rounded(px(6.))
+            .border_1()
+            .border_color(rgb(if primary {
+                if enabled {
+                    0x474df2
+                } else {
+                    0x222469
+                }
+            } else {
+                0x676099
+            }))
             .text_size(px(13.))
             .flex()
             .items_center()
@@ -624,53 +660,140 @@ impl UserProfileDialog {
                 };
                 div()
                     .debug_selector(move || keycap_selector.into())
-                    .h(px(18.))
-                    .min_w(px(23.))
-                    .px(px(3.))
-                    .rounded(px(3.))
-                    .border_1()
-                    .border_color(rgb(0x8d86bf))
-                    .text_size(px(9.))
+                    .h(px(20.))
+                    .w(px(if primary { 28. } else { 35. }))
+                    .flex_none()
+                    .rounded(px(4.))
+                    .when(primary, |cap| {
+                        cap.border_1()
+                            .border_color(if enabled {
+                                hsla(0., 0., 1., 0.28)
+                            } else {
+                                rgb(0x34356a).into()
+                            })
+                            .bg(hsla(0., 0., 1., if enabled { 0.02 } else { 0.01 }))
+                    })
+                    .when(!primary, |cap| {
+                        cap.bg(rgb(0x4e4c77)).text_color(rgb(0xc4c2d7))
+                    })
+                    .text_size(px(10.))
+                    .font_weight(gpui::FontWeight::BOLD)
                     .line_height(px(14.))
                     .flex()
                     .items_center()
                     .justify_center()
                     .when(primary, |keycap| {
-                        keycap.child(icons::control_sized(Icon::Enter, 14.))
+                        keycap.child(icons::control_sized(Icon::Enter, 18.))
                     })
                     .when(!primary, |keycap| keycap.child("ESC"))
             })
             .bg(if primary {
-                rgb(0x5851eb)
+                rgb(if enabled { 0x3339f1 } else { 0x1c1d4c })
             } else {
-                rgb(0x383456)
+                rgb(0x302f60)
             })
-            .text_color(rgb(0xffffff))
-            .when(!enabled, |element| element.opacity(0.35))
+            .text_color(rgb(if primary && !enabled {
+                0x5b5c7f
+            } else {
+                0xffffff
+            }))
+            .when(!enabled && !primary, |element| element.opacity(0.35))
             .when(enabled, |element| element.cursor_pointer())
     }
 
     fn profile_illustration(&self) -> AnyElement {
-        // Echo's own browser-window geometry, with no reference-brand assets.
+        // Original browser-window geometry replaces the reference mascot.
+        let creation = matches!(self.step, Step::Name | Step::Spaces);
+        let confirmation = self.step == Step::ConfirmSwitch;
+        let badge = div()
+            .absolute()
+            .right(px(if creation { 3. } else { 1. }))
+            .bottom(px(3.))
+            .size(px(16.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(if creation { 0x5da642 } else { 0xc4c4dc }))
+            .text_color(rgb(if creation { 0xffffff } else { 0x383456 }))
+            .child(if creation {
+                icons::control_sized(Icon::Plus, 12.)
+            } else {
+                gpui::canvas(
+                    |_, _, _| (),
+                    |bounds, _, window, _| {
+                        let color = window.text_style().color;
+                        let mut path = gpui::PathBuilder::stroke(px(1.3));
+                        for (index, (x, y)) in [
+                            (3.6, 3.5),
+                            (3.9, 2.),
+                            (5.3, 1.5),
+                            (7., 1.5),
+                            (8.1, 2.2),
+                            (8.3, 3.6),
+                            (7.6, 4.8),
+                            (6., 5.8),
+                            (6., 7.8),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let point = bounds.origin + gpui::point(px(x), px(y));
+                            if index == 0 {
+                                path.move_to(point);
+                            } else {
+                                path.line_to(point);
+                            }
+                        }
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, color);
+                        }
+                        let mut dot = gpui::fill(
+                            gpui::Bounds::new(
+                                bounds.origin + gpui::point(px(5.3), px(9.3)),
+                                gpui::size(px(1.4), px(1.4)),
+                            ),
+                            color,
+                        );
+                        dot.corner_radii = px(0.7).into();
+                        window.paint_quad(dot);
+                    },
+                )
+                .size(px(12.))
+                .into_any_element()
+            });
         div()
             .debug_selector(|| "profile-illustration".into())
             .size(px(64.))
             .flex_none()
+            .relative()
             .rounded(px(16.))
             .bg(rgb(0x383456))
             .text_color(rgb(0xc7c4ff))
+            .when(creation || confirmation, |image| {
+                image.rounded_full().border_1().border_color(rgb(0x6964a0))
+            })
             .flex()
             .items_center()
             .justify_center()
             .child(icons::control_sized(Icon::Sidebar, 40.))
+            .when(creation || confirmation, |image| image.child(badge))
             .into_any_element()
     }
 
-    fn space_cards(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn space_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let dark = match self.appearance {
+            browser_core::themes::ThemeAppearance::Dark => true,
+            browser_core::themes::ThemeAppearance::Light => false,
+            browser_core::themes::ThemeAppearance::Automatic => matches!(
+                window.appearance(),
+                gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+            ),
+        };
         div()
             .id("profile-space-cards")
             .debug_selector(|| "profile-space-cards".into())
-            .h(px(154.))
+            .h(px(155.))
             .flex_none()
             .flex()
             .gap(px(12.))
@@ -685,8 +808,7 @@ impl UserProfileDialog {
                     .debug_selector(move || selector.clone())
                     .key_context("UserProfileSpace")
                     .track_focus(&space.focus)
-                    .rounded(px(10.))
-                    .focus(|style| style.bg(rgb(0x51496f)))
+                    .rounded(px(15.))
                     .w(px(64.))
                     .flex_none()
                     .flex()
@@ -706,34 +828,46 @@ impl UserProfileDialog {
                     .child(
                         div()
                             .debug_selector(move || format!("profile-space-tile-{index}"))
-                            .h(px(95.))
+                            .h(px(96.))
                             .w_full()
                             .flex_none()
-                            .rounded(px(10.))
-                            .bg(hsla(space.hue / 360., 0.35, 0.42, 1.)),
+                            .rounded(px(15.))
+                            .child({
+                                let mut surface = space.surface.clone();
+                                surface.dark = dark;
+                                gpui::img(space.preview.image(surface))
+                                    .size_full()
+                                    .rounded(px(14.))
+                                    .object_fit(gpui::ObjectFit::Fill)
+                            })
+                            .border_1()
+                            .border_color(hsla(0., 0., 1., 0.3)),
                     )
                     .child(
                         div()
                             .debug_selector(move || format!("profile-space-check-{index}"))
-                            .mt(px(4.))
-                            .size(px(21.))
+                            .mt(px(5.))
+                            .size(px(16.))
                             .flex_none()
                             .rounded_full()
                             .border_1()
-                            .border_color(rgb(0xf5f5f5))
+                            .border_color(hsla(0., 0., 1., 0.28))
                             .flex()
                             .items_center()
                             .justify_center()
                             .when(selected, |circle| {
                                 circle
-                                    .bg(rgb(0xf5f5f5))
-                                    .text_color(rgb(0x35353b))
-                                    .child(icons::control_sized(Icon::Check, 15.))
+                                    .bg(rgb(0x107a00))
+                                    .border_color(rgb(0x107a00))
+                                    .text_color(rgb(0x000000))
+                                    .child(icons::control_sized(Icon::Check, 12.))
                             }),
                     )
                     .child(
                         div()
                             .debug_selector(move || format!("profile-space-label-{index}"))
+                            .mt(px(4.))
+                            .text_color(rgb(0xb8b8c0))
                             .text_size(px(12.))
                             .line_height(px(18.))
                             .child(space.name.clone()),
@@ -783,7 +917,6 @@ impl UserProfileDialog {
                     .debug_selector(|| "profile-dropdown".into())
                     .key_context("UserProfileDropdown")
                     .track_focus(&self.dropdown_focus)
-                    .focus(|style| style.bg(rgb(0x51496f)))
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -949,6 +1082,18 @@ impl Render for UserProfileDialog {
         } else {
             0.
         };
+        let paragraph_width = px((if self.step == Step::ConfirmSwitch {
+            456_f32
+        } else {
+            450_f32
+        })
+        .min(f32::from(window.viewport_size().width))
+            - 76.
+            - if self.step == Step::ConfirmSwitch {
+                2.
+            } else {
+                0.
+            });
         let available_height = (f32::from(window.viewport_size().height) - 32.).max(0.);
         // Reserve the closed sheet's chrome and a gutter. Short lists retain
         // their natural height; large lists scroll rather than growing forever.
@@ -970,25 +1115,26 @@ impl Render for UserProfileDialog {
                 }))
             })
             .when(self.step == Step::ConfirmSwitch, |sheet| {
-                sheet.min_h(px(425.))
+                sheet
+                    .w(px(456.))
+                    .min_h(px(400.))
+                    .border_1()
+                    .border_color(rgb(0x5d6171))
             })
             .when(self.step == Step::Switch, |sheet| {
                 sheet.h(px(338. + switch_extra)).max_h(px(available_height))
             })
             .p(px(38.))
+            .when(self.step == Step::ConfirmSwitch, |sheet| sheet.pb(px(28.)))
             .rounded(px(16.))
-            .bg(rgb(0x151c2e))
+            .bg(rgb(0x161c2f))
             .text_color(rgb(0xffffff))
             .text_size(px(14.))
             .line_height(px(18.))
             .shadow_lg()
             .flex()
             .flex_col()
-            .gap(px(if creation || self.step == Step::Switch {
-                0.
-            } else {
-                16.
-            }))
+            .gap(px(0.))
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Accept, window, cx| this.accept(window, cx)))
@@ -1045,6 +1191,9 @@ impl Render for UserProfileDialog {
                     .debug_selector(|| "profile-heading".into())
                     .flex_none()
                     .when(creation, |heading| heading.mt(px(18.)).h(px(22.)))
+                    .when(self.step == Step::ConfirmSwitch, |heading| {
+                        heading.mt(px(16.))
+                    })
                     .when(self.step == Step::Switch, |heading| {
                         heading
                             .absolute()
@@ -1055,6 +1204,7 @@ impl Render for UserProfileDialog {
                     })
                     .text_size(px(18.))
                     .line_height(px(22.))
+                    .font_family("SF Pro Display")
                     .font_weight(gpui::FontWeight::BOLD)
                     .when(self.step == Step::Switch, |heading| {
                         // 19 px wrapped leading, with 1.5 px above/below:
@@ -1062,14 +1212,25 @@ impl Render for UserProfileDialog {
                         // single-line box; each extra line adds exactly 19 px.
                         heading.line_height(px(19.)).py(px(1.5))
                     })
-                    .child(heading),
+                    .child(
+                        div()
+                            .relative()
+                            .top(px(if creation {
+                                -3.
+                            } else if self.step == Step::ConfirmSwitch {
+                                -2.
+                            } else {
+                                0.
+                            }))
+                            .child(heading),
+                    ),
             );
         sheet = match self.step {
             Step::Name => sheet
                 .child(div().debug_selector(|| "profile-body".into())
                     .flex_none().mt(px(12.)).h(px(72.))
                     .text_color(rgb(0xb8b8c0))
-                    .child("Profiles make your Spaces truly separate — with their own history, saved passwords, extensions, and other browsing data. No more flipping between work and personal accounts!"))
+                    .child(crate::paragraph::render("Profiles make your Spaces truly separate — with their own history, saved passwords, extensions, and other browsing data. No more flipping between work and personal accounts!".into(),None,paragraph_width,px(-2.),window)))
                 .child(div().debug_selector(|| "profile-name-label".into())
                     .flex_none().mt(px(18.)).h(px(18.))
                     .child("What do you want to call this Profile?"))
@@ -1082,8 +1243,8 @@ impl Render for UserProfileDialog {
                 .child(div().debug_selector(|| "profile-body".into())
                     .flex_none().mt(px(12.)).h(px(90.))
                     .text_color(rgb(0xb8b8c0))
-                    .child("These Spaces will start fresh in your brand new Profile — so you’ll have to log back in to websites, re-save your passwords, add extensions, etc. You can always switch back to your previous Profile though if you forgot something!"))
-                .child(div().flex_none().mt(px(10.)).child(self.space_cards(cx))),
+                    .child(crate::paragraph::render("These Spaces will start fresh in your brand new Profile — so you’ll have to log back in to websites, re-save your passwords, add extensions, etc. You can always switch back to your previous Profile though if you forgot something!".into(),None,paragraph_width,px(-2.),window)))
+                .child(div().flex_none().mt(px(10.)).child(self.space_cards(window,cx))),
             Step::Switch => sheet
                 .child(div().debug_selector(|| "profile-body".into())
                     .absolute().left(px(38.)).right(px(38.)).top(px(160. + switch_extra)).h(px(54.))
@@ -1095,9 +1256,13 @@ impl Render for UserProfileDialog {
                         .min_w_0().truncate().text_size(px(12.)).font_weight(gpui::FontWeight::BOLD)
                         .child(format!("{}’s Profile", self.switch_space.as_ref().unwrap().1)))
                     .child(self.profile_dropdown(dropdown_height, window, cx))),
-            Step::ConfirmSwitch => sheet
-                .child(div().debug_selector(|| "profile-switch-warning".into()).child(self.confirmation_body()))
-                .child(div().debug_selector(|| "profile-switch-irreversible".into()).child("This action cannot be undone.")),
+            Step::ConfirmSwitch => {
+                let text = self.confirmation_body();
+                let name_start = "Each Profile has different browser data, so your ".len();
+                let name_end = name_start + self.switch_space.as_ref().unwrap().1.len();
+                sheet.child(div().debug_selector(|| "profile-switch-warning".into()).mt(px(16.)).text_color(rgb(0xb8b8c0)).child(crate::paragraph::render(text,Some(name_start..name_end),paragraph_width,px(-2.),window)))
+                    .child(div().debug_selector(|| "profile-switch-irreversible".into()).mt(px(16.)).text_color(rgb(0xb8b8c0)).child(div().relative().top(px(-2.)).child("This action cannot be undone.")))
+            },
         };
         if let Some(error) = &self.error {
             sheet = sheet.child(
@@ -1135,10 +1300,11 @@ impl Render for UserProfileDialog {
                         },
                     ))
                 })
-                // Auto margins belong only to the flow-based confirmation
-                // footer. On the absolute switching footer they add free
-                // sheet height on top of its measured 274 px inset.
-                .when(self.step == Step::ConfirmSwitch, |footer| footer.mt_auto())
+                // Measured confirmation spacing stays in normal flow so long
+                // names expand the card without overlapping its controls.
+                .when(self.step == Step::ConfirmSwitch, |footer| {
+                    footer.mt(px(34.)).mr(px(-10.)).h(px(36.))
+                })
                 .when(self.step == Step::Switch, |footer| {
                     footer
                         .absolute()
@@ -1160,16 +1326,15 @@ impl Render for UserProfileDialog {
                 .child(
                     div()
                         .flex()
-                        .gap(px(if creation || self.step == Step::Switch {
-                            8.
-                        } else {
-                            9.
-                        }))
+                        .gap(px(8.))
                         .when(self.step != Step::Spaces, |buttons| {
                             buttons.child(
                                 self.button("Cancel", "profile-cancel", false, true)
                                     .when(creation, |button| button.w(px(110.)))
-                                    .when(self.step == Step::Switch, |button| button.w(px(110.)))
+                                    .when(
+                                        matches!(self.step, Step::Switch | Step::ConfirmSwitch),
+                                        |button| button.w(px(110.)),
+                                    )
                                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
                             )
                         })
@@ -1179,6 +1344,9 @@ impl Render for UserProfileDialog {
                                     button.w(px(if self.step == Step::Spaces { 142. } else { 88. }))
                                 })
                                 .when(self.step == Step::Switch, |button| button.w(px(148.)))
+                                .when(self.step == Step::ConfirmSwitch, |button| {
+                                    button.w(px(130.))
+                                })
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.accept_primary(window, cx)
                                 })),

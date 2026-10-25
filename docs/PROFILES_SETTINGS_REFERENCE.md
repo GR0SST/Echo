@@ -135,3 +135,53 @@ cover activation, persistence, profile identity preservation and preview
 colour/alpha correctness. The native fixture explicitly activates its verified
 process before clicking, since a first click into an inactive app may only
 activate it.
+
+## Creation and Space assignment presentation
+
+The guarded source draft captured `arc-profile-create-name.png`,
+`arc-profile-create-spaces.png` and `arc-profile-create-spaces-selected.png`.
+Only the Echo Test draft checkbox was changed; Cancel discarded the draft.
+No owner profile or assignment was created, renamed, deleted or reassigned.
+The existing `target/parity/context-menus/arc-space-profile-confirm.png`
+provides the confirmation reference.
+
+The name sheet is 450 × 426; the Space choice is 450 × 506. Its cards are
+64 × 96 with 15 px corners, a 16 px check 13 px below the tile, and a label
+12 px below the check. Cards sample each actual Space theme, including its
+noise, rather than substituting a single hue. Circle illustrations retain
+original Echo vector geometry; no Arc artwork or sync notice is included.
+
+Native font measurements and zoomed crops identify the wider system text face
+as the previous heading mismatch. The 18 px bold display face preserves the
+reference's stroke weight and measured width. Raw UTF-8 executable copy preserves the nonbreaking
+space in “Profile — so”; the earlier ASCII string extraction lost it. GPUI
+0.2 wraps at that character and counts overflowing trailing ASCII spaces.
+Short static paragraphs now measure whole words and preserve NBSP groups,
+explicit paragraph breaks and attributed byte offsets. Complex scripts and
+overlong words use GPUI's normal fallback. Two regressions cover the observed
+wrapping errors.
+
+The 456 × 400 switch confirmation separates its two source paragraphs and
+retains the bold Space name. Its footer follows content rather than covering
+long profile names; a GPUI regression verifies expansion and cancellation
+without changing the assignment. Existing creation/switch tests check the
+updated dimensions and source copy.
+
+Shortcut inspection safety: a cancelled Arc recording cleared Add Split View
+rather than restoring its prior chord. The captured original ⇧⌘E / Use Both
+was restored. `arc-shortcut-stability.log` verifies it in a fresh guarded
+Cmd+N/Escape session without editing the recorder. Teardown explicitly moves
+focus to Search and leaves Shortcuts before native AX close; Escape must not
+be used to close an armed shortcut recorder. Conflict recording is suspended;
+no conflict-layout capture is accepted from those attempts.
+
+Final native validation: `profile-layout-native-run.PgNhBk/drive.log` completes
+creation, assigns only the checked fixture Space, confirms its switch to the
+second existing fixture profile and reaches CEF Complete / native Cmd+Q exit 0.
+The profile registry, monotonic IDs and every other Space assignment remain
+unchanged. Inspected 3× pairs: `pair-profile-{name,spaces,confirm}-final-3x.png`.
+Source and fixture Space names/themes differ intentionally; card geometry,
+warning wrapping and the confirmation footer align. Remaining differences are
+original illustration geometry, shared font baselines, keycaps and material.
+`profile-layout-full-tests-9.log`: 1069 browser, 237 core, 15 AI, 148 engine,
+2 bundle and 4 importer tests passed; one AI test ignored.

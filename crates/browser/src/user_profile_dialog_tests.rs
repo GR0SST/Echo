@@ -213,14 +213,12 @@ fn creation_focus_disabled_next_back_and_file_assignment(cx: &mut TestAppContext
             owner.browser.user_profile(assigned).unwrap().name(),
             "Personal Profile"
         );
-        assert!(
-            owner
-                .browser
-                .user_profile(assigned)
-                .unwrap()
-                .favorites
-                .is_empty()
-        );
+        assert!(owner
+            .browser
+            .user_profile(assigned)
+            .unwrap()
+            .favorites
+            .is_empty());
         assert_eq!(
             owner.browser.user_profile(old).unwrap().favorites[0].id,
             old_favorite
@@ -316,9 +314,18 @@ fn switching_dropdown_current_profile_and_selection(cx: &mut TestAppContext) {
     dialog.read_with(visual, |dialog, _| {
         assert!(dialog.step == Step::ConfirmSwitch);
         assert_eq!(dialog.confirmation_heading(), "Switch to your Other Profile?");
-        assert_eq!(dialog.confirmation_body(), "Each Profile has different browser data, so your Personal Space might look a little different! For example, you might get logged out of some websites, see different Favorites up top, or need to re-install an extension.");
+        assert_eq!(dialog.confirmation_body(), "Each Profile has different browser data, so your Personal Space might look a little different!\n\nFor example, you might get logged out of some websites, see different Favorites up top, or need to re-install an extension.");
     });
     assert!(!dialog.read_with(visual, |dialog, _| dialog.dropdown_open));
+    let illustration = visual.debug_bounds("profile-illustration").unwrap();
+    let heading = visual.debug_bounds("profile-heading").unwrap();
+    let warning = visual.debug_bounds("profile-switch-warning").unwrap();
+    let irreversible = visual.debug_bounds("profile-switch-irreversible").unwrap();
+    let footer = visual.debug_bounds("profile-footer").unwrap();
+    assert_eq!(heading.top() - illustration.bottom(), px(16.));
+    assert_eq!(warning.top() - heading.bottom(), px(16.));
+    assert_eq!(irreversible.top() - warning.bottom(), px(16.));
+    assert_eq!(footer.top() - irreversible.bottom(), px(34.));
     assert!(visual.debug_bounds("profile-switch-warning").is_some());
     assert!(visual.debug_bounds("profile-switch-irreversible").is_some());
     click(visual, "profile-accept");
@@ -535,9 +542,10 @@ fn five_space_cards_fit_observed_sheet_width(cx: &mut TestAppContext) {
     assert_eq!(body.origin.y - heading.bottom(), px(12.));
     assert_eq!(body.size.height, px(90.)); // Five lines at 18 px.
     assert_eq!(tile.origin.y - body.bottom(), px(10.));
-    assert_eq!(tile.size, gpui::size(px(64.), px(95.)));
-    assert_eq!(check.origin.y - tile.bottom(), px(12.));
-    assert_eq!(label.origin.y - check.bottom(), px(8.));
+    assert_eq!(tile.size, gpui::size(px(64.), px(96.)));
+    assert_eq!(check.origin.y - tile.bottom(), px(13.));
+    assert_eq!(check.size, gpui::size(px(16.), px(16.)));
+    assert_eq!(label.origin.y - check.bottom(), px(12.));
     assert!(back.origin.y - label.bottom() >= px(30.));
     assert_eq!(back.origin.y, create.origin.y);
     assert_eq!(back.origin.x - sheet.origin.x, px(165.));
@@ -718,10 +726,11 @@ fn many_profile_keyboard_navigation_reveals_destination_and_new_profile(cx: &mut
         visual.simulate_keystrokes(key);
     }
     assert_highlighted_profile_visible(&dialog, visual);
-    assert!(dialog.read_with(
-        visual,
-        |dialog, _| dialog.dropdown_scroll.max_offset().height > px(0.)
-    ));
+    assert!(dialog.read_with(visual, |dialog, _| dialog
+        .dropdown_scroll
+        .max_offset()
+        .height
+        > px(0.)));
     visual.simulate_keystrokes("end");
     assert_eq!(
         dialog.read_with(visual, |dialog, _| dialog.dropdown_index),
@@ -1058,4 +1067,34 @@ fn unusually_long_switch_row_labels_stay_bounded_beside_pill(cx: &mut TestAppCon
     assert!(pill.right() <= row.right());
     assert!(pill.size.width <= px(160.));
     assert!(label.size.height <= px(18.));
+}
+
+#[gpui::test]
+fn long_profile_confirmation_grows_without_covering_the_cancellable_footer(
+    cx: &mut TestAppContext,
+) {
+    let mut browser = fixture();
+    browser.create_user_profile("A deliberately long local profile name that wraps over several lines while the confirmation remains readable and its controls remain reachable").unwrap();
+    let space = browser.space().id;
+    let (owner, _, visual, events, _subscription) =
+        open(cx, browser, CreationSource::File(space), true);
+    let before = owner.read_with(visual, |owner, _| owner.browser.space().user_profile_id);
+    click(visual, "profile-dropdown");
+    click(visual, "profile-choice-1");
+    click(visual, "profile-accept");
+    let sheet = visual.debug_bounds("user-profile-sheet").unwrap();
+    let warning = visual.debug_bounds("profile-switch-irreversible").unwrap();
+    let footer = visual.debug_bounds("profile-footer").unwrap();
+    assert!(sheet.size.height > px(400.));
+    assert!(footer.top() >= warning.bottom() + px(16.));
+    assert!(footer.bottom() <= sheet.bottom() - px(28.));
+    click(visual, "profile-cancel");
+    assert_eq!(
+        owner.read_with(visual, |owner, _| owner.browser.space().user_profile_id),
+        before
+    );
+    assert!(events
+        .borrow()
+        .iter()
+        .all(|event| !matches!(event, DialogEvent::Submit(_))));
 }
