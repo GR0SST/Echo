@@ -299,3 +299,25 @@ barriers. Its framework hash matches the final sixteen-exit matrix exactly.
 Evidence: `qualification/shutdown-final-bundle/run-moxctlik/`. Re-linking the Rust
 wrapper changed the main executable's hash, so this separate pair qualifies the
 actual local bundle as well as the frozen full-matrix fixture.
+
+## Quit visibility and latency
+
+Quit now calls GPUI's application-hide operation as soon as its first intent is
+sealed. It retains windows, engine owners, downloads, sessions and all existing
+shutdown barriers until real completion. Ordinary teardown opens no progress
+window. A failed barrier presents one diagnostic window and keeps termination
+paused, rather than discarding browsing data. GPUI currently implements app hide
+on macOS; Windows/Linux visibility parity remains unqualified.
+
+`scripts/check-quit-latency.py` copies the assembled bundle into isolated test
+profiles, acquires the screen lock with a 90-second hard holder limit, and polls
+CoreGraphics for that exact process's on-screen windows every 5 ms. The three
+native request-to-window-gone observations were **23.928, 30.363 and 32.290 ms**;
+all three processes exited zero after `CEF Complete`. These are idle development
+measurements, not a guarantee under arbitrary I/O load. Before-quit screenshots
+were inspected. Evidence: `target/parity/quit-latency/{results.json,run-*.log,before-*.png}`.
+A separate normal write/restart check retained its cookie and required graceful
+network cleanup: `/Users/grosstgrosst/Documents/Bot/cef-src/qualification/quit-hidden/run-5wodi57c/`.
+The full 1,610-test suite passed after the behavior change; the added GPUI
+regression also passed, checking no ordinary progress window, one diagnostic on
+failure, retained termination gating, and repeated Quit joining that state.

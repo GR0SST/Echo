@@ -514,3 +514,23 @@ fn final_quit_barrier_flushes_retained_canonical_profile_after_sources_are_gone(
     assert!(shutdown.retained_normal_handles().is_err()); // finish closed capability.
     std::fs::remove_file(path).unwrap();
 }
+
+#[gpui::test]
+fn ordinary_quit_has_no_progress_window_but_a_failed_barrier_gets_one(cx: &mut gpui::TestAppContext) {
+    let _reset = GateReset;
+    cx.update(|cx| {
+        let state = Rc::new(RefCell::new(Coordinator::default()));
+        cx.set_global(QuitState(state.clone()));
+        request(cx);
+        show_progress(cx);
+        assert!(cx.windows().is_empty());
+        assert!(!state.borrow().finalized);
+        state.borrow_mut().fail("Cookie persistence failed".into());
+        show_progress(cx);
+        assert_eq!(cx.windows().len(), 1);
+        show_progress(cx);
+        request(cx);
+        assert_eq!(cx.windows().len(), 1);
+        assert!(!state.borrow().finalized);
+    });
+}

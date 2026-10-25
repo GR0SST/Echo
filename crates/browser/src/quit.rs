@@ -22,6 +22,7 @@ pub(crate) struct Coordinator {
     engine_complete: bool,
     finalized: bool,
     failure: Option<String>,
+    failure_presented: bool,
     diagnostic: String,
     last_status: Option<ShutdownStatus>,
 }
@@ -29,7 +30,9 @@ impl Coordinator {
     pub(crate) fn request(&mut self) -> bool {
         if self.requested { return false; }
         self.requested = true;
-        eprintln!("[quit] Requested; saving sessions before engine teardown");
+        eprintln!("[quit] Requested; saving sessions before engine teardown request_unix_us={}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_micros());
         self.diagnostic = "Saving your browsing session…".into();
         true
     }
@@ -358,7 +361,15 @@ pub(crate) fn request(cx: &mut App) {
     #[cfg(any(target_os = "macos", test))]
     NATIVE_GATE.with(|gate| gate.borrow_mut().note_app_request());
     let first = cx.try_global::<QuitState>().is_some_and(|state| state.0.borrow_mut().request());
-    if first { cx.refresh_windows(); }
+    if first {
+        let start = std::time::Instant::now();
+        // Visibility does not destroy windows, pages or their storage owners.
+        // GPUI's test platform has no hide implementation; native qualification
+        // measures actual window disappearance independently via CoreGraphics.
+        #[cfg(not(test))]
+        cx.hide();
+        eprintln!("[quit] presentation-hidden elapsed_us={}", start.elapsed().as_micros());
+    }
 }
 
 pub(crate) fn last_window_close(cx: &mut App) -> bool {
@@ -386,6 +397,13 @@ impl gpui::Render for Progress {
 }
 
 fn show_progress(cx: &mut App) {
+    let Some(state) = cx.try_global::<QuitState>() else { return; };
+    {
+        let mut state = state.0.borrow_mut();
+        if state.failure.is_none() || state.failure_presented { return; }
+        state.failure_presented = true;
+    }
+    cx.activate(true);
     let _ = cx.open_window(Default::default(), |window, cx| {
         window.on_window_should_close(cx, |_, _| false);
         cx.new(|_| Progress)
@@ -433,8 +451,8 @@ pub(crate) fn init(cx: &mut App) {
                     Ok(Err(error)) => state.borrow_mut().fail(error),
                     Err(error) => state.borrow_mut().fail(error.to_string()),
                 }
-                // Keep the existing diagnostic visible even while an older
-                // download batch owns its lease or the handoff fails.
+                // Ordinary teardown stays hidden. A failed data barrier gets
+                // one visible diagnostic rather than silently abandoning data.
                 let _ = cx.update(show_progress);
             }
             if preparing && state.borrow().failure.is_none()
@@ -503,7 +521,7 @@ pub(crate) fn init(cx: &mut App) {
                 #[cfg(any(not(target_os = "macos"), test))]
                 if state.borrow().finalized && state.borrow().failure.is_none() { break; }
             } else if state.borrow().failure.is_some() {
-                let _ = cx.update(|cx| cx.refresh_windows());
+                let _ = cx.update(show_progress);
             }
         }
     }).detach();
