@@ -222,38 +222,30 @@ fn recover_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn root() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "echo-recovery-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&path).unwrap();
-        path
+    fn root() -> tempfile::TempDir {
+        tempfile::Builder::new().prefix("echo-recovery-test-").tempdir().unwrap()
     }
     #[test]
     fn clean_start_never_runs_a_verifier() {
-        let root = root();
+        let directory = root();
+        let root = directory.path();
         recover_with(&root, |_| panic!("clean start must not inspect stores")).unwrap();
-        std::fs::remove_dir(root).unwrap();
     }
     #[test]
     fn failed_verification_retains_marker_and_every_store() {
-        let root = root();
+        let directory = root();
+        let root = directory.path();
         std::fs::write(root.join(MARKER), r#"{"schema":1}"#).unwrap();
         std::fs::write(root.join("Cookies"), b"sentinel").unwrap();
         assert!(recover_with(&root, |_| Err("corrupt fixture".into())).is_err());
         assert!(root.join(MARKER).exists());
         assert!(!root.join(RECEIPT).exists());
         assert_eq!(std::fs::read(root.join("Cookies")).unwrap(), b"sentinel");
-        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn verified_start_archives_reason_and_only_then_clears_marker() {
-        let root = root();
+        let directory = root();
+        let root = directory.path();
         std::fs::write(root.join(MARKER), r#"{"schema":1,"network_pid":42}"#).unwrap();
         recover_with(&root, |_| {
             Ok(serde_json::json!({"passed":true,"sqlite_databases":1,"leveldb_databases":2}))
@@ -264,11 +256,11 @@ mod tests {
             serde_json::from_slice(&std::fs::read(root.join(RECEIPT)).unwrap()).unwrap();
         assert_eq!(receipt["previous_shutdown"]["network_pid"], 42);
         assert_eq!(receipt["integrity"]["leveldb_databases"], 2);
-        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn malformed_marker_cannot_be_erased_by_a_successful_verifier() {
-        let root = root();
+        let directory = root();
+        let root = directory.path();
         std::fs::write(root.join(MARKER), b"incomplete").unwrap();
         assert!(
             recover_with(&root, |_| panic!(
@@ -277,6 +269,5 @@ mod tests {
             .is_err()
         );
         assert!(root.join(MARKER).exists());
-        std::fs::remove_dir_all(root).unwrap();
     }
 }
