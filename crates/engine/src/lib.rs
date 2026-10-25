@@ -29,6 +29,8 @@ mod site_info;
 mod permissions;
 pub use permissions::{PermissionRequestId, PermissionRequest, PermissionDecision};
 mod site_data;
+mod script_evaluation;
+pub use script_evaluation::ScriptTicket;
 pub use site_data::ClearSiteData;
 pub use site_info::{SiteInfo, SiteCertificate, SitePermission, PermissionKind, PermissionValue};
 mod boost_picker;
@@ -310,6 +312,7 @@ pub struct Engine {
     next_id: u64,
     snapshots: snapshot::Snapshots,
     site_data: site_data::SiteData,
+    script_evaluations: script_evaluation::Evaluations,
     boosts: Vec<(std::rc::Weak<RequestContext>, Arc<Mutex<Vec<SiteBoost>>>)>,
     message_ids: devtools::MessageIds,
     inspectors: devtools::Inspectors,
@@ -430,6 +433,7 @@ impl Engine {
             next_id: 1,
             snapshots: snapshot::Snapshots::default(),
             site_data: site_data::SiteData::default(),
+            script_evaluations: script_evaluation::Evaluations::default(),
             boosts: Vec::new(),
             message_ids: runtime.message_ids.clone(),
             inspectors: devtools::Inspectors::default(),
@@ -576,6 +580,8 @@ impl Engine {
     }
 
     fn drain_events(&mut self, ordered_input: bool) -> Vec<Event> {
+        let views=&self.views;
+        self.script_evaluations.poll(|view,browser,url|views.get(&view).is_some_and(|p|p.browser.identifier()==browser&&p.browser.main_frame().map(|f|CefString::from(&f.url()).to_string()).as_deref()==Some(url)));
         for result in self.site_data.take() {
             let Some(view) = self.views.get(&result.view).filter(|view| view.role == ViewRole::Page) else { continue; };
             let current = view.browser.main_frame().map(|frame| CefString::from(&frame.url()).to_string());
@@ -905,6 +911,7 @@ impl Engine {
         if let Some(view)=self.views.get(&id) {page_context::cancel(view.browser.identifier());}
         self.snapshots.close(id);
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         let view = self.views.remove(&id)?;
         let browser = view.browser.identifier();
@@ -979,6 +986,7 @@ impl Engine {
 
     pub fn navigate(&mut self, id: ViewId, url: &str) {
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(frame) = self.views.get(&id).and_then(|view| view.browser.main_frame()) {
             frame.load_url(Some(&CefString::from(url)));
@@ -987,6 +995,7 @@ impl Engine {
 
     pub fn go_back(&mut self, id: ViewId) {
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) {
             view.browser.go_back();
@@ -1004,6 +1013,7 @@ impl Engine {
 
     pub fn go_forward(&mut self, id: ViewId) {
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) {
             view.browser.go_forward();
@@ -1012,6 +1022,7 @@ impl Engine {
 
     pub fn reload(&mut self, id: ViewId) {
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) {
             view.browser.reload();
@@ -1021,12 +1032,14 @@ impl Engine {
     /// Reloads from the network, bypassing the HTTP cache.
     pub fn force_reload(&mut self, id: ViewId) {
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) { view.browser.reload_ignore_cache(); }
     }
 
     pub fn stop_loading(&mut self, id: ViewId) {
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.get(&id) { view.browser.stop_load(); }
     }
@@ -1067,6 +1080,11 @@ impl Engine {
     }
 
     /// Steps through Chromium's standard zoom factors. Zero resets to 100%.
+    pub fn evaluate_script(&mut self, id: ViewId, expected_url: &str, source: &str) -> Result<ScriptTicket, String> {
+        let page = self.views.get(&id).filter(|p|p.role==ViewRole::Page).ok_or("Unknown page")?;
+        self.script_evaluations.request(id,&page.browser,&self.message_ids,expected_url,source)
+    }
+
     pub fn zoom(&mut self, id: ViewId, direction: i32) {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
             let factor = next_zoom_factor(1.2_f64.powf(host.zoom_level()), direction);
@@ -1277,6 +1295,7 @@ impl Engine {
         for inspector in inspectors { self.close_inspector(inspector); }
         self.snapshots.close(id);
         self.site_data.close(id);
+        self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.remove(&id) {
             page_context::forget(view.browser.identifier());
