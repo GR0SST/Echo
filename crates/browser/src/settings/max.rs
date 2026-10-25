@@ -149,6 +149,7 @@ const FEATURES: [(MaxFeature, &str, &str, &str); 6] = [
     (MaxFeature::ChatGptCommandBar, "ChatGPT in the Command Bar", "Add ChatGPT to your Search suggestions, or start typing “ChatGPT”, hit Tab, to ask any question instantly.", "chatbubble-outline"),
 ];
 fn button(
+    colors: appearance::Colors,
     cx: &mut Context<SettingsWindow>,
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
@@ -175,14 +176,15 @@ fn button(
         .min_h(px(24.))
         .px(px(12.))
         .rounded(px(5.))
-        .bg(rgb(0x393b3d))
-        .hover(|s| s.bg(rgb(0x484a4a)))
+        .bg(colors.rgb(0x393b3d))
+        .hover(move |s| s.bg(colors.rgb(0x484a4a)))
         .child(label.into())
 }
-fn line() -> gpui::Div {
-    super::rule()
+fn line(colors: appearance::Colors) -> gpui::Div {
+    super::rule().bg(colors.rgb(0x3e3f41))
 }
 fn field(
+    colors: appearance::Colors,
     entity: &Entity<crate::text_input::TextInput>,
     id: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
@@ -196,8 +198,8 @@ fn field(
         .items_center()
         .rounded(px(5.))
         .border_1()
-        .border_color(rgb(0x555759))
-        .bg(rgb(0x242628))
+        .border_color(colors.rgb(0x555759))
+        .bg(colors.rgb(0x242628))
         .child(entity.clone())
 }
 // Original Echo artwork: folded ribbons, rather than the reference's brand marks.
@@ -502,6 +504,7 @@ impl SettingsWindow {
             this.max.status=match result{Ok(true)=>"Signed out".into(),Ok(false)=>"Signed out locally. Remote revocation was not confirmed; you can disconnect Echo in ChatGPT Settings.".into(),Err(e)=>e.to_string()};cx.notify();});}).detach();
     }
     pub(super) fn max(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
         let settings = self.profile.read_settings(|b| b.settings.max.clone());
         let all = FEATURES.iter().all(|(f, _, _, _)| settings.enabled(*f));
         let provider = settings.provider.provider;
@@ -517,10 +520,10 @@ impl SettingsWindow {
             .justify_center()
             .text_size(px(44.))
             .font_weight(gpui::FontWeight::BOLD)
-            .text_color(rgb(0xffffff))
+            .text_color(colors.rgb(0xffffff))
             .child(banner_art())
             .child("Max");
-        let enable = group()
+        let enable = self.settings_group()
             .px(px(9.))
             .child(
                 row()
@@ -537,9 +540,9 @@ impl SettingsWindow {
                             .child("Enable Max"),
                     )
                     .child(
-                        button(cx, "max-enable-all", "Turn On All")
-                            .bg(rgb(0x3532ff))
-                            .text_color(rgb(0xffffff))
+                        button(colors, cx, "max-enable-all", "Turn On All")
+                            .bg(colors.rgb(0x3532ff))
+                            .text_color(colors.rgb(0xffffff))
                             .w(px(117.))
                             .h(px(28.))
                             .when(all, |s| s.opacity(0.5))
@@ -553,7 +556,7 @@ impl SettingsWindow {
                             })),
                     ),
             )
-            .child(line())
+            .child(line(colors))
             .child(
                 row()
                     .h(px(37.))
@@ -563,7 +566,7 @@ impl SettingsWindow {
                     .focusable()
                     .tab_stop(true)
                     .child("Automatically enable future Max features")
-                    .child(switch(settings.automatically_enable_future))
+                    .child(self.settings_switch(settings.automatically_enable_future))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.profile.edit_settings(|b| {
                             b.settings.max.automatically_enable_future =
@@ -582,10 +585,10 @@ impl SettingsWindow {
                         }
                     })),
             );
-        let mut features = group().px(px(9.));
+        let mut features = self.settings_group().px(px(9.));
         for (index, (feature, title, description, icon)) in FEATURES.into_iter().enumerate() {
             if index > 0 {
-                features = features.child(line());
+                features = features.child(line(colors));
             }
             let enabled = settings.enabled(feature);
             features = features.child(
@@ -613,11 +616,11 @@ impl SettingsWindow {
                                 div()
                                     .text_size(px(11.))
                                     .line_height(px(16.))
-                                    .text_color(rgb(0x8d9091))
+                                    .text_color(colors.rgb(0x8d9091))
                                     .child(description),
                             ),
                     )
-                    .child(switch(enabled))
+                    .child(self.settings_switch(enabled))
                     .on_click(cx.listener(move |this, _, _, cx| this.max_toggle(feature, cx)))
                     .on_key_down(cx.listener(move |this, e: &gpui::KeyDownEvent, _, cx| {
                         if matches!(e.keystroke.key.as_str(), "enter" | "space") {
@@ -627,7 +630,7 @@ impl SettingsWindow {
                     })),
             );
         }
-        let mut providers = group().child(
+        let mut providers = self.settings_group().child(
             row().child("AI provider").child(
                 div().flex().gap(px(4.)).children(
                     [
@@ -637,9 +640,9 @@ impl SettingsWindow {
                     ]
                     .into_iter()
                     .map(|(p, label)| {
-                        button(cx, SharedString::from(format!("max-provider-{p:?}")), label)
+                        button(colors, cx, SharedString::from(format!("max-provider-{p:?}")), label)
                             .debug_selector(move || format!("max-provider-{p:?}"))
-                            .when(provider == p, |s| s.bg(rgb(0x45525e)))
+                            .when(provider == p, |s| s.bg(colors.rgb(0x45525e)))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.max_select_provider(p, cx)),
                             )
@@ -648,36 +651,36 @@ impl SettingsWindow {
             ),
         );
         if provider == Provider::OpenAiCompatible {
-            providers = providers.child(line()).child(
+            providers = providers.child(line(colors)).child(
                 row()
                     .child("Base URL")
-                    .child(field(&self.max.base_url, "max-base-url")),
+                    .child(field(colors, &self.max.base_url, "max-base-url")),
             );
         }
         if provider == Provider::Anthropic {
-            providers = providers.child(line()).child(
+            providers = providers.child(line(colors)).child(
                 row()
                     .child("Workspace ID")
-                    .child(field(&self.max.workspace, "max-workspace-id")),
+                    .child(field(colors, &self.max.workspace, "max-workspace-id")),
             );
         }
         providers = providers
-            .child(line())
+            .child(line(colors))
             .child(
                 row()
                     .child("API key")
-                    .child(field(&self.max.key, "max-api-key")),
+                    .child(field(colors, &self.max.key, "max-api-key")),
             )
             .child(
                 row().justify_end().gap(px(8.)).child(
-                    button(cx, "max-save-key", "Save API Key")
+                    button(colors, cx, "max-save-key", "Save API Key")
                         .on_click(cx.listener(|this, _, _, cx| this.max_save_key(cx))),
                 ),
             );
         if provider == Provider::OpenAi {
-            providers = providers.child(line()).child(
+            providers = providers.child(line(colors)).child(
                 row().child("ChatGPT").child(
-                    button(cx, "max-chatgpt-sign-in", "Sign in with ChatGPT")
+                    button(colors, cx, "max-chatgpt-sign-in", "Sign in with ChatGPT")
                         .on_click(cx.listener(|this, _, _, cx| this.max_sign_in(None, cx))),
                 ),
             );
@@ -688,7 +691,7 @@ impl SettingsWindow {
                 providers =
                     providers.child(
                         row().child(account.label.clone()).child(
-                            button(
+                            button(colors,
                                 cx,
                                 SharedString::from(format!("max-account-{id}")),
                                 if selected { "Reconnect" } else { "Use account" },
@@ -702,22 +705,22 @@ impl SettingsWindow {
             if settings.provider.authentication == Authentication::ChatGpt {
                 providers = providers.child(
                     row().justify_end().child(
-                        button(cx, "max-chatgpt-sign-out", "Sign Out")
+                        button(colors, cx, "max-chatgpt-sign-out", "Sign Out")
                             .on_click(cx.listener(|this, _, _, cx| this.max_sign_out(cx))),
                     ),
                 );
             }
         }
         providers = providers
-            .child(line())
+            .child(line(colors))
             .child(
                 row()
                     .child("Model")
-                    .child(field(&self.max.model, "max-model")),
+                    .child(field(colors, &self.max.model, "max-model")),
             )
             .child(
                 row().justify_end().child(
-                    button(cx, "max-load-models", "Load Models")
+                    button(colors, cx, "max-load-models", "Load Models")
                         .on_click(cx.listener(|this, _, _, cx| this.max_models(cx))),
                 ),
             );
@@ -725,7 +728,7 @@ impl SettingsWindow {
             let id = model.id.clone();
             providers = providers.child(
                 row().child(model.name.clone()).child(
-                    button(
+                    button(colors,
                         cx,
                         SharedString::from(format!("max-model-{index}")),
                         "Use Model",
@@ -742,7 +745,7 @@ impl SettingsWindow {
         }
         if self.max.busy.is_some() {
             providers = providers.child(row().justify_end().child(
-                button(cx, "max-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| {
+                button(colors, cx, "max-cancel", "Cancel").on_click(cx.listener(|this, _, _, cx| {
                     this.max.cancel();
                     this.max.status = "Cancelled".into();
                     cx.notify();
@@ -753,14 +756,14 @@ impl SettingsWindow {
             div()
                 .py(px(8.))
                 .text_size(px(11.))
-                .text_color(rgb(0xaaaeb0))
+                .text_color(colors.rgb(0xaaaeb0))
                 .child(self.max.status.clone()),
         );
         div().w(px(684.)).flex_none().flex().flex_col().child(banner)
             .child(div().px(px(64.)).pt(px(24.)).pb(px(20.)).flex().flex_col().gap(px(24.))
                 .child(div().h(px(34.)).px(px(5.)).child("Let Echo do more for you with Max, so you can do less. Power up your browsing with AI and spend time on the things that matter — on or off screen."))
                 .child(enable).child(features)
-                .child(div().text_size(px(11.)).text_color(rgb(0x96999a)).child("Max features send data directly to your selected AI provider. Keys and ChatGPT credentials stay in your system keychain."))
+                .child(div().text_size(px(11.)).text_color(colors.rgb(0x96999a)).child("Max features send data directly to your selected AI provider. Keys and ChatGPT credentials stay in your system keychain."))
                 .child(providers)).into_any_element()
     }
 }

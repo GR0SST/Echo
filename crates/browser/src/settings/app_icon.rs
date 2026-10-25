@@ -3,17 +3,25 @@ use super::*;
 use browser_core::settings::AppIcon;
 impl SettingsWindow {
     pub(super) fn icon(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
         let selected = self
             .profile
             .read_settings(|browser| browser.settings.app_icon);
-        group()
+        self.settings_group()
+            .when(colors.light, |group| group.bg(gpui::rgb(0xffffff)))
             .px(px(16.))
             .pt(px(9.))
             .pb(px(20.))
             .children(AppIcon::ALL.into_iter().enumerate().map(|(index, icon)| {
                 div()
                     .when(index > 0, |row| {
-                        row.child(div().ml(px(24.)).mr(px(22.)).h(px(1.)).bg(rgb(0x3c3e3e)))
+                        row.child(
+                            div()
+                                .ml(px(24.))
+                                .mr(px(22.))
+                                .h(px(1.))
+                                .bg(colors.rgb(0x3c3e3e)),
+                        )
                     })
                     .child(
                         div()
@@ -51,16 +59,16 @@ impl SettingsWindow {
                                     .size(px(20.))
                                     .flex_none()
                                     .rounded_full()
-                                    .bg(rgb(0xffffff))
+                                    .bg(colors.rgb(0xffffff))
                                     .border_1()
-                                    .border_color(rgb(0xc5c7c7))
+                                    .border_color(colors.rgb(0xc5c7c7))
                                     .when(selected == icon, |radio| {
-                                        radio.border_2().border_color(rgb(0x534dff)).child(
+                                        radio.border_2().border_color(colors.rgb(0x534dff)).child(
                                             div()
                                                 .m(px(2.))
                                                 .size(px(12.))
                                                 .rounded_full()
-                                                .bg(rgb(0x534dff)),
+                                                .bg(colors.rgb(0x534dff)),
                                         )
                                     }),
                             )
@@ -78,7 +86,7 @@ impl SettingsWindow {
                                             div()
                                                 .debug_selector(|| "settings-current-icon".into())
                                                 .text_size(px(10.))
-                                                .text_color(rgb(0x1590ff))
+                                                .text_color(colors.rgb(0x1590ff))
                                                 .child("CURRENT ICON"),
                                         )
                                     }),

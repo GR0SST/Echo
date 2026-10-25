@@ -172,8 +172,7 @@ rather than restoring its prior chord. The captured original ⇧⌘E / Use Both
 was restored. `arc-shortcut-stability.log` verifies it in a fresh guarded
 Cmd+N/Escape session without editing the recorder. Teardown explicitly moves
 focus to Search and leaves Shortcuts before native AX close; Escape must not
-be used to close an armed shortcut recorder. Conflict recording is suspended;
-no conflict-layout capture is accepted from those attempts.
+be used to close an armed shortcut recorder. No conflict-layout capture is accepted from those initial attempts.
 
 Final native validation: `profile-layout-native-run.PgNhBk/drive.log` completes
 creation, assigns only the checked fixture Space, confirms its switch to the
@@ -185,3 +184,56 @@ warning wrapping and the confirmation footer align. Remaining differences are
 original illustration geometry, shared font baselines, keycaps and material.
 `profile-layout-full-tests-9.log`: 1069 browser, 237 core, 15 AI, 148 engine,
 2 bundle and 4 importer tests passed; one AI test ignored.
+
+## System appearance and profile selection
+
+Owned Arc windows supplied `arc-{General,Links,Advanced,Shortcuts,Icon}-system-light.png`,
+`arc-profiles-system-light.png` and `arc-previews-system-light.png`. System
+Dark mode was restored to its original value. The Previews sheet's Done
+control has no AX name: use its captured button index, rather than searching
+for a button named Done. Cleanup must independently close each owned window and poll through native
+close animations; a failed main-window check must never skip closing Settings. No owner profile or Space assignment was changed.
+
+Settings now observes its own window appearance. Light uses white chrome,
+near-white groups, measured gray borders/buttons, dark labels and the pale
+blue profile selection. It also supplies the white Previews panel and its
+20% dimming layer. The fixture confirms identical RGB (255,255,255) blank
+window backgrounds and (204,204,204) dimmed backgrounds. Restoring macOS Dark
+changes the same open Settings window back to RGB (41,43,45). Space appearance
+remains independent. Profile selection is inset by 5 px vertically within
+each 40 px row, with 6 px label insets and separately painted dividers.
+
+`light-native-run.A2Htba/drive.log` captures General, Profiles, Icon, Links,
+Shortcuts and Previews; its Advanced coordinate initially hit a toolbar gap.
+`light-native-run.7UDJWI/drive.log` supplies the final General/Links/Advanced/Previews captures, asserting the selected titles explicitly. Both restore the original system appearance and reach native Cmd+Q / CEF Complete with exit 0. Reviewed pairs are
+`pair-settings-{general,profiles,icon,links,shortcuts,advanced,previews}-light-2x.png`.
+The source's excluded Account/update UI is absent. Original toolbar/feature
+artwork, shared font rendering, inactive parent-control styling and Light
+profile-management sheets remain partial.
+
+A GPUI regression opens every tab under a Light test window while the browser
+uses Dark Space appearance, verifies independence after changing the Space
+preference, and exercises Previews dismissal. All 22 focused Settings tests
+pass. `light-settings-full-tests-3.log` records the green full workspace run: 1,096 browser, 241 core, 18 AI, 151 engine, two bundle and four importer tests. One credential-dependent AI test is ignored.
+
+A later guarded capture used only the already-disabled Blank Window shortcut
+to show a conflict with Cmd+1: `arc-shortcut-disabled-conflict.png`. Arc shows
+a red selected row and keycaps, a warning marker and the exact tooltip
+“⌘1 is already in use by ‘Go to Sidebar Item 1’”. Delete restores the captured
+`---` state; Escape cancels recording. The other action was never removed.
+`arc-shortcut-readonly.log` verifies the original Add Split View ⇧⌘E / Use Both
+and disabled Blank Window in a fresh session without recording inputs.
+No new row-context-menu reference is accepted: that menu was not exposed.
+
+The read-only shortcut session verified the restored bindings, then failed to
+expose a row menu. Its cleanup assertion raced the main-window close animation
+and skipped closing Settings. Before the queued follow-up cleanup acquired
+the screen lock, Arc restarted and all recorded inspection IDs disappeared.
+`arc-current-inventory.log` verifies the four restored owner windows by name
+(Grosst, Work, Яремко and Playable). An unidentified 500 × 500 popup was left
+untouched. No further Arc inputs were made. Historical inspection scripts
+are not safe templates: always close Settings in its own nested finally.
+
+## Profile isolation after rename and restart
+
+`isolation-native-run.hMix7u/{first,restart}.log` and `reports.jsonl` verify three private fixture profiles visiting the same localhost origin. Each starts without another profile’s data, retains only its own session/persistent/HTTP-only cookies, localStorage and IndexedDB markers, and writes only its own URL path into its profile history. Renaming profile 2 preserves its ID, Space assignment and storage identity. After native quit / CEF Complete and a full process restart, newly generated documents read the original stores before writing anything. `echo-isolation-{A,B,C}-restart.png` show those read-only results. Password/autofill and extension management remain outside this check.

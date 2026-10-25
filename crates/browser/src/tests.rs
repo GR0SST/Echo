@@ -11010,3 +11010,6 @@ mod app_icon_tests;
 
 #[path="capture_tests.rs"]
 mod capture_tests;
+
+#[path = "settings_appearance_tests.rs"]
+mod settings_appearance_tests;

@@ -70,11 +70,14 @@ enum Popup {
 }
 
 mod archive;
+mod appearance;
 mod app_icon;
 mod previews;
 mod profiles;
 
 pub(crate) struct SettingsWindow {
+    colors: appearance::Colors,
+    _appearance: Subscription,
     profile: ProfileHandle,
     owner: Option<WeakEntity<BrowserWindow>>,
     pub(crate) tab: Tab,
@@ -213,7 +216,10 @@ fn open(
                     |_, _, _: &crate::text_input::Changed, cx| cx.notify(),
                 );
                 let max = max::State::new(&profile, cx);
+                let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
                 let mut view = SettingsWindow {
+                    colors: appearance::Colors::from_appearance(window.appearance()),
+                    _appearance: appearance,
                     max,
                     profile,
                     owner,
@@ -275,6 +281,9 @@ fn rule() -> gpui::Div {
     div().h(px(1.)).w_full().bg(rgb(0x3e3f41))
 }
 fn button(label: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
+    button_palette(label, appearance::Colors { light: false })
+}
+fn button_palette(label: impl Into<SharedString>, colors: appearance::Colors) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
     div()
         .id(label.clone())
@@ -286,8 +295,9 @@ fn button(label: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
         .flex_none()
         .px(px(12.))
         .rounded(px(5.))
-        .bg(rgb(0x393b3d))
-        .hover(|s| s.bg(rgb(0x484a4a)))
+        .bg(colors.rgb(0x393b3d))
+        .when(colors.light, |button| button.text_color(rgb(0x424242)))
+        .hover(move |s| s.bg(colors.rgb(0x484a4a)))
         .child(label)
 }
 fn switch(enabled: bool) -> AnyElement {
@@ -439,7 +449,7 @@ impl SettingsWindow {
                 }
             }))
             .child(div().flex_1().min_w_0().child(label))
-            .child(switch(enabled))
+            .child(self.settings_switch(enabled))
             .into_any_element()
     }
     fn action_row(
@@ -458,7 +468,7 @@ impl SettingsWindow {
             }))
             .child(div().flex_1().min_w_0().child(label))
             .child(
-                button(action)
+                self.settings_button(action)
                     .when(tab.is_none() && action != "Previews Settings…" && action != "Air Traffic Control…", |s| {
                         s.opacity(0.5)
                     })
@@ -479,8 +489,8 @@ impl SettingsWindow {
     }
     fn general(&self, cx: &mut Context<Self>) -> AnyElement {
         div().w(px(556.)).flex().flex_col().gap(px(8.))
-            .child(group().child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
-            .child(group().child(self.action_row("Previews", "Previews Settings…", None, cx)).child(rule())
+            .child(self.settings_group().child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
+            .child(self.settings_group().child(self.action_row("Previews", "Previews Settings…", None, cx)).child(self.settings_rule())
                 .child(self.action_row("Manage your default search engine, Auto-Archive, and downloads in Profile Settings.", "Profile Settings…", Some(Tab::Profiles), cx)))
             .into_any_element()
     }
@@ -502,7 +512,7 @@ impl SettingsWindow {
             .child(div().flex_1().min_w_0().child(label))
             .child(
                 div().w(px(178.)).flex_none().flex().justify_center().child(
-                    button(value)
+                    self.settings_button(value)
                         .id(SharedString::from(format!("popup-{label}")))
                         .debug_selector(|| format!("settings-popup-{label}"))
                         .w(px(width))
@@ -526,13 +536,14 @@ impl SettingsWindow {
             .into_any_element()
     }
     fn profiles(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
         let browser = self.profile.settings_snapshot();
         let profile = browser
             .user_profile(self.selected_profile)
             .unwrap_or(browser.active_user_profile());
         let selected = profile.id();
         let can_delete = selected != browser.default_user_profile_id() && !browser.spaces.iter().any(|space| space.user_profile_id == selected);
-        let list = group()
+        let list = self.settings_group().when(colors.light, |list| list.bg(gpui::rgb(0xffffff)))
             .w(px(206.))
             .px_0()
             .h(px(478.))
@@ -543,11 +554,11 @@ impl SettingsWindow {
                     .flex()
                     .items_center()
                     .text_size(px(11.))
-                    .text_color(rgb(0x929494))
+                    .text_color(colors.rgb(0x929494))
                     .font_weight(gpui::FontWeight::BOLD)
                     .child("Your Profiles"),
             )
-            .child(rule())
+            .child(self.settings_rule())
             .child(
                 div()
                     .id("settings-profiles-list")
@@ -572,25 +583,28 @@ impl SettingsWindow {
                             .debug_selector(|| format!("settings-profile-{}", profile.name()))
                             .h(px(40.))
                             .w_full()
+                            .relative()
+                            .px(px(6.))
                             .flex()
                             .items_center()
                             .justify_between()
                             .gap(px(6.))
-                            .border_b_1()
-                            .border_color(rgb(0x3e3f41))
+                            .when(id == selected, |row| row.child(div().absolute().left_0().right_0().top(px(5.)).h(px(30.)).rounded(px(6.)).bg(colors.rgb(0x263342))))
+                            .child(div().absolute().left(px(6.)).right_0().bottom_0().h(px(1.)).bg(colors.rgb(0x3e3f41)))
                             .child(
                                 div()
+                                    .relative()
                                     .flex_1()
                                     .truncate()
                                     .child(profile.name().to_string()),
                             )
                             .child(
                                 div()
+                                    .relative()
                                     .text_size(px(11.))
-                                    .text_color(rgb(0x999b9b))
+                                    .text_color(colors.rgb(0x999b9b))
                                     .child(count),
                             )
-                            .when(id == selected, |s| s.bg(rgb(0x263342)).rounded(px(6.)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.selected_profile = id;
                                 this.popup = None;
@@ -598,14 +612,14 @@ impl SettingsWindow {
                             }))
                     })),
             )
-            .child(div().h(px(31.)).border_t_1().border_color(rgb(0x3e3f41)).flex().items_center()
+            .child(div().h(px(31.)).border_t_1().border_color(colors.rgb(0x3e3f41)).flex().items_center()
                 .child(div().id("add-profile").debug_selector(|| "settings-add-profile".into()).w(px(31.)).h(px(30.)).flex().items_center().justify_center().cursor_pointer()
                     .child(icons::control_sized(Icon::Plus,13.)).on_click(cx.listener(|this,_,window,cx| this.begin_profile_creation(window,cx))))
-                .child(div().w(px(1.)).h(px(14.)).bg(rgb(0x3e3f41)))
+                .child(div().w(px(1.)).h(px(14.)).bg(colors.rgb(0x3e3f41)))
                 .child(div().id("delete-profile").debug_selector(|| "settings-delete-profile".into()).w(px(31.)).h(px(30.)).flex().items_center().justify_center()
                     .when(!can_delete,|s|s.opacity(0.35)).when(can_delete,|s|s.cursor_pointer())
                     .child(icons::control_sized(Icon::Minus,13.)).on_click(cx.listener(move|this,_,window,cx|{if can_delete {this.begin_profile_editor(profiles::Operation::Delete,window,cx);}})))
-                .child(div().w(px(1.)).h(px(14.)).bg(rgb(0x3e3f41)))
+                .child(div().w(px(1.)).h(px(14.)).bg(colors.rgb(0x3e3f41)))
                 .child(div().id("rename-profile").debug_selector(|| "settings-rename-profile".into()).w(px(36.)).h(px(30.)).flex().items_center().justify_center().cursor_pointer()
                     .child(profiles::rename_control()).on_click(cx.listener(|this,_,window,cx|this.begin_profile_editor(profiles::Operation::Rename,window,cx)))));
 
@@ -615,7 +629,7 @@ impl SettingsWindow {
             .flex_col()
             .gap(px(8.))
             .child(
-                group()
+                self.settings_group()
                     .child(self.popup_row(
                         "Search engine",
                         profile.settings.search.engine.label(),
@@ -623,16 +637,16 @@ impl SettingsWindow {
                         137.,
                         cx,
                     ))
-                    .child(rule())
+                    .child(self.settings_rule())
                     .child(self.action_row("Manage search", "Search Settings…", None, cx))
-                    .child(rule())
+                    .child(self.settings_rule())
                     .child(
                         row()
                             .min_h(px(36.))
                             .id("search-suggestions")
                             .debug_selector(|| "settings-search-suggestions".into())
                             .child("Include search engine suggestions")
-                            .child(switch(profile.settings.search.suggestions))
+                            .child(self.settings_switch(profile.settings.search.suggestions))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.profile.edit_settings(|b| {
                                     if let Some(p) = b.user_profile_mut(selected) {
@@ -645,7 +659,7 @@ impl SettingsWindow {
                     ),
             )
             .child(
-                group()
+                self.settings_group()
                     .child(self.popup_row(
                         "Archive tabs after",
                         archive_label(profile.archive_after),
@@ -653,7 +667,7 @@ impl SettingsWindow {
                         154.,
                         cx,
                     ))
-                    .child(rule())
+                    .child(self.settings_rule())
                     .child(self.popup_row(
                         "New documents",
                         profile.settings.document_app.clone(),
@@ -661,7 +675,7 @@ impl SettingsWindow {
                         150.,
                         cx,
                     ))
-                    .child(rule())
+                    .child(self.settings_rule())
                     .child(self.popup_row(
                         "Download location",
                         profile.settings.download_location.clone(),
@@ -675,12 +689,12 @@ impl SettingsWindow {
                     .pl(px(10.))
                     .pt(px(4.))
                     .text_size(px(11.))
-                    .text_color(rgb(0x929494))
+                    .text_color(colors.rgb(0x929494))
                     .line_height(px(12.))
                     .child("Your Data and Settings"),
             )
             .child(
-                group().py(px(3.)).children(
+                self.settings_group().py(px(3.)).children(
                     [
                         ("Privacy and Security", Icon::Lock, 0x198deb),
                         ("Passwords", Icon::SiteControls, 0x27b943),
@@ -698,17 +712,17 @@ impl SettingsWindow {
                                 div()
                                     .size(px(24.))
                                     .rounded(px(4.))
-                                    .bg(rgb(color))
+                                    .bg(colors.rgb(color))
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_color(rgb(0xffffff))
+                                    .text_color(colors.rgb(0xffffff))
                                     .child(icons::control(icon)),
                             )
                             .child(div().flex_1().min_w_0().child(label))
                             .child(
                                 div()
-                                    .text_color(rgb(0x2794f4))
+                                    .text_color(colors.rgb(0x2794f4))
                                     .child(icons::control(Icon::Forward)),
                             )
                     }),
@@ -718,6 +732,7 @@ impl SettingsWindow {
             .child(div().flex().gap(px(10.)).child(list).child(fields)).into_any_element()
     }
     fn links(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
         let settings = self.profile.read_settings(|b| b.settings.clone());
         let archive = match settings.little_window_archive {
             browser_core::settings::LittleWindowArchive::OneHour => "1 hour",
@@ -725,21 +740,21 @@ impl SettingsWindow {
             browser_core::settings::LittleWindowArchive::TwelveHours => "12 hours",
         };
         div().flex().flex_col()
-            .child(div().h(px(134.)).overflow_hidden().bg(rgb(0xd28586)).px(px(60.)).pt(px(46.))
-                .child(div().h(px(130.)).rounded_t(px(8.)).bg(rgb(0xe6d1cc)).border_1().border_color(rgb(0xbcb7bd))
-                    .child(div().h(px(25.)).bg(rgb(0xbab9c5)).rounded_t(px(8.)).flex().items_center().justify_between().px(px(10.)).text_size(px(10.)).text_color(rgb(0x555761)).child("Work").child("echo.local").child("Open in Work"))))
+            .child(div().h(px(134.)).overflow_hidden().bg(colors.rgb(0xd28586)).px(px(60.)).pt(px(46.))
+                .child(div().h(px(130.)).rounded_t(px(8.)).bg(colors.rgb(0xe6d1cc)).border_1().border_color(colors.rgb(0xbcb7bd))
+                    .child(div().h(px(25.)).bg(colors.rgb(0xbab9c5)).rounded_t(px(8.)).flex().items_center().justify_between().px(px(10.)).text_size(px(10.)).text_color(colors.rgb(0x555761)).child("Work").child("echo.local").child("Open in Work"))))
             .child(div().px(px(64.)).py(px(24.)).flex().flex_col().gap(px(24.))
                 .child(div().px(px(10.)).child("Little Echo is a smaller, simpler Echo window. It’s perfect for quick lookups and reading funny tweets your friends send you."))
-                .child(group().child(self.toggle_row("Open Little Echo when I press ⌥⌘N in any app", Toggle::LittleWindowShortcut, cx)).child(rule())
-                    .child(self.toggle_row("Open Little Echo when clicking on links with ⌥⌘ held", Toggle::LittleWindowCommandClick, cx)).child(rule())
-                    .child(self.toggle_row("Links from other apps open in Little Echo", Toggle::LittleWindowLinks, cx)).child(rule())
+                .child(self.settings_group().child(self.toggle_row("Open Little Echo when I press ⌥⌘N in any app", Toggle::LittleWindowShortcut, cx)).child(self.settings_rule())
+                    .child(self.toggle_row("Open Little Echo when clicking on links with ⌥⌘ held", Toggle::LittleWindowCommandClick, cx)).child(self.settings_rule())
+                    .child(self.toggle_row("Links from other apps open in Little Echo", Toggle::LittleWindowLinks, cx)).child(self.settings_rule())
                     .child(self.popup_row("Archive Little Echos after:", archive, Popup::LittleArchive, 150., cx)))
-                .child(rule())
+                .child(self.settings_rule())
                 .child(div().px(px(10.)).child("Peek is a way to preview a link without opening a new tab. It’s perfect for quickly looking at a link from an email, news article, or tweet."))
-                .child(group().child(self.toggle_row("Open a Peek window when clicking on links with Shift held", Toggle::PeekCommandShiftClick, cx)).child(rule())
+                .child(self.settings_group().child(self.toggle_row("Open a Peek window when clicking on links with Shift held", Toggle::PeekCommandShiftClick, cx)).child(self.settings_rule())
                     .child(self.toggle_row("Open a Peek window when clicking on links to other sites", Toggle::PeekPinned, cx))
-                    .child(div().pb(px(6.)).italic().text_color(rgb(0x929494)).child("Note: This only affects Favorites and Pinned tabs.")))
-                .child(rule()).child(self.action_row("Choose where links open inside Echo.", "Air Traffic Control…", None, cx)))
+                    .child(div().pb(px(6.)).italic().text_color(colors.rgb(0x929494)).child("Note: This only affects Favorites and Pinned tabs.")))
+                .child(self.settings_rule()).child(self.action_row("Choose where links open inside Echo.", "Air Traffic Control…", None, cx)))
             .into_any_element()
     }
     fn advanced_row(
@@ -750,6 +765,7 @@ impl SettingsWindow {
         color: u32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let colors = self.colors;
         let enabled = self.profile.read_settings(|b| b.settings.enabled(toggle));
         row()
             .id(SharedString::from(format!("toggle-{toggle:?}")))
@@ -765,8 +781,8 @@ impl SettingsWindow {
                 div()
                     .size(px(20.))
                     .rounded(px(4.))
-                    .bg(rgb(color))
-                    .text_color(rgb(0xffffff))
+                    .bg(colors.rgb(color))
+                    .text_color(colors.rgb(0xffffff))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -778,13 +794,13 @@ impl SettingsWindow {
                     .child(label)
                     .when(toggle == Toggle::SharedQuotes, |s| {
                         s.child(
-                            div().text_size(px(10.)).text_color(rgb(0x858787)).child(
+                            div().text_size(px(10.)).text_color(colors.rgb(0x858787)).child(
                                 "If disabled, you can still copy URL as a quote using ⌃⇧⌘C.",
                             ),
                         )
                     }),
             )
-            .child(switch(enabled))
+            .child(self.settings_switch(enabled))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle, cx)))
             .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "space" | "enter") {
@@ -862,10 +878,10 @@ impl SettingsWindow {
             .flex_col()
             .gap(px(10.))
             .children(sections.into_iter().map(|rows| {
-                group().children(rows.into_iter().enumerate().map(
+                self.settings_group().children(rows.into_iter().enumerate().map(
                     |(index, (label, toggle, icon, color))| {
                         div()
-                            .when(index > 0, |s| s.child(rule()))
+                            .when(index > 0, |s| s.child(self.settings_rule()))
                             .child(self.advanced_row(label, toggle, icon, color, cx))
                     },
                 ))
@@ -874,14 +890,15 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(button("More Settings…").opacity(0.5))
-                    .child(button("Reset Translated-site Prompts").opacity(0.5))
+                    .child(self.settings_button("More Settings…").opacity(0.5))
+                    .child(self.settings_button("Reset Translated-site Prompts").opacity(0.5))
                     .child(div().flex_1())
-                    .child(button("Export Data").opacity(0.5)),
+                    .child(self.settings_button("Export Data").opacity(0.5)),
             )
             .into_any_element()
     }
     fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
         static CATALOG: std::sync::LazyLock<Vec<(String, String)>> =
             std::sync::LazyLock::new(|| {
                 serde_json::from_str(include_str!("../assets/settings-shortcuts.json"))
@@ -899,19 +916,19 @@ impl SettingsWindow {
             query.is_empty() || format!("{label} {key}").to_lowercase().contains(&query)
         });
         div().w(px(556.)).flex().flex_col().gap(px(30.))
-            .child(div().flex().justify_center().child(div().flex().items_center().gap(px(10.)).p(px(6.)).rounded(px(6.)).bg(rgb(0x5b575f)).child("Start with the basics").child(button("Learn the Essential Shortcuts").id("learn-essential-shortcuts").debug_selector(|| "learn-essential-shortcuts".into()).bg(rgb(0x147bff)).cursor_pointer().on_click(|_, _, cx| cx.defer(crate::essential_shortcuts::open)))))
+            .child(div().flex().justify_center().child(div().flex().items_center().gap(px(10.)).p(px(6.)).rounded(px(6.)).bg(colors.rgb(0x5b575f)).when(colors.light, |callout| callout.border_1().border_color(rgb(0xe7e7e7)).shadow_sm()).child("Start with the basics").child(self.settings_button("Learn the Essential Shortcuts").id("learn-essential-shortcuts").debug_selector(|| "learn-essential-shortcuts".into()).bg(colors.rgb(0x147bff)).text_color(rgb(0xffffff)).cursor_pointer().on_click(|_, _, cx| cx.defer(crate::essential_shortcuts::open)))))
             .child(div().flex().gap(px(16.)).h(px(450.))
-                .child(group().w(px(340.)).flex_none().px_0()
-                    .child(div().h(px(40.)).flex_none().px(px(16.)).bg(rgb(0x3b3e3e)).flex().items_center().gap(px(6.)).text_color(rgb(0xa6a8a8)).child(icons::control_sized(Icon::Search, 14.)).child(self.shortcut_search.clone()))
-                    .child(div().h(px(28.)).flex_none().px(px(16.)).flex().items_center().text_size(px(11.)).text_color(rgb(0x929494)).child("Default Shortcuts"))
+                .child(self.settings_group().when(colors.light, |list| list.bg(rgb(0xffffff))).w(px(340.)).flex_none().px_0()
+                    .child(div().h(px(40.)).flex_none().px(px(16.)).bg(colors.rgb(0x3b3e3e)).flex().items_center().gap(px(6.)).text_color(colors.rgb(0xa6a8a8)).child(icons::control_sized(Icon::Search, 14.)).child(self.shortcut_search.clone()))
+                    .child(div().h(px(28.)).flex_none().px(px(16.)).flex().items_center().text_size(px(11.)).text_color(colors.rgb(0x929494)).child("Default Shortcuts"))
                     .child(div().id("settings-shortcuts-list").min_h_0().flex_1().overflow_y_scroll().px(px(24.)).children(entries.map(|(label, key)| {
-                        row().h(px(48.)).flex_none().border_b_1().border_color(rgb(0x3e3f41)).child(div().flex_1().min_w_0().child(label)).child(button(key).w(px(64.)).opacity(0.5))
+                        row().h(px(48.)).flex_none().border_b_1().border_color(colors.rgb(0x3e3f41)).child(div().flex_1().min_w_0().child(label)).child(self.settings_button(key).w(px(64.)).when(colors.light, |key| key.bg(rgb(0xffffff)).border_1().border_color(rgb(0xe7e7e7)).text_color(rgb(0x808080))).when(!colors.light, |key| key.opacity(0.5)))
                     }))))
                 .child(div().w(px(200.)).min_w_0().flex_none().flex().flex_col().gap(px(10.))
-                    .child(div().flex().gap(px(4.)).text_color(rgb(0x1686ff)).child(div().size(px(64.)).rounded(px(12.)).bg(rgb(0x75acff)).border_2().border_color(rgb(0x0788ff)).flex().items_center().justify_center().child(icons::control_sized(Icon::Command, 40.))).child(div().size(px(64.)).rounded(px(12.)).bg(rgb(0x75acff)).border_2().border_color(rgb(0x0788ff)).flex().items_center().justify_center().child(icons::ionicon("happy-outline", 42., 1.))))
+                    .child(div().flex().gap(px(4.)).text_color(colors.rgb(0x1686ff)).child(div().size(px(64.)).rounded(px(12.)).bg(colors.rgb(0x75acff)).border_2().border_color(colors.rgb(0x0788ff)).flex().items_center().justify_center().child(icons::control_sized(Icon::Command, 40.))).child(div().size(px(64.)).rounded(px(12.)).bg(colors.rgb(0x75acff)).border_2().border_color(colors.rgb(0x0788ff)).flex().items_center().justify_center().child(icons::ionicon("happy-outline", 42., 1.))))
                     .child(div().mt(px(12.)).font_weight(gpui::FontWeight::BOLD).child("Custom Shortcuts"))
-                    .child(div().text_size(px(11.)).line_height(px(14.)).text_color(rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
-                    .child(div().flex_1()).child(div().flex().gap(px(4.)).child(button("Reset All Shortcuts").px(px(8.)).opacity(0.5)).child(div().size(px(24.)).rounded_full().bg(rgb(0x393b3d)).child(icons::more()).opacity(0.5)))))
+                    .child(div().text_size(px(11.)).line_height(px(14.)).text_color(colors.rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
+                    .child(div().flex_1()).child(div().flex().gap(px(4.)).child(self.settings_button("Reset All Shortcuts").px(px(8.)).opacity(0.5)).child(div().size(px(24.)).rounded_full().bg(colors.rgb(0x393b3d)).child(icons::more()).opacity(0.5)))))
             .into_any_element()
     }
     fn popup_options(&self, popup: Popup) -> Vec<(String, bool)> {
@@ -973,6 +990,7 @@ impl SettingsWindow {
         }
     }
     fn popup_menu(&self, popup: Popup, cx: &mut Context<Self>) -> AnyElement {
+        let colors = self.colors;
         let options = self.popup_options(popup);
         let selected_index = options
             .iter()
@@ -1012,8 +1030,8 @@ impl SettingsWindow {
             .p(px(4.))
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(0x636565))
-            .bg(rgb(0x343636))
+            .border_color(colors.rgb(0x636565))
+            .bg(colors.rgb(0x343636))
             .shadow_lg()
             .children(
                 options
@@ -1029,8 +1047,8 @@ impl SettingsWindow {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .hover(|s| s.bg(rgb(0x1769c4)))
-                            .when(index == self.popup_selection, |s| s.bg(rgb(0x087dff)))
+                            .hover(move |s| s.bg(colors.rgb(0x1769c4)).text_color(rgb(0xffffff)))
+                            .when(index == self.popup_selection, |s| s.bg(colors.rgb(0x087dff)).text_color(rgb(0xffffff)))
                             .child(div().w(px(16.)).when(selected, |s| {
                                 s.child(icons::control_sized(Icon::Check, 14.))
                             }))
@@ -1123,6 +1141,8 @@ fn archive_label(duration: Option<Duration>) -> &'static str {
 }
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.colors = appearance::Colors::from_appearance(window.appearance());
+        let colors = self.colors;
         self.validate_profile_editor(window, cx);
         if self.atc_return_focus { self.atc_return_focus = false; self.focus.focus(window); }
         let browser = self.profile.settings_snapshot();
@@ -1145,8 +1165,8 @@ impl Render for SettingsWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x292b2d))
-            .text_color(rgb(0xc4c5c5))
+            .bg(colors.rgb(0x292b2d))
+            .text_color(colors.rgb(0xc4c5c5))
             .font_family(".SystemUIFont")
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_size(px(13.))
@@ -1239,9 +1259,9 @@ impl Render for SettingsWindow {
                     .flex_none()
                     .flex()
                     .flex_col()
-                    .bg(rgb(0x303334))
+                    .bg(colors.rgb(0x303334))
                     .border_b_1()
-                    .border_color(rgb(0x393b3b))
+                    .border_color(colors.rgb(0x393b3b))
                     .child(
                         div()
                             .h(px(28.))
@@ -1249,7 +1269,7 @@ impl Render for SettingsWindow {
                             .justify_center()
                             .items_center()
                             .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(0xacafb0))
+                            .text_color(colors.rgb(0xacafb0))
                             .child(self.tab.label()),
                     )
                     .child(
@@ -1271,13 +1291,13 @@ impl Render for SettingsWindow {
                                     .justify_center()
                                     .gap(px(3.))
                                     .text_size(px(11.))
-                                    .text_color(rgb(if self.tab == tab {
+                                    .text_color(colors.rgb(if self.tab == tab {
                                         0x0788ff
                                     } else {
                                         0x989a9a
                                     }))
                                     .when(self.tab == tab, |s| {
-                                        s.bg(rgb(0x363838)).border_1().border_color(rgb(0x181919))
+                                        s.bg(colors.rgb(0x363838)).border_1().border_color(colors.rgb(0x181919))
                                     })
                                     .child(icons::ionicon(tab.icon(), 22., 1.))
                                     .child(tab.label())
