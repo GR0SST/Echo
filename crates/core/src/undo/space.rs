@@ -327,6 +327,7 @@ impl Browser {
             }
             let destination = self.spaces.iter_mut().find(|space| space.id == target)?;
             destination.folders.push(Folder {
+                live: None,
                 id,
                 name: snapshot.name.clone(),
                 collapsed: false,

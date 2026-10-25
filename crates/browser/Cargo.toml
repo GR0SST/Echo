@@ -15,6 +15,7 @@ name = "Echo"
 path = "src/main.rs"
 
 [dependencies]
+echo_github = { path = "../github" }
 echo_ai = { path = "../ai", features = ["http", "native"] }
 browser_core = { package = "core", path = "../core" }
 engine = { path = "../engine" }

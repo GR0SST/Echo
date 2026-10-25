@@ -28,6 +28,8 @@ pub enum PinnedItem {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Folder {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<crate::live_folders::LiveFolder>,
     pub id: FolderId,
     pub name: String,
     #[serde(default)]
@@ -145,6 +147,7 @@ impl Browser {
         }
         let index = self.spaces.iter().position(|entry| entry.id == space)?;
         if let Some(parent) = parent {
+            if self.folder(parent).is_some_and(|f|f.live.is_some()) {return None;}
             if self.folder_space(parent) != Some(space) {
                 return None;
             }
@@ -164,6 +167,7 @@ impl Browser {
         self.repair_folders();
         let id = FolderId(self.next_id());
         self.spaces[index].folders.push(Folder {
+            live: None,
             id,
             name: name.to_string(),
             collapsed: false,
@@ -241,6 +245,7 @@ impl Browser {
     /// Pins the whole item in the destination Space, without expanding a closed
     /// destination folder. The caller chooses whether to focus its page.
     pub fn move_item_to_folder(&mut self, tab: TabId, folder: FolderId) -> bool {
+        if self.folder(folder).is_some_and(|f|f.live.is_some()) {return false;}
         if !self.can_edit_persistent_sidebar() { return false; }
         let Some(space) = self.folder_space(folder) else {
             return false;
@@ -320,7 +325,7 @@ impl Browser {
             return false;
         };
         if self.spaces[source].user_profile_id != self.spaces[target].user_profile_id { return false; }
-        if parent.is_some_and(|parent| self.folder_space(parent) != Some(destination)) {
+        if parent.is_some_and(|parent| self.folder_space(parent) != Some(destination) || self.folder(parent).is_some_and(|f|f.live.is_some())) {
             return false;
         }
         let descendants = subtree_folders(&self.spaces[source], id);

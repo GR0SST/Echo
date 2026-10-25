@@ -22,6 +22,8 @@ impl UserProfileId {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<crate::live_folders::GitHubAccount>,
     #[serde(default)]
     pub settings: crate::settings::ProfileSettings,
     pub(crate) id: UserProfileId,
@@ -66,6 +68,7 @@ impl UserProfile {
     }
     fn empty(id: UserProfileId, name: String, archive_after: Option<Duration>) -> Self {
         Self {
+            github: None,
             settings: crate::settings::ProfileSettings::default(),
             id,
             name,
@@ -219,6 +222,7 @@ impl Browser {
         if !self.profiles.contains_key(&to) {
             return Err(UserProfileError::UnknownProfile);
         }
+        let github = self.profiles.get(&to).and_then(|p|p.github.clone());
         let space = self
             .spaces
             .iter_mut()
@@ -235,6 +239,7 @@ impl Browser {
         {
             space.active_tab = None;
         }
+        for folder in &mut space.folders { if let Some(live) = &mut folder.live { live.disconnect(); if let Some(account)=&github { live.credential_id=account.credential_id.clone();live.login=account.login.clone(); } } }
         space.user_profile_id = to;
         let transition = UserProfileTransition {
             space: space.id,
