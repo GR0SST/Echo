@@ -84,12 +84,13 @@ impl BrowserWindow {
         }));
     }
     fn ensure_mini_pointer_tracking(&mut self, cx: &mut Context<Self>) {
+            if crate::quit::is_quitting() { return; }
             if self.mini_player.pointer.is_none() {
                 if let Some(parent)=self.native_view {
                     self.mini_player.pointer=Some(cx.spawn(async move |this,cx|loop {
                         cx.background_executor().timer(Duration::from_millis(32)).await;
                         let keep=this.update(cx,|this,cx| {
-                            if this.mini_player_source().is_none(){this.mini_player.hovered=false;this.mini_player.pointer=None;return false;}
+                            if crate::quit::is_quitting() || this.mini_player_source().is_none(){this.mini_player.hovered=false;this.mini_player.pointer=None;return false;}
                             if let (Some([x,y]),Some(bounds))=(crate::native::pointer_position(parent),this.mini_player.bounds.get()) {
                                 this.hover_mini_player(bounds.contains(&gpui::point(px(x),px(y))),cx);
                             }
