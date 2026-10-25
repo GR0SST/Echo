@@ -3282,7 +3282,7 @@ fn favorites_are_shared_and_keep_the_loaded_page_across_spaces(cx: &mut TestAppC
 fn closing_a_favorite_unloads_it_and_clicking_it_reopens_the_original_url(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let original = active_url(&view, cx).unwrap();
-    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.dispatch_action(crate::window::ToggleFavorite);
     cx.simulate_keystrokes("ctrl-2 cmd-1");
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/favorite-navigation".into() });
     fake.take_calls();
@@ -3302,7 +3302,7 @@ fn closing_a_favorite_unloads_it_and_clicking_it_reopens_the_original_url(cx: &m
 #[gpui::test]
 fn unfavorite_returns_the_shared_tab_to_the_current_spaces_today(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
-    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.dispatch_action(crate::window::ToggleFavorite);
     cx.simulate_keystrokes("ctrl-2 cmd-1");
     fake.take_calls();
     cx.simulate_keystrokes("cmd-t");
@@ -3322,7 +3322,7 @@ fn unfavorite_returns_the_shared_tab_to_the_current_spaces_today(cx: &mut TestAp
 #[gpui::test]
 fn a_favorite_can_move_to_the_current_spaces_pinned_section(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
-    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.dispatch_action(crate::window::ToggleFavorite);
     cx.simulate_keystrokes("ctrl-2 cmd-1");
     fake.take_calls();
     cx.simulate_keystrokes("cmd-t");
@@ -3344,7 +3344,7 @@ fn engine_favicons_follow_tabs_into_favorites_and_survive_closing_and_sessions(c
     let png = include_bytes!("../testdata/favicon.png").to_vec();
     fake.send(cx, Event::Favicon { view: page(1), page_url: original.clone(), png: png.clone() });
     assert_eq!(view.read_with(cx, |w, _| w.browser.favicon(w.browser.active_user_profile_id(), &original).map(Vec::from)), Some(png.clone()));
-    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.dispatch_action(crate::window::ToggleFavorite);
     cx.simulate_keystrokes("ctrl-2 cmd-1");
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://elsewhere.example/page".into() });
     cx.simulate_keystrokes("cmd-w");
@@ -3650,7 +3650,7 @@ fn context_muting_a_background_page_does_not_activate_it(cx: &mut TestAppContext
 fn mute_all_reaches_unloaded_tabs_and_unmute_all_updates_background_pages(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     fake.take_calls();
-    dispatch_menu(cx, "Tabs", "Mute All Tabs");
+    cx.dispatch_action(crate::window::MuteAllTabs);
     assert!(view.read_with(cx, |w, _| w.browser.all_tabs().all(|tab| tab.muted)));
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Mute(1, true)));
@@ -3660,7 +3660,7 @@ fn mute_all_reaches_unloaded_tabs_and_unmute_all_updates_background_pages(cx: &m
     let mute = calls.iter().position(|call| *call == Call::Mute(2, true)).unwrap();
     let show = calls.iter().position(|call| *call == Call::Visible(2, true)).unwrap();
     assert!(mute < show, "a restored muted page is muted before being shown: {calls:?}");
-    dispatch_menu(cx, "Tabs", "Unmute All Tabs");
+    cx.dispatch_action(crate::window::UnmuteAllTabs);
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Mute(1, false)) && calls.contains(&Call::Mute(2, false)));
     assert!(!view.read_with(cx, |w, _| w.browser.all_tabs().any(|tab| tab.muted)));
@@ -3669,8 +3669,8 @@ fn mute_all_reaches_unloaded_tabs_and_unmute_all_updates_background_pages(cx: &m
 #[gpui::test]
 fn a_closed_muted_favorite_reopens_muted(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
-    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
-    dispatch_menu(cx, "Tabs", "Mute/Unmute Tab");
+    cx.dispatch_action(crate::window::ToggleFavorite);
+    cx.dispatch_action(crate::window::ToggleMute);
     cx.simulate_keystrokes("ctrl-2 cmd-1 cmd-w");
     fake.take_calls();
     click(cx, "favorite-8");
@@ -3685,7 +3685,7 @@ fn a_closed_muted_favorite_reopens_muted(cx: &mut TestAppContext) {
 fn internal_history_pages_do_not_offer_mute_commands(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-y");
-    dispatch_menu(cx, "Tabs", "Mute/Unmute Tab");
+    cx.dispatch_action(crate::window::ToggleMute);
     assert!(!view.read_with(cx, |w, _| w.browser.active_tab().unwrap().muted));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("mute tab");
@@ -3695,7 +3695,7 @@ fn internal_history_pages_do_not_offer_mute_commands(cx: &mut TestAppContext) {
 #[gpui::test]
 fn engine_initialization_cannot_clear_a_saved_mute_intent(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
-    dispatch_menu(cx, "Tabs", "Mute/Unmute Tab");
+    cx.dispatch_action(crate::window::ToggleMute);
     fake.take_calls();
     // CEF initialization may replace the host's initial audio flag after creation.
     fake.0.borrow_mut().muted.clear();
@@ -4170,7 +4170,7 @@ fn duplicate_menu_copies_the_whole_split_and_closing_it_keeps_original_pages(cx:
     let (view, cx, fake) = open_split_pages(cx, 3);
     let source = view.read_with(cx, |w, _| w.browser.active_split().unwrap().clone());
     fake.take_calls();
-    dispatch_menu(cx, "Tabs", "Duplicate Current Tab");
+    cx.dispatch_action(crate::window::DuplicateTab);
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.space().splits.len(), 2);
@@ -4194,10 +4194,10 @@ fn duplicate_menu_copies_the_whole_split_and_closing_it_keeps_original_pages(cx:
 }
 
 #[gpui::test]
-fn native_duplicate_menu_dismisses_command_input_and_regular_context_menu_can_start_a_split(cx: &mut TestAppContext) {
+fn duplicate_action_dismisses_command_input_and_regular_context_menu_can_start_a_split(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     cx.simulate_keystrokes("cmd-t");
-    dispatch_menu(&mut bar(&view, cx), "Tabs", "Duplicate Current Tab");
+    bar(&view, cx).dispatch_action(crate::window::DuplicateTab);
     assert_eq!(bar_text(&view, cx), None);
     right_click(cx, "tab-4");
     click(&mut tab_menu(&view, cx), "tab-menu-add-right");
@@ -4487,7 +4487,7 @@ fn space_header_visibility_changes_only_the_current_space_and_survives_sessions(
 #[gpui::test]
 fn numbered_sidebar_shortcuts_can_exclude_and_include_favorites(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
-    dispatch_menu(cx, "Tabs", "Favorite/Unfavorite Tab");
+    cx.dispatch_action(crate::window::ToggleFavorite);
     cx.simulate_keystrokes("cmd-1");
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 8);
     run_named_command(&view, cx, "exclude favorites from ordering");
@@ -4499,7 +4499,7 @@ fn numbered_sidebar_shortcuts_can_exclude_and_include_favorites(cx: &mut TestApp
         let saved = browser_core::session::from_json(&browser_core::session::to_json(&w.browser)).unwrap();
         assert!(!saved.active_user_profile().include_favorites_in_ordering);
     });
-    dispatch_menu(cx, "Tabs", "Include/Exclude Favorites in Ordering");
+    cx.dispatch_action(crate::window::ToggleFavoritesOrdering);
     cx.simulate_keystrokes("cmd-1");
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 8);
 }
@@ -4569,14 +4569,14 @@ fn context_icon_editor_targets_an_inactive_tab_and_reset_name_and_icon_restores_
 fn split_group_icon_survives_favorite_and_separation_reveals_the_original_page_icons(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 2);
     fake.take_calls();
-    dispatch_menu(cx, "Tabs", "Customize Tab Icon…");
+    cx.dispatch_action(crate::window::CustomizeTabIcon);
     bar(&view, cx).simulate_input("🔬");
     bar(&view, cx).simulate_keystrokes("enter");
     run_named_command(&view, cx, "favorite tab");
     view.read_with(cx, |w, _| assert_eq!(w.browser.active_split().unwrap().custom_icon.as_deref(), Some("🔬")));
     cx.run_until_parked();
     assert!(cx.debug_bounds("item-icon-2").is_some());
-    dispatch_menu(cx, "Tabs", "Reset Name and Icon");
+    cx.dispatch_action(crate::window::ResetNameAndIcon);
     assert!(view.read_with(cx, |w, _| w.browser.active_split().unwrap().custom_icon.is_none()));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
@@ -4820,8 +4820,8 @@ fn named_folder_expansion_and_collapse_all_leave_the_selected_page_intact(cx: &m
     assert!(view.read_with(cx, |w, _| w.browser.space().folders.iter().all(|folder| folder.collapsed)));
     run_named_command(&view, cx, "expand folder Projects / Research");
     assert!(view.read_with(cx, |w, _| w.browser.space().folders.iter().all(|folder| !folder.collapsed)));
-    dispatch_menu(cx, "Tabs", "Collapse All Folders");
-    dispatch_menu(cx, "Tabs", "Expand All Folders");
+    cx.dispatch_action(crate::window::CollapseAllFolders);
+    cx.dispatch_action(crate::window::ExpandAllFolders);
     assert!(view.read_with(cx, |w, _| w.browser.space().folders.iter().all(|folder| !folder.collapsed)));
     assert_eq!(active_url(&view, cx), active);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
@@ -8340,6 +8340,7 @@ fn settings_toggles_persist_without_affecting_other_profiles(cx: &mut TestAppCon
     let (settings_view, mut settings) = settings_window(cx);
     click(&mut settings, "settings-toggle-WarnBeforeQuitting");
     click(&mut settings, "settings-tab-Advanced");
+    assert!(settings.debug_bounds("settings-toggle-SharedQuotes").is_none());
     click(&mut settings, "settings-toggle-Boosts");
     click(&mut settings, "settings-tab-Profiles");
     click(&mut settings, "settings-profile-Work");
@@ -8886,9 +8887,9 @@ fn favorite_menu_uses_open_in_split_and_only_remove_favorite_at_the_bottom(cx: &
 fn folder_menu_matches_arc_sections_and_has_no_collapse_or_copy_rows(cx: &mut TestAppContext) {
     let (view, cx, _) = open_folder_pages(cx);
     right_click(cx, "folder-3");
-    assert_eq!(tab_menu(&view,cx).debug_bounds("tab-context-menu").unwrap().size, gpui::size(gpui::px(282.),gpui::px(247.)));
+    assert_eq!(tab_menu(&view,cx).debug_bounds("tab-context-menu").unwrap().size, gpui::size(gpui::px(308.),gpui::px(211.)));
     assert_eq!(sidebar_menu_labels(&view, cx), [
-        "Share Folder…", "|", "New Nested Folder…", "Turn \"Research\" into Space", "|",
+        "New Nested Folder…", "Turn “Research” into Space", "|",
         "Change Icon…", "Rename…", "|", "Duplicate", "Move to", "|", "Archive Folder",
     ]);
     tab_menu(&view, cx).simulate_keystrokes("escape");
@@ -11123,4 +11124,20 @@ fn download_progress_badge_opens_downloads_without_navigating_the_document(cx:&m
     view.read_with(cx,|view,_|assert!(view.downloads_route_active()));
     assert_eq!(active_url(&view,cx),before);
     assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..)|Call::Reload(..))));
+}
+
+#[gpui::test]
+fn ordinary_tabs_menu_contains_only_the_reference_commands(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let tabs = crate::menus::build().into_iter().find(|menu| menu.name.as_ref() == "Tabs").unwrap();
+    let labels: Vec<_> = tabs.items.into_iter().map(|item| match item {
+        gpui::MenuItem::Action { name, .. } => name.to_string(),
+        gpui::MenuItem::Separator => "|".into(),
+        _ => panic!("unexpected Tabs submenu"),
+    }).collect();
+    assert_eq!(labels, ["New Tab…", "Pin Tab", "New Folder…", "|", "Next Tab", "Previous Tab", "Reveal Tab in Sidebar", "|", "Clear Today", "Reset all tabs in this Space"]);
+    dispatch_menu(cx, "Tabs", "Pin Tab");
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_some()));
+    cx.dispatch_action(crate::window::TogglePin);
+    assert!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().pinned_url.is_none()));
 }

@@ -23,3 +23,16 @@ pub(super) fn set_selected(selected: usize) {
         }
     }
 }
+
+/// NSMenu owns its intrinsic sizing; GPUI currently has no minimum-width field.
+pub(super) fn set_minimum_width(title: &str, width: f64) {
+    unsafe {
+        let app: *mut AnyObject = msg_send![objc2::class!(NSApplication), sharedApplication];
+        let root: *mut AnyObject = msg_send![app, mainMenu];
+        if root.is_null() { return; }
+        let item: *mut AnyObject = msg_send![root, itemWithTitle: &*NSString::from_str(title)];
+        if item.is_null() { return; }
+        let menu: *mut AnyObject = msg_send![item, submenu];
+        if !menu.is_null() { let _: () = msg_send![menu, setMinimumWidth: width]; }
+    }
+}

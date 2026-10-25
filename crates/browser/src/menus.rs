@@ -95,6 +95,15 @@ pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'stati
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+struct PinnedMenu(bool);
+impl gpui::Global for PinnedMenu {}
+pub(crate) fn sync_pinned(pinned: bool, cx: &mut App) {
+    if cx.try_global::<PinnedMenu>().is_some_and(|state| state.0 == pinned) { return; }
+    cx.set_global(PinnedMenu(pinned));
+    refresh_shortcuts(cx);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct MenuAppearance(browser_core::themes::ThemeAppearance);
 impl gpui::Global for MenuAppearance {}
 pub(crate) fn sync_appearance(mode: browser_core::themes::ThemeAppearance, cx: &mut App) {
@@ -142,8 +151,18 @@ fn install_menu_model(mut menus: Vec<Menu>, cx: &mut App) {
         }}
     }
     label(&mut menus, cx.try_global::<DeveloperModeMenu>().is_some_and(|mode|mode.0));
+    if cx.try_global::<PinnedMenu>().is_some_and(|state| state.0) {
+        for menu in &mut menus {
+            for item in &mut menu.items {
+                if let MenuItem::Action { name, .. } = item {
+                    if name.as_ref() == "Pin Tab" { *name = "Unpin Tab".into(); }
+                }
+            }
+        }
+    }
     cx.set_menus(menus);
     native::configure_standard_edit_menu();
+    native::set_menu_minimum_width("Tabs", 256.);
     sync_native_appearance(cx);
 }
 
@@ -279,26 +298,16 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
         Menu {
             name: "Tabs".into(),
             items: vec![
-                MenuItem::action("Include/Exclude Favorites in Ordering", window::ToggleFavoritesOrdering),
-                MenuItem::action("Collapse All Folders", window::CollapseAllFolders),
-                MenuItem::action("Expand All Folders", window::ExpandAllFolders),
-                MenuItem::action("Reveal Tab in Sidebar", window::RevealTab),
-                MenuItem::action("Duplicate Current Tab", window::DuplicateTab),
-                MenuItem::action("Pin/Unpin Tab", window::TogglePin),
-                MenuItem::action("Favorite/Unfavorite Tab", window::ToggleFavorite),
-                MenuItem::action("Mute/Unmute Tab", window::ToggleMute),
-                MenuItem::action("Mute All Tabs", window::MuteAllTabs),
-                MenuItem::action("Unmute All Tabs", window::UnmuteAllTabs),
-                MenuItem::action("Rename Current Tab…", RenameTab),
-                MenuItem::action("Customize Tab Icon…", window::CustomizeTabIcon),
-                MenuItem::action("Reset Name and Icon", window::ResetNameAndIcon),
-                MenuItem::action("Reset Tab Name", ResetTabName),
-                MenuItem::action("Reset Tab to Original URL", ResetPinnedTab),
-                MenuItem::action("Replace Pinned URL with Current", ReplacePinnedUrl),
+                MenuItem::action("New Tab…", window::OpenCommandBar),
+                MenuItem::action("Pin Tab", window::TogglePin),
+                MenuItem::action("New Folder…", window::NewFolder),
                 MenuItem::separator(),
                 MenuItem::action("Next Tab", window::NextTab),
                 MenuItem::action("Previous Tab", window::PreviousTab),
+                MenuItem::action("Reveal Tab in Sidebar", window::RevealTab),
+                MenuItem::separator(),
                 MenuItem::action("Clear Today", window::ClearToday),
+                MenuItem::action("Reset all tabs in this Space", ResetSpace),
             ],
         },
         Menu {

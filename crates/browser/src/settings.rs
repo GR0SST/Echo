@@ -786,11 +786,7 @@ impl SettingsWindow {
         row()
             .id(SharedString::from(format!("toggle-{toggle:?}")))
             .debug_selector(|| format!("settings-toggle-{toggle:?}"))
-            .min_h(px(if toggle == Toggle::SharedQuotes {
-                50.
-            } else {
-                40.
-            }))
+            .min_h(px(40.))
             .focusable()
             .tab_stop(true)
             .child(
@@ -808,13 +804,6 @@ impl SettingsWindow {
                 div()
                     .flex_1()
                     .child(label)
-                    .when(toggle == Toggle::SharedQuotes, |s| {
-                        s.child(
-                            div().text_size(px(10.)).text_color(colors.rgb(0x858787)).child(
-                                "If disabled, you can still copy URL as a quote using ⌃⇧⌘C.",
-                            ),
-                        )
-                    }),
             )
             .child(self.settings_switch(enabled))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle, cx)))
@@ -861,12 +850,7 @@ impl SettingsWindow {
                     Icon::SiteControls,
                     0xff434d,
                 ),
-                (
-                    "Enable Shared Quotes when highlighting text.",
-                    Toggle::SharedQuotes,
-                    Icon::Share,
-                    0xff434d,
-                ),
+
             ],
             vec![
                 (

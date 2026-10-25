@@ -844,6 +844,13 @@ pub(crate) fn set_appearance_menu_selection(selected: usize) {
 #[path = "native/menu_appearance.rs"]
 mod menu_appearance;
 
+pub(crate) fn set_menu_minimum_width(title: &str, width: f64) {
+    #[cfg(all(target_os = "macos", not(test)))]
+    menu_appearance::set_minimum_width(title, width);
+    #[cfg(any(not(target_os = "macos"), test))]
+    let _ = (title, width);
+}
+
 /// Alignment feedback at an accepted reorder boundary; other platforms are silent.
 pub(crate) fn reorder_haptic() {
     #[cfg(test)] { HAPTIC_PULSES.with(|count|count.set(count.get()+1)); return; }

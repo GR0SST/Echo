@@ -4530,6 +4530,7 @@ impl Render for BrowserWindow {
             let labels = if let Some(owner) = self.peek_owner.as_ref().and_then(|state| state.owner.upgrade()) {
                 let owner = owner.read(cx); (owner.browser.sidebar_undo_action(), owner.browser.sidebar_redo_action())
             } else { (self.browser.sidebar_undo_action(), self.browser.sidebar_redo_action()) };
+            crate::menus::sync_pinned(self.browser.active_tab().is_some_and(|tab| tab.pinned_url.is_some()), cx);
             crate::menus::sync_developer_mode(self.developer_mode_enabled(), cx);
             crate::menus::sync_appearance(self.theme_appearance(), cx);
             crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, self.sidebar_selection_items().len() > 1, cx);
@@ -4671,7 +4672,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::ResetTabName, _, cx| this.run_command(Command::ResetTabName, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ResetPinnedTab, _, cx| this.run_command(Command::ResetPinnedTab, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ReplacePinnedUrl, _, cx| this.run_command(Command::ReplacePinnedUrl, cx)))
-            .on_action(cx.listener(|this, _: &crate::menus::ResetSpace, _, cx| this.run_command(Command::ResetSpace, cx)))
+            .when(self.browser.space().pinned.iter().any(|tab| tab.pinned_url.is_some()), |view| view.on_action(cx.listener(|this, _: &crate::menus::ResetSpace, _, cx| this.run_command(Command::ResetSpace, cx))))
             .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.begin_space_creation(this.browser.space().id, cx)))
             .on_action(cx.listener(Self::on_edit_current_url))
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))

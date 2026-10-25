@@ -280,10 +280,8 @@ impl BrowserWindow {
             return Vec::new();
         };
         let mut rows: Vec<Entry> = vec![
-            crate::tab_menu::pending("Share Folder…").into(),
-            Entry::Separator,
             item("New Nested Folder…", MenuCommand::FolderNew).into(),
-            item(format!("Turn \"{}\" into Space", folder.name), MenuCommand::FolderIntoSpace).into(),
+            item(format!("Turn “{}” into Space", folder.name), MenuCommand::FolderIntoSpace).into(),
             Entry::Separator,
             item("Change Icon…", MenuCommand::FolderIcon).into(),
             item("Rename…", MenuCommand::FolderRename).into(),

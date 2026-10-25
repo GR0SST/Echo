@@ -660,7 +660,7 @@ impl BrowserWindow {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_some() => Some(256.),
-                MenuTarget::Folder(_) => Some(282.),
+                MenuTarget::Folder(_) => Some(308.),
                 MenuTarget::Selection(_) => Some(224.),
                 MenuTarget::Space(_) => Some(246.),
                 MenuTarget::Download(..) | MenuTarget::Transfer(..) => Some(120.),
@@ -768,7 +768,7 @@ impl BrowserWindow {
                 self.native_view.map(|v|v as usize), self.tab_menu.as_ref().unwrap().material_alive.clone())
         } else { crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop) };
         shell.when(neutral,|shell|shell.bg(hsla(0.,0.,0.45,0.38))).debug_selector(move || id.into())
-            .w(width).when(folder && !nested, |menu|menu.min_h(px(247.))).py(px(PADDING)).flex().flex_col().children(rows)
+            .w(width).py(px(PADDING)).flex().flex_col().children(rows)
     }
 }
 
