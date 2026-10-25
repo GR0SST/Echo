@@ -99,6 +99,9 @@ pub(super) fn install(app: &Path) {
         }
     }
     for (name, text) in [
+        ("Echo", include_str!("../../../LICENSE")),
+        ("CEF", include_str!("../../../patches/cef154/LICENSE.cef")),
+        ("Fonts", "Echo bundles no font files. Interface text uses platform system fonts; web fonts are provided by the websites you visit."),
         ("Gemoji", include_str!("../../browser/assets/emoji/LICENSE")),
         (
             "Ionicons",
@@ -118,6 +121,7 @@ pub(super) fn install(app: &Path) {
         include_str!("../../browser/assets/privacy.html"),
     )
     .expect("cannot install privacy policy");
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../LICENSE"), resources.join("LICENSE.txt")).expect("cannot install Echo license");
     std::fs::write(resources.join("Acknowledgements.html"), html)
         .expect("cannot install acknowledgements");
     std::fs::copy(

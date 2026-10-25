@@ -366,7 +366,7 @@ fn copy_info_menu_reports_retained_documents_without_account_fields_or_page_navi
     let original = active_url(&view, visual).unwrap();
     let tabs = view.read_with(visual, |view, _| view.browser.all_tabs().count());
     fake.take_calls();
-    dispatch_menu(visual, "Help", "Copy Echo Info");
+    dispatch_menu(visual, "Help", "Copy Diagnostics");
     let copied = visual.update(|_, cx| cx.read_from_clipboard().unwrap().text().unwrap());
     let info: serde_json::Value = serde_json::from_str(&copied).unwrap();
     assert_eq!(info["engineInfo"]["browser_tab_count"], tabs);

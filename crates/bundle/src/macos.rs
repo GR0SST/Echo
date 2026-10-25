@@ -38,10 +38,11 @@ pub(super) fn run() {
             let status = std::process::Command::new("cargo").args(["build", "--locked", "--release", "--bin", executable]).status().expect("cannot run cargo");
             assert!(status.success(), "release compilation failed");
         }
-        bundle(Path::new("target/bundle"), Path::new("target/release"), "Echo", "browser_helper", None, info)
+        bundle(Path::new("target/bundle"), &std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| "target".into()).join("release"), "Echo", "browser_helper", None, info)
     } else { build_bundle(Path::new("target/bundle"), "Echo", info) };
     match result {
         Ok(path) => {
+            install_version(&path);
             install_icon(&path);
             install_scripting(&path);
             install_icon_notices(&path);
@@ -103,5 +104,15 @@ fn install_scripting(app: &Path) {
     for (key, kind, value) in [("NSAppleScriptEnabled", "-bool", "true"), ("OSAScriptingDefinition", "-string", "Echo.sdef")] {
         let status = std::process::Command::new("plutil").args(["-replace", key, kind, value]).arg(&plist).status().expect("cannot register scripting dictionary");
         assert!(status.success(), "cannot register scripting dictionary");
+    }
+}
+
+fn install_version(app: &Path) {
+    let version = std::env::var("ECHO_RELEASE_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
+    let build = std::env::var("ECHO_BUILD_NUMBER").unwrap_or_else(|_| "1".into());
+    assert!(!build.is_empty() && build.bytes().all(|b| b.is_ascii_digit()), "ECHO_BUILD_NUMBER must be numeric");
+    for (key, value) in [("CFBundleShortVersionString", version), ("CFBundleVersion", build)] {
+        assert!(std::process::Command::new("plutil").args(["-replace", key, "-string", &value])
+            .arg(app.join("Contents/Info.plist")).status().expect("cannot set bundle version").success());
     }
 }

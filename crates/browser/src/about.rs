@@ -118,7 +118,7 @@ impl Render for AboutWindow {
             )
             .child(label(
                 142.,
-                format!("Version {}", option_env!("ECHO_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))),
+                format!("Version {} ({})", option_env!("ECHO_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")), option_env!("ECHO_BUILD_NUMBER").unwrap_or("1")),
             ))
             .child(label(
                 156.,

@@ -120,7 +120,15 @@ documents the pinned engine patches and their validation boundary.
 
 ## License
 
-This repository does not currently include a top-level license for Echo's
-own code. Chromium, CEF and other dependencies retain their own licenses;
+Echo's original code and artwork are covered by the top-level [LICENSE](LICENSE)
+(all rights reserved; no source redistribution license is granted). Chromium, CEF
+and other dependencies retain their own licenses;
 their license files and third-party notices must accompany redistribution.
 Bundled Ionicons include their [license](crates/browser/assets/ionicons/LICENSE).
+
+Daily-use macOS install: `scripts/install-dogfood.sh`, then
+`open /Applications/Echo.app`. Quit Echo and run
+`scripts/install-dogfood.sh --update` for a new local Release build. The installer
+refuses to overwrite unmanaged apps and keeps dogfood data separate from debug
+profiles. See [release readiness](docs/RELEASE_CHECKLIST.md) for local diagnostics,
+unsigned dry runs and public signing requirements.

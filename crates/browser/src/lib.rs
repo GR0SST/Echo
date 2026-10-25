@@ -212,13 +212,26 @@ fn profile_dir() -> PathBuf {
     let base = std::env::var_os("APPDATA").map_or(home, PathBuf::from);
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let base = std::env::var_os("XDG_DATA_HOME").map_or_else(|| home.join(".local/share"), PathBuf::from);
-    let dir = base.join(APP_NAME);
+    // Debug builds never open the daily-use release profile.
+    let dogfood = resources::document("echo-dogfood-install.txt").is_some();
+    let dir = base.join(profile_name(cfg!(debug_assertions), dogfood));
     let legacy = base.join(LEGACY_APP_NAME);
     // Keep the existing session and site data after the rename.
-    if !dir.exists() && legacy.is_dir() {
+    if !cfg!(debug_assertions) && !dogfood && !dir.exists() && legacy.is_dir() {
         let _ = std::fs::rename(&legacy, &dir);
     }
     dir
+}
+
+fn profile_name(debug: bool, dogfood: bool) -> &'static str {
+    if debug { "Echo Dev" } else if dogfood { "Echo Dogfood" } else { APP_NAME }
+}
+
+#[test]
+fn build_channels_never_share_default_profiles() {
+    assert_ne!(profile_name(true, false), profile_name(false, true));
+    assert_ne!(profile_name(false, false), profile_name(false, true));
+    assert_eq!(profile_name(true, true), "Echo Dev");
 }
 
 /// Only a genuinely absent session is a first launch. Existing invalid or
@@ -350,6 +363,7 @@ pub fn run() {
     if let Some(status) = engine::run_storage_verifier_process() {
         std::process::exit(status);
     }
+    diagnostics::start(&profile_dir());
     if let Err(error) = native::prepare_windowing() {
         eprintln!("[windowing] {error}");
         std::process::exit(1);
@@ -375,6 +389,7 @@ pub fn run() {
     app.run(move |cx: &mut App| {
         init(cx);
         cx.set_global(diagnostics::DataDirectory(profile_dir()));
+        diagnostics::heartbeat(cx);
         open_browser_window(cx);
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(std::time::Duration::from_millis(50)).await;
