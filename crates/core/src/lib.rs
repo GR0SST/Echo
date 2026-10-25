@@ -1171,3 +1171,4 @@ mod tests {
 pub mod space_creation;
 
 pub mod captures;
+pub mod media;
