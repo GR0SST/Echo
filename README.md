@@ -20,8 +20,8 @@ interaction details are still being developed. The
 [Arc comparison](docs/ARC_PARITY.md) tracks what is done, partial or missing.
 
 The current app bundle and development instructions target **macOS**.
-Windows and Linux are intended targets, but working builds on those platforms
-are not established by the current setup.
+Windows and Linux have cross-target compile checks; runnable builds and OS
+integrations remain incomplete. See [platform coverage](docs/PLATFORMS.md).
 
 ## Build and run on macOS
 
@@ -64,6 +64,21 @@ The Rust workspace is organized as follows:
 | [crates/core](crates/core) | Tabs, Spaces, archiving and session model |
 | [crates/engine](crates/engine) | CEF integration and browser subprocess helper |
 | [crates/bundle](crates/bundle) | macOS app packaging |
+
+### Cross-platform compile checks
+
+With a rustup-managed toolchain and the target C/C++ SDK prerequisites installed:
+
+```sh
+rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
+scripts/check-targets.sh
+```
+
+The script checks the whole workspace for both targets, including CEF Rust
+bindings, while skipping CEF's native download/link step. It launches no app.
+See [platform coverage and SDK setup](docs/PLATFORMS.md) for CI prerequisites,
+macOS cross-compilers, and the remaining platform stubs. Keep normal `cargo test`
+and runnable builds separate from this check-only feature.
 
 ### Optional: build the Chromium fork
 
