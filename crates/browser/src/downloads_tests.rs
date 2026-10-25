@@ -1966,3 +1966,21 @@ fn chooser_cancellation_is_profile_bound_deduplicated_and_waits_for_native_termi
     assert!(service.queue_cancel(81,profile).is_err());
     assert!(model.borrow().completed_downloads(profile).unwrap().is_empty());
 }
+
+#[test]
+fn transfer_ui_key_resolves_original_token_and_profile_after_identical_names_and_new_updates() {
+    let model=Rc::new(RefCell::new(Browser::new()));let first=model.borrow().default_user_profile_id();
+    let second=model.borrow_mut().create_user_profile("Second").unwrap();
+    let mut service=DownloadService::<u64,Model>::default();
+    let owner_a=register(&mut service.router,&model,first);let owner_b=register(&mut service.router,&model,second);
+    let request=|token,owner|{let mut e=event(token,owner,DownloadPhase::InProgress);e.destination_requested=true;e.destination=DownloadDestination::Requested{suggested_name:"same.bin".into()};e};
+    service.receive_copied([request(701,owner_a),request(702,owner_b)]);
+    let a=service.transfer_presentations().into_iter().find(|r|r.token==701).unwrap();
+    let b=service.transfer_presentations().into_iter().find(|r|r.token==702).unwrap();assert_ne!(a.id,b.id);
+    service.receive_copied([event(702,owner_b,DownloadPhase::InProgress)]);
+    assert_eq!(service.transfer_for_id(a.id).unwrap().profile,first);
+    assert_eq!(service.transfer_for_id(b.id).unwrap().token,702);
+    assert!(service.request_open(701,second).is_err());assert!(service.request_hide(701,second).is_err());
+    service.request_hide(701,first).unwrap();assert!(service.transfer_for_id(a.id).is_none());
+    assert_eq!(service.transfer_for_id(b.id).unwrap().profile,second);
+}

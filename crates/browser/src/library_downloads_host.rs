@@ -33,6 +33,7 @@ pub(crate) struct LibraryDownloadsHost {
     view: Entity<DownloadsView<CompletedDownloadId>>,
     format: CompletedPresentation,
     artwork: Rc<RefCell<crate::download_files::FileArtwork>>,
+    visible_transfers:Vec<(crate::downloads_view::TransferId,UserProfileId)>,
     query: String,
     // Native single-chip on/off is observed. Other live-chip combinations stay gated.
     // A removed selection stays a tombstone, never silently broadens to All.
@@ -85,6 +86,7 @@ impl LibraryDownloadsHost {
             view,
             format,
             artwork,
+            visible_transfers:Vec::new(),
             query: String::new(),
             selected: None,
             generation: 0,
@@ -162,15 +164,26 @@ impl LibraryDownloadsHost {
         if !self.normal.same_workspace(normal) {
             return false;
         }
-        let Some(projection) = self.projection() else {
+        let Some(mut projection) = self.projection() else {
             return false;
         };
         if let Some((_, records)) = self.normal.download_inventory() { self.artwork.borrow_mut().update(records); }
+        let transfers=crate::ordinary_downloads::transfer_rows(&self.normal,self.selected,&self.query,cx);
+        self.visible_transfers=transfers.iter().map(|r|(r.id,r.profile)).collect();
+        if !transfers.is_empty()&&!matches!(projection.list,DownloadsList::Completed(_)){projection.list=DownloadsList::Completed(Vec::new());}
         self.view.update(cx, |view, cx| {
+            view.set_transfers(transfers,cx);
             view.set_colors(colors, cx);
             view.set_projection(projection, window, cx);
         });
         true
+    }
+
+    pub(crate) fn accepts_transfer(&self,owner:DownloadsOwner,sender:&Entity<DownloadsView<CompletedDownloadId>>,normal:&ProfileHandle,id:crate::downloads_view::TransferId,profile:UserProfileId,cx:&App)->bool {
+        self.accepts(owner,sender,normal)&&self.visible_transfers.contains(&(id,profile))&&self.view.read(cx).has_transfer(id,profile)
+    }
+    pub(crate) fn transfer_visible(&self,owner:DownloadsOwner,normal:&ProfileHandle,id:crate::downloads_view::TransferId,profile:UserProfileId)->bool {
+        self.active&&owner==self.owner()&&self.normal.same_workspace(normal)&&self.visible_transfers.contains(&(id,profile))
     }
 
     /// The sender and lease are captured by the parent subscription, NOT looked
@@ -214,7 +227,7 @@ impl LibraryDownloadsHost {
             DownloadsIntent::FilterVisibilityChanged(_) => (),
             // File requests do not mutate query/filter state. The route resolves
             // their captured lease and canonical record before any effect.
-            DownloadsIntent::RowPressed { .. } | DownloadsIntent::RowOpened { .. } | DownloadsIntent::RowMenuRequested { .. } => return false,
+            DownloadsIntent::TransferOpened {..} | DownloadsIntent::TransferMenuRequested {..} | DownloadsIntent::RowPressed { .. } | DownloadsIntent::RowOpened { .. } | DownloadsIntent::RowMenuRequested { .. } => return false,
         }
         self.refresh(normal, colors, window, cx)
     }

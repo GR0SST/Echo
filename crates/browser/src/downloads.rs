@@ -357,7 +357,23 @@ pub(crate) struct PendingDestination<T> {
 }
 pub(crate) type DestinationPolicy =
     Rc<dyn Fn(UserProfileId, &DestinationRequest) -> DestinationDecision>;
+#[derive(Clone)]
+pub(crate) struct TransferPresentation<T,H> {
+    pub id: crate::downloads_view::TransferId,
+    pub token:T,
+    pub handle:H,
+    pub profile:UserProfileId,
+    pub title:String,
+    pub request:DestinationRequest,
+    pub info:DownloadInfo,
+    pub opening:bool,
+}
 pub(crate) struct DownloadService<T = DownloadToken, H = ProfileHandle> {
+    ui_ids: HashMap<T,crate::downloads_view::TransferId>,
+    display_names: HashMap<T,String>,
+    ui_open: HashSet<T>,
+    ui_hidden: HashSet<T>,
+    pub ui_revision:u64,
     router: DownloadRouter<T, H>,
     staged: staged::StagedTransfers<T, H>,
     policy: Option<DestinationPolicy>,
@@ -368,6 +384,7 @@ pub(crate) struct DownloadService<T = DownloadToken, H = ProfileHandle> {
 impl<T, H> Default for DownloadService<T, H> {
     fn default() -> Self {
         Self {
+            ui_ids:HashMap::new(), display_names:HashMap::new(), ui_open:HashSet::new(), ui_hidden:HashSet::new(), ui_revision:0,
             router: DownloadRouter::default(),
             staged: staged::StagedTransfers::default(),
             policy: None,
@@ -378,6 +395,53 @@ impl<T, H> Default for DownloadService<T, H> {
     }
 }
 impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
+    pub(crate) fn transfer_presentations(&self)->Vec<TransferPresentation<T,H>> {
+        let mut rows:Vec<_>=self.router.ledger.iter().filter_map(|(token,item)|{
+            if self.ui_hidden.contains(token){return None;}
+            let id=*self.ui_ids.get(token)?;
+            let request=item.destination_request.clone()?;
+            let owner=self.router.owners.get(&item.provenance.owner())?;
+            if owner.kind!=SourceKind::Normal{return None;}
+            let info=match self.staged.presentation_info(*token) {
+                Some(info)=>info?,
+                None=>{if item.info.phase==DownloadPhase::Complete{return None;}item.info.clone()},
+            };
+            Some(TransferPresentation {id,token:*token,handle:owner.handle.clone(),profile:owner.profile,
+                title:self.display_names.get(token).cloned().unwrap_or_else(||request.suggested_name.clone()),
+                request,info,opening:self.ui_open.contains(token)})
+        }).collect();
+        rows.sort_by_key(|row|std::cmp::Reverse(row.info.start_time));rows
+    }
+    pub(crate) fn transfer_for_id(&self,id:crate::downloads_view::TransferId)->Option<TransferPresentation<T,H>> {
+        self.transfer_presentations().into_iter().find(|row|row.id==id)
+    }
+    pub(crate) fn set_display_name(&mut self,token:T,profile:UserProfileId,name:String) {
+        if self.router.ledger.get(&token).and_then(|i|self.router.owners.get(&i.provenance.owner())).is_some_and(|owner|owner.profile==profile){
+            self.display_names.insert(token,name);self.ui_revision=self.ui_revision.wrapping_add(1);
+        }
+    }
+    pub(crate) fn request_open(&mut self,token:T,profile:UserProfileId)->Result<(),String> {
+        let item=self.router.ledger.get(&token).ok_or("Unknown transfer")?;
+        if item.info.phase.is_terminal()||self.router.owners.get(&item.provenance.owner()).is_none_or(|owner|owner.profile!=profile){return Err("Transfer is terminal or belongs to another profile".into());}
+        if self.staged.presentation_info(token).is_some_and(|info|info.is_none_or(|info|info.phase.is_terminal())){return Err("Transfer is terminal".into());}
+        if self.ui_open.insert(token){self.ui_revision=self.ui_revision.wrapping_add(1);}Ok(())
+    }
+    pub(crate) fn request_hide(&mut self,token:T,profile:UserProfileId)->Result<(),String> {
+        let item=self.router.ledger.get(&token).ok_or("Unknown transfer")?;
+        if self.router.owners.get(&item.provenance.owner()).is_none_or(|owner|owner.profile!=profile){return Err("Transfer belongs to another profile".into());}
+        self.ui_hidden.insert(token);self.ui_revision=self.ui_revision.wrapping_add(1);Ok(())
+    }
+    fn take_completion_intents(&mut self)->Vec<(H,UserProfileId,CompletedDownloadId,bool,bool)> {
+        let tokens:HashSet<_>=self.ui_open.iter().chain(self.ui_hidden.iter()).copied().collect();
+        let mut effects=Vec::new();
+        for token in tokens {
+            if let Some((id,_))=self.staged.completed_snapshot(token) {
+                let item=&self.router.ledger[&token];let owner=&self.router.owners[&item.provenance.owner()];
+                effects.push((owner.handle.clone(),owner.profile,id,self.ui_open.remove(&token),self.ui_hidden.remove(&token)));
+            }
+        }
+        effects
+    }
     pub(crate) fn pending_destinations(&self) -> Vec<PendingDestination<T>> {
         self.router.ledger.iter().filter_map(|(token, item)| {
             if item.destination_dispatched || item.destination_blocked || item.info.phase.is_terminal() { return None; }
@@ -397,6 +461,7 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
     }
     pub(crate) fn queue_cancel(&mut self, token: T, profile: UserProfileId) -> Result<(), String> {
         self.router.control(token, profile, DownloadControl::Cancel)?;
+        self.ui_open.remove(&token);self.ui_revision=self.ui_revision.wrapping_add(1);
         if let Some(item) = self.router.ledger.get_mut(&token) { item.destination_blocked = true; }
         if !self.user_cancellations.contains(&(token, profile)) { self.user_cancellations.push((token, profile)); }
         Ok(())
@@ -419,6 +484,9 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
         // full_path); only validated PublishedPath may become a staged record.
         let mut direct = Vec::new();
         for event in accepted {
+            // Staged observations are consumed here, before the direct router.
+            // Their progress/terminal state still invalidates every presenter.
+            self.ui_revision=self.ui_revision.wrapping_add(1);
             match self.staged.ingest(event) {
                 Ok(staged_errors) => errors.extend(staged_errors),
                 Err(direct_event) => direct.push(direct_event),
@@ -479,6 +547,7 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
         // Capture a plan immediately after its exact Requested event, before
         // reducing later observations in this same copied batch. No I/O occurs.
         for event in events {
+            let token=event.token;
             let event = match self.staged.ingest(event) {
                 Ok(errors) => { self.errors.extend(errors); continue; },
                 Err(event) => event,
@@ -486,6 +555,9 @@ impl<T: Copy + Eq + Hash, H: Clone> DownloadService<T, H> {
             let (next, errors) = self.router.reduce([event], &mut decide);
             self.errors.extend(errors);
             self.capture_staged_plans(next, &mut effects);
+            if self.router.ledger.contains_key(&token)&&!self.ui_ids.contains_key(&token) {
+                if let Some(id)=crate::downloads_view::TransferId::allocate(){self.ui_ids.insert(token,id);}
+            }
         }
         let (next, errors) = self.router.reduce([], &mut decide);
         self.errors.extend(errors);
@@ -835,6 +907,17 @@ impl AppDownloads {
                     staged::record_profile,
                 );
                 if staged_result.is_err() { break; }
+                // Progress and cancellation do not mutate the canonical profile.
+                // Redraw their presenters after reducing this copied batch rather
+                // than waiting for unrelated page input or inventory changes.
+                if !drained_empty { let _=cx.update(|cx|cx.refresh_windows()); }
+                let intents={this.service.borrow_mut().take_completion_intents()};
+                for (handle,profile,id,open,hide) in intents {
+                    if crate::quit::is_quitting(){break;}
+                    let path=handle.download_inventory().and_then(|(_,rows)|rows.into_iter().find(|r|r.id()==id&&r.id().profile()==profile).map(|r|r.final_path().to_owned()));
+                    if hide {handle.hide_completed_download(id);}
+                    if open {if let Some(path)=path.filter(|p|p.is_file()){let _=cx.update(|cx|cx.open_with_system(&path));}}
+                }
                 // Native parking must not run under App/service/model/audit borrows.
                 // Keep THIS batch's lease until any reentrant quit sees its errors.
                 if crate::quit::is_quitting() || !this.consumer.is_running() { break; }

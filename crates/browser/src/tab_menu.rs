@@ -40,7 +40,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuTarget { Tab(TabId), Folder(FolderId), Space(SpaceId), SpaceDelete(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
+pub(crate) enum MenuTarget { Transfer(crate::downloads_view::TransferId,browser_core::UserProfileId,crate::library_downloads_host::DownloadsOwner), Tab(TabId), Folder(FolderId), Space(SpaceId), SpaceDelete(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
 
 #[derive(Clone)]
 struct AddressDocument {identity:crate::pages::PageIdentity,epoch:u64,url:String}
@@ -70,7 +70,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
@@ -83,6 +83,7 @@ impl Command {
             Self::ToggleToolbar => "toggle-toolbar",
             Self::Capture => "capture",
             Self::Download(action) => action.selector(),
+            Self::Transfer(action) => action.selector(),
             Self::CustomizePage => "customize-page",
             Self::SpaceSetProfile(_) => "space-set-profile", Self::SpaceNewProfile => "space-new-profile", Self::SpaceManage => "manage-spaces", Self::SpaceDelete => "delete-space", Self::SpaceExport(_) => "space-export",
             Self::SpaceTheme => "edit-theme-color",
@@ -222,6 +223,7 @@ impl BrowserWindow {
             MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Address => self.browser.active_tab().is_some(),
             MenuTarget::Download(id, owner) => self.download_menu_record(id,owner).is_some(),
+            MenuTarget::Transfer(id,profile,owner)=>self.transfer_menu_record(id,profile,owner).is_some(),
         }
     }
 
@@ -231,7 +233,7 @@ impl BrowserWindow {
             MenuTarget::Address => return self.browser.active_tab().and_then(|tab| self.browser.user_profile_id_for_tab(tab.id)),
             MenuTarget::Folder(id) => self.browser.folder_space(id)?,
             MenuTarget::Space(id) | MenuTarget::SpaceDelete(id) | MenuTarget::Selection(id) => id,
-            MenuTarget::Download(..) => return None, // Its presenter owner has a separate generation/profile guard.
+            MenuTarget::Download(..) | MenuTarget::Transfer(..) => return None, // Its presenter owner has a separate generation/profile guard.
         };
         self.browser.spaces.iter().find(|entry| entry.id == space).map(|entry| entry.user_profile_id)
     }
@@ -241,14 +243,21 @@ impl BrowserWindow {
 
     pub(crate) fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         if !self.menu_target_exists(target) { return; }
-        let position = if matches!(target,MenuTarget::Download(..)) { point(position.x,position.y-px(5.)) } else { position };
+        let position = match target {
+            MenuTarget::Transfer(..)=>point(position.x-px(1.),position.y+px(1.)),
+            MenuTarget::Download(..)=>point(position.x,position.y-px(5.)),_=>position,
+        };
         self.close_tab_menu(cx);
         self.close_user_profile_dialog(cx);
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
         let document=if target==MenuTarget::Address {self.browser.active_tab().and_then(|tab|{let pages=self.pages.as_ref()?.borrow();Some(AddressDocument{identity:pages.media_identity(tab.id)?,epoch:pages.page_document_epoch(tab.id)?,url:tab.url.clone()})})}else{None};
-        self.tab_menu = Some(TabMenu { document,native_share_open:false,target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), material_alive: Rc::new(Cell::new(true)), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
-        let width = self.menu_level_width(&self.menu_entries(), false, window);
+        self.tab_menu = Some(TabMenu { document,native_share_open:false,target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)|MenuTarget::Transfer(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), material_alive: Rc::new(Cell::new(true)), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        let entries=self.menu_entries();
+        if matches!(target,MenuTarget::Transfer(..))&&entries.first().is_some_and(|entry|matches!(entry,Entry::Item(item) if !item.enabled)) {
+            if let Some(menu)=&mut self.tab_menu {menu.selected=None;}
+        }
+        let width = self.menu_level_width(&entries, false, window);
         if let Some(menu) = &mut self.tab_menu { menu.width = width; }
         let origin = window.bounds().origin;
         let main = self.main_window;
@@ -319,6 +328,7 @@ impl BrowserWindow {
             MenuTarget::SpaceDelete(_) => vec![],
             MenuTarget::Space(id) => self.space_menu_commands(id),
             MenuTarget::Download(id, owner) => self.download_menu_commands(id,owner),
+            MenuTarget::Transfer(id,profile,owner)=>self.transfer_menu_commands(id,profile,owner),
             MenuTarget::Folder(id) => self.folder_menu_commands(id),
             MenuTarget::Address => vec![
                 item("Copy URL", Command::Copy).into(),
@@ -519,6 +529,9 @@ impl BrowserWindow {
         if self.browser.is_blank() && matches!(command, Command::Pin | Command::Favorite | Command::NewFolderWithTab | Command::MoveToFolder) { return; }
         let pane_menu = pane_menu || item.pane.is_some();
         let id = match target {
+            MenuTarget::Transfer(id,profile,owner)=>{
+                if let Command::Transfer(action)=command {self.confirm_transfer(id,profile,owner,action,cx);}return;
+            }
             MenuTarget::Download(id, owner) => {
                 if let Command::Download(action) = command { self.confirm_download_menu(id,owner,action,window,cx); }
                 return;
@@ -650,7 +663,7 @@ impl BrowserWindow {
                 MenuTarget::Folder(_) => Some(282.),
                 MenuTarget::Selection(_) => Some(224.),
                 MenuTarget::Space(_) => Some(246.),
-                MenuTarget::Download(..) => Some(120.),
+                MenuTarget::Download(..) | MenuTarget::Transfer(..) => Some(120.),
                 MenuTarget::Address => Some(204.),
                 _ => None,
             }).unwrap_or(MIN_WIDTH)
@@ -662,7 +675,7 @@ impl BrowserWindow {
                 background_color: None, underline: None, strikethrough: None }], None).width);
         let space_menu = !nested && self.tab_menu.as_ref().is_some_and(|menu| matches!(menu.target, MenuTarget::Space(_)));
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
-        px(entries.iter().filter_map(|entry| match entry {
+        let measured=px(entries.iter().filter_map(|entry| match entry {
             Entry::Item(item) => Some(inset + 17. + text_width(&item.label)
                 + if item.space_destination { 19. } else if item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
                 + if pane_controls { 22. } else { 0. }
@@ -670,7 +683,8 @@ impl BrowserWindow {
                 + if item.submenu.is_empty() && !item.native_share { 0. } else if space_menu { 31. } else { 38. }),
             Entry::Header(label) => Some(inset + 17. + text_width(label)),
             Entry::Separator => None,
-        }).fold(minimum, f32::max).ceil())
+        }).fold(minimum, f32::max).ceil());
+        if !nested&&self.tab_menu.as_ref().is_some_and(|menu|matches!(menu.target,MenuTarget::Transfer(..))){measured-px(1.)}else{measured}
     }
 
     /// One menu panel: rows, separators and headers; `nested` is a submenu.
@@ -747,11 +761,13 @@ impl BrowserWindow {
         let width = self.menu_level_width(entries, nested, window);
         let backdrop = self.tab_menu.as_ref().map(|menu| menu.backdrop[usize::from(nested)].clone()).unwrap_or_default();
         let folder = self.tab_menu.as_ref().is_some_and(|menu| matches!(menu.target, MenuTarget::Folder(_)));
+        let download=self.tab_menu.as_ref().is_some_and(|menu|matches!(menu.target,MenuTarget::Transfer(..)|MenuTarget::Download(..)));
+        let neutral=download&&backdrop.get();
         let shell = if folder {
             crate::panel::menu_shell_at(id, if nested { "folder-submenu" } else { "folder-menu" }, self.accent(), backdrop,
                 self.native_view.map(|v|v as usize), self.tab_menu.as_ref().unwrap().material_alive.clone())
         } else { crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop) };
-        shell.debug_selector(move || id.into())
+        shell.when(neutral,|shell|shell.bg(hsla(0.,0.,0.45,0.38))).debug_selector(move || id.into())
             .w(width).when(folder && !nested, |menu|menu.min_h(px(247.))).py(px(PADDING)).flex().flex_col().children(rows)
     }
 }

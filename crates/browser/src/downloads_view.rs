@@ -9,6 +9,9 @@ use gpui::{
     Focusable, Hsla, KeyBinding, Render, ScrollHandle, Subscription, Window,
 };
 use std::rc::Rc;
+#[path="downloads_active.rs"]
+mod active;
+pub(crate) use active::{TransferId, TransferRow, progress_icon_sized};
 
 actions!(downloads_view, [NextFocus, PreviousFocus]);
 
@@ -75,6 +78,8 @@ pub(crate) struct DownloadsProjection<Token> {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DownloadsIntent<Token> {
     SearchChanged(String),
+    TransferOpened { id: TransferId, profile: UserProfileId },
+    TransferMenuRequested { id: TransferId, profile: UserProfileId, position: gpui::Point<gpui::Pixels> },
     FilterVisibilityChanged(bool),
     /// Host applies its policy, then replaces the projection. Native
     /// multi-selection/persistence semantics remain unverified.
@@ -113,6 +118,7 @@ pub(crate) type DownloadsArtwork<Token> =
 /// Lives in the existing Library route, immediately after the host's 112 px nav.
 /// The root's local x=0 is the list; the parent preview begins at local x=305.
 pub(crate) struct DownloadsView<Token: Clone + Eq + 'static> {
+    transfers: active::Transfers,
     projection: DownloadsProjection<Token>,
     colors: DownloadsColors,
     preview: DownloadsPreview,
@@ -171,6 +177,7 @@ impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
             .map(|profile| (profile.id, cx.focus_handle()))
             .collect();
         let mut view = Self {
+            transfers: Default::default(),
             focus: cx.focus_handle(),
             controls_focus: cx.focus_handle(),
             _control_focus: None,
@@ -744,7 +751,7 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
                             .flex()
                             .flex_col()
                             .min_w_0()
-                            .child(
+                            .when(self.transfers.rows.is_empty() || group.heading != "Today", |el| el.child(
                                 div()
                                     .debug_selector(move || {
                                         format!("downloads-group-{group_index}")
@@ -757,12 +764,12 @@ impl<Token: Clone + Eq + 'static> Render for DownloadsView<Token> {
                                     .text_color(self.colors.muted)
                                     .line_height(px(16.))
                                     .child(SidebarTitle::new(group.heading.clone())),
-                            )
+                            ))
                             .children(rows)
                     })
                     .collect::<Vec<_>>();
                 scroll
-                    .child(div().flex().flex_col().children(groups))
+                    .child(div().flex().flex_col().children(self.transfer_elements(cx)).children(groups))
                     .into_any_element()
             }
         };

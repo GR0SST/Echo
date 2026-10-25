@@ -28,13 +28,11 @@ impl FileAction {
 }
 
 pub(crate) fn kind(record: &CompletedDownload) -> &'static str {
-    let ext = record
-        .final_path()
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match (record.mime_type(), ext.as_str()) {
+    kind_for(record.final_path(),record.mime_type())
+}
+pub(crate) fn kind_for(path:&Path,mime:&str)->&'static str {
+    let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
+    match (mime, ext.as_str()) {
         (_, "dmg") | ("application/x-apple-diskimage", _) => "Disk Image",
         ("application/pdf", _) | (_, "pdf") => "PDF",
         (mime, _) if mime.starts_with("image/") => "Image",
@@ -42,12 +40,13 @@ pub(crate) fn kind(record: &CompletedDownload) -> &'static str {
         (mime, _) if mime.starts_with("video/") => "Movie",
         (_, "mp4" | "mov" | "m4v" | "webm") => "Movie",
         (_, "bin" | "zip" | "gz" | "tar" | "rar" | "7z" | "bz2" | "xz") => "Archive",
-        _ => "File",
+        _ => "Download",
     }
 }
 
 pub(crate) fn subtitle(record: &CompletedDownload) -> String {
     let kind = kind(record);
+    if kind=="Download" {return kind.into();}
     let host = url::Url::parse(record.source_url()).ok().and_then(|url| {
         if !matches!(url.scheme(), "http" | "https") {
             return None;

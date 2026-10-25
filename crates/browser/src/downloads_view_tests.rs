@@ -959,3 +959,34 @@ fn verified_context_actions_do_not_enable_unverified_file_activation(cx: &mut Te
     assert_eq!(log.borrow().len(),1);
     assert!(matches!(log.borrow()[0],DownloadsIntent::RowMenuRequested {token:101,..}));
 }
+
+#[gpui::test]
+fn transfer_overflow_keeps_the_token_after_duplicate_names_reorder(cx:&mut TestAppContext) {
+    let projection=fixture();let first=projection.profiles[0].id;let second=projection.profiles[1].id;
+    let (view,visual,log,_subscription)=open(cx,projection);
+    let row=|id,profile|TransferRow{id:TransferId(id),profile,title:"same.bin".into(),subtitle:"1 KB/8 MB".into(),progress:Some(0.2),canceled:false};
+    view.update(visual,|view,cx|view.set_transfers(vec![row(7,first),row(8,second)],cx));visual.run_until_parked();
+    let bounds=visual.debug_bounds("downloads-transfer-8").unwrap();
+    visual.simulate_mouse_move(bounds.center(),None,Modifiers::none());visual.run_until_parked();
+    view.update(visual,|view,cx|view.set_transfers(vec![row(8,second),row(7,first)],cx));visual.run_until_parked();
+    let title=visual.debug_bounds("downloads-transfer-title-8").unwrap();
+    assert_eq!(title.origin.x,px(172.));
+    assert_eq!(visual.debug_bounds("downloads-transfer-8").unwrap().origin.y,px(83.));
+    click(visual,"downloads-transfer-overflow-8");
+    assert_eq!(log.borrow().len(),1);
+    assert!(matches!(log.borrow()[0],DownloadsIntent::TransferMenuRequested{id:TransferId(8),profile,..} if profile==second));
+}
+#[gpui::test]
+fn canceled_transfer_retains_its_row_and_cannot_queue_an_open(cx:&mut TestAppContext) {
+    let projection=fixture();let profile=projection.profiles[0].id;
+    let (view,visual,log,_subscription)=open(cx,projection);
+    let mut row=TransferRow{id:TransferId(9),profile,title:"same.bin".into(),subtitle:"1 KB/8 MB".into(),progress:Some(0.2),canceled:false};
+    view.update(visual,|view,cx|view.set_transfers(vec![row.clone()],cx));visual.run_until_parked();
+    click(visual,"downloads-transfer-9");
+    assert!(matches!(log.borrow()[0],DownloadsIntent::TransferOpened{id:TransferId(9),..}));log.borrow_mut().clear();
+    row.canceled=true;row.subtitle="Cancelled".into();
+    view.update(visual,|view,cx|view.set_transfers(vec![row],cx));visual.run_until_parked();
+    click(visual,"downloads-transfer-9");assert!(log.borrow().is_empty());
+    click(visual,"downloads-transfer-overflow-9");
+    assert!(matches!(log.borrow()[0],DownloadsIntent::TransferMenuRequested{id:TransferId(9),..}));
+}

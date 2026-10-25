@@ -1227,3 +1227,34 @@ fn canonical_acknowledgement_releases_filesystem_pins_but_keeps_idempotent_metad
     assert_eq!(fs::read(f.folder.join("existing")).unwrap(), b"download");
     assert_eq!(f.model.borrow().completed_downloads(f.profile).unwrap().len(), 1);
 }
+
+#[test]
+fn transfer_metrics_survive_detached_work_and_late_progress_cannot_revive_cancellation() {
+    let f=Fixture::new();let work=f.work(ConsumerOwner::Running);
+    let id=f.service.borrow().transfer_presentations()[0].id;
+    let mut progress=f.event(DownloadPhase::InProgress,false);progress.info.received_bytes=3;progress.info.percent_complete=30;
+    let revision=f.service.borrow().ui_revision;
+    f.ingest(progress.clone());
+    assert_ne!(f.service.borrow().ui_revision,revision,"staged progress must invalidate the presenter");
+    let row=f.service.borrow().transfer_for_id(id).unwrap();
+    assert_eq!(row.info.received_bytes,3);assert_eq!(row.title,"callback.bin");
+    let revision=f.service.borrow().ui_revision;
+    f.ingest(f.event(DownloadPhase::Canceled,false));
+    assert_ne!(f.service.borrow().ui_revision,revision,"staged cancellation must invalidate the presenter");
+    f.ingest(progress);
+    let row=f.service.borrow().transfer_for_id(id).unwrap();
+    assert_eq!(row.info.phase,DownloadPhase::Canceled);
+    assert_eq!(crate::downloads_progress::subtitle(&row.info,true),"Cancelled");
+    drop(work);
+    assert!(f.model.borrow().completed_downloads(f.profile).unwrap().is_empty());
+}
+#[test]
+fn requested_open_waits_for_proof_bound_canonical_record_and_is_consumed_once() {
+    let f=Fixture::new();f.service.borrow_mut().request_open(400,f.profile).unwrap();
+    f.handoff();f.complete();
+    assert!(f.service.borrow_mut().take_completion_intents().is_empty());
+    let mut work=f.work(ConsumerOwner::Running);let id=f.record(&mut work);drop(work);
+    let effects=f.service.borrow_mut().take_completion_intents();
+    assert_eq!(effects.len(),1);assert_eq!((effects[0].1,effects[0].2,effects[0].3,effects[0].4),(f.profile,id,true,false));
+    assert!(f.service.borrow_mut().take_completion_intents().is_empty());
+}

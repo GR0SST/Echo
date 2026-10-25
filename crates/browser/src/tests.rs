@@ -11109,3 +11109,16 @@ fn library_footer_handle_reorders_cards_without_navigating_or_reloading(cx: &mut
     assert_eq!(active_url(&view, cx), original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
+
+#[gpui::test]
+fn download_progress_badge_opens_downloads_without_navigating_the_document(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);cx.simulate_resize(gpui::size(gpui::px(1000.),gpui::px(760.)));
+    let before=active_url(&view,cx);fake.take_calls();
+    view.update(cx,|view,cx|{view.sidebar_navigation.downloads.progress=Some(Some(0.3));cx.notify();});cx.run_until_parked();
+    let bounds=cx.debug_bounds("download-progress-badge").unwrap();
+    assert_eq!(bounds.size,gpui::size(gpui::px(20.),gpui::px(20.)));
+    click(cx,"download-progress-badge");
+    view.read_with(cx,|view,_|assert!(view.downloads_route_active()));
+    assert_eq!(active_url(&view,cx),before);
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..)|Call::Reload(..))));
+}

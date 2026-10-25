@@ -135,12 +135,15 @@ impl<T: Copy + Eq, H> Job<T, H> {
     }
 }
 struct Slot<T, H> {
+    key: Key<T>,
+    latest: Rc<RefCell<DownloadInfo>>,
     job: Rc<Cell<Option<Job<T, H>>>>,
     queued: Rc<RefCell<Vec<TransferEvent<T>>>>,
 }
-impl<T, H> Clone for Slot<T, H> {
+impl<T: Copy, H> Clone for Slot<T, H> {
     fn clone(&self) -> Self {
         Self {
+            key: self.key, latest: self.latest.clone(),
             job: self.job.clone(),
             queued: self.queued.clone(),
         }
@@ -204,6 +207,7 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
         self.slots.insert(
             token,
             Slot {
+                key, latest: Rc::new(RefCell::new(request.info.clone())),
                 job: Rc::new(Cell::new(Some(Job {
                     key,
                     owner,
@@ -234,6 +238,10 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
         let Some(slot) = self.slots.get(&event.token) else {
             return Err(event);
         };
+        if slot.key==(event.token,event.provenance) && !event.destination_requested {
+            let mut latest=slot.latest.borrow_mut();
+            if !latest.phase.is_terminal(){*latest=event.info.clone();}
+        }
         slot.queued.borrow_mut().push(event);
         let mut errors = Vec::new();
         if let Some(mut job) = slot.job.take() {
@@ -245,6 +253,11 @@ impl<T: Copy + Eq + Hash, H: Clone> StagedTransfers<T, H> {
             slot.job.set(Some(job));
         }
         Ok(errors)
+    }
+    pub(super) fn presentation_info(&self, token:T)->Option<Option<DownloadInfo>> {
+        let slot=self.slots.get(&token)?;
+        let info=slot.latest.borrow();
+        Some((info.phase!=DownloadPhase::Complete).then(||info.clone()))
     }
     pub(super) fn completed_snapshot(
         &self,

@@ -268,6 +268,7 @@ impl crate::window::BrowserWindow {
         state.prompt.set(Some(pending.token));
         cx.spawn(async move |_, cx| {
             let choice = dialog.choose(cx).await;
+            let display_name=choice.as_ref().ok().and_then(|p|p.as_ref()).and_then(|p|p.file_name()).map(|n|n.to_string_lossy().into_owned());
             if !crate::quit::is_quitting() {
                 let stage = match choice {
                     Ok(Some(path)) => path
@@ -288,7 +289,8 @@ impl crate::window::BrowserWindow {
                 let mut service = state.downloads.service.borrow_mut();
                 let result = match stage {
                     Ok(Some(stage)) => {
-                        service.retain_chosen_staging(pending.token, pending.profile, stage)
+                        let result=service.retain_chosen_staging(pending.token, pending.profile, stage);
+                        if result.is_ok(){if let Some(name)=display_name {service.set_display_name(pending.token,pending.profile,name);}}result
                     }
                     Ok(None) => service.queue_cancel(pending.token, pending.profile),
                     Err(error) => {
@@ -358,4 +360,17 @@ mod tests {
         }
         assert!(plan(PathBuf::from("relative"), "sample.bin").is_none());
     }
+}
+
+pub(crate) fn transfer_rows(handle:&ProfileHandle, selected:Option<UserProfileId>, query:&str, cx:&App)->Vec<crate::downloads_view::TransferRow> {
+    let Some(downloads)=cx.try_global::<AppDownloads>() else{return Vec::new();};
+    downloads.service.borrow().transfer_presentations().into_iter().filter(|row|
+        row.handle.same_workspace(handle) && selected.is_none_or(|p|p==row.profile)
+        && handle.read_settings(|b|b.user_profile(row.profile).is_some())
+        && crate::downloads::filename_matches_ascii(&row.title,query)
+    ).map(|row|crate::downloads_view::TransferRow {
+        id:row.id,profile:row.profile,title:row.title,
+        subtitle:crate::downloads_progress::subtitle(&row.info,row.opening),
+        progress:crate::downloads_progress::percent(&row.info),canceled:row.info.phase==engine::DownloadPhase::Canceled,
+    }).collect()
 }

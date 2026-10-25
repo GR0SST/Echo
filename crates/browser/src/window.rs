@@ -923,6 +923,7 @@ impl BrowserWindow {
                     // Reconcile both edges against the native pointer rather than
                     // leaving GPUI's cached hover stuck after a page interaction.
                     let _ = this.update_in(cx, |this, window, cx| {
+                        this.poll_download_ui(cx);
                         this.poll_download_destinations(window,cx);
                         this.poll_max_preview_modifiers(window,cx);
                         if let Some((x, y)) = this.native_view.and_then(crate::native::pointer_in_view) {
@@ -3839,7 +3840,7 @@ impl BrowserWindow {
             .px(px(SIDEBAR_INSET))
             .flex()
             .items_center()
-            .child(corner("library")
+            .child(corner("library").relative()
                 .when(normal && selected == crate::sidebar_pages::SidebarPage::Library, |this| this.bg(hsla(0., 0., 1., 0.3)))
                 .when(normal, |this| this.on_click(cx.listener(|this, _, _, cx| {
                     this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx);
@@ -3860,7 +3861,11 @@ impl BrowserWindow {
                     ).corner_radii(px(4.)));
                 }
             }).absolute().inset_0()))
-                .child(crate::icons::control(crate::icons::Icon::Library)))
+                .child(crate::icons::control(crate::icons::Icon::Library))
+                .children(self.sidebar_navigation.downloads.progress.filter(|_|normal).map(|progress|
+                    div().id("download-progress-badge").debug_selector(||"download-progress-badge".into()).absolute().right(px(-4.)).top(px(-6.)).size(px(20.))
+                    .on_click(cx.listener(|this,_,_,cx|{cx.stop_propagation();this.open_library_downloads(cx);})).child(crate::downloads_view::progress_icon_sized(progress,20.))
+                )))
             .child(div().relative().flex_1().min_w_0().flex().items_center().justify_center().gap(px(4.))
             .children(self.browser.spaces.iter().enumerate().flat_map(|(index, space)| {
                 let space_id = space.id;
@@ -4540,6 +4545,7 @@ impl Render for BrowserWindow {
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);
         }
+        self.poll_download_ui(cx);
         self.sync_library_downloads(window, cx);
         self.remember_library_preview_focus(window, cx);
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();

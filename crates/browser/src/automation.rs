@@ -743,7 +743,11 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
         for record in records { out += &format!("[dump] download_complete name={:?} path={:?}\n", record.final_name(), record.final_path()); }
     }
     if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>() {
-        out += &format!("[dump] download_errors={:?}\n", downloads.service.borrow().errors);
+        let service=downloads.service.borrow();
+        out += &format!("[dump] download_errors={:?}\n", service.errors);
+        for row in service.transfer_presentations() {
+            out += &format!("[dump] download_transfer id={} phase={:?} received={} total={} title={:?}\n",row.id.0,row.info.phase,row.info.received_bytes,row.info.total_bytes,row.title);
+        }
     }
     out += &format!("[dump] inline_rename={:?}\n", this.tab_rename.as_ref().map(|editor| (editor.tab.get(), editor.input.read(cx).text().to_string())));
     out += &format!("[dump] link_status={:?}\n", this.link_status.as_ref().map(|status| (status.tab.get(), &status.text, status.expanded)));

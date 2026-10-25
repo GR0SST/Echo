@@ -13,6 +13,9 @@ use std::rc::Rc;
 
 #[derive(Default)]
 pub(crate) struct DownloadsNavigation {
+    pub(crate) service:Option<crate::downloads::AppDownloads>,
+    pub(crate) ui_revision:u64,
+    pub(crate) progress:Option<Option<f32>>,
     pub(crate) host: Option<LibraryDownloadsHost>,
     pub(crate) dirty: bool,
     active: bool,
@@ -67,6 +70,7 @@ impl BrowserWindow {
         }
     }
     pub(crate) fn sync_library_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_navigation.downloads.service=cx.try_global::<crate::downloads::AppDownloads>().cloned();
         let active = self.downloads_route_active();
         let preview_left = self.library_preview_left();
         let colors = self.downloads_colors();
@@ -129,7 +133,10 @@ impl BrowserWindow {
                 crate::tab_menu::MenuTarget::Download(id,owner) if owner == host.owner() => Some((id,id.profile())),
                 _ => None,
             })).flatten();
-            host.view().update(cx,|view,cx|view.set_menu_row(row,cx));
+            let transfer=active.then(||self.tab_menu.as_ref().and_then(|menu|match menu.target {
+                crate::tab_menu::MenuTarget::Transfer(id,_,lease) if lease==host.owner()=>Some(id),_=>None,
+            })).flatten();
+            host.view().update(cx,|view,cx|{view.set_menu_row(row,cx);view.set_transfer_menu(transfer,cx);});
         }
         if !active || !self.sidebar_navigation.downloads.subscriptions.is_empty() {
             return;
@@ -147,6 +154,18 @@ impl BrowserWindow {
                     return;
                 }
                 match event {
+                    DownloadsIntent::TransferMenuRequested{id,profile,position}=>{
+                        let accepted=this.sidebar_navigation.downloads.host.as_ref().is_some_and(|host|
+                            host.accepts_transfer(owner,sender,&this.profile.handle,*id,*profile,cx));
+                        if accepted&&this.transfer_menu_record(*id,*profile,owner).is_some(){
+                            this.open_sidebar_menu(crate::tab_menu::MenuTarget::Transfer(*id,*profile,owner),*position,window,cx);
+                        }return;
+                    }
+                    DownloadsIntent::TransferOpened{id,profile}=>{
+                        let accepted=this.sidebar_navigation.downloads.host.as_ref().is_some_and(|host|
+                            host.accepts_transfer(owner,sender,&this.profile.handle,*id,*profile,cx));
+                        if accepted {this.confirm_transfer(*id,*profile,owner,crate::download_transfer_actions::Action::Open,cx);}return;
+                    }
                     DownloadsIntent::RowMenuRequested { token, profile, position } => {
                         let record = this.sidebar_navigation.downloads.host.as_ref().and_then(|host|
                             host.record_for_intent(owner,sender,&this.profile.handle,*token,*profile));

@@ -84,6 +84,8 @@ mod download_files;
 mod download_actions;
 mod downloads;
 mod ordinary_downloads;
+mod downloads_progress;
+mod download_transfer_actions;
 mod download_dialog;
 mod downloads_publication;
 mod download_acceptance;
