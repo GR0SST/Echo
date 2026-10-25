@@ -1135,6 +1135,7 @@ impl BrowserWindow {
         self.close_theme_editor_with_focus(PopupFocus::OnActivation, cx);
         if crate::quit::is_quitting() || crate::quit::last_window_close(cx) { return; }
         if !window_close::claim(self.main_window, cx) { return; }
+        self.retain_little_archive();
         self.detach_peek(cx);
         self.cancel_split_draft();
         // Parent remains alive. release_host only queues retirement; the

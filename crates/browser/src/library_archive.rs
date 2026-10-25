@@ -21,8 +21,8 @@ pub(crate) struct ArchiveLibrary {
     filters: bool,
     hovered: Option<TabId>,
     reason: Option<ArchiveReason>,
+    little_arc: bool,
     spaces: HashSet<SpaceId>,
-    profile: Option<UserProfileId>,
     colors: LibraryColors,
     _subscriptions: Vec<Subscription>,
 }
@@ -43,8 +43,8 @@ impl ArchiveLibrary {
             filters: false,
             hovered: None,
             reason: None,
+            little_arc: false,
             spaces: HashSet::new(),
-            profile: None,
             colors,
             _subscriptions: subscriptions,
         }
@@ -58,53 +58,46 @@ impl Render for ArchiveLibrary {
         let inventory = self
             .owner
             .read_with(cx, |view, _| {
-                let profile = view.browser.active_user_profile_id();
                 (
-                    profile,
                     view.browser
                         .archive
                         .iter()
-                        .filter(|entry| entry.user_profile_id == profile)
                         .cloned()
                         .collect::<Vec<_>>(),
                     view.browser
                         .spaces
                         .iter()
-                        .filter(|space| space.user_profile_id == profile)
                         .map(|space| (space.id, space.name.clone()))
                         .collect::<Vec<_>>(),
                 )
             })
             .ok();
         let colors = self.colors;
-        let Some((profile, mut entries, spaces)) = inventory else {
+        let dark = colors.text.l > 0.5;
+        let chip_fill = if dark { gpui::hsla(0., 0., 1., 0.055) } else { gpui::hsla(0., 0., 0., 0.055) };
+        let chip_selected = if dark { gpui::hsla(0., 0., 1., 0.45) } else { gpui::hsla(0., 0., 0., 0.45) };
+        let chip_selected_ink = if dark { gpui::black() } else { gpui::white() };
+        let Some((mut entries, spaces)) = inventory else {
             return div().into_any_element();
         };
-        if self.profile != Some(profile) {
-            if self.profile.is_some() {
-                self.input.update(cx, |input, cx| input.set_text("", cx));
-            }
-            self.profile = Some(profile);
-            self.hovered = None;
-            self.spaces.clear();
-            self.reason = None;
-        }
         let query = self.input.read(cx).text().trim().to_lowercase();
         let filter = browser_core::archive_query::ArchiveFilter {
             query,
             spaces: self.spaces.clone(),
             reason: self.reason,
+            little_arc: self.little_arc,
         };
-        entries.retain(|entry| filter.matches(entry, profile));
+        entries.retain(|entry| filter.matches_global(entry));
         let empty = entries.is_empty();
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.archived_at));
+        let has_filters = self.little_arc || self.reason.is_some() || !self.spaces.is_empty();
         let mut list = div()
             .id("library-archive-rows")
             .debug_selector(|| "library-archive-rows".into())
             .absolute()
             .left(px(8.))
             .right(px(8.))
-            .top(px(if self.filters { 242. } else { 58. }))
+            .top(px(if self.filters { 245. } else if has_filters { 100. } else { 58. }))
             .bottom_0()
             .overflow_y_scroll()
             .flex()
@@ -112,6 +105,7 @@ impl Render for ArchiveLibrary {
         let today = Local::now().date_naive();
         let mut previous = None;
         for entry in entries {
+            let profile = entry.user_profile_id;
             let day = DateTime::<Local>::from(entry.archived_at).date_naive();
             if previous != Some(day) {
                 list = list.child(
@@ -252,7 +246,7 @@ impl Render for ArchiveLibrary {
                     div()
                         .absolute()
                         .left(px(12.))
-                        .top(px(20.))
+                        .top(px(17.))
                         .text_size(px(14.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child("Filter Archived Tabs"),
@@ -278,7 +272,14 @@ impl Render for ArchiveLibrary {
                         }))
                         .child("Done"),
                 );
-            let mut chips = div().flex().flex_wrap().gap(px(6.));
+            let mut chips = div().flex().flex_wrap().gap(px(6.)).child(
+                div().id("archive-little-arc").debug_selector(|| "library-archive-little-arc".into())
+                    .px(px(12.)).h(px(32.)).rounded(px(12.))
+                    .bg(if self.little_arc { chip_selected } else { chip_fill })
+                    .text_color(if self.little_arc { chip_selected_ink } else { colors.text })
+                    .flex().items_center().font_weight(gpui::FontWeight::SEMIBOLD).cursor_pointer().child("Little Arc")
+                    .on_click(cx.listener(|this, _, _, cx| { this.little_arc = !this.little_arc; cx.notify(); }))
+            );
             for (index, (id, name)) in spaces.into_iter().enumerate() {
                 chips = chips.child(
                     div()
@@ -287,14 +288,12 @@ impl Render for ArchiveLibrary {
                         .px(px(12.))
                         .h(px(32.))
                         .rounded(px(12.))
-                        .bg(if self.spaces.contains(&id) {
-                            colors.selected
-                        } else {
-                            colors.hover
-                        })
+                        .bg(if self.spaces.contains(&id) { chip_selected } else { chip_fill })
+                        .text_color(if self.spaces.contains(&id) { chip_selected_ink } else { colors.text })
                         .flex()
                         .items_center()
                         .cursor_pointer()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !this.spaces.remove(&id) {
                                 this.spaces.insert(id);
@@ -309,7 +308,7 @@ impl Render for ArchiveLibrary {
                     .absolute()
                     .left(px(8.))
                     .right(px(8.))
-                    .top(px(64.))
+                    .top(px(61.))
                     .flex()
                     .flex_col()
                     .gap(px(6.))
@@ -317,6 +316,7 @@ impl Render for ArchiveLibrary {
                         div()
                             .pl(px(4.))
                             .text_size(px(12.))
+                            .line_height(px(16.))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(colors.muted)
                             .child("How was the tab closed?"),
@@ -338,14 +338,12 @@ impl Render for ArchiveLibrary {
                                     .px(px(12.))
                                     .h(px(32.))
                                     .rounded(px(12.))
-                                    .bg(if self.reason == Some(reason) {
-                                        colors.selected
-                                    } else {
-                                        colors.hover
-                                    })
+                                    .bg(if self.reason == Some(reason) { chip_selected } else { chip_fill })
+                                    .text_color(if self.reason == Some(reason) { chip_selected_ink } else { colors.text })
                                     .flex()
                                     .items_center()
                                     .cursor_pointer()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.reason = if this.reason == Some(reason) {
                                             None
@@ -363,6 +361,7 @@ impl Render for ArchiveLibrary {
                             .mt(px(10.))
                             .pl(px(4.))
                             .text_size(px(12.))
+                            .line_height(px(16.))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(colors.muted)
                             .child("Where was the tab?"),
@@ -423,6 +422,32 @@ impl Render for ArchiveLibrary {
                         .child("Filter"),
                 );
         }
+        if !self.filters && has_filters {
+            let chip = |id: &'static str, name: String| div().id(id).debug_selector(move || id.into())
+                .flex_none().h(px(32.)).px(px(8.)).rounded(px(12.)).bg(colors.selected)
+                .flex().items_center().gap(px(4.)).cursor_pointer().text_size(px(13.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(icons::ionicon("close-circle", 14., 1.)).child(name);
+            let mut summary = div().id("archive-active-filters").absolute().top(px(52.)).left(px(8.)).right(px(8.))
+                .flex().gap(px(6.)).overflow_x_scroll();
+            if self.little_arc {
+                summary = summary.child(chip("archive-remove-little", "Little Arc".into())
+                    .on_click(cx.listener(|this, _, _, cx| { this.little_arc = false; cx.notify(); })));
+            }
+            if let Some(reason) = self.reason {
+                summary = summary.child(chip("archive-remove-reason", match reason {
+                    ArchiveReason::Automatic => "Auto-Closed", ArchiveReason::Manual => "Manually Closed", ArchiveReason::Unknown => "Archived",
+                }.into()).on_click(cx.listener(|this, _, _, cx| { this.reason = None; cx.notify(); })));
+            }
+            for (index, (id, name)) in self.owner.read_with(cx, |view, _| view.browser.spaces.iter()
+                .filter(|space| self.spaces.contains(&space.id)).map(|space| (space.id, space.name.clone())).collect::<Vec<_>>()).unwrap_or_default().into_iter().enumerate() {
+                summary = summary.child(div().id(("archive-remove-space", index)).h(px(32.)).px(px(8.)).rounded(px(12.))
+                    .bg(colors.selected).flex().items_center().gap(px(4.)).cursor_pointer().text_size(px(13.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD).child(icons::ionicon("close-circle", 14., 1.)).child(name)
+                    .on_click(cx.listener(move |this, _, _, cx| { this.spaces.remove(&id); cx.notify(); })));
+            }
+            column = column.child(summary);
+        }
         div()
             .debug_selector(|| "library-archive".into())
             .relative()
@@ -441,7 +466,6 @@ impl BrowserWindow {
     ) {
         if self.sidebar_navigation.controller.selected() != crate::sidebar_pages::SidebarPage::Library
             || self.sidebar_navigation.library_section != crate::library::LibrarySection::ArchivedTabs
-            || self.browser.active_user_profile_id() != profile
             || !self.browser.archive.iter().any(|entry| entry.tab.id == id && entry.user_profile_id == profile
                 && entry.tab.url == url && entry.archived_at == archived_at) { return; }
         match action {
@@ -465,14 +489,13 @@ impl BrowserWindow {
     ) {
         if self.sidebar_navigation.controller.selected() != crate::sidebar_pages::SidebarPage::Library
             || self.sidebar_navigation.library_section != crate::library::LibrarySection::ArchivedTabs
-            || self.browser.active_user_profile_id() != profile
             || !self.browser.archive.iter().any(|entry| {
                 entry.user_profile_id == profile && entry.tab.id == id && entry.tab.url == url
             })
         {
             return;
         }
-        self.open_peek(url.to_owned(), window, cx);
+        self.open_peek_for_profile(profile, url.to_owned(), window, cx);
     }
 }
 

@@ -63,14 +63,22 @@ impl BrowserWindow {
     pub(crate) fn open_peek(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
         let Ok(url)=url::Url::parse(&url) else{return;};
         if !matches!(url.scheme(),"http"|"https"){return;}
-        self.open_peek_document(url,window,cx);
+        self.open_peek_document(url,None,window,cx);
     }
     pub(crate) fn open_site_settings_peek(&mut self,url:String,window:&mut Window,cx:&mut Context<Self>) {
         if !crate::site_settings_page::is_site_url(&url){return;}
         let Ok(url)=url::Url::parse(&url) else{return;};
-        self.open_peek_document(url,window,cx);
+        self.open_peek_document(url,None,window,cx);
     }
-    fn open_peek_document(&mut self,url:url::Url,window:&mut Window,cx:&mut Context<Self>) {
+    /// Archive rows may belong to another local website profile. Keep its
+    /// cookies/storage without changing the host window's current Space.
+    pub(crate) fn open_peek_for_profile(&mut self, profile: browser_core::UserProfileId, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser.is_private() || self.browser.is_blank() || self.browser.user_profile(profile).is_none() { return; }
+        let Ok(url) = url::Url::parse(&url) else { return; };
+        if !matches!(url.scheme(), "http" | "https") { return; }
+        self.open_peek_document(url, Some(profile), window, cx);
+    }
+    fn open_peek_document(&mut self,url:url::Url,profile:Option<browser_core::UserProfileId>,window:&mut Window,cx:&mut Context<Self>) {
         if self.peek_owner.is_some() || self.transient.is_some() || self.peek_child.is_some() || crate::quit::is_quitting(){return;}
         self.close_command_bar(cx);
         let site_settings_source=if crate::site_settings_page::is_site_url(url.as_str()){crate::site_settings_page::DataSource::capture(self,cx)}else{None};
@@ -78,7 +86,7 @@ impl BrowserWindow {
         let space = self.browser.space().id;
         let theme = self.browser.space().theme.clone();
         let hue = self.browser.space().hue;
-        let website_profile = self.browser.active_user_profile_id();
+        let website_profile = profile.unwrap_or_else(|| self.browser.active_user_profile_id());
         let private = self.browser.is_private();
         let share_history = !private && !self.browser.is_blank();
         let storage = if private { StorageSelection::Current } else { StorageSelection::for_profile(website_profile) };
@@ -111,7 +119,7 @@ impl BrowserWindow {
                     if let Some(pages) = &view.pages { pages.borrow_mut().peek_mode = true; }
                     view.site_settings_page.source=site_settings_source;
                     view.sidebar_visible = false;
-                    view.transient = Some(Transient { source, space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
+                    view.transient = Some(Transient { source, space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true,archive_retained:false,archive_reason:browser_core::ArchiveReason::Manual });
                     view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: None, redo_close: None, sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);
                     view
@@ -151,7 +159,7 @@ impl BrowserWindow {
                 cx.new(|cx| {
                     let mut view = BrowserWindow::with_profile_pages(document.profile, Some(document.selection), pages, window, cx);
                     view.sidebar_visible = false;
-                    view.transient = Some(Transient { source: document.source, space: document.space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
+                    view.transient = Some(Transient { source: document.source, space: document.space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true,archive_retained:false,archive_reason:browser_core::ArchiveReason::Manual });
                     view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: Some(token), redo_close: None,
                         sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);

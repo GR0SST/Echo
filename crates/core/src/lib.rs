@@ -163,11 +163,21 @@ pub enum ArchiveReason {
     Automatic,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveOrigin {
+    #[default]
+    Space,
+    LittleArc,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArchivedTab {
+    #[serde(default)]
+    pub origin: ArchiveOrigin,
     pub tab: Tab,
     pub space: SpaceId,
-    /// Origin identity only; global Archive visibility is not yet established.
+    /// Captured website-storage owner, including in the global Library archive.
     pub user_profile_id: UserProfileId,
     pub archived_at: SystemTime,
     #[serde(default)]
@@ -488,7 +498,7 @@ impl Browser {
             (Section::Today, _) => {
                 let space_id = space.id;
                 let tab = self.remove_tab(id)?;
-                self.archive.push(ArchivedTab { tab, user_profile_id: self.space().user_profile_id, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
+                self.archive.push(ArchivedTab { origin: ArchiveOrigin::Space, tab, user_profile_id: self.space().user_profile_id, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
                 Some(Closed::Archived)
             }
         }

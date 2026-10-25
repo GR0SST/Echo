@@ -1285,7 +1285,7 @@ fn library_real_tab_rows_fill_the_card_and_short_titles_fit_without_clipping(
 }
 
 #[gpui::test]
-fn library_archive_route_search_and_filters_preserve_inventory_and_profile_scope(cx: &mut TestAppContext) {
+fn library_archive_route_search_and_filters_preserve_inventory_and_global_scope(cx: &mut TestAppContext) {
     let mut browser = Browser::new();
     let profile = browser.active_user_profile_id();
     let first = browser.new_tab("https://example.org/needle", SystemTime::now());
@@ -1301,6 +1301,9 @@ fn library_archive_route_search_and_filters_preserve_inventory_and_profile_scope
     let foreign = browser.new_tab("https://private.example/needle", SystemTime::now());
     browser.close_tab(foreign, SystemTime::now());
     browser.switch_space(0);
+    let mut lookup = Browser::new();
+    lookup.new_tab("https://lookup.example/needle", SystemTime::now());
+    let little = browser.archive_lookup_tab(lookup.active_tab().unwrap().clone(), profile, browser.space().id, browser_core::ArchiveReason::Manual, SystemTime::now()).unwrap();
     let (view, visual, _) = open(cx, browser);
     visual.simulate_resize(gpui::size(px(1000.), px(760.)));
     let before = session(&view, visual);
@@ -1313,7 +1316,7 @@ fn library_archive_route_search_and_filters_preserve_inventory_and_profile_scope
     let first_row: &'static str = Box::leak(format!("library-archive-row-{}", first.get()).into_boxed_str());
     assert_eq!(visual.debug_bounds(first_row).unwrap().size.height, px(56.));
     let foreign_row: &'static str = Box::leak(format!("library-archive-row-{}", foreign.get()).into_boxed_str());
-    assert!(visual.debug_bounds(foreign_row).is_none());
+    assert!(visual.debug_bounds(foreign_row).is_some());
     click(visual, "library-archive-search");
     visual.simulate_input("needle");
     visual.run_until_parked();
@@ -1325,6 +1328,14 @@ fn library_archive_route_search_and_filters_preserve_inventory_and_profile_scope
     let painted = visible_titles(visual);
     assert!(painted.iter().any(|title| title == "Archive needle"));
     assert!(!painted.iter().any(|title| title.contains("example.org/other")));
+    click(visual, "library-archive-filter");
+    click(visual, "library-archive-little-arc");
+    click(visual, "archive-filter-done");
+    assert!(visible_titles(visual).iter().any(|title| title.contains("lookup.example/needle")));
+    assert!(!visible_titles(visual).iter().any(|title| title == "Archive needle"));
+    assert!(view.read_with(visual, |view, _| view.browser.archive.iter().any(|entry| entry.tab.id == little)));
+    click(visual, "archive-remove-little");
+    assert!(visible_titles(visual).iter().any(|title| title == "Archive needle"));
     click(visual, "library-archive-filter");
     click(visual, "library-archive-reason-0");
     assert!(!visible_titles(visual).iter().any(|title| title == "Archive needle"));
@@ -1404,4 +1415,48 @@ fn library_archive_hover_actions_preserve_selection_and_reject_stale_rows(cx: &m
     click(visual, "library-nav-media");
     view.update(visual, |view, cx| view.apply_library_archive_action(profile, first, "https://example.org/first", later, ArchiveAction::Delete, cx));
     view.read_with(visual, |view, _| assert_eq!(view.browser.archive.len(), 1));
+}
+
+#[gpui::test]
+fn global_archive_actions_keep_the_row_profile_and_host_selection(cx: &mut TestAppContext) {
+    let mut browser = Browser::new();
+    let now = SystemTime::now();
+    let host_profile = browser.active_user_profile_id();
+    let host_space = browser.space().id;
+    let selected = browser.new_tab("https://selected.example/", now);
+    let foreign = browser.create_user_profile("Foreign").unwrap();
+    let foreign_space = browser.add_space("Foreign Space", 120.);
+    browser.assign_space_user_profile(foreign_space, foreign).unwrap();
+    browser.switch_space(1);
+    let restored = browser.new_tab("https://foreign.example/restore", now);
+    browser.close_tab(restored, now);
+    let deleted = browser.new_tab("https://foreign.example/delete", now);
+    browser.close_tab(deleted, now);
+    browser.switch_space(0);
+    let (view, visual, _) = open(cx, browser);
+    select(&view, visual, SidebarPage::Library);
+    click(visual, "library-nav-archive");
+    let selector = |action: &str, id: browser_core::TabId| -> &'static str {
+        Box::leak(format!("library-archive-{action}-{}", id.get()).into_boxed_str())
+    };
+    click(visual, selector("row", restored));
+    let child = view.read_with(visual, |view, _| view.peek_child.unwrap());
+    child.read_with(visual, |child, _| {
+        assert_eq!(child.browser.active_user_profile_id(), foreign);
+        assert_eq!(child.browser.active_tab().unwrap().url, "https://foreign.example/restore");
+    }).unwrap();
+    view.update(visual, |view, cx| view.detach_peek(cx));
+    visual.run_until_parked();
+    click(visual, selector("restore", restored));
+    click(visual, selector("delete", deleted));
+    view.read_with(visual, |view, _| {
+        assert!(view.browser.archive.is_empty());
+        assert_eq!(view.browser.active_user_profile_id(), host_profile);
+        assert_eq!(view.browser.space().id, host_space);
+        assert_eq!(view.browser.space().active_tab, Some(selected));
+        let foreign = view.browser.spaces.iter().find(|space| space.id == foreign_space).unwrap();
+        assert_eq!(foreign.active_tab, None);
+        assert!(foreign.today.iter().any(|tab| tab.id == restored));
+        assert!(!foreign.today.iter().any(|tab| tab.id == deleted));
+    });
 }

@@ -17,6 +17,8 @@ pub(crate) struct Transient {
     pub last_active: std::time::Instant,
     pub last_active_wall: SystemTime,
     pub active: bool,
+    pub archive_retained: bool,
+    pub archive_reason: browser_core::ArchiveReason,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PickerKind { Spaces, Profiles }
@@ -90,7 +92,7 @@ pub(crate) fn open_with(source: NormalProfile, space: SpaceId, profile: UserProf
             let mut view = BrowserWindow::with_profile_pages(profile, Some(selection), pages, window, cx);
             if let Some(pages) = &view.pages { pages.borrow_mut().square_top(); }
             view.sidebar_visible = false;
-            view.transient = Some(Transient { source, space, picker: None, last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
+            view.transient = Some(Transient { source, space, picker: None, last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true,archive_retained:false,archive_reason:browser_core::ArchiveReason::Manual });
             view.focus(window);
             view
         })
@@ -109,6 +111,19 @@ pub(crate) fn open_with(source: NormalProfile, space: SpaceId, profile: UserProf
 }
 
 impl BrowserWindow {
+
+    pub(crate) fn retain_little_archive(&mut self) {
+        if self.peek_owner.is_some() { return; }
+        let tab = self.browser.active_tab().cloned();
+        let profile = self.browser.active_user_profile_id();
+        let Some(state) = self.transient.as_mut().filter(|state| !state.archive_retained) else { return; };
+        state.archive_retained = true;
+        if let Some(tab) = tab {
+            state.source.profile.edit_settings(|browser| {
+                browser.archive_lookup_tab(tab, profile, state.space, state.archive_reason, SystemTime::now())
+            });
+        }
+    }
 
     pub(crate) fn set_little_archive_active(&mut self,active:bool,cx:&mut Context<Self>){
         if self.peek_owner.is_some(){return;}
@@ -137,6 +152,7 @@ impl BrowserWindow {
             .max(SystemTime::now().duration_since(state.last_active_wall).unwrap_or_default());
         let threshold=state.source.profile.read_settings(|browser|browser.settings.little_window_archive.duration());
         if age<threshold{return false;}
+        self.transient.as_mut().unwrap().archive_reason = browser_core::ArchiveReason::Automatic;
         self.close_window(cx);true
     }
 
@@ -257,7 +273,7 @@ impl BrowserWindow {
                     cx.notify();
                     true
                 }).unwrap_or(false);
-                if moved { let _ = lookup.update(cx, |this, cx| this.close_window(cx)); }
+                if moved { let _ = lookup.update(cx, |this, cx| { this.transient.as_mut().unwrap().archive_retained = true; this.close_window(cx); }); }
             }
         });
     }
@@ -329,7 +345,7 @@ impl BrowserWindow {
         cx.defer(move |cx| {
             if !source.profile.read_settings(|browser| browser.user_profile(id).is_some()) { return; }
             if open_with(source, space, id, url, cx).is_some() {
-                let _ = old.update(cx, |view, cx| view.close_window(cx));
+                let _ = old.update(cx, |view, cx| { view.transient.as_mut().unwrap().archive_retained = true; view.close_window(cx); });
             }
         });
     }
