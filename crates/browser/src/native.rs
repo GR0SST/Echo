@@ -843,3 +843,18 @@ pub(crate) fn set_appearance_menu_selection(selected: usize) {
 #[cfg(all(target_os = "macos", not(test)))]
 #[path = "native/menu_appearance.rs"]
 mod menu_appearance;
+
+/// OS-owned diagnostic text behind the shared utility interface.
+pub(crate) fn operating_system_version() -> String {
+    #[cfg(all(target_os = "macos", not(test)))]
+    unsafe {
+        use objc2::{msg_send, runtime::AnyObject};
+        let info: *mut AnyObject = msg_send![objc2::class!(NSProcessInfo), processInfo];
+        let version: *mut AnyObject = msg_send![info, operatingSystemVersionString];
+        if !version.is_null() {
+            let text: *const std::ffi::c_char = msg_send![version, UTF8String];
+            if !text.is_null() { return std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned(); }
+        }
+    }
+    std::env::consts::OS.to_owned()
+}

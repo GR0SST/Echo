@@ -13,6 +13,7 @@ pub(crate) struct Toast {
     pub(crate) copied_link: bool,
     undo_hint: bool,
     download_undo: bool,
+    compact: bool,
     generation: u64,
     started: Instant,
     dismissed: Option<(Instant, f32)>,
@@ -217,12 +218,21 @@ impl BrowserWindow {
     }
 
     fn present_toast(&mut self, message: String, receipt: Option<crate::max_downloads::Receipt>, cx: &mut Context<Self>) {
+        self.present_toast_style(message, receipt, false, cx);
+    }
+
+    pub(crate) fn show_compact_toast(&mut self, message: String, cx: &mut Context<Self>) {
+        self.present_toast_style(message, None, true, cx);
+    }
+
+    fn present_toast_style(&mut self, message: String, receipt: Option<crate::max_downloads::Receipt>, compact: bool, cx: &mut Context<Self>) {
         let download_undo = receipt.is_some();
         self.retire_toast(cx);
         self.toast_generation += 1;
         let generation = self.toast_generation;
         self.toast = Some(Toast {
-            copied_link: message.starts_with("Copied"),
+            copied_link: !compact && message.starts_with("Copied"),
+            compact,
             undo_hint: message.contains("⌘Z"),
             download_undo,
             message,
@@ -252,7 +262,7 @@ impl BrowserWindow {
             let Ok((main, text_width)) = main.update(cx, |_, window, _| {
                 let mut font = gpui::font(".SystemUIFont");
                 font.weight = FontWeight::SEMIBOLD;
-                let width = window.text_system().shape_line(message.clone().into(), px(14.), &[TextRun {
+                let width = window.text_system().shape_line(message.clone().into(), px(if compact { 13. } else { 14. }), &[TextRun {
                     len: message.len(), font, color: gpui::white(),
                     background_color: None, underline: None, strikethrough: None,
                 }], None).width;
@@ -265,10 +275,10 @@ impl BrowserWindow {
             let width = (text_width.ceil() + px(if copied_link { 68. } else if undo_hint { 41. } else { 24. })).min(main.size.width - px(32.));
             let bounds = Bounds::new(
                 point(
-                    main.origin.x + main.size.width - width - px(if copied_link { 16. } else { 4. }) - px(PAD_X),
-                    main.origin.y + px(if copied_link { 19. } else { 4. }) - px(PAD_Y),
+                    main.origin.x + main.size.width - width - px(if compact { 19. } else if copied_link { 16. } else { 4. }) - px(PAD_X),
+                    main.origin.y + px(if compact || copied_link { 19. } else { 4. }) - px(PAD_Y),
                 ),
-                size(width + px(PAD_X * 2.), px(if copied_link || undo_hint { 48. } else { 42. }) + px(PAD_Y * 2.)),
+                size(width + px(PAD_X * 2.), px(if compact { 40. } else if copied_link || undo_hint { 48. } else { 42. }) + px(PAD_Y * 2.)),
             );
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -371,6 +381,7 @@ impl BrowserWindow {
         let message = toast.message.clone();
         let copied_link = toast.copied_link || toast.download_undo;
         let download_undo = toast.download_undo;
+        let compact = toast.compact;
         let undo_hint = toast.undo_hint;
         let (scale, opacity, _) = toast.progress(now, crate::native::prefers_reduced_motion());
         if scale < 0.001 { return div().size_full().into_any_element(); }
@@ -384,7 +395,7 @@ impl BrowserWindow {
             }))
             .debug_selector(|| "toast".into())
             .w(px((width - PAD_X * 2.) * scale))
-            .h(px(if copied_link || undo_hint { 48. } else { 42. } * scale))
+            .h(px(if compact { 40. } else if copied_link || undo_hint { 48. } else { 42. } * scale))
             .flex()
             .items_center()
             .justify_between()
@@ -394,12 +405,12 @@ impl BrowserWindow {
             .border_1()
             .border_color(hsla(0.76, 0.5, 0.4, 0.25))
             .bg(linear_gradient(180.,
-                linear_color_stop(rgb(0x28154e), 0.),
-                linear_color_stop(rgb(0x201140), 1.)))
+                linear_color_stop(rgb(if compact { 0x402a69 } else { 0x28154e }), 0.),
+                linear_color_stop(rgb(if compact { 0x301e4e } else { 0x201140 }), 1.)))
             .text_color(gpui::white())
             .font_family(".SystemUIFont")
             .font_weight(FontWeight::SEMIBOLD)
-            .text_size(px(14. * scale))
+            .text_size(px(if compact { 13. } else { 14. } * scale))
             .line_height(px(18. * scale))
             .when(!undo_hint, |this| this.child(div().flex_1().min_w_0().truncate().child(message.clone())))
             .when(undo_hint, |this| this.child(div().flex_1().min_w_0().flex().items_center().gap(px(4. * scale))

@@ -273,3 +273,27 @@ structured JSON; only redacted field names were saved in
 `arc-info-reference/info-format-redacted.txt`. It includes account, stable-device
 and Sentry fields that must be omitted from Echo. The passive surface closes
 with its owned parent, and the final cleanup inventories are empty.
+
+
+## Copy Echo Info
+
+Help → Troubleshooting and Command Bar now copy explicit local JSON diagnostics:
+Echo/Chromium/OS versions, local profile count and the current window's retained
+renderer inventory. This is an explicit clipboard action, with no telemetry,
+account fields, stable device identifier, page URLs or profile names. Arc's
+redacted source schema is in `arc-info-reference/info-format-redacted.txt`;
+Echo's private-profile output is `echo-copy-info-final/info.json`.
+
+The compact confirmation matches the captured 40 px height and 19 px top/right
+inset, content-sized width, 13 pt semibold label and purple gradient. Its width
+is 136 px versus Arc's 130 px because “Echo” replaces “Arc”. Regular link-copy
+toasts retain their existing style. Compared captures are
+`arc-info-reference/info-popup.png` and `echo-copy-info-final/copied.png`;
+menu and Command Bar native acceptance both pass, with zero-status shutdown.
+Fine font/shadow optics, other-platform OS version strings and a combined
+all-window renderer inventory remain partial.
+
+Two GPUI tests cover JSON scope/counts, retained-page behavior, Command Bar
+dismissal and the compact toast without a Share action. The final full local
+suite passes 1,085 browser, 239 core, 148 engine and 18 AI tests plus importer
+and bundle checks; one existing native-credential integration test is ignored.

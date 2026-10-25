@@ -347,3 +347,49 @@ fn file_share_anchor_stays_over_the_live_page_after_collapsing_the_sidebar(cx: &
         assert!(anchor[2] > 0. && anchor[3] > 0., "Native picker anchors must be non-empty");
     });
 }
+
+#[gpui::test]
+fn copy_info_menu_reports_retained_documents_without_account_fields_or_page_navigation(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    let original = active_url(&view, visual).unwrap();
+    let tabs = view.read_with(visual, |view, _| view.browser.all_tabs().count());
+    fake.take_calls();
+    dispatch_menu(visual, "Help", "Copy Echo Info");
+    let copied = visual.update(|_, cx| cx.read_from_clipboard().unwrap().text().unwrap());
+    let info: serde_json::Value = serde_json::from_str(&copied).unwrap();
+    assert_eq!(info["engineInfo"]["browser_tab_count"], tabs);
+    assert_eq!(info["engineInfo"]["native_web_contents_count"], 1);
+    assert_eq!(info["engineInfo"]["active_profiles_count"], 1);
+    assert_eq!(info["numProfiles"], 1);
+    assert!(info["deviceInfo"]["osVersion"].as_str().is_some_and(|version| !version.is_empty()));
+    assert!(info.get("memberInfo").is_none());
+    assert!(info.get("sentrySearchLink").is_none());
+    assert!(info["deviceInfo"].get("deviceId").is_none());
+    assert!(!copied.contains(&original));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
+    visual.executor().advance_clock(Duration::from_millis(700));
+    visual.run_until_parked();
+    let overlay = view.read_with(visual, |view, _| view.toast.as_ref().unwrap().overlay.unwrap());
+    let mut toast = VisualTestContext::from_window(overlay.into(), &visual.cx);
+    toast.run_until_parked();
+    assert_eq!(f32::from(toast.debug_bounds("toast").unwrap().size.height), 40.);
+    assert!(toast.debug_bounds("toast-share").is_none());
+}
+
+#[gpui::test]
+fn copy_info_command_closes_its_draft_and_keeps_the_same_page_and_clipboard_schema(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    let original = active_url(&view, visual);
+    fake.take_calls();
+    run_named_command(&view, visual, "copy info");
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+    assert_eq!(active_url(&view, visual), original);
+    let copied = visual.update(|_, cx| cx.read_from_clipboard().unwrap().text().unwrap());
+    let info: serde_json::Value = serde_json::from_str(&copied).unwrap();
+    assert_eq!(info["echoVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(info["engineInfo"]["chromiumVersion"], engine::chromium_version());
+    assert!(view.read_with(visual, |view, _| !view.toast.as_ref().unwrap().copied_link));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
+}

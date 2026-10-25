@@ -432,6 +432,7 @@ pub enum Command {
     ViewArchive,
     ViewHistory,
     OpenLibrary,
+    CopyBrowserInfo,
     ViewMedia,
     ViewBoosts,
     ClearCookiesAndRefresh,
@@ -1820,6 +1821,7 @@ impl BrowserWindow {
             let favorite = active.is_some_and(|tab| self.browser.is_favorite(tab.id));
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::CopyBrowserInfo, "Copy Echo Info", "copy echo info|copy browser info|copy info|diagnostic info", true),
                 (Command::AutomaticAppearance, "Switch to Automatic Appearance", "switch to automatic appearance|automatic mode", true),
                 (Command::LightAppearance, "Switch to Light Mode", "switch to light mode|light mode|light appearance", true),
                 (Command::DarkAppearance, "Switch to Dark Mode", "switch to dark mode|dark mode|dark appearance|night mode", true),
@@ -2218,6 +2220,7 @@ impl BrowserWindow {
                 }
             }
             Command::ViewHistory => self.history_from_command(cx),
+            Command::CopyBrowserInfo => self.copy_browser_info(cx),
             Command::OpenLibrary => self.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx),
             Command::ManageSpaces => self.open_library_spaces(cx),
             Command::ViewDownloads => self.open_library_downloads(cx),
@@ -2351,6 +2354,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::tab_switcher::NextRecentItem, window, cx| this.show_recent_items(false,window,cx)))
             .on_action(cx.listener(|this, _: &crate::tab_switcher::PreviousRecentItem, window, cx| this.show_recent_items(true,window,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::CopyBrowserInfo, _, cx| this.copy_browser_info(cx)))
             .on_action(cx.listener(|this, _: &crate::task_manager::OpenTaskManager, _, cx| this.open_menu_utility(crate::task_manager::open, cx)))
             .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
@@ -4512,6 +4516,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::tab_switcher::NextRecentItem, window, cx| this.show_recent_items(false,window,cx)))
             .on_action(cx.listener(|this, _: &crate::tab_switcher::PreviousRecentItem, window, cx| this.show_recent_items(true,window,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::CopyBrowserInfo, _, cx| this.copy_browser_info(cx)))
             .on_action(cx.listener(|this, _: &crate::task_manager::OpenTaskManager, _, cx| this.open_menu_utility(crate::task_manager::open, cx)))
             .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))

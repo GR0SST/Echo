@@ -18,6 +18,7 @@ mod menus;
 mod tab_switcher;
 mod save_dialog;
 mod about;
+mod diagnostics;
 mod resources;
 mod essential_shortcuts;
 mod history;

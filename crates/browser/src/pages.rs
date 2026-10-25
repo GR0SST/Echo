@@ -1331,6 +1331,14 @@ impl Pages {
         }).collect())
     }
 
+    /// A local inventory of retained page identities; never URLs or titles.
+    pub(crate) fn diagnostic_inventory(&self) -> Vec<(TabId, UserProfileId, bool)> {
+        let store = self.store.borrow();
+        let mut entries = store.pages.iter().map(|(tab, page)| (*tab, page.identity.profile, page.visible)).collect::<Vec<_>>();
+        entries.sort_by_key(|(tab, _, _)| tab.get());
+        entries
+    }
+
     pub fn surface_layout(&self) -> Vec<(TabId, Bounds)> {
         self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| {
             let store = self.store.borrow();
