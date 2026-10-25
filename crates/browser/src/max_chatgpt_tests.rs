@@ -99,3 +99,83 @@ fn chatgpt_keyword_in_a_rename_form_stays_a_tab_name(cx: &mut TestAppContext) {
         assert_eq!(w.browser.active_tab().unwrap().title, "ChatGPT")
     });
 }
+fn enable_generic_chatgpt(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
+    view.update(cx, |w, cx| {
+        w.edit_profile(|b| {
+            b.settings
+                .max
+                .set_enabled(echo_ai::MaxFeature::ChatGptCommandBar, true)
+        });
+        w.edit_browser(|b| b.active_user_profile_mut().settings.search.suggestions = false);
+        cx.notify();
+    });
+}
+#[gpui::test]
+fn chatgpt_ordinary_query_offers_the_captioned_row_and_keyboard_handoff(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    enable_generic_chatgpt(&view, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("Explain Rust lifetimes");
+    view.read_with(cx, |w, cx| {
+        let suggestions = w.suggestions(cx);
+        assert_eq!(suggestions.len(), 2);
+        assert!(matches!(&suggestions[1], Suggestion::AskChatGpt { query } if query == "Explain Rust lifetimes"));
+    });
+    assert!(bar(&view, cx).debug_bounds("ask-chatgpt").is_some());
+    bar(&view, cx).simulate_keystrokes("down enter");
+    assert_eq!(
+        active_url(&view, cx).as_deref(),
+        Some("https://chat.openai.com/?q=Explain%20Rust%20lifetimes")
+    );
+}
+#[gpui::test]
+fn chatgpt_ordinary_query_click_uses_the_same_website_handoff(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    enable_generic_chatgpt(&view, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("Explain Rust lifetimes");
+    click(&mut bar(&view, cx), "ask-chatgpt");
+    assert_eq!(
+        active_url(&view, cx).as_deref(),
+        Some("https://chat.openai.com/?q=Explain%20Rust%20lifetimes")
+    );
+}
+#[gpui::test]
+fn chatgpt_ordinary_query_row_respects_feature_changes_and_does_not_replace_url_navigation(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    enable_generic_chatgpt(&view, cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://rust-lang.org/");
+    view.read_with(cx, |w, cx| {
+        assert!(!w
+            .suggestions(cx)
+            .iter()
+            .any(|s| matches!(s, Suggestion::AskChatGpt { .. })))
+    });
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("Explain Rust lifetimes");
+    view.read_with(cx, |w, cx| {
+        assert!(w
+            .suggestions(cx)
+            .iter()
+            .any(|s| matches!(s, Suggestion::AskChatGpt { .. })))
+    });
+    view.update(cx, |w, _| {
+        w.edit_profile(|b| {
+            b.settings
+                .max
+                .set_enabled(echo_ai::MaxFeature::ChatGptCommandBar, false)
+        })
+    });
+    view.read_with(cx, |w, cx| {
+        assert!(!w
+            .suggestions(cx)
+            .iter()
+            .any(|s| matches!(s, Suggestion::AskChatGpt { .. })))
+    });
+    let before = active_url(&view, cx);
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(active_url(&view, cx), before);
+}

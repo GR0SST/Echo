@@ -376,6 +376,7 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
     Load(Resolved),
+    AskChatGpt { query: String },
     Calculator { answer: String },
     SplitTab { id: TabId, title: String, space: String },
     History { title: String, url: String },
@@ -1957,7 +1958,12 @@ impl BrowserWindow {
         if self.browser.active_user_profile().settings.search.suggestions && !self.browser.is_private() {
             suggestions.extend(bar.remote.iter().map(|query| Suggestion::Load(engine.search(query))));
         }
-        suggestions.truncate(MAX_COMMAND_SUGGESTIONS);
+        let ask_chatgpt = chatgpt_enabled && !chatgpt_keyword
+            && bar.target == Target::NewTab
+            && matches!(omnibox::resolve_with_engine(text, engine), Some(Resolved::Search { .. }))
+            && !suggestions.iter().any(|s| matches!(s, Suggestion::Action { .. } | Suggestion::Calculator { .. }));
+        suggestions.truncate(MAX_COMMAND_SUGGESTIONS - usize::from(ask_chatgpt));
+        if ask_chatgpt { suggestions.push(Suggestion::AskChatGpt { query: text.trim().to_owned() }); }
         suggestions
     }
 
@@ -1994,6 +2000,13 @@ impl BrowserWindow {
         };
         let now = SystemTime::now();
         match suggestion {
+            Suggestion::AskChatGpt { query } => {
+                if target != Target::NewTab || !self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar)) { return; }
+                let resolved = omnibox::SiteSearch::ChatGpt.search(&query);
+                if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
+                let id = self.new_command_tab(resolved.url(), background, cx);
+                self.edit_browser(|b| b.set_title(id, query));
+            }
             Suggestion::Calculator { answer } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(answer));
                 self.close_command_bar(cx);
@@ -4079,8 +4092,10 @@ impl BrowserWindow {
                 };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
+                let ask_chatgpt = matches!(&suggestion, Suggestion::AskChatGpt { .. });
                 let search_row = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }) | Suggestion::Calculator { .. });
                 let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
+                    Suggestion::AskChatGpt { query } => (crate::icons::Icon::Search, query, "Ask ChatGPT".into()),
                     Suggestion::Load(Resolved::Search { query, .. }) => {
                         (crate::icons::Icon::Search, query, String::new())
                     }
@@ -4113,13 +4128,14 @@ impl BrowserWindow {
                 // Pages show their favicon; commands a glyph on a faint tile.
                 // The selected row's tile turns white, as in the reference.
                 let tile = div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(6.0))
-                    .when(!search_row && selected && page.is_none(), |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
-                    .when(!search_row && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
+                    .when(!search_row && !ask_chatgpt && selected && page.is_none(), |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
+                    .when(!search_row && !ask_chatgpt && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
                     .when(selected && matches!(icon, crate::icons::Icon::AirTraffic), |this| this.text_color(gpui::rgb(0x6e74ff)))
                     .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
                 let row = div()
                     .id(("suggestion", index))
                     .debug_selector(|| self.sidebar_debug_name((move || format!("suggestion-{index}"))()))
+                    .when(ask_chatgpt, |this| this.debug_selector(|| "ask-chatgpt".into()))
                     .flex()
                     .items_center()
                     .gap(px(9.0))

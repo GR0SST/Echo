@@ -1747,6 +1747,30 @@ through Echo's Max settings and deleted from Keychain after the capture.
 Arc's result ranking, proprietary AI glyph and exact loading motion remain
 partial. Fixtures differ in Favorites/existing tabs and remote page revisions.
 
+`arc_instant_existing_query.png` shows a second 46 px row for the unchanged
+query, captioned “Ask ChatGPT”, with a 24 px arrow tile on the right and no
+leading icon backplate. Echo now offers that row for ordinary New Tab searches
+when the existing ChatGPT Max flag is enabled. It preserves keyword/Tab scope
+and uses the already verified `https://chat.openai.com/?q=...` website handoff;
+it makes no provider request. URLs and rename/split forms retain their existing
+behavior. The observed New Tab flow is the scope of this follow-up; Command-L
+ordinary-query behavior has not been established. Keyboard, click and disabling
+the flag have GPUI regressions.
+
+The private native fixture disables remote search suggestions to match the
+reference's two-row state. Compare `arc_instant_existing_query.png` with
+`echo_instant_query.png` under `target/parity/arc-max/`.
+`echo_chatgpt_generic_selected.png` also records native keyboard selection;
+there is no selected-Ask Arc pair, so that exact state remains unverified. The
+Instant Links loading label was raised to 14 px medium after the original
+13 px label measured two pixels shorter than Arc's text in the paired captures.
+Loading/result capture names remain those in the Instant Links section. The
+original search glyph substitutes for proprietary artwork; font/material
+fidelity and exact ranking remain partial. The authenticated loopback fixture
+returns ten public sources; its body is checked to contain only the explicit
+query and standard search controls, without browser context. Its synthetic
+credential is saved via Max settings and deleted after clean native shutdown.
+
 Ask on Page still exposes no Ask control in the installed desktop Command-F
 flow, including the available permitted Max flags. There is no separate Ask
 toggle in this build. Browse for Me captions exist in the bundle (52626–52635)

@@ -171,14 +171,15 @@ impl BrowserWindow {
                 .flex_none()
                 .px(px(9.))
                 .gap(px(10.))
-                .text_size(px(13.))
+                .text_size(px(14.))
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(hsla(0., 0., ink, 0.85))
                 .child(crate::icons::control_sized(crate::icons::Icon::Search, 16.))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
-                    .child("Searching the web for you"),
+                        .child("Searching the web for you"),
                 )
                 .into_any_element(),
         )
