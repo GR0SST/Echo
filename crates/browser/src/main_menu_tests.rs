@@ -499,3 +499,32 @@ fn saved_custom_shortcuts_keep_standard_edit_actions_routable(cx: &mut TestAppCo
     visual.run_until_parked();
     assert_eq!(visual.cx.read(|cx| cx.global::<crate::standard_edit::Requests>().commands.clone()), vec![crate::standard_edit::Command::Underline]);
 }
+
+
+#[gpui::test]
+fn find_panel_matches_reference_inset_and_only_shows_navigation_for_a_query(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.simulate_keystrokes("cmd-f");
+    let mut find = find_overlay(&view, visual);
+    let panel = find.debug_bounds("find-bar").unwrap();
+    let main = visual.update(|window, _| window.bounds());
+    let overlay = find.update(|window, _| window.bounds());
+    assert_eq!(panel.size, gpui::size(gpui::px(300.), gpui::px(32.)));
+    assert_eq!(overlay.origin.x + panel.origin.x, main.origin.x + main.size.width - gpui::px(320.));
+    assert_eq!(overlay.origin.y + panel.origin.y, main.origin.y + gpui::px(20.));
+    assert!(find.debug_bounds("find-status").is_none());
+    assert!(find.debug_bounds("find-next").is_none());
+    assert!(find.debug_bounds("find-previous").is_none());
+    find.simulate_input("needle");
+    assert!(find.debug_bounds("find-status").is_some());
+    click(&mut find, "find-next");
+    assert!(fake.take_calls().contains(&Call::Find(1, "needle".into(), true, true)));
+    fake.send(visual, Event::FindResult { view: page(1), count: 0, active: 0, final_update: true });
+    assert!(find.debug_bounds("find-not-found").is_some());
+    find.simulate_keystrokes("cmd-a backspace");
+    find.run_until_parked();
+    assert!(view.read_with(visual, |view, cx| view.find_bar.as_ref().unwrap().input.read(cx).text().is_empty()));
+    assert!(fake.take_calls().contains(&Call::StopFinding(1)));
+    find.simulate_keystrokes("escape");
+    assert!(view.read_with(visual, |view, _| view.find_bar.is_none()));
+}

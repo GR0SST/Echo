@@ -67,7 +67,7 @@ impl BrowserWindow {
             return;
         };
         self.close_command_bar(cx);
-        let input = cx.new(|cx| TextInput::new("Find in Page…", cx));
+        let input = cx.new(|cx| TextInput::new("Find in page...", cx).with_placeholder_opacity(0.6875));
         let changed = cx.subscribe(&input, |this, _, _: &Changed, cx| {
             this.search_page(false, true, cx)
         });
@@ -81,13 +81,13 @@ impl BrowserWindow {
             _changed: changed,
         });
         let main = window.bounds();
-        let width = px(420.0).min(main.size.width - px(32.0));
+        let width = px(300.0).min(main.size.width - px(40.0));
         let bounds = Bounds::new(
             point(
-                main.origin.x + main.size.width - width - px(16.0),
-                main.origin.y + px(16.0),
+                main.origin.x + main.size.width - width - px(40.0),
+                main.origin.y,
             ),
-            size(width, px(48.0)),
+            size(width + px(40.0), px(72.0)),
         );
         let browser = cx.entity().downgrade();
         let parent = self.native_view;
@@ -111,10 +111,13 @@ impl BrowserWindow {
                 ..Default::default()
             };
             if let Ok(overlay) = cx.open_window(options, |window, cx| {
-                input.read(cx).focus_handle(cx).focus(window);
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
+                    // A borderless padded HUD must not expose AppKit's frame rim.
+                    // Attach afterwards: Find paints its own bounded shadow.
+                    crate::native::prepare_toast_window(child);
                     crate::native::attach_overlay(parent, child, false);
                 }
+                input.read(cx).focus_handle(cx).focus(window);
                 cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Find, cx))
             }) {
                 let _ = browser.update(cx, |this, _| {
@@ -168,74 +171,91 @@ impl BrowserWindow {
         let Some(bar) = &self.find_bar else {
             return div().into_any_element();
         };
-        let status = if bar.input.read(cx).text().is_empty() {
-            String::new()
-        } else if bar.searching {
-            "Searching…".into()
-        } else {
-            match bar.count {
-                Some(0) => "No results found".into(),
-                Some(count) if bar.active > 0 => format!("{} of {count}", bar.active),
-                    Some(count) => format!("{count} matches"),
-                None => String::new(),
-            }
+        let has_query = !bar.input.read(cx).text().is_empty();
+        let not_found = has_query && bar.count == Some(0) && !bar.searching;
+        let status = match (bar.count, bar.active) {
+            (Some(count), active) => format!("{}/{count}", active.max(0)),
+            _ => "0/0".into(),
         };
-        div()
+        let control = |id: &'static str| div().id(id).debug_selector(move || id.into())
+            .flex_none().w(px(26.)).h(px(30.)).flex().items_center().justify_center()
+            .rounded(px(4.)).hover(|s| s.bg(hsla(0., 0., 1., 0.08)));
+        div().size_full().p(px(20.)).child(div()
             .id("find-bar")
             .debug_selector(|| "find-bar".into())
             .key_context(CONTEXT)
             .size_full()
-            .rounded_lg()
-            .bg(gpui::white())
-            .border_1()
-            .border_color(hsla(0.0, 0.0, 0.0, 0.15))
-            .text_color(hsla(0.0, 0.0, 0.1, 1.0))
-            .text_sm()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_3()
+            .rounded(px(6.))
+            .bg(gpui::rgb(0x131c32))
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::rgba(0x131c32c9).into(), offset: point(px(0.), px(3.)),
+                blur_radius: px(4.8), spread_radius: px(0.),
+            }])
+            .text_color(hsla(0., 0., 1., 0.8))
+            .text_size(px(13.)).line_height(px(16.)).font_weight(gpui::FontWeight(550.))
+            .flex().items_center().pl(px(10.)).pr(px(3.))
             .on_action(cx.listener(|this, _: &NextMatch, _, cx| this.find_next(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousMatch, _, cx| this.find_next(false, cx)))
             .on_action(cx.listener(|this, _: &CloseFind, _, cx| this.close_find(cx)))
             .on_action(cx.listener(|this, _: &FindPage, window, cx| this.open_find(window, cx)))
+            .child(div().flex_none().mr(px(7.)).text_color(hsla(0., 0., 1., 0.55))
+                .child(find_glyph(crate::icons::Icon::Search)))
             .child(div().flex_1().min_w_0().child(bar.input.clone()))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(hsla(0.0, 0.0, 0.4, 1.0))
-                    .child(status),
-            )
-            .child(
-                div()
-                    .id("find-previous")
-                    .debug_selector(|| "find-previous".into())
-                    .px_1()
-                    .rounded_md()
-                    .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
+            .when(has_query && !not_found, |row| row
+                .child(div().id("find-status").debug_selector(|| "find-status".into())
+                    .w(px(25.)).flex_none().text_center().text_size(px(12.)).child(status))
+                .child(control("find-previous")
                     .on_click(cx.listener(|this, _, _, cx| this.find_next(false, cx)))
-                    .child(crate::icons::control(crate::icons::Icon::Up)),
-            )
-            .child(
-                div()
-                    .id("find-next")
-                    .debug_selector(|| "find-next".into())
-                    .px_1()
-                    .rounded_md()
-                    .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
+                    .child(find_glyph(crate::icons::Icon::Up)))
+                .child(control("find-next")
                     .on_click(cx.listener(|this, _, _, cx| this.find_next(true, cx)))
-                    .child(crate::icons::control(crate::icons::Icon::Down)),
-            )
-            .child(
-                div()
-                    .id("find-close")
-                    .debug_selector(|| "find-close".into())
-                    .px_1()
-                    .rounded_md()
-                    .hover(|s| s.bg(hsla(0.0, 0.0, 0.0, 0.06)))
-                    .on_click(cx.listener(|this, _, _, cx| this.close_find(cx)))
-                    .child(crate::icons::control(crate::icons::Icon::Close)),
-            )
+                    .child(find_glyph(crate::icons::Icon::Down))))
+            .when(not_found, |row| row.child(div().id("find-not-found")
+                .debug_selector(|| "find-not-found".into()).w(px(77.)).flex_none()
+                .text_right().text_size(px(10.)).font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(gpui::rgb(0xdb1929)).child("NOT FOUND")))
+            .child(control("find-close").ml(px(6.))
+                .on_click(cx.listener(|this, _, _, cx| this.close_find(cx)))
+                .child(find_glyph(crate::icons::Icon::Close))))
             .into_any_element()
     }
+}
+
+// The compact reference controls have a heavier stroke than a scaled toolbar
+// icon. Keep the 14 px geometry independent of fonts and toolbar dimensions.
+fn find_glyph(icon: crate::icons::Icon) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        use crate::icons::Icon;
+        let color = window.text_style().color;
+        let at = |x, y| bounds.origin + point(px(x), px(y));
+        let lines: Vec<Vec<(f32, f32)>> = match icon {
+            Icon::Up => vec![vec![(7., 12.), (7., 2.)], vec![(3., 6.), (7., 2.), (11., 6.)]],
+            Icon::Down => vec![vec![(7., 2.), (7., 12.)], vec![(3., 8.), (7., 12.), (11., 8.)]],
+            Icon::Close => vec![vec![(3., 3.), (11., 11.)], vec![(3., 11.), (11., 3.)]],
+            Icon::Search => vec![vec![(9.5, 9.5), (12.5, 12.5)]],
+            _ => unreachable!("Find uses only search, arrows and close"),
+        };
+        let stroke = if matches!(icon, Icon::Search) { 1.3 } else { 1.5 };
+        if matches!(icon, Icon::Search) {
+            let mut circle = gpui::PathBuilder::stroke(px(stroke));
+            for index in 0..=48 {
+                let angle = index as f32 / 48. * std::f32::consts::TAU;
+                let p = at(6. + 4.5 * angle.cos(), 6. + 4.5 * angle.sin());
+                if index == 0 { circle.move_to(p); } else { circle.line_to(p); }
+            }
+            if let Ok(path) = circle.build() { window.paint_path(path, color); }
+        }
+        for points in lines {
+            let mut line = gpui::PathBuilder::stroke(px(stroke));
+            line.move_to(at(points[0].0, points[0].1));
+            for &(x, y) in &points[1..] { line.line_to(at(x, y)); }
+            if let Ok(path) = line.build() { window.paint_path(path, color); }
+            for (x, y) in points {
+                let radius = px(stroke / 2.);
+                let mut dot = gpui::fill(Bounds::new(at(x, y) - point(radius, radius), size(radius * 2., radius * 2.)), color);
+                dot.corner_radii = radius.into();
+                window.paint_quad(dot);
+            }
+        }
+    }).size(px(14.)).flex_none().into_any_element()
 }

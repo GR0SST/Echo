@@ -425,3 +425,71 @@ CEF shuts down. The five inspected submenu bodies preserve the source geometry
 and enabled states after startup applies the saved override. Full validation:
 1,116 browser, 242 core, 157 engine and 18 AI tests pass (one existing native
 credential integration test ignored), plus importer and bundle checks.
+
+
+## Find bar reference and initial match selection
+
+Guarded references are `arc-find-bar-reference/`,
+`arc-find-replace-active/` and `arc-find-selection-reference/`. The visible
+panel is 300 × 32 px, with a 6 px radius, 20 px top/right window inset and
+13 px query text. It has a search vector and close control; the count and
+up/down controls are absent for an empty query. A completed zero-result query
+shows red `NOT FOUND` and hides the navigation arrows. The color-managed body
+sample is sRGB (19, 28, 50), with white text at 80% and placeholder at 55%.
+The Find field's placeholder treatment is local; other TextInputs keep their
+existing default. The fitted navy shadow has 4.8 px blur, 3 px downward offset and 79% alpha,
+inside a transparent 20 px overlay margin.
+
+The source's Find submenu has all six items enabled while the Find field is
+active, including empty and zero-result queries. Outside Find, only `Find…`
+is enabled in the tested page editor. `Find and Replace` returns focus to the
+same field without replacement controls. `Use Selection to Find` leaves its
+partially selected query and page result unchanged in that context. Menu
+hierarchy and the remaining actions still need implementation/validation;
+these references do not justify a replacement editor.
+
+The first native Echo comparison found a real engine issue: the initial query
+counted a match but did not activate it (`0/1`, yellow). The isolated CEF adapter
+now selects an initial match instead of merely counting. The shipped
+[CEF implementation](https://raw.githubusercontent.com/chromiumembedded/cef/14c5a089e8452874cb1a556dc3fde26ed2d87723/libcef/browser/browser_host_base.cc)
+forwards its legacy `findNext` argument to
+[Chromium 154's `find_match` option](https://raw.githubusercontent.com/chromium/chromium/154.0.8037.98/components/find_in_page/find_tab_helper.cc).
+Chromium itself detects a new session when the query changes. The shared engine
+interface still expresses new-query versus next/previous intent normally.
+
+The GPUI regression checks source geometry, empty-query controls, live search,
+navigation, zero-result presentation, clearing and Escape. GPUI 0.2.2 retains
+old debug-selector bounds after element removal, so cleared-query disappearance
+must be checked in native images rather than an old selector-map entry.
+Final native acceptance is recorded separately below.
+
+
+Final native acceptance: `echo-find-shadow/` exits zero after native Command-Q
+and the complete CEF shutdown barrier. Real-app dumps assert query `words`,
+count 1, active 1 and a completed zero-result `missing` query. The inspected
+pairs are `arc-find-bar-reference/find-{empty,words}.png` and
+`arc-find-selection-reference/no-results.png` versus
+`echo-find-shadow/find-{empty,words,missing}.png`. All six 3× crops are in
+`pairs/`. Clearing removes the status/navigation controls, and Escape restores
+the retained page. The body is 300 × 32 px at the same 20 px inset. Thirteen
+color-managed samples below the body differ from Arc by at most two RGB levels;
+`fit-find-shadow.py` records the fit against GPUI's shadow integration.
+
+A padded titled child initially exposed AppKit's frame rim. The existing
+borderless transient-window shim removes that rim before child attachment;
+Find draws its own fitted shadow. Fixed 14 px vectors use measured compact
+control strokes. Fine text baseline/width and arrow raster details still differ
+by approximately 1–2 px; pending-search timing, resize and other contexts remain
+partial. No complete visual parity claim is made for those states.
+
+One native harness attempt stopped at its File menu when a passive link-status
+overlay appeared in its isolated Echo process. The driver's eventual exit was
+zero but that attempt was not accepted. The final actor tracks all windows of
+its exact private bundle process and dismisses menus/quits that process in
+finally. Arc ownership checks are unchanged. Guarded Arc fixtures and roots are
+closed, with empty cleanup-error and remaining-owned inventories. General and
+Find pasteboards are restored by the reference helper.
+
+This change passes the complete suite: 1,127 browser, 242 core, 157 engine,
+18 AI tests, importer and bundle checks; one existing native credential test
+is ignored. Native acceptance uses the final fitted-shadow bundle.

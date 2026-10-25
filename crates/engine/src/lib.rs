@@ -1127,9 +1127,12 @@ impl Engine {
         self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view| media::command(&view.browser, action))
     }
 
-    pub fn find(&mut self, id: ViewId, text: &str, forward: bool, next: bool) {
+    pub fn find(&mut self, id: ViewId, text: &str, forward: bool, _next: bool) {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {
-            host.find(Some(&CefString::from(text)), forward.into(), 0, next.into());
+            // CEF 154 forwards its legacy findNext argument to Chromium's
+            // find_match option. False counts matches without selecting one.
+            // Chromium restarts the session itself when the query changes.
+            host.find(Some(&CefString::from(text)), forward.into(), 0, 1);
         }
     }
 

@@ -97,6 +97,7 @@ pub struct TextInput {
     focus_handle: FocusHandle,
     content: SharedString,
     placeholder: SharedString,
+    placeholder_opacity: f32,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -131,6 +132,7 @@ impl TextInput {
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
             placeholder: single_line_text(&placeholder).into_owned().into(),
+            placeholder_opacity: 0.45,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -169,6 +171,11 @@ impl TextInput {
     }
     pub fn scroll_x(&self) -> Pixels {
         self.scroll_x
+    }
+
+    pub(crate) fn with_placeholder_opacity(mut self, opacity: f32) -> Self {
+        self.placeholder_opacity = opacity.clamp(0., 1.);
+        self
     }
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -678,7 +685,7 @@ impl Element for TextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), style.color.opacity(0.45))
+            (input.placeholder.clone(), style.color.opacity(input.placeholder_opacity))
         } else if input.secure {
             ("*".repeat(content.len()).into(), style.color)
         } else {
