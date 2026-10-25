@@ -361,3 +361,50 @@ Arc's instruction changes after interaction (`arc-capture-drag-reference/`).
 Initial pointer/hover and instruction state, backdrop treatment and remaining
 cursor/glyph/motion details need a follow-up. Arc cleanup inventories are empty;
 no capture was saved to its Library.
+
+
+## Standard editing submenus
+
+The installed MainMenu nib and `arc-edit-menu-reference/` define Spelling and
+Grammar, Substitutions, Transformations, Speech and Format → Font. GPUI owns
+the menu structure and typed actions. The isolated macOS adapter binds the
+standard selectors to the current native text responder, with Font Manager
+trait tags 2/1 for Bold/Italic and nib-derived key equivalents. AppKit owns
+validation, checkmarks and font samples; manually assigning an attributed font
+made the Font menu 2 px too wide and was removed. Native calls that can open
+panels run outside GPUI application/window borrows. Toolkit action dispatch
+captures its actual window, including the Command Bar overlay, rather than
+implicitly targeting the page window.
+
+The inspected Arc/Echo submenu pairs are `arc-edit-menu-reference/<name>.png`
+and `echo-standard-edit/menu-<name>.png`; 3× crops are in `pairs/`. Every enabled
+state matches. Bodies measure, respectively: Spelling 268 × 141 px,
+Substitutions 162 × 189, Transformations 140 × 82, Speech 122 × 58 and Font
+136 × 82. The native uppercase result is `MISPELLED WORDS AND STYLED TEXT.`;
+both browsers copy identical `<u>` HTML after Underline. Source evidence is
+`arc-standard-edit-actions/` and native Echo acceptance is `echo-standard-edit/`.
+Earlier clipboard assertions read the previous Copy result; the accepted
+runners wait for clipboard change count and expected contents before comparing.
+
+Standard panels are floating native windows at CG layer 3, so the reference
+runner separately records/claims them while retaining the shared guard for its
+owned root. Spelling and Grammar is 431 × 289 px and Substitutions is 360 × 150
+in both apps. Only each directly-created panel is closed, without selecting
+replacement/correction controls. Panel positions retain the OS's existing
+per-app frame restoration. No preference toggle or speech playback is claimed
+as tested. Three GPUI tests cover menu dispatch without navigation, preserving
+the actions after sidebar Undo labels rebuild menus, and routing a Command Bar
+draft's request to its own overlay without closing the draft or focusing a page.
+
+Other native input contexts, preference toggles and hardware shortcut acceptance
+remain partial; Windows/Linux do not expose these macOS-only standard menus.
+Edit's remaining Find grouping/actions are a separate unfinished row.
+
+
+Final validation for this group passes 1,105 browser, 241 core, 153 engine and
+18 AI tests plus importer/bundle checks, with one existing native-credential
+integration test ignored. The final scope-corrected bundle passes the native
+actor with zero-status CEF teardown. All five 3× submenu pairs and both native
+panel pairs were inspected. `arc-menu-key-probe/` additionally verifies the
+physical Command-Shift-semicolon spelling shortcut in the owned Arc editor;
+remaining hardware acceptance stays explicitly partial.

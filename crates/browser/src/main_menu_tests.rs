@@ -441,3 +441,44 @@ fn reveal_data_without_a_browser_uses_the_configured_directory(cx: &mut TestAppC
     cx.run_until_parked();
     assert_eq!(cx.opened_url(), Some(expected));
 }
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn standard_edit_menu_dispatches_to_the_text_responder_without_page_navigation(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    let original = active_url(&view, visual);
+    fake.take_calls();
+    dispatch_menu(visual, "Edit", "Make Upper Case");
+    visual.run_until_parked();
+    assert_eq!(visual.cx.read(|cx| cx.global::<crate::standard_edit::Requests>().commands.clone()), vec![crate::standard_edit::Command::Uppercase]);
+    assert_eq!(active_url(&view, visual), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
+}
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn standard_edit_menus_survive_sidebar_undo_label_rebuilds(cx: &mut TestAppContext) {
+    let (_, visual, _) = open_pages(cx);
+    visual.update(|_, cx| crate::menus::sync_sidebar_undo(Some("moving a tab"), None, false, cx));
+    dispatch_menu(visual, "Edit", "Underline");
+    dispatch_menu(visual, "Edit", "Show Spelling and Grammar");
+    visual.run_until_parked();
+    assert_eq!(visual.cx.read(|cx| cx.global::<crate::standard_edit::Requests>().commands.clone()), vec![crate::standard_edit::Command::Underline, crate::standard_edit::Command::ShowSpelling]);
+}
+
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn standard_edit_from_a_command_draft_targets_its_overlay_window(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.simulate_keystrokes("cmd-t");
+    let mut command = bar(&view, visual);
+    command.simulate_input("Mispelled command draft");
+    let target = command.update(|window, _| window.window_handle().window_id());
+    fake.take_calls();
+    dispatch_menu(&mut command, "Edit", "Show Spelling and Grammar");
+    command.run_until_parked();
+    assert_eq!(command.cx.read(|cx| cx.global::<crate::standard_edit::Requests>().windows.clone()), vec![target]);
+    assert_eq!(bar_text(&view, visual).as_deref(), Some("Mispelled command draft"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_) | Call::Create(..) | Call::Navigate(..))));
+}

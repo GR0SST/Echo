@@ -873,3 +873,22 @@ pub(crate) fn operating_system_version() -> String {
     }
     std::env::consts::OS.to_owned()
 }
+
+/// Standard text commands remain in the platform responder chain; native menus
+/// own enablement and checked state rather than advertising unsupported edits.
+pub(crate) fn configure_standard_edit_menu() {
+    #[cfg(all(target_os = "macos", not(test)))]
+    standard_edit::configure();
+}
+
+pub(crate) fn perform_standard_edit(command: crate::standard_edit::Command, view: Option<*mut c_void>) -> bool {
+    #[cfg(test)] { let _ = (command, view); true }
+    #[cfg(all(target_os = "macos", not(test)))] {
+        view.is_some_and(|view| standard_edit::perform(command, view))
+    }
+    #[cfg(all(not(target_os = "macos"), not(test)))] { let _ = (command, view); false }
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+#[path = "native/standard_edit.rs"]
+mod standard_edit;

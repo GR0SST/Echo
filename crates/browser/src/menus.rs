@@ -81,6 +81,7 @@ pub(crate) fn init(cx: &mut App) {
         ]);
     }
     cx.set_menus(build());
+    native::configure_standard_edit_menu();
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -92,6 +93,7 @@ pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'stati
     if cx.try_global::<SidebarUndoLabels>() == Some(&labels) { return; }
     cx.set_global(labels);
     cx.set_menus(build_with_sidebar_undo(undo, redo, multiple));
+    native::configure_standard_edit_menu();
     sync_native_appearance(cx);
 }
 
@@ -183,7 +185,11 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("Find…", find::FindPage),
                 MenuItem::action("Find Next", find::NextMatch),
                 MenuItem::action("Find Previous", find::PreviousMatch),
-            ],
+            ].into_iter().chain({
+                let mut items = Vec::new();
+                crate::standard_edit::append_submenus(&mut items);
+                items
+            }).collect(),
         },
         Menu {
             name: "View".into(),
