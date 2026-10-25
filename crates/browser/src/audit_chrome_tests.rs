@@ -1,5 +1,6 @@
 //! Behavioral regressions from the second native parity audit.
 use super::*;
+use browser_core::omnibox::Resolved;
 
 #[gpui::test]
 fn current_tab_is_history_and_inactive_tab_is_switchable(cx: &mut TestAppContext) {
@@ -108,4 +109,158 @@ fn closing_settings_from_the_footer_menu_removes_both_windows(cx: &mut TestAppCo
     assert!(view.read_with(cx, |view, _| view.shortcut_footer_window()).is_none());
     assert_eq!(cx.cx.read(|cx| cx.windows().len()), 1);
     assert_eq!(today_urls(&browser, cx), before);
+}
+
+#[gpui::test]
+fn site_search_hint_follows_completion_and_profile_activation(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("wiki");
+    cx.run_until_parked();
+    assert!(bar(&view, cx).debug_bounds("site-search-tab-hint").is_some());
+    bar(&view, cx).simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert!(bar(&view, cx).debug_bounds("site-search-pill").is_some());
+    assert!(view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().site_search.is_some()));
+    bar(&view, cx).simulate_keystrokes("backspace");
+    bar(&view, cx).simulate_input("unrelated query");
+    cx.run_until_parked();
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("wikipedia");
+    view.update(cx, |view, cx| { view.edit_browser(|browser| { browser.active_user_profile_mut().settings.search.providers.iter_mut().find(|p| p.id == 7).unwrap().active = false; }); cx.notify(); });
+    cx.run_until_parked();
+    view.update(cx, |w, cx| assert!(!w.scope_site_search(cx)));
+}
+
+#[gpui::test]
+fn editing_a_pin_keeps_tab_identity_and_navigates_its_existing_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    click(cx, "tab-4");
+    let id = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    fake.take_calls();
+    right_click(cx, "tab-4");
+    let mut menu = tab_menu(&view, cx);
+    click(&mut menu, "tab-menu-edit-pinned-page");
+    click(&mut menu, "tab-menu-edit-pinned-url");
+    let mut editor = bar(&view, cx);
+    assert_eq!(editor.debug_bounds("pinned-url-editor").unwrap().size, gpui::size(gpui::px(394.), gpui::px(265.)));
+    editor.simulate_input("https://github.com/edited-pin");
+    editor.simulate_keystrokes("enter");
+    view.read_with(cx, |w, _| {
+        let tab = w.browser.active_tab().unwrap();
+        assert_eq!(tab.id, id);
+        assert_eq!(tab.url, "https://github.com/edited-pin");
+        assert_eq!(tab.pinned_url.as_deref(), Some(tab.url.as_str()));
+    });
+    let calls = fake.take_calls();
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..))));
+    assert!(calls.iter().any(|call| matches!(call, Call::Navigate(_, url) if url == "https://github.com/edited-pin")));
+    click(cx, "close-4");
+    click(cx, "tab-4");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://github.com/edited-pin"));
+}
+
+#[gpui::test]
+fn pin_editor_cancel_and_superseded_pin_cannot_mutate_a_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = active_url(&view, cx);
+    for superseded in [false, true] {
+        right_click(cx, "tab-4");
+        let mut menu = tab_menu(&view, cx);
+        click(&mut menu, "tab-menu-edit-pinned-page");
+        click(&mut menu, "tab-menu-edit-pinned-url");
+        bar(&view, cx).simulate_input("https://example.org/edited");
+        if superseded {
+            view.update(cx, |w, cx| { w.edit_browser(|b| { b.move_tab(b.space().pinned[0].id, b.space().id, browser_core::Section::Today); }); cx.notify(); });
+            fake.take_calls();
+            bar(&view, cx).simulate_keystrokes("enter");
+            assert!(view.read_with(cx, |w, _| w.browser.all_tabs().all(|t| t.url != "https://example.org/edited")));
+            assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..))));
+            assert!(view.read_with(cx, |w, _| w.command_bar.is_none()));
+        } else {
+            fake.take_calls();
+            bar(&view, cx).simulate_keystrokes("escape");
+            assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..))));
+        }
+        assert_eq!(active_url(&view, cx), before);
+    }
+}
+
+#[gpui::test]
+fn domain_completion_keeps_the_typed_search_row_during_navigation(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("git");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("github.com"));
+    let rows = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert!(matches!(&rows[0], Suggestion::Load(Resolved::Url(url)) if url == "https://github.com"));
+    assert!(matches!(&rows[1], Suggestion::Load(Resolved::Search { query, .. }) if query == "git"));
+    bar(&view, cx).simulate_keystrokes("down");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("git"));
+    assert_eq!(view.read_with(cx, |w, cx| w.suggestions(cx)), rows);
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.google.com/search?q=git"));
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("git");
+    bar(&view, cx).simulate_keystrokes("right enter");
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://github.com"));
+}
+
+#[gpui::test]
+fn command_bar_shortcuts_action_opens_the_existing_settings_section(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = active_url(&view, cx);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("edit keyboard shortcuts");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let (settings, _) = settings_window(cx);
+    assert_eq!(settings.read_with(cx, |s, _| s.tab), crate::settings::Tab::Shortcuts);
+    assert_eq!(active_url(&view, cx), before);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn suggestions_disclosure_settings_and_dismiss_retain_the_source_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let id = view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rust language");
+    click(&mut bar(&view, cx), "suggestions-info");
+    let disclosure = bar(&view, cx).debug_bounds("suggestions-privacy").unwrap();
+    assert_eq!(disclosure.size.height, gpui::px(60.));
+    assert!(bar(&view, cx).debug_bounds("suggestions-privacy-link").is_some());
+    fake.take_calls();
+    click(&mut bar(&view, cx), "dismiss-suggestions-privacy");
+    view.read_with(cx, |w, _| {
+        assert!(!w.command_bar.as_ref().unwrap().suggestions_privacy);
+        assert!(w.browser.active_user_profile().settings.search.notice_dismissed);
+        assert_eq!(w.browser.active_tab().unwrap().id, id);
+    });
+    click(&mut bar(&view, cx), "suggestions-info");
+    click(&mut bar(&view, cx), "suggestions-search-settings");
+    cx.run_until_parked();
+    assert!(active_url(&view, cx).unwrap().starts_with("browser://settings/searchEngines"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn page_suggestions_match_separate_words_in_title_and_url(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, cx| {
+        w.edit_browser(|b| {
+            let profile = b.active_user_profile_id();
+            b.record_visit(profile, "https://en.wikipedia.org/wiki/Rust_(programming_language)", std::time::SystemTime::now());
+            b.update_history_title(profile, "https://en.wikipedia.org/wiki/Rust_(programming_language)", "Rust (programming language)");
+            let id = b.new_tab("https://example.org/rust/language-guide", std::time::SystemTime::now());
+            b.set_title(id, "A language guide");
+        }); cx.notify();
+    });
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("rust programming language");
+    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::History { title, .. } if title == "Rust (programming language)"))));
+    bar(&view, cx).simulate_keystrokes("cmd-a");
+    bar(&view, cx).simulate_input("rust absent");
+    assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::History { .. }))));
 }

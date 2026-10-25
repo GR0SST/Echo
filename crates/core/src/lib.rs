@@ -674,6 +674,17 @@ impl Browser {
         changed
     }
 
+    /// Editing a pin changes its reset destination and navigates the same page.
+    pub fn edit_pinned_url(&mut self, id: TabId, url: &str) -> bool {
+        if url.trim().is_empty() || !self.all_tabs().any(|tab| tab.id == id && tab.pinned_url.is_some()) { return false; }
+        self.navigate(id, url);
+        if let Some(tab) = self.tab_mut(id) {
+            tab.pinned_url = Some(url.into());
+            tab.pinned_title = None;
+        }
+        true
+    }
+
     /// Loads `url` in an existing tab of any space.
     pub fn navigate(&mut self, id: TabId, url: impl Into<String>) {
         let url = url.into();

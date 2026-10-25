@@ -70,7 +70,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, EditPinnedUrl, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
@@ -94,7 +94,7 @@ impl Command {
             Self::NewFolderWithTab => "new-folder-with-tab", Self::MoveToFolder => "move-to-folder",
             Self::FolderRename => "folder-rename", Self::FolderNew => "folder-new", Self::FolderMove => "folder-move", Self::FolderIcon => "folder-icon", Self::FolderCollapse => "folder-collapse", Self::FolderDelete => "folder-delete", Self::FolderCopy => "folder-copy", Self::FolderCopyMarkdown => "folder-copy-markdown",
             Self::Icon => "icon", Self::ResetCustomization => "reset-customization", Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
-            Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::Mute => "mute", Self::Close => "close",
+            Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::EditPinnedUrl => "edit-pinned-url", Self::Mute => "mute", Self::Close => "close",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Other) => "archive-other",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Above) => "archive-above",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Below) => "archive-below",
@@ -425,7 +425,7 @@ impl BrowserWindow {
             let moved = tab.pinned_url.as_ref().is_some_and(|url| *url != tab.url);
             rows.push(pending("Edit Pinned Page").submenu(vec![
                 item("Replace Pinned URL with Current", Command::Replace).enabled(moved).into(),
-                pending("Edit…").into(),
+                item("Edit…", Command::EditPinnedUrl).into(),
             ]).submenu_width(232.).into());
         }
         rows.push(Entry::Separator);
@@ -603,6 +603,7 @@ impl BrowserWindow {
                     if let Some(pages) = &self.pages { let mut pages = pages.borrow_mut(); for id in self.browser.related_tabs(id) { pages.discard(id); } }
                 }
             }
+            Command::EditPinnedUrl => self.open_pinned_url_editor(id, window, cx),
             Command::Replace => { self.edit_browser(|browser| browser.replace_pinned_url(id)); }
             Command::Mute => {
                 let ids = if pane_menu { vec![id] } else { self.browser.related_tabs(id) };

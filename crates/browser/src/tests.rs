@@ -6742,7 +6742,7 @@ fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext)
     let first = cx.debug_bounds("favorite-4").unwrap();
     let second = cx.debug_bounds("favorite-5").unwrap();
     assert_eq!(first.size, second.size);
-    assert_eq!(first.size.height, gpui::px(46.));
+    assert_eq!(first.size.height, gpui::px(47.));
     assert_eq!(first.origin.x, address.origin.x);
     assert!(address.right() - second.right() < gpui::px(1.));
     // The hit/scroll slot stays 38 px; its painted fill is inset by one pixel.
@@ -8783,7 +8783,7 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
             assert_eq!(w.theme_tab_selection_for(w.browser.space().id).l,1.);
             assert_eq!(w.theme_is_dark(),w.theme_is_dark_for(other));
             assert_eq!(w.theme_foreground_for(w.browser.space().id),w.theme_foreground_for(other));
-            assert_eq!(w.command_bar_page_selection(), gpui::Hsla::from(gpui::rgb(if appearance == ThemeAppearance::Light { 0x8f95ff } else { 0x4248d8 })));
+            assert_eq!(w.command_bar_page_selection(), gpui::Hsla::from(gpui::rgb(if appearance == ThemeAppearance::Light { 0x8f95ff } else { 0x464ddc })));
             assert!(w.command_bar_selection().a<1.);
             assert!((w.command_bar_selection().h - w.accent()).abs() < 0.001);
             assert_eq!(w.command_bar_panel_fill(false).a,1.);

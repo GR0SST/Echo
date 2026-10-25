@@ -181,7 +181,7 @@ fn move_first_favorite(cx: &mut TestAppContext, pinned: bool, dismissed: bool) {
             .unwrap()
             .size
             .height,
-        gpui::px(46.)
+        gpui::px(47.)
     );
     assert_eq!(
         visual.debug_bounds("space-header-0").unwrap().top(),

@@ -116,6 +116,7 @@ pub struct TextInput {
     /// one undoable edit, never the individual conversion candidates.
     composition_before: Option<EditState>,
     complete_after_edit: bool,
+    completion_prefix_end: Option<usize>,
 }
 
 impl EventEmitter<Changed> for TextInput {}
@@ -148,6 +149,7 @@ impl TextInput {
             redo_history: Vec::new(),
             composition_before: None,
             complete_after_edit: false,
+            completion_prefix_end: None,
         }
     }
 
@@ -198,9 +200,16 @@ impl TextInput {
         &self.content
     }
 
+    /// The actual typed prefix while a generated suffix remains selected.
+    pub(crate) fn completion_prefix(&self) -> Option<&str> {
+        self.completion_prefix_end.filter(|end| self.marked_range.is_none() && self.selected_range == (*end..self.content.len()))
+            .map(|end| &self.content[..end])
+    }
+
     /// Keyboard result navigation previews a URL without issuing an edit. The
     /// Command Bar keeps its draft for filtering until the next actual edit.
     pub(crate) fn preview_navigation_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.completion_prefix_end = None;
         self.content = single_line_text(text).into_owned().into();
         self.selected_range = self.content.len()..self.content.len();
         self.selection_reversed = false;
@@ -219,6 +228,7 @@ impl TextInput {
             || !completion[..length].eq_ignore_ascii_case(&self.content) { return; }
         self.content = format!("{}{}", self.content, &completion[length..]).into();
         self.selected_range = length..self.content.len();
+        self.completion_prefix_end = Some(length);
         self.complete_after_edit = false;
         cx.notify();
     }
@@ -230,6 +240,7 @@ impl TextInput {
 
     /// Replaces the text and selects all of it, so typing overwrites it.
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.completion_prefix_end = None;
         let text = text.into();
         self.content = if self.multiline { text } else { single_line_text(&text).into_owned().into() };
         self.complete_after_edit = false;
@@ -322,6 +333,7 @@ impl TextInput {
     }
 
     fn restore_edit(&mut self, state: EditState, cx: &mut Context<Self>) {
+        self.completion_prefix_end = None;
         let changed = self.content != state.text;
         self.content = state.text;
         self.selected_range = state.selection;
@@ -411,6 +423,7 @@ impl TextInput {
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.completion_prefix_end = None;
         self.selected_range = offset..offset;
         cx.notify()
     }
@@ -444,6 +457,7 @@ impl TextInput {
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.completion_prefix_end = None;
         if self.selection_reversed {
             self.selected_range.start = offset
         } else {
@@ -553,6 +567,7 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.completion_prefix_end = None;
         let new_text = if self.multiline { Cow::Borrowed(new_text) } else { single_line_text(new_text) };
         let new_text = new_text.as_ref();
         let old_text = self.content.clone();
@@ -583,6 +598,7 @@ impl EntityInputHandler for TextInput {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.completion_prefix_end = None;
         let new_text = if self.multiline { Cow::Borrowed(new_text) } else { single_line_text(new_text) };
         let new_text = new_text.as_ref();
         if self.composition_before.is_none() { self.composition_before = Some(self.edit_state()); }

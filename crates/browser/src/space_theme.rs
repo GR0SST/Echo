@@ -464,7 +464,7 @@ impl BrowserWindow {
     }
     /// Solid page-result selection, measured separately in each appearance.
     pub(crate) fn command_bar_page_selection(&self) -> gpui::Hsla {
-        gpui::rgb(if self.theme_is_dark() { 0x4248d8 } else { 0x8f95ff }).into()
+        gpui::rgb(if self.theme_is_dark() { 0x464ddc } else { 0x8f95ff }).into()
     }
     pub(crate) fn command_bar_selection(&self) -> gpui::Hsla {
         let surface = self.theme_surface_for(self.browser.space());

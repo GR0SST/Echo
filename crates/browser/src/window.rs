@@ -1,6 +1,11 @@
 //! Arc-style browser window: vertical sidebar, content card, command bar.
 //! Native CEF pages sit below browser-owned GPUI controls.
 
+#[path = "pinned_url.rs"]
+mod pinned_url;
+#[path = "suggestions_notice.rs"]
+mod suggestions_notice;
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -38,7 +43,7 @@ pub(crate) const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
 const SIDEBAR_TAB_HEIGHT: f32 = 36.0;
 pub(crate) const SIDEBAR_ROW_GAP: f32 = 3.0;
 pub(crate) const SIDEBAR_ROW_RADIUS: f32 = 10.0;
-const FAVORITE_HEIGHT: f32 = 46.0;
+const FAVORITE_HEIGHT: f32 = 47.0;
 const FAVORITE_GAP: f32 = 8.0;
 const FAVORITE_COLUMNS: usize = 4;
 /// Room for "Tidy | Clear" at the right of the Today divider.
@@ -372,6 +377,7 @@ pub enum Target {
     NewSpace,
     RenameSpace(SpaceId),
     RenameTab(TabId),
+    EditPinnedUrl { tab: TabId, profile: browser_core::UserProfileId, space: SpaceId },
     Icon(crate::icons::IconTarget),
     NewFolder { space: SpaceId, parent: Option<FolderId>, tab: Option<TabId> },
     RenameFolder(FolderId),
@@ -435,6 +441,7 @@ pub enum Command {
     RenameSpace,
     FindPage,
     Settings,
+    KeyboardShortcuts,
     ViewArchive,
     ViewHistory,
     OpenLibrary,
@@ -515,11 +522,20 @@ fn command_match_score(query: &str, names: &str) -> Option<usize> {
     }).min()
 }
 
+/// Page results match every typed word across their title and address.
+fn page_query_matches(query: &str, values: &[&str]) -> bool {
+    let values: Vec<_> = values.iter().map(|value| value.to_lowercase()).collect();
+    query.split_whitespace().all(|word| values.iter().any(|value| value.contains(word)))
+}
+
+pub(crate) struct NavigationDraft { text: String, completion: Option<String> }
+
 pub struct CommandBar {
     pub input: Entity<TextInput>,
     /// The user's draft while arrow navigation displays a selected page URL.
-    pub(crate) navigation_query: Option<String>,
+    pub(crate) navigation_query: Option<NavigationDraft>,
     pub target: Target,
+    pub(crate) pinned_url_source: Option<String>,
     pub selected: usize,
     pub(crate) site_search: Option<omnibox::SiteSearch>,
     pub(crate) site_search_profile: Option<browser_core::UserProfileId>,
@@ -543,8 +559,11 @@ pub struct CommandBar {
 }
 
 impl CommandBar {
+    pub(crate) fn completion<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        self.navigation_query.as_ref().map_or_else(|| self.input.read(cx).completion_prefix(), |draft| draft.completion.as_deref())
+    }
     pub(crate) fn query<'a>(&'a self, cx: &'a App) -> &'a str {
-        self.navigation_query.as_deref().unwrap_or_else(|| self.input.read(cx).text())
+        self.navigation_query.as_ref().map(|draft| draft.text.as_str()).unwrap_or_else(|| self.input.read(cx).text())
     }
 }
 
@@ -1619,6 +1638,7 @@ impl BrowserWindow {
             input: input.clone(),
             navigation_query: None,
             target,
+            pinned_url_source: match target { Target::EditPinnedUrl { tab, .. } => self.browser.all_tabs().find(|page| page.id == tab).and_then(|page| page.pinned_url.clone()), _ => None },
             selected: 0,
             site_search: None,
             site_search_profile: None,
@@ -1836,6 +1856,7 @@ impl BrowserWindow {
     }
 
     pub fn suggestions(&self, cx: &App) -> Vec<Suggestion> {
+        if self.command_bar.as_ref().is_some_and(|bar| matches!(bar.target, Target::EditPinnedUrl { .. })) { return Vec::new(); }
         let Some(bar) = &self.command_bar else {
             return Vec::new();
         };
@@ -1864,7 +1885,7 @@ impl BrowserWindow {
         if matches!(bar.target, Target::NewSpace | Target::RenameSpace(_)) {
             return if text.trim().is_empty() { Vec::new() } else { vec![Suggestion::SaveSpace { name: text.trim().to_string() }] };
         }
-        let query = text.trim().to_lowercase();
+        let query = bar.completion(cx).unwrap_or(text).trim().to_lowercase();
         let mut suggestions = Vec::new();
         let chatgpt_enabled = self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar));
         let chatgpt_keyword = chatgpt_enabled && query == "chatgpt";
@@ -1926,6 +1947,7 @@ impl BrowserWindow {
                 (Command::CapturePage, "Capture", "capture|capture page|take screenshot", self.capture_available()),
                 (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
+                (Command::KeyboardShortcuts, "Edit Keyboard Shortcuts", "edit keyboard shortcuts|keyboard shortcuts|customize shortcuts", true),
                 (Command::Settings, "Settings…", "settings|preferences", true),
                 (Command::ManagePasswords, "Manage Passwords", "manage passwords|password manager|passwords", true),
                 (Command::SearchSettings, "Search Settings", "search settings|manage search engines|site search", true),
@@ -2035,6 +2057,7 @@ impl BrowserWindow {
         }
         let preferences = &self.browser.active_user_profile().settings.search;
         suggestions.extend(preferences.resolve(text).map(Suggestion::Load));
+        if let Some(prefix) = bar.completion(cx) { suggestions.push(Suggestion::Load(preferences.search(prefix))); }
         if bar.target == Target::NewTab {
             // Current Space first, then every other Space, keeping duplicate URLs distinct.
             let current = self.browser.active_space;
@@ -2047,8 +2070,7 @@ impl BrowserWindow {
                 space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))
             }))
             .filter(|(_, tab)| Some(tab.id) != self.browser.space().active_tab || self.browser.split_for(tab.id).is_some())
-            .filter(|(_, tab)| query.is_empty() || self.browser.item_title(tab.id).to_lowercase().contains(&query) || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
-                || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
+            .filter(|(_, tab)| page_query_matches(&query, &[&self.browser.item_title(tab.id), &tab.title, &tab.url, tab.page_title.as_deref().unwrap_or_default()]))
                 .filter(|(_, tab)| seen.insert(self.browser.item_anchor(tab.id)))
                 .take(if query.is_empty() { 5 } else { MAX_TAB_SUGGESTIONS })
                 .map(|(space, tab)| Suggestion::SwitchToTab {
@@ -2059,7 +2081,7 @@ impl BrowserWindow {
             let open: std::collections::HashSet<_> = self.browser.all_tabs().filter(|tab| self.browser.user_profile_id_for_tab(tab.id) == Some(self.browser.active_user_profile_id())).map(|tab| tab.url.as_str()).collect();
             suggestions.extend(self.browser.active_user_profile().history.iter()
                 .filter(|entry| self.browser.active_tab().is_some_and(|tab| tab.url == entry.url) || !open.contains(entry.url.as_str()))
-                .filter(|entry| entry.title.to_lowercase().contains(&query) || entry.url.to_lowercase().contains(&query))
+                .filter(|entry| page_query_matches(&query, &[&entry.title, &entry.url]))
                 .take(MAX_HISTORY_SUGGESTIONS)
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
         }
@@ -2083,12 +2105,12 @@ impl BrowserWindow {
                 bar.selected = (bar.selected as isize + delta).rem_euclid(count) as usize;
                 bar.rows_scroll.scroll_to_item(bar.selected);
                 if matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() {
-                    let query = bar.navigation_query.get_or_insert_with(|| bar.input.read(cx).text().to_owned());
+                    let query = bar.navigation_query.get_or_insert_with(|| { let input = bar.input.read(cx); NavigationDraft { text: input.text().to_owned(), completion: input.completion_prefix().map(str::to_owned) } });
                     let preview = match &suggestions[bar.selected] {
                         Suggestion::SwitchToTab { url, .. } | Suggestion::History { url, .. }
                         | Suggestion::Load(Resolved::Url(url)) => display_url(url),
                         Suggestion::Load(Resolved::Search { query, .. }) => query.clone(),
-                        _ => query.clone(),
+                        _ => query.text.clone(),
                     };
                     bar.input.update(cx, |input, cx| input.preview_navigation_text(&preview, cx));
                 }
@@ -2114,6 +2136,7 @@ impl BrowserWindow {
         let Some(target) = self.command_bar.as_ref().map(|bar| bar.target) else {
             return;
         };
+        if matches!(target, Target::EditPinnedUrl { .. }) { self.save_pinned_url(cx); return; }
         let Some(suggestion) = self.suggestions(cx).into_iter().nth(index) else {
             return;
         };
@@ -2158,7 +2181,7 @@ impl BrowserWindow {
                         self.edit_browser(|browser| browser.navigate(id, resolved.url()));
                         id
                     }
-                    Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::NewFolder { .. } | Target::RenameFolder(_) | Target::MoveToFolder(_) | Target::MoveFolder(_) | Target::Archive(_) | Target::ConfirmClearArchive => return,
+                    Target::EditPinnedUrl { .. } | Target::NewSpace | Target::RenameSpace(_) | Target::RenameTab(_) | Target::Icon(_) | Target::NewFolder { .. } | Target::RenameFolder(_) | Target::MoveToFolder(_) | Target::MoveFolder(_) | Target::Archive(_) | Target::ConfirmClearArchive => return,
                 };
                 self.edit_browser(|browser| browser.set_title(id, title));
             }
@@ -2324,6 +2347,7 @@ impl BrowserWindow {
             Command::CapturePage => self.capture_page(cx),
             Command::OpenTaskManager => self.open_menu_utility(crate::task_manager::open, cx),
             Command::Settings => self.open_settings(cx),
+            Command::KeyboardShortcuts => { self.retain_normal_source(cx); self.close_command_bar(cx); crate::settings::open_shortcuts(cx); },
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
             Command::SearchSettings => self.search_settings_from_command(cx),
             Command::ManagePasswords => self.passwords_from_command(cx),
@@ -3522,6 +3546,7 @@ impl BrowserWindow {
             .when(!blank && (!favorites.is_empty() || (!private && (!self.browser.active_user_profile().empty_favorites_dismissed || self.tab_drag_active))), |this| this.child(
                 div().id("favorites").debug_selector(|| self.sidebar_debug_name((|| "favorites".into())()))
                     .flex().flex_wrap().gap(px(FAVORITE_GAP)).px(px(SIDEBAR_INSET))
+                    .when(!favorites.is_empty(), |dock| dock.mb(px(-1.)))
                     .when(favorites.is_empty(), |this| this.flex_none()
                         .child(self.render_empty_favorites(cx)))
                     .rounded_lg().drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.3)))
@@ -4237,7 +4262,7 @@ impl BrowserWindow {
         });
         if let Some(bar) = &mut self.command_bar {
             if let Some(query) = bar.navigation_query.take() {
-                bar.input.update(cx, |input, cx| input.preview_navigation_text(&query, cx));
+                bar.input.update(cx, |input, cx| input.preview_navigation_text(&query.text, cx));
             }
         }
         let count = self.suggestions(cx).len();
@@ -4259,6 +4284,7 @@ impl BrowserWindow {
     fn render_command_bar_overlay(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
         match &self.command_bar {
             Some(bar) if matches!(bar.target, Target::Icon(_)) => { bar.material_alive.set(false); self.clear_command_bar_backdrop(); self.render_icon_picker(bar, width, height, cx) },
+            Some(bar) if matches!(bar.target, Target::EditPinnedUrl { .. }) => { bar.material_alive.set(false); self.clear_command_bar_backdrop(); self.render_pinned_url_editor(bar, height, cx) },
             Some(bar) => { bar.material_alive.set(true); self.render_command_bar(bar, width, height, cx).into_any_element() },
             None => div().into_any_element(),
         }
@@ -4277,6 +4303,9 @@ impl BrowserWindow {
         let chatgpt_keyword = matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none()
             && self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar))
             && bar.query(cx).trim().eq_ignore_ascii_case("chatgpt");
+        let site_hint = (matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_keyword)
+            .then(|| omnibox::SiteSearch::for_profile(bar.input.read(cx).text(), &self.browser.active_user_profile().settings.search))
+            .flatten().and_then(|site| site.name(&self.browser.active_user_profile().settings.search));
         let scope_color = if bar.site_search == Some(omnibox::SiteSearch::ChatGpt) { 0x64ab9c } else { 0xffa000 };
         let accent = self.accent();
         // Arc's split draft uses the ordinary window-wide Command Bar, even
@@ -4290,6 +4319,12 @@ impl BrowserWindow {
         let top = default_top;
         let mut previous_date = None;
         let suggestions = self.suggestions(cx);
+        let action_icon = match suggestions.get(bar.selected) {
+            Some(Suggestion::Action { command: Command::KeyboardShortcuts, .. }) => Some("settings-outline"),
+            Some(Suggestion::Action { command: Command::DuplicateTab, .. }) => Some("duplicate-outline"),
+            Some(Suggestion::Action { command: Command::RenameTab, .. }) => Some("pencil-outline"),
+            _ => None,
+        };
         let atc_selected = matches!(suggestions.get(bar.selected), Some(Suggestion::Action { command: Command::AirTrafficControl, .. }));
         let preview_url = match suggestions.get(bar.selected) {
             Some(Suggestion::SwitchToTab { id, url, .. }) => Some((url.clone(), Some(*id))),
@@ -4312,10 +4347,19 @@ impl BrowserWindow {
                     (Suggestion::Load(Resolved::Url(url)), Target::Tab(id)) => self.browser.all_tabs().find(|tab| tab.id == id && tab.url == *url),
                     _ => None,
                 };
+                let completed_domain = bar.completion(cx).is_some() && matches!(&suggestion, Suggestion::Load(Resolved::Url(_)));
+                let action_result = matches!(&suggestion, Suggestion::Action { .. });
                 let page_result = matches!(&suggestion, Suggestion::SwitchToTab { .. } | Suggestion::History { .. } | Suggestion::Load(Resolved::Url(_)));
+                let action_page = match &suggestion {
+                    Suggestion::Action { command: Command::KeyboardShortcuts, .. } => Some("settings-outline"),
+                    Suggestion::Action { command: Command::DuplicateTab, .. } => Some("duplicate-outline"),
+                    Suggestion::Action { command: Command::RenameTab, .. } => Some("pencil-outline"),
+                    _ => None,
+                };
                 let page = match &suggestion {
                     Suggestion::Load(Resolved::Url(url)) => Some(self.render_command_page_icon(url, current_url_tab.map(|tab| tab.id), dark && !selected)),
                     Suggestion::SwitchToTab { id, url, .. } => Some(self.render_command_page_icon(url, Some(*id), dark && !selected)),
+                    Suggestion::History { url, .. } => self.browser.favicon(history_owner, url).map(|_| self.render_command_page_icon(url, None, dark && !selected)),
                     Suggestion::SplitTab { id, .. } => self.browser.all_tabs().find(|tab| tab.id == *id).map(|tab| self.render_favicon_on(tab, accent, !selected)),
                     _ => None,
                 };
@@ -4346,6 +4390,7 @@ impl BrowserWindow {
                             else { "Switch to Tab".into() };
                         (crate::icons::Icon::Enter, title, hint)
                     }
+                    Suggestion::Action { command: Command::KeyboardShortcuts, label } => (crate::icons::Icon::SiteControls, label, String::new()),
                     Suggestion::Action { command: Command::AirTrafficControl, label } => (crate::icons::Icon::AirTraffic, label, String::new()),
                     Suggestion::Action { label, .. } => (crate::icons::Icon::Command, label, String::new()),
                     Suggestion::SaveFolderName { name } => (crate::icons::Icon::Folder, name, if matches!(bar.target, Target::RenameFolder(_)) { "Rename Folder".into() } else { "Create Folder".into() }),
@@ -4364,7 +4409,8 @@ impl BrowserWindow {
                     .when(!history_result && !search_row && !ask_chatgpt && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
                     .when(history_result, |tile| tile.text_color(hsla(0., 0., if selected { 1. } else { ink }, 0.7)))
                     .when(selected && matches!(icon, crate::icons::Icon::AirTraffic), |this| this.text_color(gpui::rgb(0x6e74ff)))
-                    .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
+                    .when(selected && action_page.is_some(), |tile| tile.text_color(gpui::rgb(0x6e74ff)))
+                    .child(page.unwrap_or_else(|| action_page.map(|name| crate::icons::ionicon(name,14.,1.)).unwrap_or_else(|| crate::icons::control_sized(icon, 14.0))));
                 let label_len = label.len();
                 let highlights = history_url.as_ref().map(|url| (
                     label_len - display_url(url).len() - " — ".len()..label_len,
@@ -4429,7 +4475,7 @@ impl BrowserWindow {
                             cx.stop_propagation();
                             this.delete_command_history_entry(history_owner, &url, cx);
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
-                    .when(!search_row && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
+                    .when(!search_row && !completed_domain && !action_result && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
                         .when(history_result && !selected, |arrow| arrow.invisible().group_hover(row_group, |s| s.visible()))
                         .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, ink, 0.06) })
                         .text_color(if selected && ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if selected && page_result { page_selection } else if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
@@ -4536,7 +4582,7 @@ impl BrowserWindow {
                             .flex().items_center().gap(px(13.0))
                             .pl(px(22.0)).pr(px(21.0))
                             .child(div().text_color(hsla(0.0, 0.0, ink, 0.75)).child(
-                                if atc_selected { crate::icons::control_sized(crate::icons::Icon::AirTraffic, 16.0) } else if let Some((url, tab)) = &preview_url {
+                                if let Some(name) = action_icon { crate::icons::ionicon(name,16.,1.) } else if atc_selected { crate::icons::control_sized(crate::icons::Icon::AirTraffic, 16.0) } else if let Some((url, tab)) = &preview_url {
                                     self.render_command_page_icon(url, *tab, dark)
                                 } else if let Target::Tab(id) = bar.target {
                                     self.browser.all_tabs().find(|tab| tab.id == id)
@@ -4559,7 +4605,11 @@ impl BrowserWindow {
                             .when(chatgpt_keyword, |this| this.child(div().debug_selector(|| "chatgpt-tab-hint".into())
                                 .flex().items_center().gap(px(9.)).text_size(px(13.)).text_color(hsla(0.,0.,ink,0.4))
                                 .child("Ask ChatGPT").child(div().px(px(4.)).py(px(2.)).rounded(px(3.)).bg(hsla(0.,0.,ink,0.08)).child("Tab"))))
-                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_keyword, |this| this.child(div()
+                            .when_some(site_hint, |this, name| this.child(div().debug_selector(|| "site-search-tab-hint".into())
+                                .flex().items_center().gap(px(9.)).text_size(px(13.)).text_color(hsla(0.,0.,ink,0.4))
+                                .child(format!("Search {name}"))
+                                .child(div().px(px(4.)).py(px(2.)).rounded(px(3.)).bg(hsla(0.,0.,ink,0.08)).child("Tab"))))
+                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_keyword && site_hint.is_none() && !bar.suggestions_privacy, |this| this.child(div()
                                 .id("suggestions-info").debug_selector(|| "suggestions-info".into())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = !bar.suggestions_privacy; }
@@ -4576,23 +4626,9 @@ impl BrowserWindow {
                         this.child(div().h(px(1.0)).bg(hsla(0.0, 0.0, ink, 0.1)))
                             .text_size(px(if archive { 14.0 } else { 13.0 }))
                             .child(div().id("command-suggestions").debug_selector(|| self.sidebar_debug_name((|| "command-suggestions".into())()))
-                                .flex().flex_col().gap_1().pt(px(6.0)).pb(px(10.0)).max_h(px(rows_height + 16.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
+                                .flex().flex_col().gap_1().pt(px(6.0)).pb(px(if bar.suggestions_privacy {2.} else {10.})).max_h(px(rows_height + 16.)).overflow_y_scroll().track_scroll(&bar.rows_scroll).children(rows))
                     })
-                    .when(bar.suggestions_privacy, |this| this.child(div()
-                        .debug_selector(|| "suggestions-privacy".into())
-                        .flex().items_center().gap_3().px_4().py_3()
-                        .bg(gpui::black()).text_color(gpui::white()).rounded_b(px(COMMAND_BAR_RADIUS))
-                        .child(crate::icons::control_sized(crate::icons::Icon::Info, 16.))
-                        .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM)
-                            .child("We talk to your search engine to help us suggest results."))
-                        .child(div().id("dismiss-suggestions-privacy").debug_selector(|| "dismiss-suggestions-privacy".into())
-                            .rounded(px(6.)).px_3().py_2().text_size(px(13.))
-                            .bg(hsla(accent, 0.3, 0.3, 1.))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.edit_browser(|browser| browser.active_user_profile_mut().settings.search.notice_dismissed = true);
-                                if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = false; }
-                                cx.notify();
-                            })).child("Dismiss")))),
+                    .when(bar.suggestions_privacy, |this| this.child(self.render_suggestions_notice(cx)))
             )
     }
 }
