@@ -477,6 +477,9 @@ fn choose_update(
 pub fn prepare() -> Result<Option<Ready>> {
     let base = std::env::var("ECHO_UPDATE_URL").unwrap_or_else(|_| DEFAULT_URL.into());
     let source = SignedSource::new(base, CHANNEL.into(), platform(), key(PUBLIC_KEY)?)?;
+    // Check the authenticated endpoint even for local, unpackaged dogfood builds.
+    // Installation still requires a valid Velopack locator below.
+    let manifest = source.load()?;
     let locator = velopack::locator::auto_locate_app_manifest(
         velopack::locator::LocationContext::FromCurrentExe,
     )?;
@@ -494,7 +497,6 @@ pub fn prepare() -> Result<Option<Ready>> {
     )?;
     // SDK check_for_updates creates a persistent rollout identifier even with
     // a custom source. Select locally from our signed feed instead.
-    let manifest = source.load()?;
     let Some(update) = choose_update(
         &manifest,
         &locator.get_manifest_version().to_string(),

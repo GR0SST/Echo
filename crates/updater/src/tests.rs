@@ -370,3 +370,27 @@ fn one_root_catalog_authenticates_platform_selection() {
     .is_err());
     assert!(parse(&bytes, &key.verifying_key(), "test", &platform(), now()).is_err());
 }
+
+#[test]
+fn missing_release_feed_is_a_recoverable_error_and_never_pins_a_manifest() {
+    use std::net::TcpListener;
+    let (key, _, _) = fixture();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        assert!(request.starts_with(b"GET /manifest.json HTTP/1.1\r\n"));
+        stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    });
+    let source = SignedSource::new(base, "stable".into(), platform(), key.verifying_key()).unwrap();
+    assert!(source.load().err().expect("404 must fail").to_string().contains("404"));
+    assert!(source.pinned().is_err());
+    server.join().unwrap();
+}

@@ -30,6 +30,16 @@ fn run() -> Result<()> {
             fs::write(&args[3], format!("{}\n", STANDARD.encode(key.verifying_key().as_bytes())))?;
             println!("Signing key created outside the repo. Public key written to {}. Back up the private key offline before releasing.", args[3]);
         }
+        Some("verify") if args.len() == 5 => {
+            let path = Path::new(&args[2]);
+            let public = echo_updater::key(echo_updater::PUBLIC_KEY)?;
+            let manifest = echo_updater::parse(&fs::read(path)?, &public, &args[3], &args[4], echo_updater::now())?;
+            let directory = path.parent().ok_or("Manifest directory required")?.join(&args[4]);
+            for asset in &manifest.feed.Assets {
+                echo_updater::verify_artifact(&directory.join(&asset.FileName), asset, &manifest, &public)?;
+            }
+            println!("Verified manifest and {} artifacts for {}/{} using the client's embedded key and validator.", manifest.feed.Assets.len(), args[3], args[4]);
+        }
         Some("sign") if args.len() == 7 => {
             let private = Path::new(&args[2]).canonicalize()?;
             if in_repository(&private) || private.starts_with(std::env::current_dir()?.canonicalize()?) { return Err("Private key must be outside the repository".into()); }
@@ -78,7 +88,7 @@ fn run() -> Result<()> {
             fs::write(output.with_extension("tmp"), &bytes)?;
             fs::rename(output.with_extension("tmp"), output)?;
         }
-        _ => return Err("Usage: echo-release keygen ABSOLUTE_PRIVATE_PATH PUBLIC_PATH | sign PRIVATE_PATH VPK_CACHE_DIR CHANNEL PLATFORM OUTPUT_ROOT/manifest.json".into()),
+        _ => return Err("Usage: echo-release keygen ABSOLUTE_PRIVATE_PATH PUBLIC_PATH | sign PRIVATE_PATH VPK_CACHE_DIR CHANNEL PLATFORM OUTPUT_ROOT/manifest.json | verify MANIFEST CHANNEL PLATFORM".into()),
     }
     Ok(())
 }
