@@ -10,6 +10,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use cef::*;
+#[cfg(target_os = "macos")]
+mod framework;
+
+/// Preload the allocator-bearing framework before constructing the UI toolkit.
+/// Returns false for an unbundled UI-only executable or a non-macOS platform.
+/// This does not initialize CEF or create a profile, page, or native window.
+pub fn preload_framework() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    { framework::preload() }
+    #[cfg(not(target_os = "macos"))]
+    { Ok(false) }
+}
+
 mod devtools;
 mod downloads;
 mod retirement;
@@ -220,8 +233,6 @@ struct Runtime {
     readiness: storage::ContextReadiness<RequestContext>,
     downloads: std::cell::RefCell<downloads::RuntimeDownloads<RequestContext>>,
     lifecycle: shutdown::Lifecycle,
-    #[cfg(target_os = "macos")]
-    _library: library_loader::LibraryLoader,
 }
 
 /// Opaque, cloneable storage lease retaining the initialized CEF runtime.
@@ -355,23 +366,10 @@ impl Engine {
                 return Ok(runtime.clone());
             }
             let default_cache = storage::default_path(&root_cache)?;
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-
             #[cfg(target_os = "macos")]
-            let library = {
-                let framework = exe
-                    .parent()
-                    .map(|dir| dir.join("../Frameworks/Chromium Embedded Framework.framework"))
-                    .filter(|path| path.exists());
-                if framework.is_none() {
-                    return Err("Chromium Embedded Framework is missing; run the app bundle".into());
-                }
-                let loader = library_loader::LibraryLoader::new(&exe, false);
-                if !loader.load() {
-                    return Err("cannot load Chromium Embedded Framework".into());
-                }
-                loader
-            };
+            if !preload_framework()? {
+                return Err("Chromium Embedded Framework is missing; run the app bundle".into());
+            }
 
             let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
 
@@ -409,8 +407,6 @@ impl Engine {
                 private: std::cell::RefCell::new(std::rc::Weak::new()),
                 readiness: storage::ContextReadiness::default(),
                 downloads: std::cell::RefCell::new(downloads::RuntimeDownloads::default()),
-                #[cfg(target_os = "macos")]
-                _library: library,
             });
             *slot.borrow_mut() = Some(runtime.clone());
             // Register Default even if a later pool constructor fails. Once

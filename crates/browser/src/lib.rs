@@ -318,6 +318,16 @@ fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
 }
 
 pub fn run() {
+    // CEF replaces the process allocator during dlopen. Do this before GPUI
+    // creates AppKit/XPC workers that can free memory during zone registration.
+    match engine::preload_framework() {
+        Ok(true) => eprintln!("[engine] framework preloaded before application"),
+        Ok(false) => {}, // Unbundled UI-only development and non-macOS hosts.
+        Err(error) => {
+            eprintln!("[engine] framework preload failed: {error}");
+            std::process::exit(1);
+        }
+    }
     let app = Application::new();
     app.on_reopen(reopen);
     let urls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, Option<String>)>::new()));

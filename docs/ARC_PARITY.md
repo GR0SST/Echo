@@ -556,6 +556,7 @@ Max download rename/revert feedback awaits the later Max implementation.
 | Saving the session between launches (Spaces, tabs, archive) | done | One profile owner writes `session.json`, including after the original window closes. Uncommitted split drafts from all bound windows are excluded. Demo data only on first launch; URLs are saved, back/forward history isn't |
 | "When opening Arc, restore windows from previous session" | missing | — |
 | Cookies persist between launches | done | `persist_session_cookies` in the engine |
+| CEF startup and framework lifetime | partial | macOS preloads the allocator-bearing framework on the main thread before GPUI/AppKit creation and retains it for the process lifetime. Worker-thread and unbundled-path regressions pass; three copied-profile native startup/quit checks pass. The preserved intermittent XPC/malloc-zone trap matches the documented allocator registration race, but could not be reproduced deterministically. [Investigation](CEF_STARTUP.md) |
 
 ## 21. Gestures and feel
 
