@@ -1,6 +1,9 @@
 //! Drives the real window through gpui's test platform: keystrokes and
 //! clicks go through the same key bindings, focus and hit-testing as the app.
 
+#[path = "audit_chrome_tests.rs"]
+mod audit_chrome_tests;
+
 #[path = "feedback_owner_tests.rs"]
 mod feedback_owner_tests;
 
@@ -780,6 +783,8 @@ fn command_bar_uses_profile_engine_and_remote_rows_are_selectable(cx: &mut TestA
 #[gpui::test]
 fn command_bar_empty_field_shows_five_rows_and_privacy_disclosure_dismisses(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
+    // Keep five inactive pages available after omitting the current page.
+    view.update(cx, |w, _| w.edit_browser(|b| b.new_tab("https://sixth.example", std::time::SystemTime::now())));
     cx.simulate_keystrokes("cmd-t");
     assert_eq!(view.read_with(cx, |view, cx| view.suggestions(cx).len()), 5);
     click(&mut bar(&view, cx), "suggestions-info");
@@ -3223,6 +3228,7 @@ fn open_tabs_match_their_page_titles_without_duplicate_history_rows(cx: &mut Tes
     bar(&view, cx).simulate_keystrokes("enter");
     cx.simulate_input("Renamed tab");
     cx.simulate_keystrokes("enter");
+    view.update(cx, |w, _| w.edit_browser(|b| b.new_tab("https://unrelated.example", std::time::SystemTime::now())));
     cx.simulate_keystrokes("cmd-t");
     bar(&view, cx).simulate_input("second page");
     let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
@@ -3277,7 +3283,7 @@ fn favorites_are_shared_and_keep_the_loaded_page_across_spaces(cx: &mut TestAppC
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://github.com"));
     cx.simulate_keystrokes("cmd-1");
     assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
-    cx.simulate_keystrokes("cmd-t");
+    cx.simulate_keystrokes("cmd-2 cmd-t");
     bar(&view, cx).simulate_input("chromium");
     assert!(view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::SwitchToTab { space, .. } if space == "Favorites"))));
     bar(&view, cx).simulate_keystrokes("down enter");
@@ -6722,6 +6728,10 @@ fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext)
     // The address shows only the site.
     assert_eq!(crate::window::address_host("https://www.youtube.com/watch?v=1"), "youtube.com");
     assert_eq!(crate::window::address_host("about:blank"), "about:blank");
+    assert_eq!(crate::window::address_host("http://127.0.0.1:8147/audit"), "127.0.0.1");
+    assert_eq!(crate::window::address_host("https://www.example.com:8443/path"), "example.com");
+    assert_eq!(crate::window::address_host("http://[::1]:8147/path"), "[::1]");
+    assert_eq!(crate::window::display_url("http://127.0.0.1:8147/audit"), "127.0.0.1:8147/audit");
     let address = cx.debug_bounds("address").unwrap();
     assert_eq!(address.size.height, gpui::px(36.));
     // Favorites stretch across the row with equal tiles.
@@ -6731,10 +6741,13 @@ fn sidebar_matches_reference_metrics_and_hover_controls(cx: &mut TestAppContext)
     assert_eq!(first.size.height, gpui::px(46.));
     assert_eq!(first.origin.x, address.origin.x);
     assert!(address.right() - second.right() < gpui::px(1.));
-    // Rows are 38 px with a 3 px gap.
+    // The hit/scroll slot stays 38 px; its painted fill is inset by one pixel.
     let today = view.read_with(cx, |w, _| w.browser.space().today[0].id.get());
     let tab = cx.debug_bounds(test_selector(format!("tab-{today}"))).unwrap();
     assert_eq!(tab.size.height, gpui::px(38.));
+    let fill = cx.debug_bounds(test_selector(format!("tab-fill-{today}"))).unwrap();
+    assert_eq!(fill.size.height, gpui::px(36.));
+    assert_eq!(fill.center(), tab.center());
     let new_tab = cx.debug_bounds("new-tab").unwrap();
     assert_eq!(new_tab.size.height, gpui::px(38.));
     // Traffic lights light up only while the pointer is over them.
@@ -8766,6 +8779,7 @@ fn theme_materials_preserve_command_bar_input_and_selection_in_light_and_dark(cx
             assert_eq!(w.theme_tab_selection_for(w.browser.space().id).l,1.);
             assert_eq!(w.theme_is_dark(),w.theme_is_dark_for(other));
             assert_eq!(w.theme_foreground_for(w.browser.space().id),w.theme_foreground_for(other));
+            assert_eq!(w.command_bar_page_selection(), gpui::Hsla::from(gpui::rgb(if appearance == ThemeAppearance::Light { 0x8f95ff } else { 0x4248d8 })));
             assert!(w.command_bar_selection().a<1.);
             assert!((w.command_bar_selection().h - w.accent()).abs() < 0.001);
             assert_eq!(w.command_bar_panel_fill(false).a,1.);
@@ -11167,3 +11181,4 @@ fn header_theme_editor_uses_the_originating_menu_anchor(cx: &mut TestAppContext)
         visual.run_until_parked();
     }
 }
+

@@ -565,6 +565,7 @@ fn command_open_tab_preview_keeps_the_original_result_and_confirms_the_tab(cx: &
     let (view, visual, fake) = open_pages(cx);
     record_history_fixture(&fake, visual);
     let tab = view.read_with(visual, |view, _| view.browser.active_tab().unwrap().id);
+    view.update(visual, |w, _| w.edit_browser(|b| b.new_tab("https://unrelated.example", std::time::SystemTime::now())));
     visual.simulate_keystrokes("cmd-t");
     let mut command = bar(&view, visual);
     command.simulate_input("second page");

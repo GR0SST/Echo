@@ -35,6 +35,7 @@ const SIDEBAR_INSET: f32 = 8.0;
 const SIDEBAR_TOOLBAR_HEIGHT: f32 = 47.0;
 pub(crate) const TOP_TOOLBAR_HEIGHT: f32 = 33.;
 pub(crate) const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
+const SIDEBAR_TAB_HEIGHT: f32 = 36.0;
 pub(crate) const SIDEBAR_ROW_GAP: f32 = 3.0;
 pub(crate) const SIDEBAR_ROW_RADIUS: f32 = 10.0;
 const FAVORITE_HEIGHT: f32 = 46.0;
@@ -2020,6 +2021,7 @@ impl BrowserWindow {
             suggestions.extend(favorites.chain(spaces.filter(|space| space.user_profile_id == self.browser.active_user_profile_id()).flat_map(|space| {
                 space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))
             }))
+            .filter(|(_, tab)| Some(tab.id) != self.browser.space().active_tab || self.browser.split_for(tab.id).is_some())
             .filter(|(_, tab)| query.is_empty() || self.browser.item_title(tab.id).to_lowercase().contains(&query) || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
                 || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))
                 .filter(|(_, tab)| seen.insert(self.browser.item_anchor(tab.id)))
@@ -2031,7 +2033,7 @@ impl BrowserWindow {
         if !query.is_empty() {
             let open: std::collections::HashSet<_> = self.browser.all_tabs().filter(|tab| self.browser.user_profile_id_for_tab(tab.id) == Some(self.browser.active_user_profile_id())).map(|tab| tab.url.as_str()).collect();
             suggestions.extend(self.browser.active_user_profile().history.iter()
-                .filter(|entry| !open.contains(entry.url.as_str()))
+                .filter(|entry| self.browser.active_tab().is_some_and(|tab| tab.url == entry.url) || !open.contains(entry.url.as_str()))
                 .filter(|entry| entry.title.to_lowercase().contains(&query) || entry.url.to_lowercase().contains(&query))
                 .take(MAX_HISTORY_SUGGESTIONS)
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
@@ -3161,11 +3163,17 @@ impl BrowserWindow {
             .rounded(px(SIDEBAR_ROW_RADIUS))
             // Arc eases ordinary rows into a one-pixel inset at each edge while held.
             .mx(px(press_inset))
-            .when(active, |this| this.bg(self.theme_tab_selection_for(painted_space)))
-            .when(!active && self.sidebar_item_selected(id), |this| this.bg(hsla(0., 0., 1., if private { 0.1 } else { 0.3 })))
-            .when(active && segmented && self.theme_uses_light_ink_for(painted_space), |this| this.bg(hsla(0.,0.,1.,0.2)))
             .text_color(self.theme_foreground_for(painted_space))
-            .when(!active, |this| this.hover(move |style| style.bg(hsla(0.0, 0.0, 1.0, if private { 0.1 } else { 0.3 }))))
+            // Paint a 36 px fill inside the unchanged hit/scroll slot.
+            .child(div().debug_selector(|| self.sidebar_debug_name(format!("tab-fill-{key}")))
+                .absolute().left_0().right_0()
+                .top(px(if segmented { 0. } else { (SIDEBAR_ROW_HEIGHT - SIDEBAR_TAB_HEIGHT) / 2. }))
+                .bottom(px(if segmented { 0. } else { (SIDEBAR_ROW_HEIGHT - SIDEBAR_TAB_HEIGHT) / 2. }))
+                .rounded(px(SIDEBAR_ROW_RADIUS))
+                .when(active, |fill| fill.bg(self.theme_tab_selection_for(painted_space)))
+                .when(!active && self.sidebar_item_selected(id), |fill| fill.bg(hsla(0., 0., 1., if private { 0.1 } else { 0.3 })))
+                .when(active && segmented && self.theme_uses_light_ink_for(painted_space), |fill| fill.bg(hsla(0.,0.,1.,0.2)))
+                .when(!active, |fill| fill.group_hover(group.clone(), move |fill| fill.bg(hsla(0.,0.,1.,if private {0.1} else {0.3})))))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
@@ -4225,6 +4233,7 @@ impl BrowserWindow {
         let page_parent = self.native_view.map(|view| view as usize);
         let panel_fill = self.command_bar_panel_fill(material_backdrop.get());
         let row_selection = self.command_bar_selection();
+        let page_selection = self.command_bar_page_selection();
         let chatgpt_keyword = matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none()
             && self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar))
             && bar.query(cx).trim().eq_ignore_ascii_case("chatgpt");
@@ -4267,12 +4276,13 @@ impl BrowserWindow {
                 let page = match &suggestion {
                     Suggestion::Load(Resolved::Url(url)) => Some(self.render_command_page_icon(url, current_url_tab.map(|tab| tab.id), dark && !selected)),
                     Suggestion::SwitchToTab { id, url, .. } => Some(self.render_command_page_icon(url, Some(*id), dark && !selected)),
-                    Suggestion::History { url, .. } => Some(self.render_command_page_icon(url, None, dark && !selected)),
                     Suggestion::SplitTab { id, .. } => self.browser.all_tabs().find(|tab| tab.id == *id).map(|tab| self.render_favicon_on(tab, accent, !selected)),
                     _ => None,
                 };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
+                let history_result = history_url.is_some();
+                let row_group = SharedString::from(format!("command-result-{index}"));
                 let ask_chatgpt = matches!(&suggestion, Suggestion::AskChatGpt { .. });
                 let direct_search = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }));
                 let search_row = direct_search || matches!(&suggestion, Suggestion::Calculator { .. });
@@ -4310,12 +4320,24 @@ impl BrowserWindow {
                 // Pages show their favicon; commands a glyph on a faint tile.
                 // The selected row's tile turns white, as in the reference.
                 let tile = div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(6.0))
-                    .when(!search_row && !ask_chatgpt && selected && page.is_none(), |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
-                    .when(!search_row && !ask_chatgpt && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
+                    .when(!history_result && !search_row && !ask_chatgpt && selected && page.is_none(), |this| this.bg(gpui::white()).text_color(hsla(0.0, 0.0, 0.12, 1.0)))
+                    .when(!history_result && !search_row && !ask_chatgpt && !selected && page.is_none(), |this| this.bg(hsla(0.0, 0.0, 1.0, 0.07)).text_color(hsla(0.0, 0.0, 1.0, 0.7)))
+                    .when(history_result, |tile| tile.text_color(hsla(0., 0., if selected { 1. } else { ink }, 0.7)))
                     .when(selected && matches!(icon, crate::icons::Icon::AirTraffic), |this| this.text_color(gpui::rgb(0x6e74ff)))
                     .child(page.unwrap_or_else(|| crate::icons::control_sized(icon, 14.0)));
+                let label_len = label.len();
+                let highlights = history_url.as_ref().map(|url| (
+                    label_len - display_url(url).len() - " — ".len()..label_len,
+                    gpui::HighlightStyle {
+                        fade_out: Some(if selected { 0.35 } else { 0.6 }),
+                        font_weight: Some(gpui::FontWeight::MEDIUM),
+                        ..Default::default()
+                    },
+                ));
+                let label = gpui::StyledText::new(label).with_highlights(highlights);
                 let row = div()
                     .id(("suggestion", index))
+                    .group(row_group.clone())
                     .debug_selector(|| self.sidebar_debug_name((move || format!("suggestion-{index}"))()))
                     .when(ask_chatgpt, |this| this.debug_selector(|| "ask-chatgpt".into()))
                     .flex()
@@ -4326,7 +4348,7 @@ impl BrowserWindow {
                     .mx_2()
                     .rounded(px(8.0))
                     .text_color(hsla(0.0, 0.0, if selected { 1. } else { ink }, if selected { 1.0 } else { 0.82 }))
-                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if page_result || direct_search || (chatgpt_keyword && index == 0) { gpui::rgb(0x4248d8).into() } else { row_selection }))
+                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if page_result || direct_search || (chatgpt_keyword && index == 0) { page_selection } else { row_selection }))
                     .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, ink, if direct_search || ask_chatgpt { 0.05 } else { 0.04 }))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
@@ -4361,14 +4383,16 @@ impl BrowserWindow {
                     .when_some(history_url, |this, url| this.child(div()
                         .id(("delete-suggestion", index))
                         .debug_selector(|| self.sidebar_debug_name((move || format!("delete-suggestion-{index}"))()))
-                        .px_2().rounded_md().hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.12)))
+                        .px_2().rounded_md().invisible().group_hover(row_group.clone(), |s| s.visible())
+                        .hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.12)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_command_history_entry(history_owner, &url, cx);
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when(!search_row && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
+                        .when(history_result && !selected, |arrow| arrow.invisible().group_hover(row_group, |s| s.visible()))
                         .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, ink, 0.06) })
-                        .text_color(if selected && ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if selected && page_result { gpui::rgb(0x4248d8).into() } else if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
+                        .text_color(if selected && ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if selected && page_result { page_selection } else if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
                         .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0))));
                 div().flex().flex_col().flex_none()
                     .children(date.map(|date| div().debug_selector(|| self.sidebar_debug_name((move || format!("archive-date-{index}"))())).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))
@@ -4798,10 +4822,13 @@ pub(crate) fn tint(hue: f32, lightness: f32) -> Hsla {
 
 /// The sidebar address field shows only the site, as in the reference.
 pub fn address_host(url: &str) -> String {
-    let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) else { return display_url(url); };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let host = host.rsplit('@').next().unwrap_or(host);
-    host.strip_prefix("www.").unwrap_or(host).to_string()
+    let Some((scheme, rest)) = url.split_once("://") else { return display_url(url); };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") { return display_url(url); }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if authority.starts_with('[') { return authority.split_once(']').map_or(authority, |(host, _)| &authority[..host.len()+1]).to_owned(); }
+    let host = authority.rsplit_once(':').filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit())).map_or(authority, |(host, _)| host);
+    host.strip_prefix("www.").unwrap_or(host).to_owned()
 }
 
 pub fn display_url(url: &str) -> String {
