@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "patches": [
+    { "path": "chromium.patch", "directory": "" },
+    { "path": "cef.patch", "directory": "cef" },
+    { "path": "extensions-bridge.patch", "directory": "" },
+    { "path": "shutdown-durability.patch", "directory": "" },
+    { "path": "video-pip.patch", "directory": "" },
+    { "path": "browsing-data-bridge.patch", "directory": "" }
+  ]
+}

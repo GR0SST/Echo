@@ -1,8 +1,8 @@
 diff --git a/cef/BUILD.gn b/cef/BUILD.gn
-index 92c540976..adb4e2ac2 100644
+index c53f0e4..55c446d 100644
 --- a/cef/BUILD.gn
 +++ b/cef/BUILD.gn
-@@ -536,6 +536,8 @@ source_set("libcef_static") {
+@@ -553,6 +553,8 @@ source_set("libcef_static") {
      "libcef/browser/browser_event_util.h",
      "libcef/browser/browser_frame.cc",
      "libcef/browser/browser_frame.h",
@@ -10,8 +10,8 @@ index 92c540976..adb4e2ac2 100644
 +    "libcef/browser/extensions_bridge.h",
      "libcef/browser/browser_guest_util.cc",
      "libcef/browser/browser_guest_util.h",
-     "libcef/browser/browser_host_base.cc",
-@@ -1101,6 +1103,7 @@ source_set("libcef_static") {
+     "libcef/browser/download_bridge.cc",
+@@ -1121,6 +1123,7 @@ source_set("libcef_static") {
        "libcef/browser/chrome/chrome_web_contents_view_delegate_cef_mac.mm",
        "libcef/browser/native/browser_platform_delegate_native_mac.h",
        "libcef/browser/native/browser_platform_delegate_native_mac.mm",
@@ -19,27 +19,27 @@ index 92c540976..adb4e2ac2 100644
        "libcef/browser/native/cursor_util_mac.mm",
        "libcef/browser/native/javascript_dialog_runner_mac.h",
        "libcef/browser/native/javascript_dialog_runner_mac.mm",
-@@ -1756,6 +1759,7 @@ libcef_sources_common = includes_common +
-                         gypi_paths.autogen_capi_versions_includes +
+@@ -1777,6 +1780,7 @@ libcef_sources_common = includes_common +
                          gypi_paths2.libcef_sources_common +
                          gypi_paths.autogen_library_side + [
+   "libcef_dll/echo_cef_download_v1.cc",
 +  "libcef_dll/echo_cef_extensions_v1.cc",
    "$root_gen_dir/cef/libcef_dll/cef_pack_resources.inc",
    "$root_gen_dir/cef/libcef_dll/cef_pack_strings.inc",
    "$root_gen_dir/cef/libcef_dll/cef_command_ids.inc",
 diff --git a/cef/cef_paths2.gypi b/cef/cef_paths2.gypi
-index 6de0bd818..e46224ec9 100644
+index 46a09e6..eeea92c 100644
 --- a/cef/cef_paths2.gypi
 +++ b/cef/cef_paths2.gypi
-@@ -5,6 +5,7 @@
- {
+@@ -6,6 +6,7 @@
    'variables': {
      'includes_common': [
+       'include/echo_cef_download_v1.h',
 +      'include/echo_cef_extensions_v1.h',
        'include/base/cef_atomic_flag.h',
        'include/base/cef_atomic_ref_count.h',
        'include/base/cef_bind.h',
-@@ -419,6 +420,8 @@
+@@ -420,6 +421,8 @@
        'tests/cefclient/win/cefclient.rc',
      ],
      'cefclient_sources_mac': [
@@ -50,10 +50,10 @@ index 6de0bd818..e46224ec9 100644
        'tests/cefclient/browser/browser_window_std_mac.h',
 diff --git a/cef/include/echo_cef_extensions_v1.h b/cef/include/echo_cef_extensions_v1.h
 new file mode 100644
-index 000000000..d565bd321
+index 0000000..4a37d5b
 --- /dev/null
 +++ b/cef/include/echo_cef_extensions_v1.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,123 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#ifndef CEF_INCLUDE_ECHO_CEF_EXTENSIONS_V1_H_
@@ -155,6 +155,20 @@ index 000000000..d565bd321
 +                                        uint64_t request,
 +                                        int accepted);
 +} echo_ext_api_v1;
++// Additive UI operations; v1 remains binary-compatible for existing callers.
++typedef struct echo_ext_api_v2 {
++  uint32_t size;
++  uint32_t version;
++  uint32_t(ECHO_EXT_CALL* remove)(int owner, const char* id, uint64_t request);
++  uint32_t(ECHO_EXT_CALL* set_shortcut)(int owner,
++                                        const char* id,
++                                        const char* command,
++                                        const char* shortcut,
++                                        uint64_t request);
++  uint32_t(ECHO_EXT_CALL* dispatch_key)(int owner, int key, uint32_t modifiers);
++} echo_ext_api_v2;
++ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
++cef_echo_extensions_get_api_v2(uint32_t size, echo_ext_api_v2* output);
 +// Size mismatch clears nothing and returns BAD_ARGUMENT. The function table is
 +// available independently of opt-in; operations fail closed when disabled.
 +ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
@@ -164,19 +178,19 @@ index 000000000..d565bd321
 +#endif
 +#endif
 diff --git a/cef/libcef/browser/download_manager_delegate_impl.cc b/cef/libcef/browser/download_manager_delegate_impl.cc
-index e5363cc46..ff2e4f56e 100644
+index f5289c3..47004de 100644
 --- a/cef/libcef/browser/download_manager_delegate_impl.cc
 +++ b/cef/libcef/browser/download_manager_delegate_impl.cc
-@@ -3,6 +3,8 @@
- // found in the LICENSE file.
+@@ -4,6 +4,8 @@
  
  #include "cef/libcef/browser/download_manager_delegate_impl.h"
+ #include "cef/libcef/browser/download_bridge.h"
 +#include "base/command_line.h"
 +#include "components/download/public/common/download_source.h"
  
  #include <tuple>
  
-@@ -32,6 +34,12 @@ using content::WebContents;
+@@ -33,6 +35,12 @@ using content::WebContents;
  using download::DownloadItem;
  
  namespace {
@@ -189,7 +203,7 @@ index e5363cc46..ff2e4f56e 100644
  
  // Helper function to retrieve the CefDownloadHandler.
  CefRefPtr<CefDownloadHandler> GetDownloadHandler(
-@@ -327,6 +335,7 @@ CefDownloadManagerDelegateImpl::~CefDownloadManagerDelegateImpl() {
+@@ -330,6 +338,7 @@ CefDownloadManagerDelegateImpl::~CefDownloadManagerDelegateImpl() {
  }
  
  void CefDownloadManagerDelegateImpl::OnDownloadUpdated(DownloadItem* download) {
@@ -197,7 +211,7 @@ index e5363cc46..ff2e4f56e 100644
    CefRefPtr<CefBrowserHostBase> browser = GetBrowser(download);
    CefRefPtr<CefDownloadHandler> handler;
    if (browser.get()) {
-@@ -376,6 +385,7 @@ void CefDownloadManagerDelegateImpl::OnDownloadDestroyed(DownloadItem* item) {
+@@ -379,6 +388,7 @@ void CefDownloadManagerDelegateImpl::OnDownloadDestroyed(DownloadItem* item) {
  
  void CefDownloadManagerDelegateImpl::OnDownloadCreated(DownloadManager* manager,
                                                         DownloadItem* item) {
@@ -205,7 +219,7 @@ index e5363cc46..ff2e4f56e 100644
    // This callback may arrive after DetermineDownloadTarget, so we allow
    // association from either method.
    CefRefPtr<CefBrowserHostBase> browser = GetOrAssociateBrowser(item);
-@@ -403,6 +413,7 @@ void CefDownloadManagerDelegateImpl::ManagerGoingDown(
+@@ -406,6 +416,7 @@ void CefDownloadManagerDelegateImpl::ManagerGoingDown(
  bool CefDownloadManagerDelegateImpl::DetermineDownloadTarget(
      DownloadItem* item,
      download::DownloadTargetCallback* callback) {
@@ -215,20 +229,23 @@ index e5363cc46..ff2e4f56e 100644
    CefRefPtr<CefBrowserHostBase> browser = GetOrAssociateBrowser(item);
 diff --git a/cef/libcef/browser/extensions_bridge.cc b/cef/libcef/browser/extensions_bridge.cc
 new file mode 100644
-index 000000000..a5921e9f9
+index 0000000..b2ad26a
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge.cc
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,1112 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#include "cef/libcef/browser/extensions_bridge.h"
 +
++#include <algorithm>
 +#include <map>
 +#include <memory>
 +
 +#include "base/auto_reset.h"
++#include "base/base64.h"
 +#include "base/command_line.h"
 +#include "base/files/file_path.h"
++#include "base/files/file_util.h"
 +#include "base/functional/bind.h"
 +#include "base/json/json_writer.h"
 +#include "base/no_destructor.h"
@@ -240,23 +257,29 @@ index 000000000..a5921e9f9
 +#include "cef/libcef/browser/browser_host_base.h"
 +#include "cef/libcef/browser/browser_info.h"
 +#include "cef/libcef/browser/browser_info_manager.h"
++#include "chrome/browser/extensions/commands/command_service.h"
 +#include "chrome/browser/extensions/extension_action_runner.h"
 +#include "chrome/browser/extensions/extension_install_prompt_show_params.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
 +#include "chrome/browser/extensions/extension_view.h"
 +#include "chrome/browser/extensions/extension_view_host.h"
 +#include "chrome/browser/extensions/webstore_standalone_installer.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "components/crx_file/id_util.h"
++#include "components/input/native_web_keyboard_event.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "content/public/browser/eye_dropper.h"
 +#include "content/public/browser/keyboard_event_processing_result.h"
++#include "content/public/browser/page_navigator.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/render_widget_host_view.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/browser/web_contents_observer.h"
 +#include "extensions/browser/disable_reason.h"
++#include "extensions/browser/event_router.h"
 +#include "extensions/browser/extension_action.h"
 +#include "extensions/browser/extension_action_manager.h"
++#include "extensions/browser/extension_event_histogram_value.h"
 +#include "extensions/browser/extension_registrar.h"
 +#include "extensions/browser/extension_registry.h"
 +#include "extensions/browser/extension_registry_observer.h"
@@ -264,10 +287,17 @@ index 000000000..a5921e9f9
 +#include "extensions/browser/install_approval.h"
 +#include "extensions/browser/install_prompt_data.h"
 +#include "extensions/browser/management_policy.h"
++#include "extensions/browser/permissions/active_tab_permission_granter.h"
 +#include "extensions/browser/unpacked_installer.h"
++#include "extensions/common/api/commands/commands_handler.h"
++#include "extensions/common/command.h"
 +#include "extensions/common/extension.h"
++#include "extensions/common/extension_resource.h"
 +#include "extensions/common/manifest.h"
++#include "extensions/common/manifest_handlers/icons_handler.h"
++#include "extensions/common/mojom/context_type.mojom.h"
 +#include "extensions/common/mojom/view_type.mojom.h"
++#include "ui/events/event_constants.h"
 +
 +namespace cef::extensions_bridge {
 +#if !BUILDFLAG(IS_MAC)
@@ -307,16 +337,30 @@ index 000000000..a5921e9f9
 +
 +// Keep the real ExtensionViewHost as WebContentsDelegate. No Chrome browser,
 +// toolbar or ordinary browser navigation is fabricated for an extension.
++void EmitManagement(int owner,
++                    uint32_t event,
++                    uint64_t request,
++                    base::DictValue data);
 +class HostDelegate : public extensions::ExtensionViewHost::Delegate {
 + public:
++  HostDelegate(int owner, uint64_t popup) : owner_(owner), popup_(popup) {}
 +  content::WebContents* OpenURL(
-+      const content::OpenURLParams&,
++      const content::OpenURLParams& params,
 +      base::OnceCallback<void(content::NavigationHandle&)>) override {
-+    return nullptr;  // Outside this bounded gate; never create a Chrome window.
++    base::DictValue data;
++    data.Set("url", params.url.spec());
++    EmitManagement(owner_, 16, 0, std::move(data));
++    return nullptr;  // GPUI owns tabs and windows.
 +  }
 +  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
 +      content::WebContents*,
-+      const input::NativeWebKeyboardEvent&) override {
++      const input::NativeWebKeyboardEvent& event) override {
++    if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown &&
++        event.windows_key_code == ui::VKEY_ESCAPE) {
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&CloseInternal, popup_));
++      return content::KeyboardEventProcessingResult::HANDLED;
++    }
 +    return content::KeyboardEventProcessingResult::NOT_HANDLED;
 +  }
 +  std::unique_ptr<content::EyeDropper> OpenEyeDropper(
@@ -327,6 +371,10 @@ index 000000000..a5921e9f9
 +  extensions::WindowController* GetExtensionWindowController() override {
 +    return nullptr;
 +  }
++
++ private:
++  int owner_;
++  uint64_t popup_;
 +};
 +
 +class Popup : public extensions::ExtensionView,
@@ -360,7 +408,7 @@ index 000000000..a5921e9f9
 +            owner->GetWebContents()->GetBrowserContext(),
 +            url,
 +            extensions::mojom::ViewType::kExtensionPopup,
-+            std::make_unique<HostDelegate>())) {
++            std::make_unique<HostDelegate>(owner_id_, id_))) {
 +    host_->set_view(this);
 +    host_->SetCloseHandler(base::BindOnce(
 +        [](uint64_t id, extensions::ExtensionHost*) { CloseInternal(id); },
@@ -572,6 +620,23 @@ index 000000000..a5921e9f9
 +  CloseInternal(id);
 +  return ECHO_EXT_OK;
 +}
++std::vector<std::string> CommandNames(const extensions::Extension* extension) {
++  std::vector<std::string> names;
++  if (auto* named = extensions::CommandsInfo::GetNamedCommands(extension)) {
++    for (const auto& [name, command] : *named) {
++      names.push_back(name);
++    }
++  }
++  for (const auto* command :
++       {extensions::CommandsInfo::GetActionCommand(extension),
++        extensions::CommandsInfo::GetBrowserActionCommand(extension),
++        extensions::CommandsInfo::GetPageActionCommand(extension)}) {
++    if (command) {
++      names.push_back(command->command_name());
++    }
++  }
++  return names;
++}
 +// Profile services, never a default-profile or Chrome-window fallback.
 +base::DictValue Catalog(int id) {
 +  base::DictValue payload;
@@ -583,6 +648,9 @@ index 000000000..a5921e9f9
 +  auto* context = owner->GetWebContents()->GetBrowserContext();
 +  auto* registry = extensions::ExtensionRegistry::Get(context);
 +  for (const auto& extension : registry->GenerateInstalledExtensionsSet()) {
++    if (extensions::Manifest::IsComponentLocation(extension->location())) {
++      continue;
++    }
 +    base::DictValue entry;
 +    entry.Set("id", extension->id());
 +    entry.Set("name", extension->name());
@@ -590,6 +658,27 @@ index 000000000..a5921e9f9
 +    entry.Set("enabled",
 +              registry->enabled_extensions().Contains(extension->id()));
 +    entry.Set("manifest", extension->manifest()->value()->Clone());
++    const auto icon = extensions::IconsInfo::GetIconResource(
++        extension.get(), 32, ExtensionIconSet::Match::kBigger);
++    std::string icon_bytes;
++    if (!icon.empty() && base::ReadFileToStringWithMaxSize(
++                             icon.GetFilePath(), &icon_bytes, 1024 * 1024)) {
++      entry.Set("icon_base64", base::Base64Encode(icon_bytes));
++    }
++    base::ListValue commands;
++    auto* service = extensions::CommandService::Get(context);
++    for (const auto& name : CommandNames(extension.get())) {
++      auto command = service->FindCommandByName(extension->id(), name);
++      base::DictValue item;
++      item.Set("name", name);
++      item.Set("description", command.description().empty()
++                                  ? "Activate the extension"
++                                  : base::UTF16ToUTF8(command.description()));
++      item.Set("shortcut",
++               extensions::Command::AcceleratorToString(command.accelerator()));
++      commands.Append(std::move(item));
++    }
++    entry.Set("commands", std::move(commands));
 +    const int tab =
 +        sessions::SessionTabHelper::IdForTab(owner->GetWebContents()).id();
 +    if (auto* action = extensions::ExtensionActionManager::Get(context)
@@ -607,12 +696,15 @@ index 000000000..a5921e9f9
 +using Watches = std::map<int, std::unique_ptr<Watch>>;
 +Watches& Watchers();
 +void CancelInstalls(int owner);
++void CancelPagePrompts(int owner);
++void InstallPromptHook();
 +void EmitManagement(int owner,
 +                    uint32_t event,
 +                    uint64_t request,
 +                    base::DictValue data);
 +class Watch : public content::WebContentsObserver,
-+              public extensions::ExtensionRegistryObserver {
++              public extensions::ExtensionRegistryObserver,
++              public extensions::CommandService::Observer {
 + public:
 +  Watch(int id,
 +        CefRefPtr<CefBrowserHostBase> owner,
@@ -626,8 +718,14 @@ index 000000000..a5921e9f9
 +        registry_(extensions::ExtensionRegistry::Get(
 +            owner->GetWebContents()->GetBrowserContext())) {
 +    registry_->AddObserver(this);
++    commands_ = extensions::CommandService::Get(
++        owner->GetWebContents()->GetBrowserContext());
++    commands_->AddObserver(this);
 +  }
 +  ~Watch() override {
++    if (commands_) {
++      commands_->RemoveObserver(this);
++    }
 +    registry_->RemoveObserver(this);
 +    Emit(ECHO_EXT_WATCH_CLOSED, 0, {});
 +  }
@@ -655,6 +753,15 @@ index 000000000..a5921e9f9
 +                              extensions::UninstallReason) override {
 +    Changed();
 +  }
++  void OnExtensionCommandAdded(const std::string&,
++                               const std::string&) override {
++    Changed();
++  }
++  void OnExtensionCommandRemoved(const std::string&,
++                                 const std::string&) override {
++    Changed();
++  }
++  void OnCommandServiceDestroying() override { commands_ = nullptr; }
 +  void WebContentsDestroyed() override {
 +    CancelInstalls(id_);
 +    auto self = std::move(Watchers().at(id_));
@@ -668,6 +775,7 @@ index 000000000..a5921e9f9
 +  echo_ext_management_callback_v1 callback_;
 +  void* userdata_;
 +  raw_ptr<extensions::ExtensionRegistry> registry_;
++  raw_ptr<extensions::CommandService> commands_ = nullptr;
 +};
 +Watches& Watchers() {
 +  static base::NoDestructor<Watches> value;
@@ -694,6 +802,7 @@ index 000000000..a5921e9f9
 +  if (!owner) {
 +    return ECHO_EXT_NOT_FOUND;
 +  }
++  InstallPromptHook();
 +  Watchers().emplace(id, std::make_unique<Watch>(id, owner, cb, data));
 +  EmitManagement(id, ECHO_EXT_CATALOG, 0, Catalog(id));
 +  return ECHO_EXT_OK;
@@ -918,6 +1027,7 @@ index 000000000..a5921e9f9
 +  return *value;
 +}
 +void CancelInstalls(int owner) {
++  CancelPagePrompts(owner);
 +  std::vector<scoped_refptr<StoreInstall>> pending;
 +  for (auto& [token, install] : Installations()) {
 +    if (install->owner_id() == owner) {
@@ -928,6 +1038,232 @@ index 000000000..a5921e9f9
 +    install->Cancel();
 +  }
 +}
++
++struct PagePrompt {
++  int owner;
++  ExtensionInstallPrompt::DoneCallback done;
++  std::unique_ptr<extensions::InstallPromptData> prompt;
++};
++std::map<uint64_t, PagePrompt>& PagePrompts() {
++  static base::NoDestructor<std::map<uint64_t, PagePrompt>> prompts;
++  return *prompts;
++}
++void CancelPagePrompts(int owner) {
++  std::vector<ExtensionInstallPrompt::DoneCallback> callbacks;
++  for (auto it = PagePrompts().begin(); it != PagePrompts().end();) {
++    if (it->second.owner == owner) {
++      callbacks.push_back(std::move(it->second.done));
++      it = PagePrompts().erase(it);
++    } else {
++      ++it;
++    }
++  }
++  for (auto& done : callbacks) {
++    std::move(done).Run(ExtensionInstallPrompt::DoneCallbackPayload(
++        ExtensionInstallPrompt::Result::ABORTED));
++  }
++}
++void InstallPromptHook() {
++  ExtensionInstallPrompt::SetEmbedderDialogCallback(base::BindRepeating(
++      [](std::unique_ptr<ExtensionInstallPromptShowParams>& params,
++         ExtensionInstallPrompt::DoneCallback& done,
++         std::unique_ptr<extensions::InstallPromptData>& prompt) {
++        auto* contents = params->GetParentWebContents();
++        int owner_id = 0;
++        for (const auto& info :
++             CefBrowserInfoManager::GetInstance()->GetBrowserInfoList()) {
++          auto owner = Owner(info->browser_id());
++          if (owner && owner->GetWebContents() == contents) {
++            owner_id = info->browser_id();
++            break;
++          }
++        }
++        if (!owner_id) {
++          return false;
++        }
++        // Never show Chromium browser UI for an unowned Alloy prompt.
++        if (!Watchers().contains(owner_id) ||
++            prompt->requires_parent_permission() ||
++            prompt->ShouldWithheldPermissionsOnDialogAccept() ||
++            prompt->GetAcceptButtonLabel().empty()) {
++          std::move(done).Run(ExtensionInstallPrompt::DoneCallbackPayload(
++              ExtensionInstallPrompt::Result::ABORTED));
++          return true;
++        }
++        const auto token = next_install++;
++        base::DictValue data;
++        data.Set("id", prompt->extension()->id());
++        data.Set("name", prompt->extension()->name());
++        data.Set("title", base::UTF16ToUTF8(prompt->GetDialogTitle()));
++        data.Set("accept", base::UTF16ToUTF8(prompt->GetAcceptButtonLabel()));
++        data.Set("cancel", base::UTF16ToUTF8(prompt->GetAbortButtonLabel()));
++        data.Set("heading", base::UTF16ToUTF8(prompt->GetPermissionsHeading()));
++        base::ListValue permissions;
++        auto warnings = prompt->GetPermissions();
++        for (size_t i = 0; i < warnings.permissions.size(); ++i) {
++          base::DictValue warning;
++          warning.Set("message", base::UTF16ToUTF8(warnings.permissions[i]));
++          warning.Set("details", base::UTF16ToUTF8(warnings.details[i]));
++          permissions.Append(std::move(warning));
++        }
++        data.Set("permissions", std::move(permissions));
++        PagePrompts().emplace(
++            token, PagePrompt{owner_id, std::move(done), std::move(prompt)});
++        EmitManagement(owner_id, ECHO_EXT_INSTALL_PROMPT, token,
++                       std::move(data));
++        return true;
++      }));
++}
++uint32_t ECHO_EXT_CALL Remove(int id,
++                              const char* extension_id,
++                              uint64_t request) {
++  if (auto status = Check()) {
++    return status;
++  }
++  auto owner = Owner(id);
++  if (!owner || !Watchers().contains(id) || !extension_id) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  auto* context = owner->GetWebContents()->GetBrowserContext();
++  auto* extension =
++      extensions::ExtensionRegistry::Get(context)->GetExtensionById(
++          extension_id, extensions::ExtensionRegistry::EVERYTHING);
++  if (!extension) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  std::u16string policy_error;
++  auto* policy = extensions::ExtensionSystem::Get(context)->management_policy();
++  if (!policy->UserMayModifySettings(extension, &policy_error) ||
++      policy->MustRemainInstalled(extension, &policy_error)) {
++    return ECHO_EXT_UNSUPPORTED;
++  }
++  const std::string extension_key(extension_id);
++  auto* registrar = extensions::ExtensionRegistrar::Get(context);
++  const bool accepted = registrar->UninstallExtension(
++      extension_key, extensions::UNINSTALL_REASON_USER_INITIATED, &policy_error,
++      base::BindOnce(
++          [](int owner, std::string key, uint64_t request) {
++            base::DictValue result;
++            result.Set("id", key);
++            result.Set("success", true);
++            EmitManagement(owner, ECHO_EXT_OPERATION_COMPLETE, request,
++                           std::move(result));
++          },
++          id, extension_key, request));
++  return accepted ? ECHO_EXT_OK : ECHO_EXT_UNSUPPORTED;
++}
++uint32_t ECHO_EXT_CALL SetShortcut(int id,
++                                   const char* extension_id,
++                                   const char* name,
++                                   const char* shortcut,
++                                   uint64_t request) {
++  if (auto status = Check()) {
++    return status;
++  }
++  auto owner = Owner(id);
++  if (!owner || !extension_id || !name || !shortcut ||
++      !Watchers().contains(id)) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  auto* context = owner->GetWebContents()->GetBrowserContext();
++  auto* extension =
++      extensions::ExtensionRegistry::Get(context)->GetExtensionById(
++          extension_id, extensions::ExtensionRegistry::EVERYTHING);
++  if (!extension) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  const auto names = CommandNames(extension);
++  if (std::ranges::find(names, std::string(name)) == names.end()) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  const auto accelerator =
++      extensions::Command::StringToAccelerator(shortcut, name);
++  if (*shortcut && accelerator.key_code() == ui::VKEY_UNKNOWN) {
++    return ECHO_EXT_BAD_ARGUMENT;
++  }
++  auto* service = extensions::CommandService::Get(context);
++  if (!*shortcut) {
++    service->RemoveKeybindingPrefs(extension_id, name);
++  }
++  if (*shortcut && !service->AddKeybindingPref(accelerator, extension_id, name,
++                                               false, false)) {
++    return ECHO_EXT_UNSUPPORTED;
++  }
++  EmitManagement(id, ECHO_EXT_CATALOG, 0, Catalog(id));
++  base::DictValue result;
++  result.Set("success", true);
++  EmitManagement(id, ECHO_EXT_OPERATION_COMPLETE, request, std::move(result));
++  return ECHO_EXT_OK;
++}
++uint32_t ECHO_EXT_CALL DispatchKey(int id, int key, uint32_t modifiers) {
++  if (Check() || !Watchers().contains(id)) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  auto owner = Owner(id);
++  if (!owner) {
++    return ECHO_EXT_NOT_FOUND;
++  }
++  auto* contents = owner->GetWebContents();
++  auto* context = contents->GetBrowserContext();
++  // CEF event flags, translated explicitly rather than reusing platform bits.
++  int flags = 0;
++  if (modifiers & EVENTFLAG_SHIFT_DOWN) {
++    flags |= ui::EF_SHIFT_DOWN;
++  }
++  if (modifiers & EVENTFLAG_CONTROL_DOWN) {
++    flags |= ui::EF_CONTROL_DOWN;
++  }
++  if (modifiers & EVENTFLAG_ALT_DOWN) {
++    flags |= ui::EF_ALT_DOWN;
++  }
++  if (modifiers & EVENTFLAG_COMMAND_DOWN) {
++    flags |= ui::EF_COMMAND_DOWN;
++  }
++  const ui::Accelerator accelerator(static_cast<ui::KeyboardCode>(key), flags);
++  auto* service = extensions::CommandService::Get(context);
++  for (const auto& extension :
++       extensions::ExtensionRegistry::Get(context)->enabled_extensions()) {
++    for (const auto& name : CommandNames(extension.get())) {
++      const auto command = service->FindCommandByName(extension->id(), name);
++      if (command.accelerator().key_code() == ui::VKEY_UNKNOWN ||
++          command.global() || command.accelerator() != accelerator) {
++        continue;
++      }
++      if (extensions::Command::IsActionRelatedCommand(name)) {
++        base::DictValue request;
++        request.Set("id", extension->id());
++        EmitManagement(id, 15, 0, std::move(request));
++      } else {
++        if (auto* granter =
++                extensions::ActiveTabPermissionGranter::FromWebContents(
++                    contents)) {
++          granter->GrantIfRequested(extension.get());
++        }
++        base::ListValue args;
++        args.Append(name);
++        args.Append(
++            extensions::ExtensionTabUtil::CreateTabObject(
++                contents,
++                extensions::ExtensionTabUtil::GetScrubTabBehavior(
++                    extension.get(),
++                    extensions::mojom::ContextType::kPrivilegedExtension,
++                    contents),
++                extension.get())
++                .ToValue());
++        auto event = std::make_unique<extensions::Event>(
++            extensions::events::COMMANDS_ON_COMMAND, "commands.onCommand",
++            std::move(args), context);
++        event->user_gesture =
++            extensions::EventRouter::UserGestureState::kEnabled;
++        extensions::EventRouter::Get(context)->DispatchEventToExtension(
++            extension->id(), std::move(event));
++      }
++      return ECHO_EXT_OK;
++    }
++  }
++  return ECHO_EXT_NOT_FOUND;
++}
++
 +uint32_t ECHO_EXT_CALL InstallStore(int id, const char* item, uint64_t* token) {
 +  if (token) {
 +    *token = 0;
@@ -952,6 +1288,28 @@ index 000000000..a5921e9f9
 +uint32_t ECHO_EXT_CALL DecideStore(int owner, uint64_t token, int accepted) {
 +  if (auto status = Check()) {
 +    return status;
++  }
++  auto page = PagePrompts().find(token);
++  if (page != PagePrompts().end()) {
++    if (page->second.owner != owner) {
++      return ECHO_EXT_WRONG_OWNER;
++    }
++    if (accepted < -1 || accepted > 1) {
++      return ECHO_EXT_BAD_ARGUMENT;
++    }
++    if (accepted == 1) {
++      page->second.prompt->OnDialogAccepted();
++    } else {
++      page->second.prompt->OnDialogCanceled();
++    }
++    auto done = std::move(page->second.done);
++    PagePrompts().erase(page);
++    ExtensionInstallPrompt::DoneCallbackPayload payload(
++        accepted == 1 ? ExtensionInstallPrompt::Result::ACCEPTED
++                      : ExtensionInstallPrompt::Result::USER_CANCELED);
++    payload.use_embedder_ui = true;
++    std::move(done).Run(std::move(payload));
++    return ECHO_EXT_OK;
 +  }
 +  auto it = Installations().find(token);
 +  if (it == Installations().end()) {
@@ -979,13 +1337,20 @@ index 000000000..a5921e9f9
 +             &UnwatchProfile, &SetEnabled, &InstallStore, &DecideStore};
 +  return ECHO_EXT_OK;
 +}
++uint32_t GetApi2(uint32_t size, echo_ext_api_v2* output) {
++  if (!output || size != sizeof(*output)) {
++    return ECHO_EXT_BAD_ARGUMENT;
++  }
++  *output = {sizeof(*output), 2, &Remove, &SetShortcut, &DispatchKey};
++  return ECHO_EXT_OK;
++}
 +}  // namespace cef::extensions_bridge
 diff --git a/cef/libcef/browser/extensions_bridge.h b/cef/libcef/browser/extensions_bridge.h
 new file mode 100644
-index 000000000..3a8ed529b
+index 0000000..d31eb94
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,14 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#ifndef CEF_LIBCEF_BROWSER_EXTENSIONS_BRIDGE_H_
@@ -996,12 +1361,13 @@ index 000000000..3a8ed529b
 +}
 +namespace cef::extensions_bridge {
 +uint32_t GetApi(uint32_t size, echo_ext_api_v1* output);
++uint32_t GetApi2(uint32_t size, echo_ext_api_v2* output);
 +uintptr_t NativeView(content::WebContents* contents);
 +}  // namespace cef::extensions_bridge
 +#endif
 diff --git a/cef/libcef/browser/extensions_bridge_native_mac.mm b/cef/libcef/browser/extensions_bridge_native_mac.mm
 new file mode 100644
-index 000000000..471865d0f
+index 0000000..471865d
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge_native_mac.mm
 @@ -0,0 +1,11 @@
@@ -1018,10 +1384,10 @@ index 000000000..471865d0f
 +}  // namespace cef::extensions_bridge
 diff --git a/cef/libcef_dll/echo_cef_extensions_v1.cc b/cef/libcef_dll/echo_cef_extensions_v1.cc
 new file mode 100644
-index 000000000..d31488f14
+index 0000000..07ceb6b
 --- /dev/null
 +++ b/cef/libcef_dll/echo_cef_extensions_v1.cc
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,15 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#define ECHO_EXT_IMPLEMENTATION
@@ -1032,8 +1398,13 @@ index 000000000..d31488f14
 +cef_echo_extensions_get_api_v1(uint32_t size, echo_ext_api_v1* output) {
 +  return cef::extensions_bridge::GetApi(size, output);
 +}
++
++extern "C" ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
++cef_echo_extensions_get_api_v2(uint32_t size, echo_ext_api_v2* output) {
++  return cef::extensions_bridge::GetApi2(size, output);
++}
 diff --git a/cef/tests/cefclient/browser/client_handler.cc b/cef/tests/cefclient/browser/client_handler.cc
-index f7f8cb3ce..469c46077 100644
+index f7f8cb3..469c460 100644
 --- a/cef/tests/cefclient/browser/client_handler.cc
 +++ b/cef/tests/cefclient/browser/client_handler.cc
 @@ -3,6 +3,9 @@
@@ -1078,7 +1449,7 @@ index f7f8cb3ce..469c46077 100644
  bool ClientHandler::OnRequestMediaAccessPermission(
 diff --git a/cef/tests/cefclient/browser/echo_extension_probe.h b/cef/tests/cefclient/browser/echo_extension_probe.h
 new file mode 100644
-index 000000000..c0653a786
+index 0000000..c0653a7
 --- /dev/null
 +++ b/cef/tests/cefclient/browser/echo_extension_probe.h
 @@ -0,0 +1,11 @@
@@ -1095,7 +1466,7 @@ index 000000000..c0653a786
 +#endif
 diff --git a/cef/tests/cefclient/browser/echo_extension_probe_mac.mm b/cef/tests/cefclient/browser/echo_extension_probe_mac.mm
 new file mode 100644
-index 000000000..c4b1649d2
+index 0000000..c4b1649
 --- /dev/null
 +++ b/cef/tests/cefclient/browser/echo_extension_probe_mac.mm
 @@ -0,0 +1,445 @@
@@ -1545,7 +1916,7 @@ index 000000000..c4b1649d2
 +}
 +}  // namespace client
 diff --git a/cef/tests/cefclient/browser/main_context_impl.cc b/cef/tests/cefclient/browser/main_context_impl.cc
-index f93a81583..99b9e7c62 100644
+index f93a815..99b9e7c 100644
 --- a/cef/tests/cefclient/browser/main_context_impl.cc
 +++ b/cef/tests/cefclient/browser/main_context_impl.cc
 @@ -191,6 +191,11 @@ void MainContextImpl::PopulateSettings(CefSettings* settings) {
@@ -1561,7 +1932,7 @@ index f93a81583..99b9e7c62 100644
    if (use_windowless_rendering_) {
      settings->windowless_rendering_enabled = true;
 diff --git a/cef/tests/cefclient/browser/root_window_manager.cc b/cef/tests/cefclient/browser/root_window_manager.cc
-index e804c4aed..8e3c890e0 100644
+index e804c4a..8e3c890 100644
 --- a/cef/tests/cefclient/browser/root_window_manager.cc
 +++ b/cef/tests/cefclient/browser/root_window_manager.cc
 @@ -107,6 +107,10 @@ RootWindowManager::~RootWindowManager() {
@@ -1575,8 +1946,74 @@ index e804c4aed..8e3c890e0 100644
    CefBrowserSettings settings;
    MainContext::Get()->PopulateBrowserSettings(&settings);
  
+diff --git a/chrome/browser/extensions/extension_install_prompt.cc b/chrome/browser/extensions/extension_install_prompt.cc
+index f11c96c..d604935 100644
+--- a/chrome/browser/extensions/extension_install_prompt.cc
++++ b/chrome/browser/extensions/extension_install_prompt.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/extensions/extension_install_prompt.h"
++#include "base/no_destructor.h"
+ 
+ #include <optional>
+ #include <utility>
+@@ -70,6 +71,16 @@ ExtensionInstallPrompt::DoneCallbackPayload::DoneCallbackPayload(
+     std::string justification)
+     : result(result), justification(std::move(justification)) {}
+ 
++namespace {
++ExtensionInstallPrompt::EmbedderDialogCallback& EmbedderDialog() {
++  static base::NoDestructor<ExtensionInstallPrompt::EmbedderDialogCallback> value;
++  return *value;
++}
++}  // namespace
++void ExtensionInstallPrompt::SetEmbedderDialogCallback(EmbedderDialogCallback callback) {
++  EmbedderDialog() = std::move(callback);
++}
++
+ // static
+ InstallPromptData::PromptType
+ ExtensionInstallPrompt::GetReEnablePromptTypeForExtension(
+@@ -205,7 +216,7 @@ void ExtensionInstallPrompt::ShowInstallDialog(DoneCallback install_callback,
+                                                const SkBitmap* icon) {
+   DCHECK(prompt_);
+   ShowDialog(std::move(install_callback), extension, icon,
+-             GetDefaultShowDialogCallback());
++             ShowDialogCallback());
+ }
+ 
+ std::unique_ptr<InstallPromptData>
+@@ -289,6 +300,10 @@ void ExtensionInstallPrompt::ShowConfirmation() {
+   if (AutoConfirmPromptIfEnabled())
+     return;
+ 
++  if (show_dialog_callback_.is_null() && !EmbedderDialog().is_null() &&
++      EmbedderDialog().Run(show_params_, done_callback_, prompt_)) {
++    return;
++  }
+   if (show_dialog_callback_.is_null())
+     show_dialog_callback_ = GetDefaultShowDialogCallback();
+   // TODO(crbug.com/40625151): Use OnceCallback and eliminate the need for
+diff --git a/chrome/browser/extensions/extension_install_prompt.h b/chrome/browser/extensions/extension_install_prompt.h
+index 203636d..d5dffaf 100644
+--- a/chrome/browser/extensions/extension_install_prompt.h
++++ b/chrome/browser/extensions/extension_install_prompt.h
+@@ -56,6 +56,12 @@ class ExtensionInstallPrompt : public extensions::ExtensionInstallPromptClient {
+       DoneCallback,
+       std::unique_ptr<extensions::InstallPromptData>)>;
+ 
++  using EmbedderDialogCallback = base::RepeatingCallback<bool(
++      std::unique_ptr<ExtensionInstallPromptShowParams>&,
++      DoneCallback&,
++      std::unique_ptr<extensions::InstallPromptData>&)>;
++  static void SetEmbedderDialogCallback(EmbedderDialogCallback callback);
++
+   // Callback to show the default extension install dialog.
+   // The implementations of this function are platform-specific.
+   static ShowDialogCallback GetDefaultShowDialogCallback();
 diff --git a/chrome/browser/extensions/webstore_standalone_installer.cc b/chrome/browser/extensions/webstore_standalone_installer.cc
-index 2465fb793e..ea26c50cf4 100644
+index 2465fb7..ea26c50 100644
 --- a/chrome/browser/extensions/webstore_standalone_installer.cc
 +++ b/chrome/browser/extensions/webstore_standalone_installer.cc
 @@ -357,7 +357,12 @@ void WebstoreStandaloneInstaller::ShowInstallUI() {
@@ -1594,7 +2031,7 @@ index 2465fb793e..ea26c50cf4 100644
  
  void WebstoreStandaloneInstaller::OnWebStoreDataFetcherDone() {
 diff --git a/chrome/browser/extensions/webstore_standalone_installer.h b/chrome/browser/extensions/webstore_standalone_installer.h
-index 335db52316..13c57033c7 100644
+index 335db52..13c5703 100644
 --- a/chrome/browser/extensions/webstore_standalone_installer.h
 +++ b/chrome/browser/extensions/webstore_standalone_installer.h
 @@ -128,6 +128,9 @@ class WebstoreStandaloneInstaller
@@ -1607,8 +2044,53 @@ index 335db52316..13c57033c7 100644
    // Create an approval to pass installation parameters to the CrxInstaller.
    virtual std::unique_ptr<InstallApproval> CreateApproval() const;
  
+diff --git a/extensions/browser/api/webstore_private/webstore_private_api.cc b/extensions/browser/api/webstore_private/webstore_private_api.cc
+index ad5ac45..aa2f87e 100644
+--- a/extensions/browser/api/webstore_private/webstore_private_api.cc
++++ b/extensions/browser/api/webstore_private/webstore_private_api.cc
+@@ -972,7 +972,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::OnInstallPromptDone(
+       bool withhold_permissions = payload.result ==
+                                   ExtensionInstallPromptClient::Result::
+                                       ACCEPTED_WITH_WITHHELD_PERMISSIONS;
+-      HandleInstallProceed(withhold_permissions);
++      HandleInstallProceed(withhold_permissions, payload.use_embedder_ui);
+       break;
+     }
+     case ExtensionInstallPromptClient::Result::USER_CANCELED:
+@@ -1031,7 +1031,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::
+ }
+ 
+ void WebstorePrivateBeginInstallWithManifest3Function::HandleInstallProceed(
+-    bool withhold_permissions) {
++    bool withhold_permissions, bool use_embedder_ui) {
+   // This gets cleared in CrxInstaller::ConfirmInstall(). TODO(asargent) - in
+   // the future we may also want to add time-based expiration, where an
+   // allowlist entry is only valid for some number of minutes.
+@@ -1042,7 +1042,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::HandleInstallProceed(
+   approval->use_app_installed_bubble = !!details().app_install_bubble;
+   // If we are enabling the launcher, we should not show the app list in order
+   // to train the user to open it themselves at least once.
+-  approval->skip_post_install_ui = !!details().enable_launcher;
++  approval->skip_post_install_ui = use_embedder_ui || !!details().enable_launcher;
+   approval->dummy_extension = dummy_extension_.get();
+   approval->installing_icon = gfx::ImageSkia::CreateFrom1xBitmap(icon_);
+   approval->bypassed_safebrowsing_friction = friction_dialog_shown_;
+diff --git a/extensions/browser/api/webstore_private/webstore_private_api.h b/extensions/browser/api/webstore_private/webstore_private_api.h
+index 2600fb5..fa83cc6 100644
+--- a/extensions/browser/api/webstore_private/webstore_private_api.h
++++ b/extensions/browser/api/webstore_private/webstore_private_api.h
+@@ -136,7 +136,8 @@ class WebstorePrivateBeginInstallWithManifest3Function
+   void OnRequestParentApprovalPromptCancelled();
+ 
+   // Permissions are granted by default.
+-  void HandleInstallProceed(bool withhold_permissions = false);
++  void HandleInstallProceed(bool withhold_permissions = false,
++                            bool use_embedder_ui = false);
+   void HandleInstallAbort(bool user_initiated);
+ 
+   ExtensionFunction::ResponseValue BuildResponse(
 diff --git a/extensions/browser/crx_installer.cc b/extensions/browser/crx_installer.cc
-index f683c18947..79f770e393 100644
+index f683c18..79f770e 100644
 --- a/extensions/browser/crx_installer.cc
 +++ b/extensions/browser/crx_installer.cc
 @@ -187,6 +187,7 @@ CrxInstaller::CrxInstaller(content::BrowserContext* context,
@@ -1639,7 +2121,7 @@ index f683c18947..79f770e393 100644
        current_version_.CompareTo(extension()->version()) > 0) {
      ReportFailureFromSharedFileThread(CrxInstallError(
 diff --git a/extensions/browser/crx_installer.h b/extensions/browser/crx_installer.h
-index 27352c2362..2b33caa90a 100644
+index 27352c2..2b33caa 100644
 --- a/extensions/browser/crx_installer.h
 +++ b/extensions/browser/crx_installer.h
 @@ -6,6 +6,7 @@
@@ -1666,8 +2148,22 @@ index 27352c2362..2b33caa90a 100644
    bool approved_;
  
    // For updates, external and webstore installs we have an ID we're expecting
+diff --git a/extensions/browser/extension_install_prompt_client.h b/extensions/browser/extension_install_prompt_client.h
+index 429076f..863cf49 100644
+--- a/extensions/browser/extension_install_prompt_client.h
++++ b/extensions/browser/extension_install_prompt_client.h
+@@ -38,6 +38,9 @@ class ExtensionInstallPromptClient {
+     DoneCallbackPayload(Result result, std::string justification);
+     ~DoneCallbackPayload() = default;
+ 
++    // Native embedders own confirmation and post-install presentation only.
++    // This does not change permissions, policy or CRX verification.
++    bool use_embedder_ui = false;
+     const Result result;
+     const std::string justification;
+   };
 diff --git a/extensions/browser/install_approval.h b/extensions/browser/install_approval.h
-index 00a98e0c32..84c985f529 100644
+index 00a98e0..84c985f 100644
 --- a/extensions/browser/install_approval.h
 +++ b/extensions/browser/install_approval.h
 @@ -6,10 +6,12 @@

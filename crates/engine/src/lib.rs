@@ -78,6 +78,8 @@ mod page_archive;
 pub use page_archive::{PageArchiveError, PageArchiveRequest};
 mod storage;
 mod shutdown;
+mod shutdown_recovery;
+pub use shutdown_recovery::run_verifier_process as run_storage_verifier_process;
 pub use shutdown::{ShutdownPhase, ShutdownStatus};
 pub use storage::StorageKey;
 pub use editing::subprocess_app;
@@ -392,6 +394,7 @@ impl Engine {
             }
 
             let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+            shutdown_recovery::recover(&root_cache)?;
 
             #[cfg(target_os = "macos")]
             mac::install_app_protocols();
@@ -409,7 +412,9 @@ impl Engine {
                 ..Default::default()
             };
             let args = args::Args::new();
-            let mut app = EngineApp::new();
+            let mut app = EngineApp::new(
+                storage::utf8_path(&root_cache.join(shutdown_recovery::MARKER))?.to_owned(),
+            );
             if initialize(
                 Some(args.as_main_args()),
                 Some(&settings),
@@ -1970,7 +1975,7 @@ wrap_keyboard_handler! {
 }
 
 wrap_app! {
-    struct EngineApp;
+    struct EngineApp { shutdown_marker: String }
 
     impl App {
         fn on_before_command_line_processing(
@@ -1981,6 +1986,10 @@ wrap_app! {
             // Development builds are unsigned, so macOS asks for the keychain
             // password after every rebuild. Release builds use the real keychain.
             if let Some(command_line) = command_line {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("echo-shutdown-marker")),
+                    Some(&CefString::from(self.shutdown_marker.as_str())),
+                );
                 command_line.append_switch(Some(&CefString::from("echo-video-only-pip")));
                 #[cfg(target_os = "linux")]
                 command_line.append_switch_with_value(Some(&CefString::from("ozone-platform")), Some(&CefString::from("x11")));

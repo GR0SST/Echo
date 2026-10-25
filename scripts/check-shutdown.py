@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Native shutdown and restart persistence matrix; build with cargo run -p bundle.
 
-Each drive run independently acquires the shared screen lock with a 75s holder
+Each drive run independently acquires the shared screen lock with a 120s holder
 limit. Only freshly created fixture profiles are used. No Arc input is sent.
 """
 import argparse
@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived"], action="append")
     parser.add_argument("--keep-going", action="store_true", help="collect all scenarios even after a failing quit")
     parser.add_argument("--bundle", default=str(ROOT / "target/bundle/Echo.app"))
+    parser.add_argument("--cef-dist", help="require this distribution's exact framework before the matrix")
     parser.add_argument("--appearance", choices=["Light", "Dark"], default="Dark")
     parser.add_argument("--profiles", type=int, default=3, help="persistent profile count for profiles/combined cases")
     parser.add_argument("--repeat", type=int, default=1)
@@ -67,10 +68,15 @@ def main():
     # replace files midway through the matrix or a driver copy.
     frozen_bundle = evidence / "source.app"
     shutil.copytree(pathlib.Path(args.bundle).resolve(), frozen_bundle, symlinks=True)
+    framework_hash = hashlib.sha256((frozen_bundle / "Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework").read_bytes()).hexdigest()
+    if args.cef_dist:
+        dist_binary = pathlib.Path(args.cef_dist).resolve() / "Chromium Embedded Framework.framework/Chromium Embedded Framework"
+        assert framework_hash == hashlib.sha256(dist_binary.read_bytes()).hexdigest(), "Shutdown bundle differs from the selected canonical CEF"
     (evidence / "bundle.json").write_text(json.dumps({
         "source": str(pathlib.Path(args.bundle).resolve()),
         "main_sha256": hashlib.sha256((frozen_bundle / "Contents/MacOS/Echo").read_bytes()).hexdigest(),
-        "framework_sha256": hashlib.sha256((frozen_bundle / "Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework").read_bytes()).hexdigest(),
+        "framework_sha256": framework_hash,
+        "cef_dist": str(pathlib.Path(args.cef_dist).resolve()) if args.cef_dist else None,
     }, indent=2))
     observations = []
     observations_lock = threading.Lock()

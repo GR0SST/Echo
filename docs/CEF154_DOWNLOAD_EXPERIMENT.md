@@ -2,8 +2,15 @@
 
 This source checkpoint investigates continuing downloads after their originating
 tab or window closes. It adds request identity and lifetime facts that stock CEF
-does not expose. Echo's normal Cargo build still uses its existing prebuilt CEF;
-these patches do not enable production download admission.
+does not expose. The canonical local CEF recipe now compiles this checkpoint
+before the extension, shutdown and PiP patches; the portable prebuilt fallback
+remains available. Compiling these patches does not enable production download
+admission. The selected-test record below remains the checkpoint's original
+qualification, not an additional canonical acceptance gate.
+
+Use `bun scripts/cef-stack.ts check /path/to/cef154/chromium/src` to verify the
+combined stack. The historical manifest checker below describes this receipt
+checkpoint in isolation; its byte images intentionally exclude later patches.
 
 The [patch directory](../patches/cef154/) contains the Chromium and CEF diffs,
 their source manifest, a selected-test record and native test XML. It contains no

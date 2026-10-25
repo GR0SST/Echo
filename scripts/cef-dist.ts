@@ -1,5 +1,5 @@
 // Adapt the official minimal distribution to cef-rs' flattened CEF_PATH layout.
-import { mkdir, realpath, symlink, lstat } from "node:fs/promises";
+import { mkdir, realpath, symlink, lstat, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 export const version = "154.0.34+g14c5a08+chromium-154.0.8037.98";
@@ -54,12 +54,59 @@ async function stage(source: string, destination: string) {
   console.log(await validate(dst));
 }
 
+// Publish immutable adapters. Future updates replace only this symlink; Cargo
+// readers keep their resolved generation until the qualification/cleanup step.
+export async function publish(source: string, destination: string) {
+  const src = await validate(source), dst = resolve(destination);
+  if (src === dst) throw new Error("Canonical distribution cannot point to itself");
+  const next = `${dst}.next-${crypto.randomUUID()}`;
+  let previous: string | null = null;
+  let migrated = false;
+  await symlink(src, next);
+  try {
+    let stat;
+    try { stat = await lstat(dst); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (stat?.isSymbolicLink()) {
+      previous = await realpath(dst);
+    } else if (stat) {
+      if (!stat.isDirectory()) throw new Error(`Refusing to replace ${dst}`);
+      await validate(dst);
+      previous = `${dst}.previous-${crypto.randomUUID()}`;
+      await rename(dst, previous);
+      migrated = true;
+    }
+    try { await rename(next, dst); }
+    catch (error) { if (migrated) await rename(previous!, dst); throw error; }
+    return { path: dst, generation: src, previous };
+  } finally { await rm(next, { force: true }); }
+}
+
+async function qualified(source: string) {
+  const dist = await validate(source);
+  const build = await Bun.file(join(dist, 'build.json')).json();
+  const q = await Bun.file(join(dist, 'qualification.json')).json();
+  const expected = build.framework_sha256;
+  if (!q.native_passed || !q.rust_tests?.passed || !q.candidate_bundle?.passed ||
+      !q.codecs?.passed || !q.extensions?.passed || !q.pip?.passed || !q.browsing_data?.passed || !q.shutdown_recovery?.passed ||
+      q.shutdown?.clean_exits !== 16 || q.shutdown.matrix.length !== 8 ||
+      q.shutdown.matrix.some((r: any) => !r.passed || !r.cookies_verified) ||
+      q.framework_sha256 !== expected || q.codecs.bundledHash !== expected ||
+      [q.extensions, q.pip, q.browsing_data, q.shutdown_recovery].some((r: any) => r.framework_sha256 !== expected)) throw Error('All five native gates, shutdown recovery and Rust validation must pass before canonical publication');
+  const hash = new Bun.CryptoHasher('sha256');
+  for await (const bytes of Bun.file(join(dist, 'Chromium Embedded Framework.framework/Chromium Embedded Framework')).stream()) hash.update(bytes);
+  if (hash.digest('hex') !== expected) throw Error('CEF framework changed after native qualification');
+  return dist;
+}
+
 if (import.meta.main) {
   const [mode, source, destination, ...extra] = Bun.argv.slice(2);
   try {
     if (mode === "stage" && source && destination && !extra.length) await stage(source, destination);
+    else if (mode === "publish" && source && destination && !extra.length) console.log(JSON.stringify(await publish(await qualified(source), destination)));
     else if (mode === "check" && source && !destination) console.log(await validate(source));
-    else throw new Error("Usage: bun scripts/cef-dist.ts stage <minimal-dist> <cef-path> | check <cef-path>");
+    else throw new Error("Usage: bun scripts/cef-dist.ts stage <minimal-dist> <cef-path> | publish <generation> <canonical-path> | check <cef-path>");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

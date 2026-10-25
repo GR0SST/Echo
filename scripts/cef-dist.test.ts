@@ -59,3 +59,49 @@ test("incomplete archive metadata is rejected before cef-rs can fall back", asyn
   }));
   await expect(validate(path)).rejects.toThrow("archive metadata");
 });
+
+test("canonical publication retains the old generation and switches one symlink", async () => {
+  const { publish } = await import('./cef-dist');
+  const { realpath, lstat } = await import('node:fs/promises');
+  const first = await fixture(), second = await fixture();
+  const parent = await mkdtemp(join(tmpdir(), 'echo-cef-publish-')); directories.push(parent);
+  const canonical = join(parent, 'echo-extensions-dist');
+  const initial = await publish(first, canonical);
+  expect(initial.previous).toBeNull();
+  const updated = await publish(second, canonical);
+  expect(updated.previous).toBe(await realpath(first));
+  expect(await realpath(canonical)).toBe(await realpath(second));
+  expect((await lstat(canonical)).isSymbolicLink()).toBe(true);
+  expect(await validate(first)).toBe(await realpath(first));
+});
+
+test("the original directory adapter is preserved during one-time migration", async () => {
+  const { publish } = await import('./cef-dist');
+  const { realpath } = await import('node:fs/promises');
+  const original = await fixture(), next = await fixture();
+  const result = await publish(next, original);
+  directories.push(result.previous!);
+  expect(await validate(result.previous!)).toBe(await realpath(result.previous!));
+  expect(await realpath(original)).toBe(await realpath(next));
+});
+
+test("publication cannot replace an unrelated directory", async () => {
+  const { publish } = await import('./cef-dist');
+  const source = await fixture(), destination = await mkdtemp(join(tmpdir(), 'echo-cef-unrelated-'));
+  directories.push(destination);
+  await Bun.write(join(destination, 'unrelated'), 'preserve me');
+  await expect(publish(source, destination)).rejects.toThrow();
+  expect(await Bun.file(join(destination, 'unrelated')).text()).toBe('preserve me');
+});
+
+test('the publication CLI refuses an unqualified candidate before changing the default', async () => {
+  const { publish } = await import('./cef-dist');
+  const { realpath } = await import('node:fs/promises');
+  const current = await fixture(), candidate = await fixture();
+  const parent = await mkdtemp(join(tmpdir(), 'echo-cef-qualified-publish-')); directories.push(parent);
+  const canonical = join(parent, 'echo-extensions-dist');
+  await publish(current, canonical);
+  const child = Bun.spawn(['bun', new URL('./cef-dist.ts', import.meta.url).pathname, 'publish', candidate, canonical], { stdout: 'pipe', stderr: 'pipe' });
+  expect(await child.exited).not.toBe(0);
+  expect(await realpath(canonical)).toBe(await realpath(current));
+});

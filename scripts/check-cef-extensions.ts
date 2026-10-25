@@ -1,7 +1,8 @@
 // Final native-only MV3 popup gate. Uses private CEF profiles and no owner data.
-import { mkdir, mkdtemp, realpath } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { validate } from "./cef-dist";
 
 if (!Bun.argv.includes("--locked")) {
   const child = Bun.spawn(["lockf", "-k", "-t", "120", "/tmp/echo-screen.lock",
@@ -17,11 +18,31 @@ const deadline = setTimeout(() => {
 deadline.unref();
 const source = process.env.ECHO_CEF_SOURCE ?? join(process.env.HOME!, "Documents/Bot/cef-src");
 const out = join(source, "chromium/src/out/Release_GN_arm64");
-const bundle = join(out, "cefclient.app/Contents");
-const framework = await realpath(join(bundle, "Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework"));
+const dist = await validate(process.env.ECHO_CEF_DIST ?? join(source, "echo-extensions-dist"));
 const profiles = await realpath(await mkdtemp(join(tmpdir(), "echo-mv3-gate-")));
 const evidence = join(source, "qualification", `extensions-${new Date().toISOString().replaceAll(":", "-")}`);
 await mkdir(evidence, { recursive: true });
+const privateApp = join(profiles, "cefclient.app");
+const bundle = join(privateApp, "Contents");
+const frameworkBinary = "Chromium Embedded Framework";
+const frameworkName = `${frameworkBinary}.framework`;
+async function copy(from: string, to: string) {
+  const child = Bun.spawn(["cp", "-cR", from, to]);
+  if (await child.exited !== 0) throw Error(`Cannot freeze native extension harness: ${from}`);
+}
+async function digest(path: string) {
+  const hash = new Bun.CryptoHasher("sha256");
+  for await (const chunk of Bun.file(path).stream()) hash.update(chunk);
+  return hash.digest("hex");
+}
+await copy(join(out, "cefclient.app"), privateApp);
+await rm(join(bundle, "Frameworks", frameworkName), { recursive: true });
+await copy(await realpath(join(dist, frameworkName)), join(bundle, "Frameworks", frameworkName));
+const framework = await realpath(join(bundle, "Frameworks", frameworkName, frameworkBinary));
+const frameworkHash = await digest(framework);
+if (frameworkHash !== await digest(join(dist, frameworkName, frameworkBinary))) throw Error("Extension harness does not contain the selected canonical CEF");
+await Bun.write(join(evidence, "bundle.json"), JSON.stringify({ dist, framework_sha256: frameworkHash,
+  test_executable_sha256: await digest(join(bundle, "MacOS/cefclient")) }, null, 2) + "\n");
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
   const profile = new URL(request.url).pathname === "/B" ? "B" : "A";
   return new Response(`<!doctype html><title>Alloy profile ${profile}</title>
@@ -54,7 +75,9 @@ try {
     result.close_b === 4 && result.ready && result.popup_loaded && result.visible_native_view &&
     result.popup_closed && (result.management_ok || process.env.ECHO_CEF_TEST_POPUP_ONLY === "1") && result.title === "POPUP_GATE:1:fixture-profile-A" &&
     await Bun.file(join(evidence, "popup.png")).exists();
-  console.log(JSON.stringify({ passed: Boolean(passed), exitCode, result, profiles, evidence }, null, 2));
+  const report = { passed: Boolean(passed), exitCode, result, profiles, evidence, dist, framework_sha256: frameworkHash };
+  await Bun.write(join(evidence, "qualification.json"), JSON.stringify(report, null, 2) + "\n");
+  console.log(JSON.stringify(report, null, 2));
   if (!passed) process.exitCode = 1;
 } finally {
   clearTimeout(deadline);

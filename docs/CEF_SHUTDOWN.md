@@ -1,7 +1,42 @@
 # CEF shutdown investigation
 
-Status: the final source-side deadline/failure correction passed 16/16 clean native exits. CEF 154.0.34 / Chromium 154.0.8037.98.
-The original prebuilt investigation and 8/16 watchdog baseline are retained below.
+Status: the final six-patch generation `20261025T160409Z-9401` passed **16/16
+clean native exits**, all twelve HTTP cookie checks and the separate PiP input
+harness. The forced-timeout regression exits normally, reaps its network helper,
+and verifies retained cookie/localStorage/IndexedDB stores on restart. Corrupt
+storage is preserved and rejected. CEF 154.0.34 / Chromium 154.0.8037.98.
+The original 8/16 watchdog baseline and earlier CHECK/exit-133 policy are
+retained below as history. Exact build/qualification records are in
+[CEF_BUILD.md](CEF_BUILD.md#native-qualification-and-publication).
+
+## Later exit-133 regression and bounded recovery
+
+The five-patch PiP qualification at
+`~/Documents/Bot/cef-src/qualification/canonical-2026-10-25T14-26-06.837Z/pip-soapy02w/`
+found another real failure: the parent CHECK fired after its ten-second network
+wait, while network helper 54499 was still draining ThreadPool work. Its shutdown
+log eventually reports **79,816,387 µs**. The Network Persistent State atomic
+flush only began near the end of that interval and itself took **4,354 µs**;
+this evidence identifies delayed pending work, rather than an 80-second fsync.
+The parent had already crashed (exit 133), leaving the helper running temporarily.
+An earlier clean 16-exit matrix therefore did not justify that CHECK policy.
+
+The revised source policy waits up to 60 seconds for graceful network shutdown
+in the background. It atomically records an interrupted-shutdown marker before
+terminating a late helper, escalates and reaps within two seconds, and returns
+normally. The outer watchdog reserves 72 seconds including ordinary teardown.
+Quit hides the window immediately. Next launch uses a separate bounded headless
+process and the same bundled CEF to verify cookie/storage integrity before CEF
+opens the profile. Failed checks preserve stores and the marker. See the current
+canonical qualification and exact commands in [CEF_BUILD.md](CEF_BUILD.md).
+
+The deterministic native regression shortens the grace period to 500 ms and
+delays only the test network helper by five seconds. Both overrides require
+`ECHO_CEF_TEST_MODE` and `ECHO_SHUTDOWN_TRACE`; neither is active in production.
+It asserts normal parent exit, marker creation, helper reaping, successful
+cookie/localStorage/IndexedDB recovery on restart, and rejection of an untouched
+corrupt SQLite fixture. Production 16-exit/PiP runs forbid those overrides and
+require every network helper to exit gracefully.
 
 ## What the old log concealed
 
@@ -133,7 +168,7 @@ That investigation required a CEF-side build, and its worktree had no `src/`
 checkout. It did not start a source patch or build. The subsequent source work
 is documented below; the earlier unproven scheduling changes were not retained.
 
-## Source correction (2026-10-25)
+## Historical phase-three correction (2026-10-25)
 
 `patches/cef154/shutdown-durability.patch` corrects the confirmed enclosing-deadline
 collision. `content/public/common/shutdown_timeouts.h` now supplies the network

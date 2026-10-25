@@ -13,6 +13,188 @@ the selection, and an explicit `CEF_PATH` overrides automatic detection.
 after changing or removing a distribution. Direct `cargo test` keeps Cargo's
 portable prebuilt default unless wrapped or given an explicit `CEF_PATH`.
 
+## Canonical distribution
+
+The current recipe applies every top-level patch in
+[`patches/cef154/series.json`](../patches/cef154/series.json), in this order:
+
+1. `chromium.patch` — Chromium download-receipt checkpoint.
+2. `cef.patch` — its CEF bridge and loader.
+3. `extensions-bridge.patch` — Alloy actions, profile services and install prompts.
+4. `shutdown-durability.patch` — bounded background shutdown, helper reaping and storage recovery.
+5. `video-pip.patch` — the final video-only pointer presentation and keyboard fallback.
+6. `browsing-data-bridge.patch` — profile-scoped browsing-data deletion callbacks.
+
+The extension patch is rebased over the receipt checkpoint. Both headers and
+exports are retained in their shared CEF build lists, and both integrations remain
+in the download delegate. `scripts/cef-stack.ts` rehearses the complete ordered
+stack on a shadow of its selected files before writing anything. It rejects
+partial/edited stacks and unlisted patches. An already-applied stack must reverse
+and reapply exactly. It does not reset source or modify `depot_tools`.
+
+```sh
+# Fresh external checkout only: official automate-git prepares the pinned base.
+scripts/build-cef.sh sync
+# Existing prepared checkout: one locked Release arm64 build and package.
+scripts/build-cef.sh release
+# Full Rust suite and native gates; publish only the qualified generation.
+bun scripts/check-cef-canonical.ts
+# Only after every gate passes, remove superseded external distributions.
+bun scripts/clean-cef-dists.ts
+```
+
+`release` is the default mode. Every sync/build/package operation holds immutable
+`/tmp/echo-cef-build.lock`, inherits `nice -n 10`, and uses Ninja `-j 8`. Only
+`Release_GN_arm64` is generated. `sync` refuses to overwrite custom sources;
+use `release` for incremental work. Generation uses CEF's official `gn_args.py`
+helpers after translator/version-manager updates. It does not rerun CEF's base
+patcher over the custom stack: the receipt changes overlap `content_2015.patch`.
+The latter was verified as already applied in a shadow with the custom stack
+reversed. API hashes remained unchanged.
+
+Packages are immutable generations under `cef-src/canonical-binary-distrib/`;
+flattened cef-rs adapters are under `cef-src/canonical-adapters/`.
+`cef-src/echo-extensions-dist` points to the current adapter, the same path used
+by automatic bundling. Publication changes one symlink. The first migration
+preserves the original directory adapter under `.previous-<id>` until checks
+pass. `build.json` records source/tool pins, ordered patch hashes, selected-source
+hash, GN definitions, build duration, archive digest and framework SHA-256.
+Separate `echo-dist`, `echo-pip-dist` and `echo-pip-final-dist` adapters are obsolete.
+
+`release` stages a candidate and writes `cef-src/candidate-path`; it does not
+publish it. The canonical acceptance runner tests that exact candidate: complete
+`cargo test`, an explicit candidate bundle, H.264/AAC playback, an Alloy
+MV3 popup with second-profile isolation, eight shutdown write/restart scenarios
+(16 clean exits with HTTP cookie persistence), and the native PiP harness.
+It also forces a network timeout to prove normal parent exit, helper termination,
+and next-launch cookie/localStorage/IndexedDB recovery; a corrupt SQLite fixture
+must be rejected without modifying it. A separate deletion smoke test seeds and
+removes cookies, localStorage, IndexedDB and CacheStorage through patch #6.
+Every native result must carry the candidate framework hash. Screen holders use
+`/tmp/echo-screen.lock`, hard timeouts and disposable Echo Test profiles.
+
+Only after these checks pass does the runner write a native qualification receipt
+and publish the adapter with one atomic symlink switch under the build lock. It
+then runs plain `cargo run -p bundle` without CEF overrides and verifies the default
+framework hash before marking the entire qualification passed. During development,
+`ECHO_CEF_BROWSING_DATA_BUNDLE` can select the data agent's probe-enabled bundle;
+the smoke harness replaces its entire framework with the candidate and verifies
+both executable and framework hashes in its evidence.
+
+Cleanup takes the same CEF build lock and requires the complete qualification
+receipt and matching framework. It preserves the canonical generation, sources,
+objects, evidence and prebuilt fallback. `cleanup.json` records removed paths and
+logical disk size. Compiling the download receipt checkpoint does not enable
+production download admission.
+
+### Published six-patch generation
+
+Generation `20261025T160409Z-9401` was staged on 2026-10-25. Its incremental
+compile/link and budget regression took **92 seconds**, and complete build and
+packaging took **183 seconds**, under the same pins/GN definitions below.
+Framework SHA-256:
+`9210e6a73e91c143fb62b68261990425226796b962d5c814492290ddb4129324`.
+Minimal archive SHA-1: `3024db11cd195a9c44397a2fea63c40d7e60539f`.
+Before qualification/cleanup, `du -sk cef-src` measured **77,841,664 KiB
+(74.24 GiB)**, including sources, objects, all generations and retained evidence.
+The verifier recognizes both origin-prefixed and plain bucket `indexeddb.leveldb`
+filenames. A real closed IndexedDB clone in the bucket layout failed on the
+preceding candidate and passed this framework with 19 entries, at
+`cef-src/qualification/bucket-positive-0vr6e_7p/`. Full canonical qualification
+also repeats this layout check after its real forced-timeout/restart test.
+
+### Native qualification and publication
+
+The final framework passed full `cargo test`: **1,695 passed, zero failed, one
+existing ignored**, including doctests. All 23 Bun build/stack/cleanup tests passed.
+The native matrix passed **16/16 clean exits**, all twelve HTTP cookie persistence
+checks, private isolation and sixteen graceful network-helper exits. CEF shutdown
+median/max were **152/363 ms**; full background teardown median/max were
+**204.5/2,275 ms**. The existing immediate-hide behavior remains in place; its
+CoreGraphics request-to-window-gone qualification is documented in
+[CEF_SHUTDOWN.md](CEF_SHUTDOWN.md#quit-visibility-and-latency).
+
+The same framework passed H.264/AAC decoding (100 rendered frames, zero drops,
+68,287 decoded audio bytes, 2,492,416 stereo 48 kHz samples), Alloy MV3 popup
+isolation, native PiP input/return/manual re-entry/close, and browsing-data removal
+of seeded cookies, localStorage, IndexedDB and CacheStorage (`failed_bits=0`).
+Forced timeout exited normally and reaped helper 73124; restart verified one
+SQLite database and eleven LevelDB stores, preserved all three sentinels, and
+cleared its marker only after writing a receipt. The plain bucket IndexedDB clone
+passed with 19 entries, and a corrupt SQLite copy was rejected unchanged.
+
+Evidence root:
+`cef-src/qualification/canonical-2026-10-25T16-07-28.461Z/`.
+The first PiP attempt stopped at the unchanged visibility guard because an Arc
+layer-500 auxiliary panel covered it; Echo still exited normally. After a short
+wait, the first retry passed without restarting Arc. The original failed report
+is retained as `result.json`; `result-final.json` and the adapter's
+`qualification.json` combine the actual same-framework reports, after verifying
+that the executable hash matched the frozen matrix bundle and Rust inputs had
+not changed. `complete-canonical.ts` in the evidence directory records that
+continuation and the locked publication/default-bundle commands. Plain
+`cargo run -p bundle` without CEF overrides selected the published generation
+and its framework hash matched. PiP image pair:
+`pip-mqy6mc2a/idle.png` and `pip-mqy6mc2a/hover.png`; keyboard reveal is
+`pip-mqy6mc2a/tab-reveal.png`. These images were visually inspected.
+
+Qualified cleanup removed **5,634,920 KiB (5.37 GiB)** across 23 superseded
+adapter/package paths, including the separate PiP distributions and all older
+canonical generations. Only `20261025T160409Z-9401` remains in both canonical
+adapter/package roots. `cleanup.json` lists every deletion. After qualification
+and cleanup, the complete source/build/evidence tree measured **81,632,732 KiB
+(77.85 GiB)**; native evidence includes frozen app/profile copies, so that total
+also reflects the acceptance runs. No source, object, evidence or prebuilt
+fallback was deleted.
+
+After rebasing onto main's subsequent UI-only changes, full `cargo test` passed
+**1,706 tests, zero failed, one existing ignored**, with doctests green. The
+rebased bundle passed a fresh native codec check in a self-contained Echo Test
+profile at `cef-src/qualification/2026-10-25T16-49-02.821Z/`; its bundled framework
+still matched the canonical SHA-256. The playback screenshot was inspected.
+
+### Earlier recovery preflight
+
+Generation `20261025T154030Z-56106` was staged on 2026-10-25, using the exact
+pins and GN definitions below. The final incremental compile/link and budget
+regression took **77 seconds**; the complete configuration/build/package
+invocation took **147 seconds**. Its framework SHA-256 is
+`d5e18c3fbe322f8c64262a7a902b06e7be1846408b580680c8257f441d46c57e`; minimal archive SHA-1 is
+`d9d54b1ffaa279a8e7c98137d58035ae851b9a26`. Full actual `args.gn`, tool/source commits and
+all six patch digests are recorded in the adapter's `build.json`.
+
+The forced-timeout preflight passed against this framework at
+`cef-src/qualification/recovery-final-preflight/recovery-6fkqy4wo/`:
+normal parent exit, network helper 70759 reaped, one SQLite database and eleven
+LevelDB stores verified on restart, HTTP cookie/localStorage/IndexedDB sentinels
+retained, and a corrupt SQLite copy rejected without modification. Full canonical
+qualification is separate; staging alone does not change the default symlink.
+
+### Combined build record
+
+The earlier five-patch candidate was built on 2026-10-25. Its framework SHA-256 is
+`dbe532c0f9188392cf8d8f262e614ed134a4552fdcaba06eb4033f9b869a27da`,
+and its minimal archive SHA-1 is `e0605e5a6cf5627f714ed0efac9fc5835ced1a81`.
+Its historical generation is `20261025T140112Z-43046`; the preferred adapter
+path remains `~/Documents/Bot/cef-src/echo-extensions-dist`.
+
+The combined incremental compile/link completed all 4,726 Ninja steps in
+3,674 seconds (61 min 14 s). Editing the running shell wrapper caused a parser
+failure after compilation; no source or compiled object was reset. A restart
+reported no Ninja work and completed configuration, provenance checks,
+packaging and staging in 128 seconds. This candidate was not published after
+the later PiP run exposed a network-helper timeout crash. The two invocation durations total
+3,802 seconds (63 min 22 s), excluding their final disk scans. Logs are
+`cef-src/canonical-release-driver-2.log` and
+`cef-src/canonical-release-driver-3.log`.
+The launcher now snapshots its shell text in memory before entering the lock,
+so later edits cannot invalidate Bash's file offsets during a long build.
+
+Before obsolete-package cleanup, `du -sk cef-src` measured 59,242,032 KiB
+(56.50 GiB), including sources, intermediates, all distributions and logs.
+Other agents were building Rust concurrently; changes in filesystem free
+space are not attributed to this CEF build.
+
 ## Pins and machine
 
 - Rust: `cef = 154.5.0` (`cef-dll-sys 154.5.0+154.0.34`).
@@ -44,10 +226,10 @@ Run from Echo. Xcode and its command-line tools must already be installed.
 Use Bun for the distribution adapter; Python runs CEF's official tooling.
 
 ```sh
-scripts/build-cef.sh all
+scripts/build-cef.sh sync     # only for a fresh checkout
+scripts/build-cef.sh release  # incremental build + canonical package
 
-# Equivalent resumable stages (run sequentially):
-scripts/build-cef.sh sync
+# Resumable stages, when needed (run sequentially):
 scripts/build-cef.sh build
 scripts/build-cef.sh distrib
 ```
@@ -56,7 +238,8 @@ scripts/build-cef.sh distrib
 the existing tooling path. A shared `/tmp/echo-cef-build.lock` serializes all
 stages across Echo worktrees. The entire operation runs under `nice -n 10`;
 the sole Chromium compile command uses `ninja -j 8`. No Debug build is generated.
-No custom Echo CEF/download patches are applied in the codecs phase.
+The original codecs-only phase applied no custom Echo patches. The current
+recipe applies the complete ordered series above.
 
 Exact environment:
 
@@ -103,7 +286,8 @@ use_system_xcode=true
 use_thin_lto=false
 ```
 
-The core official-tool commands, expanded for this host:
+The original codecs-only official-tool commands, expanded for this host
+(historical; use the canonical script above for the complete stack):
 
 ```sh
 src_root=/Users/grosstgrosst/Documents/Bot/cef-src
@@ -140,7 +324,7 @@ own distribution and metadata containing the local archive's actual SHA-1.
 The archive and distribution must remain in place while these links are used.
 
 ```sh
-export ECHO_CEF_DIST=/Users/grosstgrosst/Documents/Bot/cef-src/echo-dist
+export ECHO_CEF_DIST=/Users/grosstgrosst/Documents/Bot/cef-src/echo-extensions-dist
 scripts/with-cef.sh cargo test
 scripts/with-cef.sh cargo run -p bundle
 ```
@@ -152,16 +336,16 @@ bundle utility prefer `~/Documents/Bot/cef-src/echo-extensions-dist` when presen
 on macOS arm64, then fall back to Cargo’s prebuilt configuration. Direct
 `CEF_PATH=/absolute/path` remains supported by cef-rs.
 
-Expected minimal artifact:
+Current minimal artifact (the generation name is recorded in `build.json`):
 
 ```text
-/Users/grosstgrosst/Documents/Bot/cef-src/chromium/src/cef/binary_distrib/
+/Users/grosstgrosst/Documents/Bot/cef-src/canonical-binary-distrib/<generation>/
   cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal.tar.bz2
 ```
 
 Do not commit binaries, source checkouts or intermediate outputs to Echo.
 
-## Qualification record
+## Original codecs-only qualification record
 
 Source preparation started 2026-10-25 at approximately 05:08 UTC and completed
 successfully at approximately 06:05 UTC. The build recipe started at 06:05:23
@@ -200,7 +384,7 @@ Native evidence lives in
 `/Users/grosstgrosst/Documents/Bot/cef-src/qualification/2026-10-25T09-34-59.173Z/`:
 `result.json`, `native.log` and `playback.png`. Full Rust qualification logs are
 `cef-src/cargo-test.log` and `cef-src/bundle.log`.
-An extension bridge has not been implemented yet.
+That phase preceded the extension bridge described below.
 
 Each script stage records UTC start time, elapsed seconds, exit status, total
 source-root disk usage (`du -sk`) and remaining filesystem capacity (`df -k`) in
@@ -220,7 +404,7 @@ curl -fL --retry 3 https://media.w3.org/2010/05/sintel/trailer.mp4 \
 ffprobe -v error -show_entries stream=codec_name,codec_type,profile,width,height,sample_rate \
   -of json "$src_root/fixtures/sintel-trailer.mp4"
 # Run only after custom-distribution cargo test and bundling have passed.
-ECHO_CEF_DIST="$src_root/echo-dist" bun scripts/check-cef-codecs.ts
+ECHO_CEF_DIST="$src_root/echo-extensions-dist" bun scripts/check-cef-codecs.ts
 ```
 
 The fixture has H.264 High, 854×480 video and AAC-LC, 48 kHz audio.
@@ -260,17 +444,17 @@ states that the additional codecs require licensing agreements and fees to
 codec patent holders. Preserve CEF/Chromium/FFmpeg licenses and third-party
 notices; this recipe is not approval to redistribute the resulting binaries.
 
-## Opt-in extension bridge
+## Extension bridge
 
 `patches/cef154/extensions-bridge.patch` is a separate, experimental source
 patch on the same pinned CEF/Chromium revisions. It adds an additive C ABI;
-stock `cef` Rust bindings and their API hashes stay unchanged. The build script
-requires explicit opt-in and verifies either a clean application or the exact
-already-applied patch. It refuses a codec-only build from a patched checkout.
+stock `cef` Rust bindings and their API hashes stay unchanged. The canonical
+build always includes it and verifies the full ordered stack. Operations remain
+runtime-gated by `--echo-enable-extensions-bridge`; the native harness enables it
+explicitly. GPUI extension UI is still a separate implementation task.
 
 ```sh
-ECHO_CEF_EXTENSIONS_BRIDGE=1 scripts/build-cef.sh build
-ECHO_CEF_EXTENSIONS_BRIDGE=1 scripts/build-cef.sh distrib
+scripts/build-cef.sh release
 ECHO_CEF_DIST="$HOME/Documents/Bot/cef-src/echo-extensions-dist" \
   scripts/with-cef.sh cargo test
 ECHO_CEF_DIST="$HOME/Documents/Bot/cef-src/echo-extensions-dist" \
@@ -278,12 +462,13 @@ ECHO_CEF_DIST="$HOME/Documents/Bot/cef-src/echo-extensions-dist" \
 ECHO_CEF_EXTENSIONS_BRIDGE=1 target/bundle/Echo.app/Contents/MacOS/Echo
 ```
 
-The experimental distribution goes to `cef-src/bridge-binary-distrib` and its
-adapter to `cef-src/echo-extensions-dist`. The qualified codec-only archive and
-`cef-src/echo-dist` remain separate. All distributions stay outside Git.
+The original phase-two experiment used `bridge-binary-distrib` and a separate
+codec-only `echo-dist`. The canonical recipe above supersedes those packages;
+all source patches now share `echo-extensions-dist`. All binaries stay outside Git.
 
-`bun scripts/check-cef-extensions.ts` runs the source-built `cefclient` native
-harness under the shared screen lock and a 90-second hard timeout. It uses
+`bun scripts/check-cef-extensions.ts` freezes the source-built `cefclient` native
+harness with the complete selected distribution framework, verifies its hash,
+and runs under the shared screen lock and a 90-second hard timeout. It uses
 fresh canonicalized private profile paths, two actual Alloy pages and no Chrome
 toolbar. Its fixture calls `chrome.extension.getViews({type:"popup"})` and
 `chrome.storage.local` inside a real `ExtensionViewHost`. It checks registry,
@@ -391,32 +576,48 @@ cleanly. Thus the extension build retains the independently delivered codecs.
 ## Shutdown deadline correction
 
 Current source builds always apply `patches/cef154/shutdown-durability.patch`.
-The original phase-one codec qualification used no Echo source patch; its
-preserved distribution is unchanged. Newly built distributions include the
-shutdown correction regardless of whether the optional extension bridge is
-selected. The downloaded prebuilt fallback remains unchanged.
+The original phase-one codec qualification used no Echo source patch; the
+canonical distribution supersedes that package. Newly built distributions
+include the shutdown correction regardless of whether the extension bridge is
+enabled at runtime. The downloaded prebuilt fallback remains unchanged.
 
-The shared timeout policy retains the network service's ten-second graceful
-wait and reserves the existing ten-second release teardown allowance around it.
-The macOS graceful watchdog therefore allows twenty seconds, disarming on actual
-completion. Atomic flushes/replacement and cookie callbacks are unchanged; no
-priority scheduling experiment is included. On macOS a network timeout/nonzero
-helper exit fails explicitly before the inherited TerminateAll fallback, so the
-void CEF shutdown call cannot report success after an unfinished durable write.
+The current policy allows the network service up to **60 seconds** in the
+background, followed by at most **two seconds** to terminate/reap a late helper.
+The outer release watchdog reserves the original ten-second teardown allowance
+as well (72 seconds total). Echo hides its window immediately on Quit; normal
+quit latency and the window disappearance are measured separately. Cookie flush
+callbacks and atomic replacement remain unchanged.
+
+A timeout no longer triggers `CHECK`/SIGTRAP. The parent atomically records
+`echo-dirty-shutdown.json` in its cache root, terminates and reaps its owned helper,
+updates the marker, logs the outcome, and returns normally. Before the next CEF
+startup, Echo launches its own executable in isolated headless verifier mode.
+The same bundled framework checks cookie SQLite integrity and persisted storage
+SQLite/LevelDB integrity, using Chromium's IndexedDB comparator. SQLite opens
+read-only; LevelDB performs ordinary journal recovery with paranoid checks and
+checksum iteration under exclusive locks. The verifier has a 60-second parent
+limit and never repairs, razes or deletes a failed store. Only a successful
+verification writes `echo-shutdown-recovery.json` and clears the marker. Failure
+retains the profile and marker and prevents the engine from opening them.
+
+The previous ten-second fail-closed CHECK described by phase three below is
+historical: a later PiP qualification found a real network shutdown taking about
+80 seconds and exiting 133. This revision replaces that user-visible crash with
+the bounded background policy and explicit recovery above.
 
 `scripts/build-cef.sh build` runs the production-header fake-clock regression in
 `scripts/check-cef-shutdown-budget.sh`. It tests work before/after the full network
 wait for normal and slow-build allowances. A local negative-control copy using
-the original equal deadline fails the assertions. The six-file patch also applies
-and reverses on a fresh pinned-source mirror.
+the original equal deadline fails the assertions. The ordered-stack rehearsal applies and reverses the current patch on selected
+source mirrors before compilation.
 
-The final incremental rebuild took **74 seconds**, including the fake-clock
+The historical phase-three incremental rebuild took **74 seconds**, including the fake-clock
 regression; final minimal packaging took **72 seconds**. Sources, native evidence
 and distributions occupied **53,044,936 KiB (50.59 GiB)** after packaging. The
-previous phase-two archive is retained outside Git at
+previous phase-two archive was retained during that qualification outside Git at
 `/Users/grosstgrosst/Documents/Bot/cef-src/releases/phase2-413c771.tar.bz2`.
 
-The latest `echo-extensions-dist` contains the final qualified patch. Its framework
+That phase's `echo-extensions-dist` contained the final qualified shutdown patch. Its framework
 SHA-256 is `5bddc3b2ea8c251ee8325be37768a775f5e05619082b8db86efe19eaba1c6f6e`;
 the minimal archive SHA-1 is `5d741a3d852ae77895b7e06458c6710730dec7e0`.
 The complete native matrix passed **16/16 exits**, all sixteen graceful zero-status
@@ -424,8 +625,9 @@ network-helper exits and all twelve cookie persistence checks. Maximum observed
 `cef_shutdown` duration was **370 ms**. Current-main workspace tests passed
 **1,610 tests**, zero failed, one existing ignored. Investigation, before/after
 numbers and exact evidence paths are in [CEF_SHUTDOWN.md](CEF_SHUTDOWN.md).
-The original prebuilt fallback and preserved codec-only `echo-dist` do not contain
-this correction; select/rebuild the patched distribution to use it.
+The original prebuilt fallback and the old codec-only package do not contain
+this correction; the canonical distribution includes it together with PiP and
+the extension bridge.
 
 ## Automatic local selection qualification
 

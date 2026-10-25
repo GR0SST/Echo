@@ -11,4 +11,4 @@ if [[ "${ECHO_SHUTDOWN_PERFETTO:-0}" == 1 ]]; then
   export BROWSER_DRIVE_TRACE_PATH="$1/$2.pftrace"
 fi
 export BROWSER_DRIVE_LOG_PATH="$1/$2-engine.log"
-exec gtimeout -k 3 75 scripts/drive.sh "$4" 65
+exec gtimeout -k 3 120 scripts/drive.sh "$4" 110

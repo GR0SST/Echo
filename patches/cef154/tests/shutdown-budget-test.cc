@@ -19,6 +19,16 @@ constexpr bool FullNetworkWaitLeavesRundownRoom(base::TimeDelta rundown) {
 static_assert(FullNetworkWaitLeavesRundownRoom(base::Seconds(10)));
 static_assert(FullNetworkWaitLeavesRundownRoom(base::Seconds(60)));
 
+constexpr bool ForcedTerminationStillFits() {
+  FakeClock clock;
+  clock.Advance(base::Seconds(1));
+  clock.Advance(content::GetNetworkServiceShutdownTimeout());
+  clock.Advance(base::Seconds(2)); // SIGTERM, then forced kill and reap.
+  clock.Advance(base::Seconds(8)); // Marker and remaining teardown work.
+  return clock.now < content::GetBrowserShutdownTimeout(base::Seconds(10));
+}
+static_assert(ForcedTerminationStillFits());
+
 #if !BUILDFLAG(IS_CHROMEOS)
 constexpr bool OldEqualDeadlinesRace() {
   FakeClock clock;

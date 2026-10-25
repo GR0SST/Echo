@@ -342,6 +342,9 @@ fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
 }
 
 pub fn run() {
+    if let Some(status) = engine::run_storage_verifier_process() {
+        std::process::exit(status);
+    }
     if let Err(error) = native::prepare_windowing() {
         eprintln!("[windowing] {error}");
         std::process::exit(1);

@@ -50,18 +50,19 @@ section 17. Stock downloaded CEF ignores the switch and keeps its own toolbar.
 packaging, under `/tmp/echo-cef-build.lock`. Use the source-built distribution:
 
 ```sh
-ECHO_CEF_EXTENSIONS_BRIDGE=1 scripts/build-cef.sh build
-ECHO_CEF_EXTENSIONS_BRIDGE=1 scripts/build-cef.sh distrib
-scripts/with-cef.sh cargo test
+scripts/build-cef.sh release
+bun scripts/check-cef-canonical.ts
 cargo run -p bundle
 ```
 
 Never run two Chromium builds concurrently or replace a distribution while
-another agent is compiling Rust against it. PiP qualification used a separate
+another agent is compiling Rust against it. The original PiP qualification used a separate
 `~/Documents/Bot/cef-src/echo-pip-final-dist` adapter and `pip-final-binary-distrib` package
-root to preserve the extension agent's staged distribution.
+root. The canonical recipe in [CEF_BUILD.md](CEF_BUILD.md#canonical-distribution)
+now combines every patch in `echo-extensions-dist` and reruns native PiP against
+its exact framework. Superseded packages are removed after all canonical gates pass.
 
-## Qualified build
+## Original PiP qualification
 
 Final native framework SHA-256:
 `53ff7e0695104c6dfce463216d0f4e88eed44a7582d2a52d5ca3ec9027b744bf`.

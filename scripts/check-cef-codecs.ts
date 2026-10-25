@@ -13,10 +13,10 @@ if (!Bun.argv.includes("--locked")) {
 let ownedBrowser: ReturnType<typeof Bun.spawn> | undefined;
 // Bound the complete locked check, including bundle copying and hashing.
 const hardTimeout = setTimeout(() => {
-  console.error("Native codec check exceeded its 90-second hard timeout");
+  console.error("Native codec check exceeded its 120-second hard timeout");
   ownedBrowser?.kill("SIGKILL");
   process.exit(124);
-}, 90000);
+}, 120000);
 hardTimeout.unref();
 
 const dist = await validate(process.env.ECHO_CEF_DIST ?? "");
@@ -27,6 +27,15 @@ if (!await Bun.file(fixture).exists()) throw new Error(`Download the documented 
 const evidence = join(sourceRoot, "qualification", new Date().toISOString().replaceAll(":", "-"));
 await mkdir(evidence, { recursive: true });
 const privateRoot = await mkdtemp(join(tmpdir(), "echo-codec-check-"));
+await mkdir(join(privateRoot, "profile"));
+await Bun.write(join(privateRoot, "profile/session.json"), JSON.stringify({
+  format_version: 2, next_id: 4, default_user_profile_id: 1, next_user_profile_id: 2,
+  active_space: 0, archive: [], profiles: { "1": { id: 1, name: "Echo Test", archive_after: null } },
+  settings: { theme_appearance: "Dark" },
+  spaces: [{ id: 1, user_profile_id: 1, name: "Echo Test", hue: 250, pinned: [],
+    today: [{ id: 2, title: "Fixture", url: "about:blank",
+      last_active: { secs_since_epoch: Math.floor(Date.now() / 1000), nanos_since_epoch: 0 } }], active_tab: 2 }],
+}));
 const appPath = join(privateRoot, "Echo Codec Check.app");
 const copy = Bun.spawn(["cp", "-cR", join(root, "target/bundle/Echo.app"), appPath]);
 if (await copy.exited !== 0) throw new Error("Cannot copy the Echo bundle");

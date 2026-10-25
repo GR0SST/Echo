@@ -1,5 +1,5 @@
 diff --git a/base/files/important_file_writer.cc b/base/files/important_file_writer.cc
-index 71ff068568..7aafb57791 100644
+index 71ff068..7aafb57 100644
 --- a/base/files/important_file_writer.cc
 +++ b/base/files/important_file_writer.cc
 @@ -16,6 +16,7 @@
@@ -29,8 +29,217 @@ index 71ff068568..7aafb57791 100644
      DPLOG(WARNING) << "Failed to flush temp file to update " << path;
      DeleteTmpFileWithRetry(std::move(tmp_file), tmp_file_path);
      return false;
+diff --git a/cef/BUILD.gn b/cef/BUILD.gn
+index 55c446d..f17ea4c 100644
+--- a/cef/BUILD.gn
++++ b/cef/BUILD.gn
+@@ -557,6 +557,7 @@ source_set("libcef_static") {
+     "libcef/browser/extensions_bridge.h",
+     "libcef/browser/browser_guest_util.cc",
+     "libcef/browser/browser_guest_util.h",
++    "libcef/browser/shutdown_recovery.cc",
+     "libcef/browser/download_bridge.cc",
+     "libcef/browser/download_bridge.h",
+     "libcef/browser/browser_host_base.cc",
+@@ -1040,6 +1041,7 @@ source_set("libcef_static") {
+     "//third_party/hunspell",
+     "//third_party/leveldatabase",
+     "//third_party/libxml:libxml",
++    "//third_party/sqlite",
+     "//third_party/widevine/cdm:headers",
+     "//third_party/widevine/cdm",
+     "//third_party/icu",
+diff --git a/cef/cef_paths2.gypi b/cef/cef_paths2.gypi
+index eeea92c..d6cfd7e 100644
+--- a/cef/cef_paths2.gypi
++++ b/cef/cef_paths2.gypi
+@@ -10,6 +10,7 @@
+       'include/base/cef_atomic_flag.h',
+       'include/base/cef_atomic_ref_count.h',
+       'include/base/cef_bind.h',
++      'include/echo_cef_shutdown_v1.h',
+       'include/base/cef_build.h',
+       'include/base/cef_callback.h',
+       'include/base/cef_callback_forward.h',
+diff --git a/cef/include/echo_cef_shutdown_v1.h b/cef/include/echo_cef_shutdown_v1.h
+new file mode 100644
+index 0000000..d22432b
+--- /dev/null
++++ b/cef/include/echo_cef_shutdown_v1.h
+@@ -0,0 +1,34 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.txt.
++#ifndef CEF_INCLUDE_ECHO_CEF_SHUTDOWN_V1_H_
++#define CEF_INCLUDE_ECHO_CEF_SHUTDOWN_V1_H_
++#include <stdint.h>
++#if defined(_WIN32)
++#if defined(ECHO_SHUTDOWN_IMPLEMENTATION)
++#define ECHO_SHUTDOWN_EXPORT __declspec(dllexport)
++#else
++#define ECHO_SHUTDOWN_EXPORT __declspec(dllimport)
++#endif
++#else
++#define ECHO_SHUTDOWN_EXPORT __attribute__((visibility("default")))
++#endif
++#ifdef __cplusplus
++extern "C" {
++#endif
++typedef struct echo_storage_integrity_v1 {
++  uint32_t size;
++  uint32_t sqlite_databases;
++  uint32_t leveldb_databases;
++  uint32_t failures;
++  uint64_t entries_checked;
++} echo_storage_integrity_v1;
++typedef void (*echo_integrity_diagnostic_v1)(void*, const char*);
++// Headless verifier process only, before CEF initialization. Never repairs,
++// destroys, or razes a failed database. Diagnostics are borrowed during callback.
++ECHO_SHUTDOWN_EXPORT uint32_t cef_echo_verify_storage_v1(
++    const char* root, echo_storage_integrity_v1* output,
++    echo_integrity_diagnostic_v1 diagnostic, void* userdata);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/cef/libcef/browser/shutdown_recovery.cc b/cef/libcef/browser/shutdown_recovery.cc
+new file mode 100644
+index 0000000..5519ec4
+--- /dev/null
++++ b/cef/libcef/browser/shutdown_recovery.cc
+@@ -0,0 +1,131 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.txt.
++#define ECHO_SHUTDOWN_IMPLEMENTATION
++#include "cef/include/echo_cef_shutdown_v1.h"
++
++#include <memory>
++#include <string>
++
++#include "base/at_exit.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_util.h"
++#include "base/task/single_thread_task_executor.h"
++#include "base/task/thread_pool/thread_pool_instance.h"
++#include "base/time/time.h"
++#include "content/browser/indexed_db/instance/leveldb/indexed_db_leveldb_operations.h"
++#include "third_party/leveldatabase/src/include/leveldb/db.h"
++#include "third_party/leveldatabase/src/include/leveldb/iterator.h"
++#include "third_party/leveldatabase/src/include/leveldb/options.h"
++#include "third_party/sqlite/sqlite3.h"
++
++namespace {
++class Verifier {
++ public:
++  Verifier(echo_storage_integrity_v1* output,
++           echo_integrity_diagnostic_v1 diagnostic, void* userdata)
++      : output_(output), diagnostic_(diagnostic), userdata_(userdata),
++        deadline_(base::TimeTicks::Now() + base::Seconds(45)) {}
++  void Failure(const base::FilePath& path, const char* reason) {
++    ++output_->failures;
++    const auto text = path.AsUTF8Unsafe() + ": " + reason;
++    diagnostic_(userdata_, text.c_str());
++  }
++  void SQLite(const base::FilePath& path) {
++    if (!base::PathExists(path)) return;
++    ++output_->sqlite_databases;
++    sqlite3* database = nullptr;
++    if (sqlite3_open_v2(path.AsUTF8Unsafe().c_str(), &database,
++                        SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
++      if (database) sqlite3_close(database);
++      Failure(path, "SQLite read-only open failed"); return;
++    }
++    // Chromium omits SQLite progress callbacks; the parent bounds this isolated
++    // verifier process to 60 seconds. SQLite is opened read-only.
++    sqlite3_stmt* statement = nullptr;
++    bool ok = false;
++    if (sqlite3_prepare_v2(database, "PRAGMA integrity_check", -1, &statement, nullptr) == SQLITE_OK &&
++        sqlite3_step(statement) == SQLITE_ROW) {
++      const auto* text = sqlite3_column_text(statement, 0);
++      ok = text && std::string(reinterpret_cast<const char*>(text)) == "ok" &&
++           sqlite3_step(statement) == SQLITE_DONE;
++    }
++    sqlite3_finalize(statement); sqlite3_close(database);
++    if (!ok) Failure(path, "SQLite integrity_check failed or exceeded its deadline");
++  }
++  void LevelDB(const base::FilePath& path) {
++    ++output_->leveldb_databases;
++    leveldb::Options options;
++    options.create_if_missing = false;
++    options.paranoid_checks = true;
++    // IndexedDB orders encoded keys with idb_cmp1 rather than bytewise order.
++    // Use the engine's comparator; changing it would reject healthy databases.
++    const auto name = path.BaseName().MaybeAsASCII();
++    if (name == "indexeddb.leveldb" || name.ends_with(".indexeddb.leveldb"))
++      options.comparator = content::indexed_db::GetDefaultLevelDBComparator();
++    leveldb::DB* raw = nullptr;
++    const auto status = leveldb::DB::Open(options, path.AsUTF8Unsafe(), &raw);
++    std::unique_ptr<leveldb::DB> database(raw);
++    if (!status.ok()) { Failure(path, "LevelDB journal/manifest verification failed or database is locked"); return; }
++    leveldb::ReadOptions read;
++    read.verify_checksums = true;
++    std::unique_ptr<leveldb::Iterator> iterator(database->NewIterator(read));
++    for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
++      ++output_->entries_checked;
++      if (base::TimeTicks::Now() >= deadline_) { Failure(path, "LevelDB verification deadline exceeded"); return; }
++    }
++    if (!iterator->status().ok()) Failure(path, "LevelDB block checksum verification failed");
++  }
++  void Profile(const base::FilePath& profile) {
++    if (base::IsLink(profile)) { Failure(profile, "Profile alias is not permitted"); return; }
++    SQLite(profile.AppendASCII("Network").AppendASCII("Cookies"));
++    SQLite(profile.AppendASCII("Cookies"));
++    SQLite(profile.AppendASCII("QuotaManager"));
++    // CURRENT names actual LevelDB manifests, covering local/session storage,
++    // IndexedDB and service-worker storage without interpreting website values.
++    base::FileEnumerator files(profile, true,
++        base::FileEnumerator::FILES | base::FileEnumerator::SHOW_SYM_LINKS);
++    for (auto path = files.Next(); !path.empty(); path = files.Next()) {
++      if (base::IsLink(path)) { Failure(path, "Storage alias is not permitted"); continue; }
++      const auto name = path.BaseName().MaybeAsASCII();
++      if (name == "CURRENT") LevelDB(path.DirName());
++      else if (name.ends_with(".sqlite") || name.ends_with(".sqlite3") || name.ends_with(".localstorage")) SQLite(path);
++    }
++  }
++ private:
++  echo_storage_integrity_v1* const output_;
++  const echo_integrity_diagnostic_v1 diagnostic_;
++  void* const userdata_;
++  const base::TimeTicks deadline_;
++};
++}  // namespace
++
++extern "C" ECHO_SHUTDOWN_EXPORT uint32_t cef_echo_verify_storage_v1(
++    const char* root, echo_storage_integrity_v1* output,
++    echo_integrity_diagnostic_v1 diagnostic, void* userdata) {
++  if (!root || !output || output->size != sizeof(*output) || !diagnostic ||
++      base::ThreadPoolInstance::Get()) return 3;
++  const auto directory = base::FilePath::FromUTF8Unsafe(root);
++  if (!directory.IsAbsolute() || !base::DirectoryExists(directory) || base::IsLink(directory)) return 3;
++  *output = {sizeof(*output), 0, 0, 0, 0};
++  base::AtExitManager at_exit;
++  base::SingleThreadTaskExecutor executor;
++  base::ThreadPoolInstance::CreateAndStartWithDefaultParams("EchoStorageVerifier");
++  // Chromium builds SQLite with SQLITE_OMIT_AUTOINIT.
++  if (sqlite3_initialize() != SQLITE_OK) {
++    output->failures = 1;
++    diagnostic(userdata, "SQLite initialization failed");
++    base::ThreadPoolInstance::Get()->Shutdown();
++    return 2;
++  }
++  {
++    Verifier verifier(output, diagnostic, userdata);
++    base::FileEnumerator profiles(directory, false,
++        base::FileEnumerator::DIRECTORIES | base::FileEnumerator::SHOW_SYM_LINKS);
++    for (auto path = profiles.Next(); !path.empty(); path = profiles.Next()) {
++      const auto name = path.BaseName().MaybeAsASCII();
++      if (name == "Default" || name.starts_with("profile-")) verifier.Profile(path);
++    }
++  }
++  base::ThreadPoolInstance::Get()->Shutdown();
++  return output->failures ? 2 : 0;
++}
 diff --git a/chrome/browser/shutdown_watchdog_mac.cc b/chrome/browser/shutdown_watchdog_mac.cc
-index 4eae5e5800..73ce5869aa 100644
+index 4eae5e5..73ce586 100644
 --- a/chrome/browser/shutdown_watchdog_mac.cc
 +++ b/chrome/browser/shutdown_watchdog_mac.cc
 @@ -21,6 +21,7 @@
@@ -62,18 +271,30 @@ index 4eae5e5800..73ce5869aa 100644
    }
    if (base::debug::BeingDebugged()) {
 diff --git a/content/browser/browser_process_io_thread.cc b/content/browser/browser_process_io_thread.cc
-index 94a7c8ad4f..1f7b277c6c 100644
+index 94a7c8a..4e51b76 100644
 --- a/content/browser/browser_process_io_thread.cc
 +++ b/content/browser/browser_process_io_thread.cc
-@@ -7,6 +7,7 @@
+@@ -4,9 +4,19 @@
+ 
+ #include "content/browser/browser_process_io_thread.h"
+ 
++#include <algorithm>
++#include "build/build_config.h"
++#if BUILDFLAG(IS_POSIX)
++#include <signal.h>
++#endif
++
  #include "base/clang_profiling_buildflags.h"
++#include "base/command_line.h"
++#include "base/files/important_file_writer.h"
++#include "base/strings/string_number_conversions.h"
  #include "base/compiler_specific.h"
  #include "base/debug/alias.h"
 +#include "base/environment.h"
  #include "base/functional/bind.h"
  #include "base/functional/callback_helpers.h"
  #include "base/threading/hang_watcher.h"
-@@ -20,6 +21,7 @@
+@@ -20,6 +30,7 @@
  #include "content/browser/service_host/utility_process_host.h"
  #include "content/public/browser/browser_child_process_host_iterator.h"
  #include "content/public/common/process_type.h"
@@ -81,7 +302,7 @@ index 94a7c8ad4f..1f7b277c6c 100644
  #include "services/network/public/mojom/network_service.mojom.h"
  
  #if BUILDFLAG(IS_ANDROID)
-@@ -106,32 +108,51 @@ void BrowserProcessIOThread::IOThreadRun(base::RunLoop* run_loop) {
+@@ -106,32 +117,96 @@ void BrowserProcessIOThread::IOThreadRun(base::RunLoop* run_loop) {
  }
  
  void BrowserProcessIOThread::ProcessHostCleanUp() {
@@ -89,6 +310,37 @@ index 94a7c8ad4f..1f7b277c6c 100644
 +      base::Environment::Create()->HasVar("ECHO_SHUTDOWN_TRACE");
 +  bool echo_all_network_exited = true;
 +  size_t echo_network_waits = 0;
++  auto echo_timeout = GetNetworkServiceShutdownTimeout();
++  const auto echo_environment = base::Environment::Create();
++  // Deterministic bounded-fallback regression, never enabled by normal startup.
++  if (echo_diagnostics && echo_environment->HasVar("ECHO_CEF_TEST_MODE")) {
++    const auto value = echo_environment->GetVar("ECHO_TEST_NETWORK_WAIT_MS");
++    int milliseconds = 0;
++    if (value && base::StringToInt(*value, &milliseconds) &&
++        milliseconds >= 100 && milliseconds <= 60000)
++      echo_timeout = base::Milliseconds(milliseconds);
++  }
++  const auto echo_deadline = base::TimeTicks::Now() + echo_timeout;
++  const auto echo_mark_dirty = [&](base::ProcessId pid, int exit_code,
++                                   bool helper_terminated) {
++    auto marker = base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
++        "echo-shutdown-marker");
++    if (marker.empty()) {
++      auto directory = base::CommandLine::ForCurrentProcess()->GetSwitchValuePath("user-data-dir");
++      if (!directory.empty()) marker = directory.AppendASCII("echo-dirty-shutdown.json");
++    }
++    const std::string record = "{\"schema\":1,\"network_pid\":" +
++        base::NumberToString(static_cast<uint64_t>(pid)) +
++        ",\"exit_code\":" + base::NumberToString(exit_code) +
++        ",\"helper_terminated\":" + (helper_terminated ? "true" : "false") +
++        ",\"unix_ms\":" + base::NumberToString(base::Time::Now().InMillisecondsSinceUnixEpoch()) +
++        ",\"reason\":\"network shutdown incomplete\"}";
++    base::ScopedAllowBlocking allow_marker;
++    const bool recorded = !marker.empty() &&
++        base::ImportantFileWriter::WriteFileAtomically(marker, record);
++    LOG(ERROR) << "[echo-shutdown] dirty-shutdown marker=" << marker
++               << " recorded=" << recorded << " helper_terminated=" << helper_terminated;
++  };
    for (BrowserChildProcessHostIterator it(PROCESS_TYPE_UTILITY); !it.Done();
         ++it) {
      if (it.GetDelegate()->GetServiceName() ==
@@ -121,19 +373,33 @@ index 94a7c8ad4f..1f7b277c6c 100644
 +        LOG(INFO) << "[echo-shutdown] network-wait-begin pid=" << process.Pid()
 +                  << " ticks_us=" << start_time.since_origin().InMicroseconds();
 +      }
++      const auto echo_network_pid = process.Pid();
 +      int echo_exit_code = -1;
 +      ++echo_network_waits;
 +      const bool echo_exited = process.WaitForExitWithTimeout(
-+          GetNetworkServiceShutdownTimeout(), &echo_exit_code);
++          std::max(base::TimeDelta(), echo_deadline - base::TimeTicks::Now()), &echo_exit_code);
 +      echo_all_network_exited &= echo_exited && echo_exit_code == 0;
-+#if BUILDFLAG(IS_MAC)
-+      // CEF's void shutdown API must not return apparent success after killing
-+      // a network helper that still has BLOCK_SHUTDOWN durable writes pending.
-+      // Keep the existing bounded wait, but preserve a failed shutdown instead
-+      // of falling through to TerminateAll and a successful parent exit.
-+      CHECK(echo_exited && echo_exit_code == 0)
-+          << "Network service did not complete durable shutdown";
++      if (!echo_exited || echo_exit_code != 0) {
++        // Preserve an interrupted-shutdown receipt BEFORE stopping a helper.
++        // The embedding application verifies stores before its next CEF start.
++        echo_mark_dirty(echo_network_pid, echo_exit_code, echo_exited);
++        bool terminated = echo_exited;
++        if (!terminated) {
++          process.Terminate(1, false);
++          terminated = process.WaitForExitWithTimeout(base::Seconds(1), &echo_exit_code);
++        }
++        if (!terminated) {
++#if BUILDFLAG(IS_POSIX)
++          kill(echo_network_pid, SIGKILL);
++#else
++          process.Terminate(1, false);
 +#endif
++          terminated = process.WaitForExitWithTimeout(base::Seconds(1), &echo_exit_code);
++        }
++        echo_mark_dirty(echo_network_pid, echo_exit_code, terminated);
++        LOG(ERROR) << "[echo-shutdown] network-helper-terminated pid="
++                   << echo_network_pid << " terminated=" << terminated;
++      }
 +      if (echo_diagnostics) {
 +        LOG(INFO) << "[echo-shutdown] network-wait-end pid=" << process.Pid()
 +                  << " ticks_us="
@@ -146,7 +412,7 @@ index 94a7c8ad4f..1f7b277c6c 100644
        // Record time spent for the method call.
        base::TimeDelta network_wait_time = base::TimeTicks::Now() - start_time;
        DVLOG(1) << "Waited " << network_wait_time.InMilliseconds()
-@@ -139,6 +160,11 @@ void BrowserProcessIOThread::ProcessHostCleanUp() {
+@@ -139,6 +214,11 @@ void BrowserProcessIOThread::ProcessHostCleanUp() {
      }
    }
  
@@ -159,10 +425,10 @@ index 94a7c8ad4f..1f7b277c6c 100644
    // and delete the BrowserChildProcessHost instances to release whatever
    // IO thread only resources they are referencing.
 diff --git a/content/child/child_process.cc b/content/child/child_process.cc
-index 57a8bb5c35..646659e3c6 100644
+index 57a8bb5..c609fb2 100644
 --- a/content/child/child_process.cc
 +++ b/content/child/child_process.cc
-@@ -6,6 +6,7 @@
+@@ -6,9 +6,13 @@
  
  #include <string.h>
  
@@ -170,7 +436,13 @@ index 57a8bb5c35..646659e3c6 100644
  #include "base/clang_profiling_buildflags.h"
  #include "base/functional/bind.h"
  #include "base/message_loop/message_pump_type.h"
-@@ -185,7 +186,14 @@ ChildProcess::~ChildProcess() {
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/threading/platform_thread.h"
+ #include "base/process/process_handle.h"
+ #include "base/synchronization/waitable_event.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
+@@ -185,7 +189,26 @@ ChildProcess::~ChildProcess() {
  
    if (initialized_thread_pool_) {
      DCHECK(base::ThreadPoolInstance::Get());
@@ -178,6 +450,18 @@ index 57a8bb5c35..646659e3c6 100644
 +    const auto echo_start = base::TimeTicks::Now();
 +    if (echo_diagnostics) LOG(INFO) << "[echo-shutdown] child-pool-shutdown-begin ticks_us="
 +        << echo_start.since_origin().InMicroseconds();
++    const auto environment = base::Environment::Create();
++    if (echo_diagnostics && environment->HasVar("ECHO_CEF_TEST_MODE") &&
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("utility-sub-type") ==
++            "network.mojom.NetworkService") {
++      const auto value = environment->GetVar("ECHO_TEST_NETWORK_DELAY_MS");
++      int milliseconds = 0;
++      if (value && base::StringToInt(*value, &milliseconds) &&
++          milliseconds > 0 && milliseconds <= 120000) {
++        LOG(INFO) << "[echo-shutdown] network-test-delay milliseconds=" << milliseconds;
++        base::PlatformThread::Sleep(base::Milliseconds(milliseconds));
++      }
++    }
      base::ThreadPoolInstance::Get()->Shutdown();
 +    if (echo_diagnostics) LOG(INFO) << "[echo-shutdown] child-pool-shutdown-end ticks_us="
 +        << base::TimeTicks::Now().since_origin().InMicroseconds()
@@ -186,7 +470,7 @@ index 57a8bb5c35..646659e3c6 100644
  
  #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
 diff --git a/content/public/common/BUILD.gn b/content/public/common/BUILD.gn
-index a08aa58169..044daa0333 100644
+index a08aa58..044daa0 100644
 --- a/content/public/common/BUILD.gn
 +++ b/content/public/common/BUILD.gn
 @@ -194,6 +194,7 @@ source_set("common_sources") {
@@ -199,7 +483,7 @@ index a08aa58169..044daa0333 100644
      "content_features.h",
 diff --git a/content/public/common/shutdown_timeouts.h b/content/public/common/shutdown_timeouts.h
 new file mode 100644
-index 0000000000..28e49e57c2
+index 0000000..6a34cb4
 --- /dev/null
 +++ b/content/public/common/shutdown_timeouts.h
 @@ -0,0 +1,26 @@
@@ -218,14 +502,14 @@ index 0000000000..28e49e57c2
 +#elif BUILDFLAG(IS_CHROMEOS)
 +  return base::Seconds(1);
 +#else
-+  return base::Seconds(10);
++  return base::Seconds(60);
 +#endif
 +}
 +// The watchdog starts before this bounded wait. Reserve the existing rundown
 +// budget for work before and after it, instead of racing equal deadlines.
 +constexpr base::TimeDelta GetBrowserShutdownTimeout(
 +    base::TimeDelta rundown_budget) {
-+  return GetNetworkServiceShutdownTimeout() + rundown_budget;
++  return GetNetworkServiceShutdownTimeout() + base::Seconds(2) + rundown_budget;
 +}
 +}  // namespace content
 +#endif
