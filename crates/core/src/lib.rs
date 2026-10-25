@@ -27,6 +27,7 @@ pub mod undo;
 pub mod themes;
 pub mod windows;
 pub mod recent_items;
+pub mod save_page;
 pub mod profiles;
 pub mod boosts;
 pub mod downloads;

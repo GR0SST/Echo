@@ -36,6 +36,8 @@ mod page_loading_tests;
 mod site_controls_tests;
 #[path = "scripting_tests.rs"]
 mod scripting_tests;
+#[path = "save_page_tests.rs"]
+mod save_page_tests;
 #[path = "main_menu_tests.rs"]
 mod main_menu_tests;
 #[path = "tab_switcher_tests.rs"]
@@ -216,6 +218,7 @@ fn shared_profile_idle_archive_protects_tabs_selected_in_other_windows(cx: &mut 
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    ArchivePage(u64),
     PermissionResponse(u64,engine::PermissionRequestId,engine::PermissionDecision),
     Quote(u64, u64),
     SitePermission(u64,String,engine::PermissionKind,engine::PermissionValue),
@@ -258,6 +261,8 @@ enum Call {
 #[derive(Default)]
 struct FakeState {
     preview_tokens: std::collections::HashMap<u64,u64>,
+    archive_data: Option<Vec<u8>>,
+    document_epochs: std::collections::HashMap<u64,u64>,
     context_images: Vec<(u64,u64,String,String)>,
     peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
     boosts: std::collections::HashMap<crate::pages::StorageSelection, Vec<engine::SiteBoost>>,
@@ -384,6 +389,12 @@ impl WebEngine for FakeEngine {
     fn prepare_inspector_paste_and_match_style(&mut self, id: engine::InspectorId) -> Option<crate::pages::NativePaste> {
         let fake = self.clone();
         Some(Box::new(move || { fake.call(Call::InspectorPasteStyle(id)); engine::PasteDispatch::Submitted }))
+    }
+    fn supports_page_archiving(&self)->bool {true}
+    fn page_document_epoch(&self,view:ViewId)->Option<u64> {Some(*self.0.borrow().document_epochs.get(&raw(view)).unwrap_or(&0))}
+    fn request_page_archive(&mut self,view:ViewId)->Option<engine::PageArchiveRequest> {
+        self.call(Call::ArchivePage(raw(view)));
+        Some(engine::PageArchiveRequest::completed(Ok(self.0.borrow().archive_data.clone()?)))
     }
     fn supports_printing(&self) -> bool { true }
     fn prepare_print(&mut self, view: ViewId) -> Option<crate::pages::NativePrint> {
@@ -515,6 +526,7 @@ impl WebEngine for FakeEngine {
     }
     fn go_forward(&mut self, view: ViewId) { self.call(Call::Forward(raw(view))); }
     fn reload(&mut self, view: ViewId) {
+        *self.0.borrow_mut().document_epochs.entry(raw(view)).or_default() += 1;
         self.call(Call::Reload(raw(view)));
     }
     fn force_reload(&mut self, view: ViewId) { self.call(Call::ForceReload(raw(view))); }

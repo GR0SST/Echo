@@ -46,6 +46,8 @@ mod devtools_renderer;
 pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
 mod snapshot;
+mod page_archive;
+pub use page_archive::{PageArchiveError, PageArchiveRequest};
 mod storage;
 mod shutdown;
 pub use shutdown::{ShutdownPhase, ShutdownStatus};
@@ -311,6 +313,7 @@ pub struct Engine {
     by_browser_id: HashMap<i32, ViewId>,
     next_id: u64,
     snapshots: snapshot::Snapshots,
+    archives: page_archive::Archives,
     site_data: site_data::SiteData,
     script_evaluations: script_evaluation::Evaluations,
     boosts: Vec<(std::rc::Weak<RequestContext>, Arc<Mutex<Vec<SiteBoost>>>)>,
@@ -432,6 +435,7 @@ impl Engine {
             by_browser_id: HashMap::new(),
             next_id: 1,
             snapshots: snapshot::Snapshots::default(),
+            archives: page_archive::Archives::default(),
             site_data: site_data::SiteData::default(),
             script_evaluations: script_evaluation::Evaluations::default(),
             boosts: Vec::new(),
@@ -910,6 +914,7 @@ impl Engine {
         if !self.move_view(id, parent, frame) { return None; }
         if let Some(view)=self.views.get(&id) {page_context::cancel(view.browser.identifier());}
         self.snapshots.close(id);
+        self.archives.close(id);
         self.site_data.close(id);
         self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
@@ -1294,6 +1299,7 @@ impl Engine {
             .filter_map(|(&inspector, session)| (session.status.inspected == id || session.frontend == id).then_some(inspector)).collect();
         for inspector in inspectors { self.close_inspector(inspector); }
         self.snapshots.close(id);
+        self.archives.close(id);
         self.site_data.close(id);
         self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
@@ -1782,6 +1788,11 @@ fn shortcut_for(event: &KeyEvent) -> Shortcut {
         VKEY_RIGHT => "right".to_string(),
         VKEY_DOWN => "down".to_string(),
         VKEY_F12 => "f12".to_string(),
+        // CEF's unmodified character still follows the active layout and
+        // Shift. Command chords use its logical virtual key so Cyrillic (and
+        // shifted digit punctuation) cannot hide registered browser bindings.
+        code @ (0x30..=0x39 | 0x41..=0x5a) if has(sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN) =>
+            char::from_u32(code as u32).unwrap().to_ascii_lowercase().to_string(),
         _ => char::from_u32(u32::from(event.unmodified_character))
             .map(|c| c.to_lowercase().to_string())
             .unwrap_or_default(),
@@ -1948,6 +1959,19 @@ mod tests {
         assert_eq!(intercepted_shortcut(&event, &[shortcut.clone()]), Some(shortcut.clone()));
         assert_eq!(inspector_input(InspectorId(1), &RawEvent::Shortcut(shortcut.clone())), Some(InspectorEvent::Shortcut { inspector: InspectorId(1), shortcut: shortcut.clone() }));
         assert_eq!(page_event(ViewId::from_raw(1), ViewRole::Page, RawEvent::Shortcut(shortcut.clone())), Some(Event::Shortcut { view: ViewId::from_raw(1), shortcut }));
+    }
+
+    #[test]
+    fn command_shortcuts_use_virtual_keys_while_plain_text_keeps_its_layout() {
+        let command=sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0;
+        let shift=sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0;
+        let save=Shortcut {cmd:true,shift:true,key:"s".into(),..Default::default()};
+        let mut event=KeyEvent {type_:KeyEventType::RAWKEYDOWN,windows_key_code:0x53,native_key_code:1,unmodified_character:'І' as u16,modifiers:command|shift,..Default::default()};
+        assert_eq!(intercepted_shortcut(&event,&[save.clone()]),Some(save));
+        event.modifiers=0;assert_eq!(shortcut_for(&event).key,"і");
+        event.modifiers=command|shift;event.windows_key_code=0x32;event.unmodified_character='"' as u16;
+        let capture=Shortcut {cmd:true,shift:true,key:"2".into(),..Default::default()};
+        assert_eq!(intercepted_shortcut(&event,&[capture.clone()]),Some(capture));
     }
 
     #[test]

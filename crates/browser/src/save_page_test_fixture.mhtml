@@ -1,0 +1,22 @@
+MIME-Version: 1.0
+Snapshot-Content-Location: https://saved.example/page.html
+Content-Type: multipart/related; boundary=echo-save; start="<root>"
+
+--echo-save
+Content-Type: text/html; charset=utf-8
+Content-Location: https://saved.example/page.html
+Content-ID: <root>
+
+<!doctype html><html><head><title>Saved page fixture</title><link rel="stylesheet" href="theme.css"></head><body><h1>Saved page fixture</h1><img src="image.png"></body></html>
+--echo-save
+Content-Type: text/css; charset=utf-8
+Content-Location: https://saved.example/theme.css
+
+body {background: url(image.png); color: navy}
+--echo-save
+Content-Type: image/png
+Content-Location: https://saved.example/image.png
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=
+--echo-save--

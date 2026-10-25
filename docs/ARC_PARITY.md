@@ -95,7 +95,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Share… | — | missing | System share menu |
 | Capture… | ⇧⌘2 | missing | Screenshot of a page area |
 | Capture Full Page / Capture in Portrait Mode | — | missing | — |
-| Save Page As | ⇧⌘S | missing | — |
+| Save Page As | ⇧⌘S | partial | File menu, page shortcut and Command Bar export the retained document as HTML Only, Single File (MHTML), or Complete with a local resource folder. macOS native Format accessory; other backends use the common path prompt. All three formats save natively and Complete/MHTML reopen offline, retaining the original renderer and history. GPUI shortcut coverage passes; the physical ⇧⌘S chord did not open the panel in the current desktop session (the File action works). Format persistence, Chromium serializer equivalence and remaining platform UI are partial; see docs/MAIN_MENU_WIP.md |
 | Print | ⌘P | partial | File → Print, native-page shortcut and Command Bar → Print Page use the focused document. macOS dialog/Cancel checked; Windows native validation and Linux print handler remain pending. See [printing contract](PRINTING.md). |
 
 Normal-window behavior was checked in the installed Arc with disposable local

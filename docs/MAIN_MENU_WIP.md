@@ -36,8 +36,8 @@ catalog are under `target/parity/main-menu/` (ignored, no Arc assets shipped).
   unvalidated. These rows remain partial rather than claiming exact parity.
 
 Local pre-rebase validation: `RUST_TEST_THREADS=4 cargo test` passed with 971
-browser, 198 core, 130 engine, six importer and 12 AI tests; one existing live
-provider test is ignored. The credits escaping test passed as well. Both native
+browser, 198 core, 130 engine, six importer and 12 AI tests; one existing native-credential
+integration test is ignored. The credits escaping test passed as well. Both native
 utility acceptance scripts exit with status zero after the CEF quit barrier.
 No snapshot/handoff test waiver is used.
 
@@ -99,7 +99,7 @@ their rounded image mask. Split composition, five-item native acceptance,
 precise shadow/font matching and finer motion remain partial.
 
 Validation for this group: 1,020 browser, 218 core, 136 engine and 13 AI tests
-passed, plus importer/bundle tests. One existing live-provider test is ignored.
+passed, plus importer/bundle tests. One existing native-credential integration test is ignored.
 Eight GPUI switcher tests and six core recent-item tests cover the new behavior;
 a thumbnail test verifies top cropping, BGRA conversion and cache reuse.
 
@@ -109,3 +109,54 @@ proof of ownership. Restored windows can appear after an initially empty
 snapshot. A failed/ambiguous claim must never feed an unrestricted difference
 set into cleanup. Legacy Arc scripts in this evidence directory need explicit
 owned-ID cleanup before reuse; `arc-save-dialog-recovered.sh` is unsafe.
+
+
+## Save Page As
+
+The accepted reference is `arc-save-owned/save.png`; the format choices are in
+`arc-save-formats/formats.txt`. Arc's native save sheet offers, in order,
+Webpage, HTML Only; Webpage, Single File; and Webpage, Complete (the default).
+The format row uses a 46 px label, 8 px gap and approximately 182 × 24 px popup.
+The ordinary File routes now follow the nib's relative order and separators.
+
+The engine captures MHTML from the retained CEF document over the local DevTools
+transport. Each consumer owns its reply and observer lease, with document-epoch
+validation for same-address reloads, explicit source closure, timeout and size
+limits. No remote debugging port or reload is used. HTML and CSS are parsed
+locally when producing a complete resource folder or HTML-only document.
+
+Filesystem publication creates a new resource folder, preserves pre-existing
+resource folders, and atomically publishes the main file after its assets. An
+error removes only the new owned folder. Seven GPUI/publication tests, six core
+export tests, four engine request tests and one shortcut-layout test pass. The
+full run passed 1,042 browser, 228 core and 141 engine tests, plus AI/import/bundle
+tests (one existing native-credential integration test remains ignored).
+
+Native acceptance in `echo-save-export/` saved all three formats, reopened
+Complete and MHTML with the fixture server stopped, and retained the source
+load counter and same-document Back history. Both offline screenshots were
+inspected, including CSS imports, SVG and frame content. The Arc pair is
+`arc-save-owned/save.png`; Echo format sheets are
+`echo-save-export/Complete.html.panel.png`, `Only.html.panel.png` and
+`Single.mhtml.panel.png`. Native Cancel preserves the document. The panel starts
+expanded in Arc and collapsed in the isolated Echo test preferences.
+
+The physical Shift-Command-S chord did not open a panel under either the
+original keyboard layout or a temporarily selected ASCII input source; Echo
+remained frontmost. Native File actions work. The GPUI shortcut and CEF
+virtual-key conversion have tests; physical-chord acceptance remains partial.
+The temporary input source and full clipboard contents were restored. The final
+Format label uses its measured native text width and secondary label color;
+`echo-save-final/save.png` and `pairs/echo-save-format-final-zoom.png` were
+inspected against the Arc Format crop.
+
+Windows and
+Linux currently have the shared path prompt with Complete as the default,
+without the macOS native format accessory. Save-folder/format persistence and
+full Chromium serializer equivalence remain unverified.
+
+New Arc reference sessions use `target/parity/main-menu/owned_arc_session.py`: a
+settled process/window baseline, exact owned IDs, no inline restart and no
+difference-based cleanup. The old shell scripts are disabled. Successful Save
+reference sessions leave no owned windows and remove only this task's fixture
+tabs. An unowned Arc Settings window causes a read-only abort.

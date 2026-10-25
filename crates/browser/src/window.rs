@@ -97,6 +97,7 @@ actions!(
         ViewLibrary,
         ViewDownloads,
         PrintPage,
+        SavePage,
         DeveloperTools,
         InspectElements,
         JavaScriptConsole,
@@ -177,6 +178,7 @@ window_shortcuts! {
     "cmd-shift-l" => ViewLibrary,
     "cmd-shift-j" => ViewDownloads,
     "cmd-p" => PrintPage,
+    "cmd-shift-s" => SavePage,
     "cmd-shift-c" => CopyUrl,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
@@ -427,6 +429,7 @@ pub enum Command {
     ViewBoosts,
     ManageSpaces,
     PrintPage,
+    SavePage,
     ViewDownloads,
     RequestClearArchive,
     ResetPinnedTab,
@@ -719,6 +722,9 @@ pub struct BrowserWindow {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) native_action_focus: FocusHandle,
     print_generation: u64,
+    save_page_generation: u64,
+    save_page_task: Option<Task<()>>,
+    pub(crate) save_prompt_active: bool,
     popup_focus_generation: u64,
     popup_focus_pending: usize,
     popup_focus_on_activation: bool,
@@ -992,6 +998,7 @@ impl BrowserWindow {
             focus_handle: cx.focus_handle(),
             native_action_focus: cx.focus_handle(),
             print_generation: 0,
+            save_page_generation: 0, save_page_task: None, save_prompt_active: false,
             popup_focus_generation: 0,
             popup_focus_pending: 0,
             popup_focus_on_activation: false,
@@ -1126,6 +1133,9 @@ impl BrowserWindow {
     /// Child windows can outlive their parent on GPUI's test platform and
     /// must also be removed when a native titlebar close releases the root.
     fn remove_child_windows(&mut self, cx: &mut App) {
+        self.save_page_generation = self.save_page_generation.wrapping_add(1);
+        self.save_prompt_active=false;
+        if let Some(task)=self.save_page_task.take() {cx.spawn(async move |_| {drop(task);}).detach();}
         crate::peek_history::discard_owner(self.main_window.window_id(), cx);
         self.share_picker.take();
         self.discard_sidebar_resize();
@@ -1204,7 +1214,7 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (!self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::LinkPreviewHover { view, token, source_url, hover } => self.max_preview_hover(view,token,source_url,hover,window,cx),
@@ -1622,7 +1632,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.save_prompt_active || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1827,6 +1837,7 @@ impl BrowserWindow {
                 (Command::ClearToday, "Clear Today", "clear unpinned tabs|clear today|archive background today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
                 (Command::PrintPage, "Print Page", "print|print page", self.print_available()),
+                (Command::SavePage, "Save Page As", "save page as|save page|save file", self.save_page_available()),
                 (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
                 (Command::StopLoading, "Stop Loading", "stop loading|stop page", active.is_some()),
@@ -2202,6 +2213,7 @@ impl BrowserWindow {
                 if self.edit_browser(|browser| { let id = browser.archive.iter().rev().find(|entry| entry.user_profile_id == browser.active_user_profile_id()).map(|entry| entry.tab.id)?; browser.restore_archived(id, SystemTime::now()) }).is_some() { self.settle_pager(cx); }
             }
             Command::PrintPage => self.print_page(cx),
+            Command::SavePage => self.save_page(cx),
             Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
             Command::ForceReload => self.with_active_page(|pages, tab| pages.force_reload(tab)),
             Command::StopLoading => self.with_active_page(|pages, tab| pages.stop_loading(tab)),
@@ -2309,6 +2321,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &ExpandCurrentSplit, _, cx| this.run_command(Command::ExpandCurrentSplit, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
+            .when(self.save_page_available(), |this| this.on_action(cx.listener(|this, _: &SavePage, _, cx| this.save_page(cx))))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
@@ -4404,6 +4417,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
+            .when(self.save_page_available(), |this| this.on_action(cx.listener(|this, _: &SavePage, _, cx| this.save_page(cx))))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
@@ -4631,3 +4645,6 @@ mod sidebar_resize_tests;
 mod printing;
 #[path = "paste_style.rs"]
 mod paste_style;
+
+#[path = "save_page.rs"]
+mod save_page;

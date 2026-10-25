@@ -86,6 +86,9 @@ pub trait WebEngine {
     fn set_site_boosts(&mut self, _storage: &StorageSelection, _boosts: Vec<engine::SiteBoost>) {}
     fn prepare_paste_and_match_style(&mut self, _view: ViewId) -> Option<NativePaste> { None }
     fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
+    fn supports_page_archiving(&self) -> bool { false }
+    fn page_document_epoch(&self, _view:ViewId)->Option<u64> {Some(0)}
+    fn request_page_archive(&mut self, _view:ViewId)->Option<engine::PageArchiveRequest> {None}
     fn supports_printing(&self) -> bool { false }
     fn prepare_print(&mut self, _view: ViewId) -> Option<NativePrint> { None }
     /// Independent page/event ownership over this engine's regular storage.
@@ -224,6 +227,9 @@ impl WebEngine for Chromium {
         let mut request = self.engine.prepare_inspector_paste_and_match_style(id)?;
         Some(Box::new(move || request.try_dispatch()))
     }
+    fn supports_page_archiving(&self)->bool {true}
+    fn page_document_epoch(&self,view:ViewId)->Option<u64> {self.engine.page_document_epoch(view)}
+    fn request_page_archive(&mut self,view:ViewId)->Option<engine::PageArchiveRequest> {self.engine.request_page_archive(view)}
     fn supports_printing(&self) -> bool { self.engine.supports_printing() }
     fn prepare_print(&mut self, view: ViewId) -> Option<NativePrint> {
         let mut request = self.engine.prepare_print(view)?;
@@ -1564,6 +1570,17 @@ impl Pages {
         if let Some(view) = self.view(tab) {
             self.store.borrow_mut().engine.reload(view);
         }
+    }
+
+    pub(crate) fn can_archive_page(&self,tab:TabId)->bool {
+        self.view(tab).is_some() && self.store.borrow().engine.supports_page_archiving()
+    }
+    pub(crate) fn page_document_epoch(&self,tab:TabId)->Option<u64> {
+        self.store.borrow().engine.page_document_epoch(self.view(tab)?)
+    }
+    pub(crate) fn request_page_archive(&mut self,tab:TabId)->Option<engine::PageArchiveRequest> {
+        let view=self.view(tab)?;
+        self.store.borrow_mut().engine.request_page_archive(view)
     }
 
     pub(crate) fn can_print(&self, tab: TabId) -> bool {
