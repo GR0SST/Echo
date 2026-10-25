@@ -443,6 +443,7 @@ pub enum Command {
     CopyUrl,
     CopyUrlAsMarkdown,
     CopyUrlAsQuote,
+    OpenTaskManager,
     AirTrafficControl,
     ToggleSpaceHeader,
     ToggleFavoritesOrdering,
@@ -1810,6 +1811,7 @@ impl BrowserWindow {
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
+                (Command::OpenTaskManager, "Open Task Manager", "open task manager|process manager|task manager", true),
                 (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::Settings, "Settings…", "settings|preferences|search settings", true),
@@ -2173,6 +2175,7 @@ impl BrowserWindow {
             Command::CopyUrl => self.copy_url(false, cx),
             Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
             Command::CopyUrlAsQuote => self.copy_url_as_quote(cx),
+            Command::OpenTaskManager => self.open_menu_utility(crate::task_manager::open, cx),
             Command::Settings => self.open_settings(cx),
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
             Command::FindPage => self.find_from_command(cx),
@@ -2288,6 +2291,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::tab_switcher::NextRecentItem, window, cx| this.show_recent_items(false,window,cx)))
             .on_action(cx.listener(|this, _: &crate::tab_switcher::PreviousRecentItem, window, cx| this.show_recent_items(true,window,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
+            .on_action(cx.listener(|this, _: &crate::task_manager::OpenTaskManager, _, cx| this.open_menu_utility(crate::task_manager::open, cx)))
             .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::SetDefaultBrowser, _, cx| this.request_default_browser(cx)))
@@ -4403,6 +4407,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::tab_switcher::NextRecentItem, window, cx| this.show_recent_items(false,window,cx)))
             .on_action(cx.listener(|this, _: &crate::tab_switcher::PreviousRecentItem, window, cx| this.show_recent_items(true,window,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::About, _, cx| this.open_menu_utility(crate::about::open, cx)))
+            .on_action(cx.listener(|this, _: &crate::task_manager::OpenTaskManager, _, cx| this.open_menu_utility(crate::task_manager::open, cx)))
             .on_action(cx.listener(|this, _: &crate::essential_shortcuts::EssentialShortcuts, _, cx| this.open_menu_utility(crate::essential_shortcuts::open, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::ImportFromBrowser, _, cx| this.open_setup(false,cx)))
             .on_action(cx.listener(|this, _: &crate::menus::SetDefaultBrowser, _, cx| this.request_default_browser(cx)))

@@ -2158,3 +2158,16 @@ pub fn chromium_version() -> String {
     format!("{}.{}.{}.{}", cef::sys::CHROME_VERSION_MAJOR, cef::sys::CHROME_VERSION_MINOR,
         cef::sys::CHROME_VERSION_BUILD, cef::sys::CHROME_VERSION_PATCH)
 }
+
+mod task_manager;
+pub use task_manager::{TaskKind, TaskRecord, TaskMonitor};
+impl Engine {
+    /// Retain one observer while the utility is open, allowing CEF resource
+    /// sampling to complete. Drop it before engine shutdown. Main thread only.
+    pub fn task_monitor() -> Result<TaskMonitor, String> {
+        shutdown::check_thread()?;
+        let runtime = RUNTIME.with(|slot| slot.borrow().clone()).ok_or("Chromium is not initialized.")?;
+        runtime.lifecycle.require_running()?;
+        task_manager::monitor(runtime)
+    }
+}

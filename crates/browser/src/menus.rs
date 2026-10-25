@@ -244,7 +244,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
         },
         Menu {
             name: "Help".into(),
-            items: vec![MenuItem::action("Essential Keyboard Shortcuts", crate::essential_shortcuts::EssentialShortcuts)],
+            items: vec![MenuItem::action("Essential Keyboard Shortcuts", crate::essential_shortcuts::EssentialShortcuts), MenuItem::separator(), MenuItem::Submenu(Menu { name: "Troubleshooting".into(), items: vec![MenuItem::action("Open Task Manager", crate::task_manager::OpenTaskManager)] })],
         },
     ]
 }

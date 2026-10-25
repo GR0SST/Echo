@@ -583,8 +583,8 @@ Max download rename/revert feedback awaits the later Max implementation.
 | Capture (screenshot of an area, ⇧⌘2), saved to Library | missing | — |
 | Quiet downloads and the downloads tray | missing | — |
 | Battery Saver mode | missing | — |
-| Task Manager, trace recording | missing | — |
-| Shared Quotes (link to the selected text) | missing | — |
+| Task Manager, trace recording | partial | GPUI Task Manager from Help → Troubleshooting and Command Bar, retained CEF task sampler, categories/search, memory/CPU sorting and guarded End Task. Native sampling, own-renderer termination and shutdown checked. Process ID/network metrics, task grouping, full row/icon/keyboard parity and local trace recording remain unfinished; Arc team-reporting is excluded. [Reference](OTHER_REFERENCE.md) |
+| Shared Quotes (link to the selected text) | out of scope | Guarded native reference returns an arc.net/l/quote URL, requiring Arc-hosted cloud sharing. Existing local text-fragment copy is separate, not parity. [Reference](OTHER_REFERENCE.md) |
 | Arc Max (AI: Tidy Tabs, tab/download renaming, 5-Second Previews, Ask on Page, ChatGPT in the Command Bar, Browse for Me, Instant Links) | partial | Provider streaming, native credentials, public ChatGPT OAuth and Max settings; Tidy Tabs, single-page tab renaming and completed-download renaming with local toast Undo integrated at the canonical completion hook (native acceptance fixture verified; ordinary download routing remains separately gated). ChatGPT Command Bar website handoff integrated (Tab scope, prefilled composer, explicit website Send); Shift-hover public-link previews integrated with anonymous bounded document reads, conditional provider requests and a measured GPUI panel/Share menu. Automatic-preview site coverage, exact image/system-share behavior and animation remain partial. Ask on Page and Browse for Me have no exposed control in the installed desktop reference; Instant Links remains pending; no Echo intermediary server |
 
 ---

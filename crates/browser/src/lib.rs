@@ -3,6 +3,7 @@ mod automation;
 mod native;
 mod quit;
 mod scripting;
+mod task_manager;
 mod find;
 mod max;
 mod max_previews;
@@ -115,6 +116,7 @@ actions!(app, [Quit]);
 pub fn init(cx: &mut App) {
     quit::init(cx);
     scripting::init(cx);
+    task_manager::init(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     text_input::bind_keys(cx);
     window::bind_keys(cx);
