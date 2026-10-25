@@ -11148,13 +11148,18 @@ fn ordinary_tabs_menu_contains_only_the_reference_commands(cx: &mut TestAppConte
 fn header_theme_editor_uses_the_originating_menu_anchor(cx: &mut TestAppContext) {
     let (view, visual) = open(cx);
     let space = view.read_with(visual, |view, _| view.browser.space().id);
-    visual.update(|window, cx| view.update(cx, |view, cx| {
-        view.open_space_menu(space, gpui::point(gpui::px(204.), gpui::px(164.)), window, cx);
-    }));
-    let mut menu = tab_menu(&view, visual);
-    click(&mut menu, "tab-menu-edit-theme-color");
-    let mut editor = space_theme_editor(&view, visual);
-    let panel = editor.debug_bounds("theme-editor").unwrap();
-    assert_eq!(panel.size.width, gpui::px(359.));
-    assert_eq!(panel.bottom(), gpui::px(453.));
+    for pointer in [false, true] {
+        visual.update(|window, cx| view.update(cx, |view, cx| {
+            view.open_space_menu(space, gpui::point(gpui::px(204.), gpui::px(164.)), window, cx);
+        }));
+        let mut menu = tab_menu(&view, visual);
+        if pointer { click(&mut menu, "tab-menu-edit-theme-color"); }
+        else { menu.simulate_keystrokes("down down down enter"); }
+        let mut editor = space_theme_editor(&view, visual);
+        let panel = editor.debug_bounds("theme-editor").unwrap();
+        assert_eq!(panel.size.width, gpui::px(359.));
+        assert_eq!(panel.bottom(), gpui::px(if pointer { 480. } else { 453. }));
+        editor.simulate_keystrokes("escape");
+        visual.run_until_parked();
+    }
 }

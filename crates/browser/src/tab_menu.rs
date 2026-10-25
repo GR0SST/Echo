@@ -511,12 +511,12 @@ impl BrowserWindow {
         let selected = self.tab_menu.as_ref().and_then(|menu| if nested { menu.sub_selected } else { menu.selected });
         match selected.and_then(|index| entries.get(index)) {
             Some(Entry::Item(item)) if !item.submenu.is_empty() => self.open_tab_submenu(cx),
-            Some(Entry::Item(item)) => self.confirm_menu_item(item.clone(), window, cx),
+            Some(Entry::Item(item)) => self.confirm_menu_item(item.clone(), false, window, cx),
             _ => {}
         }
     }
 
-    fn confirm_menu_item(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_menu_item(&mut self, item: Item, pointer: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.refresh_profile_projection();
         if self.tab_menu.as_ref().is_none_or(|menu| !self.menu_is_current(menu)) { self.close_tab_menu(cx); return; }
         if !item.enabled { return; }
@@ -524,9 +524,9 @@ impl BrowserWindow {
         if !item.submenu.is_empty() { return; }
         let Some((target, pane_menu)) = self.tab_menu.as_ref().map(|menu| (menu.target, menu.pane)) else { return; };
         if let (MenuTarget::Space(space), Some(Command::SpaceTheme)) = (target, &item.command) {
-            // The measured header-entry bottom is 289 px below the trigger;
-            // menu.position already contains the native-style -6 px offset.
-            let bottom = self.tab_menu.as_ref().map(|menu| f32::from(menu.position.y) + 295.);
+            // Arc positions the pointer-selected entry 27 px lower than the
+            // keyboard-selected entry. menu.position includes its -6 px offset.
+            let bottom = self.tab_menu.as_ref().map(|menu| f32::from(menu.position.y) + if pointer { 322. } else { 295. });
             self.open_theme_editor_anchored(space, bottom, window, cx);
             return;
         }
@@ -739,7 +739,7 @@ impl BrowserWindow {
                             if let Some(menu) = &mut this.tab_menu { menu.selected = Some(index); menu.submenu = Some(index); }
                             cx.notify();
                             if native_share {this.open_address_share(cx);}
-                        } else { this.confirm_menu_item(item_for_click.clone(), window, cx); }
+                        } else { this.confirm_menu_item(item_for_click.clone(), true, window, cx); }
                     }))
                     .when(checks, |row| row.child(div().absolute().left(px(PADDING + 4.)).top(px(3.))
                         .when(item.checked, |slot| slot.child(crate::icons::check(0., 0.8)))))
