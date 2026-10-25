@@ -844,6 +844,21 @@ pub(crate) fn set_appearance_menu_selection(selected: usize) {
 #[path = "native/menu_appearance.rs"]
 mod menu_appearance;
 
+/// Alignment feedback at an accepted reorder boundary; other platforms are silent.
+pub(crate) fn reorder_haptic() {
+    #[cfg(test)] { HAPTIC_PULSES.with(|count|count.set(count.get()+1)); return; }
+    #[cfg(all(target_os="macos",not(test)))] unsafe {
+        use objc2::{msg_send,runtime::{AnyClass,AnyObject}};
+        let Some(class)=AnyClass::get(c"NSHapticFeedbackManager")else{return;};
+        let performer:*mut AnyObject=msg_send![class,defaultPerformer];
+        if !performer.is_null(){
+            let _:()=msg_send![performer,performFeedbackPattern:1isize,performanceTime:0usize];
+            if std::env::var_os("BROWSER_SCRIPT").is_some(){eprintln!("[reorder-haptic] Alignment");}
+        }
+    }
+}
+#[cfg(test)] thread_local!{pub(crate) static HAPTIC_PULSES:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
+
 /// OS-owned diagnostic text behind the shared utility interface.
 pub(crate) fn operating_system_version() -> String {
     #[cfg(all(target_os = "macos", not(test)))]

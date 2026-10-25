@@ -18,6 +18,7 @@ pub(crate) struct TabDrag {
     icon: Option<String>,
     favicon: Option<Vec<u8>>,
     split: bool,
+    pub(crate) reorder_target: std::rc::Rc<std::cell::Cell<Option<(TabId,bool)>>>,
 }
 
 impl TabDrag {
@@ -45,12 +46,22 @@ impl TabDrag {
                 });
             })
             .detach();
-            self.clone()
+            let mut started=self.clone();
+            started.reorder_target=std::rc::Rc::new(std::cell::Cell::new(None));
+            started
         })
     }
 }
 
 impl BrowserWindow {
+    pub(crate) fn reorder_feedback(&self,drag:&TabDrag,target:Option<(TabId,bool)>) {
+        if !self.browser.settings.enabled(browser_core::settings::Toggle::HapticFeedback){drag.reorder_target.set(None);return;}
+        let target=target.filter(|(tab,_)|self.accepts_tab_drag(drag)&&self.browser.user_profile_id_for_tab(*tab)==Some(drag.profile)&&self.browser.item_anchor(*tab)!=drag.id);
+        if drag.reorder_target.get()==target{return;}
+        drag.reorder_target.set(target);
+        if target.is_some(){crate::native::reorder_haptic();}
+    }
+
     pub(crate) fn accepts_tab_drag(&self, drag: &TabDrag) -> bool {
         self.profile.handle.same_workspace(&drag.workspace)
             && self.browser.user_profile_id_for_tab(drag.id) == Some(drag.profile)
@@ -219,6 +230,7 @@ impl BrowserWindow {
                     .map_or(tab.id, |split| split.active)
             });
         TabDrag {
+            reorder_target: std::rc::Rc::new(std::cell::Cell::new(None)),
             card_hotspot: std::rc::Rc::new(std::cell::Cell::new(gpui::point(px(64.),px(120.)))),
             source: self.main_window,
             workspace: self.profile.handle.clone(),

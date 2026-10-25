@@ -1,6 +1,9 @@
 //! Drives the real window through gpui's test platform: keystrokes and
 //! clicks go through the same key bindings, focus and hit-testing as the app.
 
+#[path = "reorder_haptics_tests.rs"]
+mod reorder_haptics_tests;
+
 #[path = "little_archive_tests.rs"]
 mod little_archive_tests;
 

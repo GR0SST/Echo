@@ -3061,7 +3061,13 @@ impl BrowserWindow {
                 drag.start_at(drag_owner.clone(),offset,drag_row_width,if segmented {36.} else {SIDEBAR_ROW_HEIGHT},cx)
             })
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
-            .on_drag_move::<crate::tab_drag::TabDrag>(move |event, _, _| { if drag_moves_active { move_edge.set(event.event.position.y > event.bounds.center().y); } })
+            .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this,event:&gpui::DragMoveEvent<crate::tab_drag::TabDrag>,_,cx| {
+                let drag=event.drag(cx);
+                if !drag_moves_active||!this.accepts_tab_drag(drag)||drag.id==id{return;}
+                let after=event.event.position.y>event.bounds.center().y;
+                if event.bounds.contains(&event.event.position){move_edge.set(after);this.reorder_feedback(drag,Some((id,after)));}
+                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None);}
+            }))
             .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {
                 let style = style.border_color(hsla(0., 0., 0.2, 0.6));
                 if paint_edge.get() { style.border_b_2() } else { style.border_t_2() }
@@ -3155,6 +3161,12 @@ impl BrowserWindow {
             .on_drag(self.tab_drag(tab), move |drag, _, _, cx| crate::tab_drag::TabDrag::start(drag, drag_owner.clone(), cx))
             .can_drop(move |value, _, cx| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| {
                 browser.read_with(cx, |this, _| drag.id != id && (this.browser.user_profile(painted_profile).is_some_and(|profile| profile.favorites.iter().any(|tab| tab.id == drag.id) || profile.favorites.len() < browser_core::favorites::MAX_FAVORITES))).unwrap_or(false)
+            }))
+            .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this,event:&gpui::DragMoveEvent<crate::tab_drag::TabDrag>,_,cx| {
+                let drag=event.drag(cx);
+                if !this.accepts_tab_drag(drag)||drag.id==id{return;}
+                if event.bounds.contains(&event.event.position){this.reorder_feedback(drag,Some((id,false)));}
+                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None);}
             }))
             .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
             .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_at_favorite(drag, id, cx); } }))

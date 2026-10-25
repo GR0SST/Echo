@@ -1740,6 +1740,32 @@ within a 35-second poll wait, unchanged normal URL, exit 0 and CEF Complete.
 the timer does not change that control. Native Settings clicks were stopped by
 the overlay/pixel guard; live preference changes are covered by the GPUI test.
 
+## Reorder feedback, sweep round 2 — 2026-10-25
+
+The retained installed-Arc Advanced capture
+`target/parity/sweep/arc-advanced.png` places Haptic feedback when reordering tabs
+under the sound-effects toggle. The binary independently exposes
+`hapticFeedbackWhenReordering`, `isDragDropHapticFeedbackEnabled`, and
+`performFeedbackPattern:performanceTime:`. Echo now gates accepted row/Favorites
+insertion-boundary signals with the canonical preference. A cell owned by the
+typed drag deduplicates held targets, including across windows; invalid profile
+targets and the source Split group do not pulse. The isolated macOS shim requests
+NSHapticFeedbackManager Alignment with default performance time; other platforms
+are silent. Exact Arc tactile pattern strength and scheduling are unverified.
+
+Two GPUI regressions exercise pointer-driven boundary changes, deduplication,
+Advanced toggle disablement, and the source Split group's own-pane target.
+The ARC_SoundEffects bundle contains capture.wav and event.m4a. Neither asset
+is copied; original replacements are tracked separately from this haptic change.
+
+`target/parity/sweep-r2/native-haptics-assertions.json` records the same native
+Today reorder with the preference on and off: alignment callbacks versus none,
+identical order/selection, exit 0 and CEF Complete. The disabled case needed one
+retry after an unrelated cookie-flush watchdog timeout. Screenshots
+`echo-haptics-on.png` and `echo-haptics-off.png` were inspected.
+`pair-haptics-retained.png` compares the unchanged checked Advanced control row;
+physical feedback strength is not measurable from these screenshots.
+
 ## Capture indicator static fallback, sweep round 2 — 2026-10-25
 
 Fresh guarded normal 22461 reused Echo Test; its R2 fixture streams and tabs were
