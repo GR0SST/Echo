@@ -16,6 +16,7 @@ pub mod favicons;
 pub mod audio;
 pub mod splits;
 pub mod bulk_archive;
+pub mod archive_query;
 pub mod preferences;
 pub mod settings;
 pub mod shortcuts;

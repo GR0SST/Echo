@@ -1278,3 +1278,60 @@ fn library_real_tab_rows_fill_the_card_and_short_titles_fit_without_clipping(
         );
     }
 }
+
+#[gpui::test]
+fn library_archive_route_search_and_filters_preserve_inventory_and_profile_scope(cx: &mut TestAppContext) {
+    let mut browser = Browser::new();
+    let profile = browser.active_user_profile_id();
+    let first = browser.new_tab("https://example.org/needle", SystemTime::now());
+    browser.set_title(first, "Archive needle");
+    browser.close_tab(first, SystemTime::now());
+    let second = browser.new_tab("https://example.org/other", SystemTime::now());
+    browser.close_tab(second, SystemTime::now());
+    browser.archive[1].reason = browser_core::ArchiveReason::Automatic;
+    let other = browser.create_user_profile("Other").unwrap();
+    let foreign_space = browser.add_space("Other Space", 120.);
+    browser.assign_space_user_profile(foreign_space, other).unwrap();
+    browser.switch_space(1);
+    let foreign = browser.new_tab("https://private.example/needle", SystemTime::now());
+    browser.close_tab(foreign, SystemTime::now());
+    browser.switch_space(0);
+    let (view, visual, _) = open(cx, browser);
+    visual.simulate_resize(gpui::size(px(1000.), px(760.)));
+    let before = session(&view, visual);
+    select(&view, visual, SidebarPage::Library);
+    click(visual, "library-nav-archive");
+    assert!(visual.debug_bounds("library-archive").is_some());
+    let search = visual.debug_bounds("library-archive-search").unwrap();
+    assert_eq!(search.origin, gpui::point(px(120.), px(10.)));
+    assert_eq!(search.size, gpui::size(px(213.), px(36.)));
+    let first_row: &'static str = Box::leak(format!("library-archive-row-{}", first.get()).into_boxed_str());
+    assert_eq!(visual.debug_bounds(first_row).unwrap().size.height, px(56.));
+    let foreign_row: &'static str = Box::leak(format!("library-archive-row-{}", foreign.get()).into_boxed_str());
+    assert!(visual.debug_bounds(foreign_row).is_none());
+    click(visual, "library-archive-search");
+    visual.simulate_input("needle");
+    visual.run_until_parked();
+    let visible_titles = |visual: &mut VisualTestContext| {
+        crate::sidebar_title::take_painted_titles();
+        visual.update(|window, cx| { let _ = window.draw(cx); });
+        crate::sidebar_title::take_painted_titles().into_iter().map(|title| title.original).collect::<Vec<_>>()
+    };
+    let painted = visible_titles(visual);
+    assert!(painted.iter().any(|title| title == "Archive needle"));
+    assert!(!painted.iter().any(|title| title.contains("example.org/other")));
+    click(visual, "library-archive-filter");
+    click(visual, "library-archive-reason-0");
+    assert!(!visible_titles(visual).iter().any(|title| title == "Archive needle"));
+    click(visual, "library-archive-reason-0");
+    click(visual, "archive-filter-done");
+    assert!(visual.debug_bounds(first_row).is_some());
+    click(visual, "library-nav-media");
+    visual.update(|window, cx| view.update(cx, |view, cx| view.open_library_archived_tab(profile, first, "https://example.org/needle", window, cx)));
+    assert!(view.read_with(visual, |view, _| view.peek_child.is_none()), "retired Archive rows cannot open a Peek");
+    click(visual, "library-nav-archive");
+    assert!(visual.debug_bounds(first_row).is_some());
+    assert!(!visible_titles(visual).iter().any(|title| title.contains("example.org/other")), "retained search survives Library navigation");
+    view.read_with(visual, |view, _| assert_eq!(view.browser.active_user_profile_id(), profile));
+    assert_eq!(session(&view, visual), before);
+}

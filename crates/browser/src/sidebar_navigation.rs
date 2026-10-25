@@ -43,6 +43,7 @@ pub(crate) struct SidebarNavigation {
     pub(crate) form: Option<Entity<SpaceCreationView>>,
     pub(crate) media: Option<Entity<library::media::MediaView>>,
     boosts:Option<Entity<crate::boost_library::BoostLibrary>>,
+    archive: Option<Entity<crate::library_archive::ArchiveLibrary>>,
     media_events: Option<Subscription>,
     pub(crate) media_search_focus: bool,
     pub(crate) downloads: crate::library_downloads::DownloadsNavigation,
@@ -69,6 +70,7 @@ impl SidebarNavigation {
             form: None,
             media: None,
             boosts:None,
+            archive: None,
             media_events: None,
             media_search_focus: false,
             downloads: Default::default(),
@@ -647,7 +649,7 @@ impl BrowserWindow {
             return;
         }
         match intent {
-            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces | LibrarySection::Boosts)) => {
+            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces | LibrarySection::Boosts | LibrarySection::ArchivedTabs)) => {
                 self.retire_library_downloads_route();
                 self.invalidate_sidebar_focus();
                 self.sidebar_navigation.library_section = section;
@@ -763,6 +765,13 @@ impl BrowserWindow {
             view.update(cx,|view,_|view.set_colors(colors));
             empty=Some(view.into_any_element());
         }
+        if section == LibrarySection::ArchivedTabs {
+            let owner = cx.weak_entity();
+            let fill = self.theme_empty_panel_fill();
+            let view = self.sidebar_navigation.archive.get_or_insert_with(|| cx.new(|cx| crate::library_archive::ArchiveLibrary::new(owner, colors, fill, cx))).clone();
+            view.update(cx, |view, _| view.set_colors(colors, fill));
+            empty = Some(view.into_any_element());
+        }
         library::render_library(
             &projection,
             section,
@@ -773,6 +782,7 @@ impl BrowserWindow {
                 media: true,
                 downloads: true,
                 boosts: true,
+                archive: true,
                 ..Default::default()
             },
             events,

@@ -31,6 +31,7 @@ mod site_controls;
 mod site_settings_page;
 mod boosts;
 mod boost_library;
+mod library_archive;
 mod panel;
 mod material;
 mod favicon_style;

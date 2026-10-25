@@ -5,7 +5,7 @@ use gpui::{div, hsla, prelude::*, AnyElement, Context};
 use std::time::SystemTime;
 use chrono::{DateTime, Local, NaiveDate};
 
-fn date_label(day: NaiveDate, today: NaiveDate) -> String {
+pub(crate) fn date_label(day: NaiveDate, today: NaiveDate) -> String {
     if day == today { "Today".into() }
     else if Some(day) == today.pred_opt() { "Yesterday".into() }
     else { day.format("%b %-d, %Y").to_string() }
