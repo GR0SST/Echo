@@ -720,7 +720,7 @@ impl BrowserWindow {
             // Reuse existing host semantic surfaces; never change App appearance.
             let media_colors = library::media::MediaColors {
                 column: colors.background,
-                preview: gpui::transparent_black(),
+                preview: self.theme_empty_panel_fill(),
                 text: colors.text,
                 muted: colors.muted,
                 control: colors.selected,

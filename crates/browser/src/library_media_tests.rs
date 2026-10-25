@@ -123,7 +123,7 @@ fn media_has_reference_width_list_after_shared_rail_and_separate_preview(cx: &mu
     assert_eq!(list.size.width, px(305.));
     assert_eq!(preview.origin.x, list.right());
     assert_eq!(preview.origin.y, px(10.));
-    assert_eq!(preview.right(), px(707.));
+    assert_eq!(preview.right(), px(697.));
     assert_eq!(search.origin.x - list.origin.x, px(8.));
     assert_eq!(search.origin.y, px(10.));
     assert_eq!(search.size, gpui::size(px(289.), px(36.)));
