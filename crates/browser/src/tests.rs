@@ -4435,7 +4435,7 @@ fn reveal_tab_unfolds_and_scrolls_pinned_without_changing_the_page(cx: &mut Test
     cx.simulate_keystrokes("cmd-s");
     cx.run_until_parked();
     fake.take_calls();
-    run_named_command(&view, cx, "reveal tab in sidebar");
+    cx.simulate_keystrokes("ctrl-space");
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
@@ -4446,6 +4446,26 @@ fn reveal_tab_unfolds_and_scrolls_pinned_without_changing_the_page(cx: &mut Test
     let row = cx.debug_bounds("tab-32").unwrap();
     let list = cx.debug_bounds("sidebar-content").unwrap();
     assert!(row.origin.y >= list.origin.y && row.bottom() <= list.bottom(), "row={row:?}, list={list:?}");
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn reveal_current_tab_shortcut_reaches_the_same_scroll_action_from_page_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_long_sidebar(cx, true);
+    let selected = active_url(&view, cx);
+    let shortcut = Shortcut { ctrl: true, key: "space".into(), ..Default::default() };
+    assert!(crate::window::page_shortcuts().contains(&shortcut));
+    cx.simulate_keystrokes("cmd-s");
+    cx.run_until_parked();
+    fake.take_calls();
+    fake.send(cx, fake.shortcut(shortcut));
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.sidebar_visible && !w.browser.space().pinned_collapsed));
+    let row = cx.debug_bounds("tab-32").unwrap();
+    let viewport = cx.debug_bounds("sidebar-content").unwrap();
+    assert!(row.top() >= viewport.top() && row.bottom() <= viewport.bottom());
+    assert_eq!(active_url(&view, cx), selected);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
 

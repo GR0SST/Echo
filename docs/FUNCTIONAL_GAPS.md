@@ -1,0 +1,249 @@
+# Functional release gaps
+
+Inventory baseline: `fcf128de1cabf4dbe4c6625bde9b071577c632f1`; reviewed 2026-10-25. All 208 rows whose status was `partial` or `missing` in [ARC_PARITY.md](ARC_PARITY.md) are classified below. Line numbers are baseline locators; feature names are the durable identifiers. No Arc sessions or pixel work were used for this triage.
+
+**Counts: F 103, C 52, B 53; total 208.** Counts are inventory rows, not unique features. Duplicate umbrella/menu rows remain visible; implement the canonical feature once.
+
+F = demonstrated missing capability, behavior difference, integration or a concrete functional acceptance gate. C = only appearance/motion/copy remains; defer for the first release. B = authentication/signing, a missing positive reference, or constrained acceptance prevents a defensible defect claim. B does **not** mean permission to build excluded account/sync/cloud features. Platform gaps are F when an adapter is known absent; mere unperformed platform acceptance is B. Mixed rows are F if any functional work remains.
+
+Ranking prioritizes data retention, login/navigation, everyday retrieval and recoverability before secondary tools. S is a focused action/adapter/verification change, M crosses a few modules, L is a backend/platform project. Estimates exclude account access and all pixel polish. Not every inventory note is current: stale entries are verification tasks, explicitly identified, rather than assumed missing code.
+
+## Ranked functional work
+
+| Rank | Baseline row / feature | Effort | Concrete fix / acceptance |
+|---:|---|:---:|---|
+| 1 | L571: "When opening Arc, restore windows from previous session" | L | Persist and restore the normal window inventory, bounds and window-local selected Spaces/tabs across relaunch. |
+| 2 | L416: Profile: separate history, cookies, passwords, extensions | L | Extend saved-login fill to iframe/cross-origin forms and provide safe multiple-account selection. |
+| 3 | L192: Add Extension… / Manage Extensions… | L | Connect the qualified extension catalog/install/action engine bridge to Add/Manage Extensions. |
+| 4 | L499: Built-in ad and tracker blocker | L | Implement local request filtering with maintained ad/tracker rules and per-site exceptions. |
+| 5 | L293: History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | M | Persist visit frequency and rank typed local results by pinned/open/history tiers plus frequency and recency. |
+| 6 | L112: Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | M | Complete Undo/Redo transactions for regrouping and Pinned/Favorite unloading without losing live pages. |
+| 7 | L99: Save Page As | S | Diagnose native Shift-Command-S routing and persist the chosen Save Page format. |
+| 8 | L129: Reveal Current Tab | S | **Fixed:** Control-Space now reaches the existing reveal/unfold/scroll action in both GPUI and renderer focus; see delivery evidence. |
+| 9 | L410: Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | M | Complete user link-disposition routing while preserving source pages, focus and profile storage. |
+| 10 | L399: Shift-click opens a link in Peek (option) | M | Handle links opened inside Peek/Little without losing or replacing the wrong retained document. |
+| 11 | L599: Quiet downloads and the downloads tray | M | Support deliberate replacement of an existing download destination without weakening staged publication. |
+| 12 | L440: General → Arc is not the default browser ("Set as default" button) | S | Connect General's default-browser status and action to the existing serialized platform registration interface. |
+| 13 | L298: **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | S | Add About Echo, Import and conditionally available Set as Default Browser Command Bar routes. |
+| 14 | L492: Crashed tab page (Sad Tab) | M | Present recoverable renderer-crash state with Reload, scoped to the failed retained page. |
+| 15 | L558: Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | L | Add supported modern Safari/session readers and local cookie/autofill/source-password import adapters. |
+| 16 | L183: Go Back / Go Forward | M | Expose retained back/forward history on a long press and navigate to the selected entry. |
+| 17 | L143: Exit (leave a context: Peek, full screen) | S | Route Exit context to leave native fullscreen while retaining the observed Peek Command-Escape behavior. |
+| 18 | L227: Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | M | Add folder sibling insertion and folder/mixed-item selection using stable captured identities. |
+| 19 | L231: Multi-selecting tabs (⌘/⇧-click) | M | Extend range/toggle multi-selection to Favorites and folders without activating pages. |
+| 20 | L419: Deleting a profile by typing its name, "Delete unused Profiles". The default profile can't be deleted | M | Add confirmed bulk unused-profile deletion and safe retired-storage reclamation. |
+| 21 | L420: Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | M | Honor the selected profile's document-app preference when opening supported documents. |
+| 22 | L137: Cast | L | Implement platform casting discovery/control behind the engine boundary. |
+| 23 | L491: Page translation: "Translate this page to %@?", Use Original, Choose Another Language, Never Translate This Site | L | Implement page translation with per-site policy, original-language restoration and language selection. |
+| 24 | L337: **Page** (Chromium's menu plus Arc's items) (?) | L | Complete page-menu Save Page/media/editable/translation actions and clicked-node inspection. |
+| 25 | L98: Capture Full Page / Capture in Portrait Mode | M | Capture the full document or portrait viewport through a bounded retained-document engine request. |
+| 26 | L496: Page full screen: "To exit full screen, press …" toast | S | Show and dismiss the native-page fullscreen exit instruction on actual state transitions. |
+| 27 | L495: Pointer lock: "Your cursor is hidden. Press 'esc'…" toast | M | Provide pointer-lock exit instructions and release/cancel handling tied to the requesting page. |
+| 28 | L279: Websites can read the theme ("Allow websites to get your theme data", CSS variables `--arc-palette-*`) | M | Expose the opt-in per-Space palette CSS variables to current documents and clear them on disable. |
+| 29 | L257: Creating a Space ("Create a Space" dialog: name, icon, theme, profile) | M | Connect existing theme/profile selectors to the window-local Space-creation draft before atomic publication. |
+| 30 | L265: Assigning a profile to a Space ("Set Profile", "Edit Space profile") | M | Allow choosing the profile in a new-Space draft without reassigning an existing Space. |
+| 31 | L387: Global shortcut "Open Little Arc when I press … in any app" | M | Support recording the Little shortcut and implement missing platform global-key registration. |
+| 32 | L388: Links from other apps open in Little Arc | M | Register and dispatch external URL launches on Windows/Linux through the existing local ATC router. |
+| 33 | L389: ⌥⌘-click on a link opens it in Little Arc | S | Route Command-Option link clicks to a new Little window using captured URL/profile identity. |
+| 34 | L391: Show/Close all Little Arc windows | M | Implement Show/Close All Little windows with correct archive and renderer teardown semantics. |
+| 35 | L401: Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | M | Add the dedicated Peek destination picker and safe cross-profile storage transition. |
+| 36 | L166: Open Little Arc or Peek in… (pick a Space) | M | Complete reference-qualified cross-profile Little/Peek promotion without leaking storage or losing the lookup on failure. |
+| 37 | L390: Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | M | Connect Little's extension/download controls to existing profile-scoped services. |
+| 38 | L306: Running an extension by name ("Extension …") | S | Invoke a matching enabled profile-owned extension action from the Command Bar through the engine bridge. |
+| 39 | L297: Removing a suggestion ("Delete Suggestion") | M | Persist dismissal of supported remote suggestion results without deleting unrelated local visits. |
+| 40 | L296: Site Search: Tab or Space after a site's name searches that site; has a management menu | M | Discover supported site-search templates and persist per-profile activation/management. |
+| 41 | L292: Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | M | Add missing provider completion transports and distinguish navigable suggestions from search text. |
+| 42 | L295: Popular domains (Popular Domains, ARC_TopDomains) | M | Expand the independent common-domain catalog and qualify ordering against local/history results. |
+| 43 | L329: **Folder**: Share, Duplicate, Archive Folder / Delete, New Nested Folder…, Turn into Space, Copy All Links (as Markdown) | M | Wire nonempty-folder archiving as one scoped Undo transaction and replace the destination picker with a real submenu. |
+| 44 | L328: **Multi-selection**: Archive Items, Copy links (as Markdown), New Folder with N items, Move to… | M | Support Favorites/folder selections and combining existing split groups in batch actions. |
+| 45 | L327: **Tab**: Copy Link, Copy link as Markdown, Share, Duplicate, Rename (?), Edit Pinned Page → Replace Pinned URL with Current, Add/Open in Split View, Move to… (Spaces, profile), New Folder with…, Mute/Unmute, Archive Tab / Close Tab / Remove Pin / Remove Favorite, Archive Other Tabs / Tabs Below / Tabs Above, Customize Page… (Boost) | M | Complete captured-tab Share/Move and playback-dependent menu availability without selecting the target. |
+| 46 | L118: Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | M | Complete context-eligible Find actions including Jump to Selection and editable replacement. |
+| 47 | L139: Developer: Developer Tools, Inspect Elements, JavaScript Console, Network Inspector | M | Support DevTools dock positions/resizing and persist dimensions while retaining frontend/source focus. |
+| 48 | L100: Print | M | Implement the missing Linux print handler and validate native Windows cancellation/printing. |
+| 49 | L96: Share… | M | Provide platform-native share presenters on Windows/Linux behind the existing captured-page interface. |
+| 50 | L72: Set as Default Browser | M | Implement Windows/Linux default registration adapters and qualify OS consent/cancellation. |
+| 51 | L119: Spelling, Substitutions, Transformations, Speech, Format (Bold/Italic/Underline) | M | Connect remaining editing preference toggles and platform responder adapters with context-sensitive enablement. |
+| 52 | L76: Hide Arc / Hide Others / Show All | M | Provide equivalent supported window-hide operations on remaining desktop platforms. |
+| 53 | L77: Quit | M | Qualify non-macOS quit visibility and ship the patched CEF teardown path rather than the risky fallback. |
+| 54 | L84: New Window | M | Qualify live-page ownership transfer and window restoration on Windows/X11. |
+| 55 | L86: New Incognito Window | M | Enforce private-window menu/action availability across all browser entry points. |
+| 56 | L85: Blank Window | M | Complete Blank-window profile selection, Archive behavior and relaunch persistence. |
+| 57 | L70: Preferences… | M | Close the remaining Settings backend integrations listed in the per-setting rows below. |
+| 58 | L73: Import from Another Browser… | L | Complete the supported local import formats and categories; use the detailed onboarding/import row as the canonical task. |
+| 59 | L87: New Little Arc Window | M | Finish the Little prompt/placement and platform entry paths listed in section 10. |
+| 60 | L90: New Boost / Edit Boost / Boost Gallery | M | Expose local Boost rename/delete controls using existing profile-owned model operations; omit cloud gallery. |
+| 61 | L149: New Space… | M | Finish theme/profile editing within the existing Space-creation draft. |
+| 62 | L152: Change Profile | M | Complete the empty-window warning policy for captured-Space profile reassignment. |
+| 63 | L214: Resize sidebar | S | Persist sidebar width and inherit it in new windows without changing document identity. |
+| 64 | L220: **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | M | Complete unread/calendar/profile behavior separately from the already-working Favorites dock. |
+| 65 | L229: Dragging tabs (between sections, into folders, into Favorites, into another Space) | M | Extend held-drag auto-scroll to folder drags and qualify edge cancellation across target types. |
+| 66 | L233: Custom tab icon ("Customize Tab") | M | Support uploaded custom tab images with bounded local decoding and persisted identity. |
+| 67 | L244: Incognito window sidebar ("Incognito Tabs") | M | Complete private New/context-menu availability without exposing regular-profile operations. |
+| 68 | L246: Media controls in the sidebar | M | Complete the media-control behaviors tracked in the detailed mini-player row. |
+| 69 | L264: Space Manager (Library → Spaces) | M | Complete Space Manager theme/overflow actions and behavioral routing independently of card styling. |
+| 70 | L272: Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | S | Clamp the theme picker to the work area and anchor Library entry to the clicked card so controls stay reachable. |
+| 71 | L305: Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo | S | Connect remaining in-scope menu actions to Command Bar routes; exclude the Arc update feed. |
+| 72 | L348: Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | M | Reconcile the stale Library/Little archive note with the implemented cross-profile inventory and remaining restoration gaps. |
+| 73 | L374: Resize Split View panes | M | Verify and fix overflow hit testing for four-pane horizontal/vertical splits. |
+| 74 | L375: Create by dragging a tab to the middle of the window | M | Qualify and implement initially-unarmed center-drop semantics without changing retained-page identities. |
+| 75 | L386: Small window for quick lookups | M | Open the initial Little lookup prompt and persist its placement instead of immediately showing a full window. |
+| 76 | L408: "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | M | Close remaining rule matching/destination limitations documented in ATC_REFERENCE without touching user rules. |
+| 77 | L418: Changing a Space's profile, with warnings ("Switch to your … Profile?") | M | Implement the empty-window warning policy for a Space profile change. |
+| 78 | L443: General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | L | Connect blocker preferences and per-site exceptions to a real local filtering backend. |
+| 79 | L452: Max → 5-Second Previews | M | Complete automatic-site eligibility and image/system-share payload handling for 5-Second Previews. |
+| 80 | L463: Archive (see section 7) | M | Restore Little archive items to the correct destination and retain final-window/app-quit lookups exactly once. |
+| 81 | L464: Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | S | Handle files moved/deleted after publication in Library Open/Show actions and missing-file state. |
+| 82 | L465: Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | L | Implement bounded local media discovery and real file actions; avoid inventing a populated Arc layout. |
+| 83 | L466: Boosts: list, on/off, rename, delete | S | Expose local Boost rename/delete operations through the existing editor/list interaction contract. |
+| 84 | L488: Site Control Center: security icon, Copy URL, Capture / Full Page / Portrait, Share, Boosts, extensions (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | L | Complete cross-origin permission requests, main-panel keyboard traversal and global site-settings navigation. |
+| 85 | L494: Dragging the window by the top of the page (option) | S | Honor the saved drag-window-from-top-of-page option through a portable host interface. |
+| 86 | L498: Chrome extensions (icons, "Open pinned extensions picker") | L | Connect the extension picker/action host to the qualified engine bridge; replace the stale approval-gated note. |
+| 87 | L500: Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | S | Notify when a background tab is created while the sidebar is hidden and let the user reveal it. |
+| 88 | L506: Mini player in the sidebar: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | M | Handle paused-video PiP, active PiP state and supported iframe media/microphone/camera controls. |
+| 89 | L507: Automatic PiP when leaving a tab with video (option) | M | Qualify automatic PiP eligibility for split panes and iframe/unmanaged videos across platforms. |
+| 90 | L508: PiP window: Back to Tab, ±15 seconds, seeking by dragging up, Keep Window on Top, minimize or close, remembered position | L | Complete PiP context controls, drag-up seeking and cross-run bounds while retaining the live source. |
+| 91 | L509: PiP for Google Meet (with chat) and Document PiP | L | Host Document PiP through a scoped GPUI surface; Meet/chat acceptance requires a separate authenticated fixture. |
+| 92 | L548: Translation: Translated to %@ / back to %@ / error | M | Add translation outcome notifications when the underlying translation backend lands. |
+| 93 | L551: Shortcut tips ("Copy links faster by pressing…", "… to easily show and hide your Sidebar!", Site Search) | S | Connect reference-backed shortcut education to real eligibility/dismissal events without repeated prompts. |
+| 94 | L560: Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | M | Complete the local Favorites catalog, blocker and AI setup steps; exclude accounts/sync/member cards. |
+| 95 | L564: Default browser prompts ("Try Arc as default for one week" etc.) | S | Implement the qualified recurring default-browser reminder policy without repeated OS requests after cancellation. |
+| 96 | L573: CEF startup and framework lifetime | L | Remove the allocator-registration startup race with deterministic native regression acceptance. |
+| 97 | L582: Swipe back/forward on the page | M | Implement Windows/Linux gesture input bridges while preserving scroll-container cancellation policy. |
+| 98 | L583: Animated tab dragging, dragging to the middle for Split | M | Finish initially-unarmed center-drop behavior and platform drag routing; defer raster/settling polish. |
+| 99 | L591: Classes: window (active tab, active space, incognito, mode), tab (id, title, URL, loading, location: topApp/pinned/unpinned), space (id, title) | M | Support range/predicate selectors and verify runtime incognito/window-state scripting snapshots. |
+| 100 | L592: Commands: make, close, select, go back, go forward, reload, stop, execute (JavaScript), focus (space) | M | Complete Little creation and unloaded-target scripting behavior using canonical profile mutations. |
+| 101 | L598: Capture (screenshot of an area, ⇧⌘2), saved to Library | M | Complete private/Blank capture destination behavior and functional local-media publication; omit Easels/cloud sharing. |
+| 102 | L601: Task Manager, trace recording | L | Add GPU/utility/worker process IDs, network sampling and local trace recording through the CEF API extension. |
+| 103 | L603: Arc Max (AI: Tidy Tabs, tab/download renaming, 5-Second Previews, Ask on Page, ChatGPT in the Command Bar, Browse for Me, Instant Links) | M | Qualify live direct-provider capability/error handling and remaining automatic preview coverage; do not invent unavailable Ask/Browse controls. |
+
+## Cosmetic-only inventory
+
+| Baseline row / feature | Reason to defer |
+|---|---|
+| L91: New Profile | Local profile creation and Settings entry already work; stale inventory note, no remaining functional gap identified. |
+| L97: Capture… | Capture works; remaining pointer/instruction/backdrop/glyph/motion differences are cosmetic. |
+| L125: Appearance: websites use Automatic / Light / Dark | Website color schemes work; remaining platform checkmark presentation/acceptance is cosmetic. |
+| L133: Add Split View | Split creation/cancellation works; remaining native visual review only. |
+| L135: Separate Page from Split View / Expand Current Split | Separate/expand work; expansion animation fidelity only. |
+| L150: Edit Theme… | Theme editing exists; remaining appearance work is documented in theme rows. |
+| L184: View History | History search/open/delete works; stale visual-review note only. |
+| L195: View Downloads | Downloads routing/progress/cancel works; remaining motion/presentation only. |
+| L219: "Show as Toolbar" mode (context menu: Show as Toolbar / Hide Toolbar) | Toolbar mode and address actions work; material/mode-switch motion only. |
+| L222: **Pinned** section of a Space | Pinned URL editing/reset/collapse work; dialog shadow/keycap/motion only. |
+| L230: Haptic feedback when reordering tabs | Haptic preference/reorder feedback works; exact tactile timing and glyph raster only. |
+| L232: Renaming a tab by double-click ("Double-click to rename") | Renaming works; Favorite/Split editor placement only. Unfinished polish is stashed. |
+| L235: Audio indicator, Mute/Unmute in the context menu | Audio activity and mute work; Favorites placement/tooltips/theme only. |
+| L236: Camera/microphone indicator on a tab | Capture indicator works; activation motion and Favorite/Split placement only. |
+| L237: Split View item in the sidebar (tab group) | Split row behavior works; Favorite-group/hover/theme presentation only. |
+| L239: Sidebar interaction states and Space dock | Interaction controls work; remaining drag/playback/reorder presentation only. |
+| L240: Browser chrome iconography | Icon system exists; remaining per-action glyph/raster differences only. |
+| L242: "+" button in the dock: New Tab, New Space, New Folder, New Split, New Boost | All in-scope New menu routes work; popover motion/material/vector raster only. |
+| L243: "Springy" click animation on sidebar items | Click feedback works; other item animation and reorder settling only. |
+| L255: Two-finger swipe on the sidebar: Spaces follow the fingers and rubber-band at the edges | Space swipe follows fingers and snaps; exact curve/flick/resistance/virtual-page motion only. |
+| L259: Space icon (emoji or symbol, "Change Space Icon…", "Remove icon") | Space icon selection/removal works; external popup position/animation only. |
+| L271: The Space color tints the sidebar and window; during a swipe the color blends smoothly | Theme fields/blending work; exact shader/inactive material calibration only. |
+| L273: Palette with several colors ("Add color" / "Remove color"), gradient of 2–3 colors (?) | Add/remove colors works; added pigment/handle placement and spatial shader differences are cosmetic. |
+| L274: Preset color sets in pages: Brand, Drab, Greyscale, Pastel | Palette selection works; transition and gamut rendering only. |
+| L275: Noise texture ("Cycle noise texture") | Noise selection/strength work; procedural texture and dial contrast differences only. |
+| L276: "Intensity" slider | Intensity is persisted/live; backing/wave/response calibration only. |
+| L277: Mode: Automatic / Light / Dark Appearance | Appearance mode works/persists; picker/shader and fresh restart qualification only. |
+| L287: Popup over the page | Command Bar works; info-button/material/platform fallback calibration only. |
+| L304: Tabs: Duplicate Current Tab, Rename Current Tab…, Reset Tab, Replace Pin with Current Page, Mute/Unmute All Tabs | Tab actions work; rename dialog placement and action glyph/status presentation only. |
+| L331: **Split View in the sidebar**: Share Split View…, Separate All Tabs, Add Split View, Convert to Vertical/Horizontal, Tab Options → Reset Name and Icon, Duplicate, Archive…, Separate from Split View | Split menu operations work; third-level hover and exact remaining menu presentation only. |
+| L332: **Split View pane** (control menu): Move, Add Split, Separate Tab from Split, Convert orientation, Share Split View… | Pane operations work; menu material/placement only. |
+| L344: Auto Archive interval choices | All observed Auto Archive choices already persist and drive the policy; stale partial status. |
+| L369: Add a pane (up to 4 panes, "Cannot Add New Pane" toast) | Add/cancel pane works; empty header/corner/body/motion calibration only. |
+| L371: Split pane corner contour and focus | Split focus/header/SCC works; corner raster/opacity/tooltips/material only. |
+| L372: Split sidebar item | Split row closing/naming works; Favorite-group/fill/favicon presentation only. |
+| L377: Separate Page / Separate All Tabs / Expand Current Split | Separate/expand work and preserve live pages; animation only. |
+| L400: Closing Peek (⌘Esc / Esc), Undo "Close Peek" | Peek close/Undo retains document; exact glyph/raster/spring only. |
+| L417: Creating a profile: name and which Spaces use it | Profile creation/assignment works; baselines/borders/material/illustration differences only. |
+| L462: Spaces (Space Manager: order of Spaces, folders, tabs) | Space manager actions work; picker anchor is ranked separately; card/menu material polish only. |
+| L485: The page sits in an inset "card" with rounded corners | Inset page/empty frame works; shadow/border only. |
+| L486: Loading indicator (glowing progress, `GlowProgressLoadingIndicator`) | Loading progress works; remaining glow rendering/motion calibration only. |
+| L487: Site-specific zoom indicator | Live zoom indicator works; remaining appearance qualification only. |
+| L489: Status bar with the URL when hovering a link (`StatusTextView`) | Status URL behavior works; Light/shadow/transition/host formatting calibration only. |
+| L547: Import: Now importing… / Success / partial / failure | Import progress and success/partial/failure toasts already exist; stale missing inventory status. |
+| L552: Screenshot Copied to Clipboard, Capture in Progress… | Capture copy/progress feedback already exists; reconcile stale inventory status before changing presentation. |
+| L559: Choosing the profile to import into ("My Existing Arc Profile" / "Create a New Profile") | Import destination selection/publication works; picker visuals only. |
+| L561: "Let’s settle in! Here are the basics." screen (Pin tabs, Split View, Spaces, Open your first tab, with video) | Basics/shortcuts route works; instructional video and layout are presentation. |
+| L562: "Essential Keyboard Shortcuts" window (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) | Shortcut help works; separate-window geometry only. |
+| L563: Empty state: "Open your first tab. Click New Tab or press ⌘T…" | Empty page is usable with Command-T; placeholder copy/layout only. |
+| L579: Sidebar swipe: Spaces follow the fingers, resistance at the edges, flick by speed, snapping back after a short swipe | Space swipe works; exact resistance/flick/icon motion only. |
+| L584: Haptic feedback and Arc's sounds (`ARC_SoundEffects`) | Haptic/sound preferences work; exact timing/cue only; meeting cue belongs to blocked calendar integration. |
+| L585: Springy click on sidebar items | Click animation exists; remaining item-type/settling animation only. |
+
+## Blocked or unqualified inventory
+
+| Baseline row / feature | Specific blocker |
+|---|---|
+| L69: About Arc | OS legal-document opening acceptance has no demonstrated failure; link tint is cosmetic. |
+| L74: Check for Updates… | Apple signing/notarization and available-update acceptance require the release signing environment; banner polish is deferred. |
+| L75: Privacy Policy | Packaged document opening needs OS acceptance; no broken route established. |
+| L92: New Note | Current Arc Notes creation reference is unavailable; confirm present product scope before building an obsolete editor. |
+| L93: New Note (in Split) | Same unavailable Arc Notes flow as New Note; do not invent a Split Notes editor. |
+| L113: Cut / Copy / Paste / Select All | Remaining platform/non-input editing contexts lack acceptance evidence, not a demonstrated failure. |
+| L116: Copy URL as Quote (link to the selected text) | Arc clipboard-format/native acceptance missing; existing local selection route is implemented. |
+| L117: Paste and Match Style | Remaining platform/menu-state acceptance only; no demonstrated missing editing path. |
+| L127: Show/Hide Toolbar (top bar mode) | Remaining address-menu matrix is unqualified; toolbar switching already works. |
+| L132: Clear Cookies and Refresh / Clear Cache and Refresh | Other-platform behavior remains unqualified; captured macOS clearing works. |
+| L140: Developer: Allow JavaScript from Apple Events | Remaining menu/profile state acceptance only; opt-in denial/evaluation already work. |
+| L141: Toggle Developer Mode (per site) | Localhost policy was subsequently implemented; remaining extension/portrait capabilities are ranked separately and the split-state matrix is unqualified. |
+| L142: Enter/Exit Full Screen | Other-platform fullscreen acceptance is pending; macOS entry/exit works. |
+| L155: Manage Spaces… (Space Manager in Library) | Repeated manager entry needs qualification; no established broken route. |
+| L162: New ChatGPT Message… | Separate new-message command eligibility/reference is unqualified; ChatGPT composer handoff already exists. |
+| L163: Join Meeting (link to the next meeting) | Calendar/next-meeting integration needs authenticated reference. |
+| L164: Peek Email… (code from an email) | Email-code integration needs authenticated reference and provider/permission contract. |
+| L167: New Folder… | Conflicting native shortcut is unresolved; do not override Incognito without positive reference. |
+| L170: Tab Switcher forward/back ("Recent Items" overlay, MRU, like ⌘Tab) | Five-item native/combined-thumbnail acceptance remains; three-item MRU cycle already works. |
+| L185: View Archive | Remaining Archive acceptance is covered by the detailed Library row; no separate defect established. |
+| L193: Minimize Window / Zoom / Bring All to Front | Native Zoom/Bring All ordering and remaining platform acceptance are unqualified. |
+| L194: View Library | Umbrella Library note does not establish another defect beyond its detailed section rows. |
+| L196: View Media / View Boosts | Remaining populated Library content/platform acceptance is tracked below; no separate route failure. |
+| L197: Help: Getting Started, Essential Keyboard Shortcuts, Release Notes, Contact the Team, Help Center, Restore Data, Export Arc Notes | Current local help/restore/export destinations need a qualified contract; never recreate Arc team/account routes. |
+| L198: Troubleshooting: Record Trace, Task Manager, Reveal Arc Data, Copy Arc Info | Trace sampling gaps are ranked under Task Manager; the remaining umbrella route matrix is unqualified. |
+| L221: Hover previews for Favorites, Pinned and folders (Gmail, Google/Outlook Calendar, Linear, Notion, Figma, Confluence) | Third-party authenticated previews/reference explicitly deferred. |
+| L225: "Tidy Tab Titles": automatic shorter names on Pin | AI Split/Favorite eligibility/feedback lacks a positive reference; ordinary title shortening works. |
+| L226: "Tidy Tabs": AI grouping of Today by topic | Arc returned no successful grouping reference; local provider grouping exists. |
+| L228: Live Folders (GitHub Pull Requests: Created by Me, Review Requests…) | Authenticated Arc PR/badge/SSO presentation is unverified; local PAT implementation already exists. |
+| L245: Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | Education eligibility/layout has no positive reference; blocker gap is ranked separately. |
+| L260: Deleting a Space (with Undo) | Native destructive last-Space deletion is prohibited; tests exist, no demonstrated defect. |
+| L262: Turning a Space into a folder ("Export “%@” into Folder") | Live Space export removes a Space and is prohibited; tested implementation is present. |
+| L263: Live Folders for a Space | Authenticated Live Folder rows are unqualified; local creation/reuse works. |
+| L291: Switching to an open tab | Native cross-Space acceptance conflicts with the shared-test-only rule; local switching has regression coverage. |
+| L294: Calculator (Search Calculator Answer) | Installed Arc returned no calculator answer; positive reference required before claiming or changing answer semantics. |
+| L307: Join next video call / Zoom | Authenticated next-meeting/calendar reference required. |
+| L308: Suggestions for an empty field (Air Traffic Control, Tips for Organizing, Help Center) | Help-row eligibility/destination and Max empty-result policy lack a qualified reference. |
+| L309: ChatGPT in the Command Bar, "Browse for Me" (Arc Max) | Desktop 1.170 exposes no Browse for Me control; do not invent one. |
+| L310: Instant Links (Arc Max) | Live provider billing/capability and Arc ranking are unqualified; local streaming/result path exists. |
+| L330: **Live Folder**: Pull Requests, Repositories, Single Sign-On, Delete Live Folder | Authenticated cookie-SSO/status visuals cannot be validated with the available local PAT reference. |
+| L333: **Space**: Change Space Icon…, Rename, Edit Theme Color…, Set Profile, New Folder, Live Folders, Share, Show/Hide Space Header, Manage Spaces…, Delete Space, New Profile, Export into Folder | Destructive last-Space/native export and authenticated Live Folder states cannot be exercised under the shared-session rules. |
+| L334: **Favorite with a calendar** (Live Calendar): Show Hover Preview, Show Time to Next Meeting, Show Next Meeting Link, reminder 2/5/10 minutes before | Authenticated calendar/meeting reference required. |
+| L335: **Download**: Open, Copy, Show in Finder, Cancel Download, Hide from Arc, Move to Trash | Active Cancel is already implemented in ordinary-download evidence; direct row activation lacks a usable positive Arc reference. |
+| L336: **Tab group header**: Remove header | Header removal semantics and current eligible reference are unavailable. |
+| L350: "Auto archived %d tabs" toast and the "We cleaned up!" banner | No positive education-banner eligibility/layout reference; archive notification already works. |
+| L392: Tip for new users "Links Open in Little Arc" | No positive new-user eligibility/presentation reference; do not invent a repeated tip. |
+| L398: Links to other sites from Pinned/Favorites open in Peek (option) | Subdomain edge-policy acceptance lacks a positive reference; cross-host Peek works. |
+| L402: Swipe to dismiss the modal (`modal-v2-native-gestures`) (?) | Gesture is inferred from a string; no qualified current dismiss gesture reference. |
+| L490: Find in Page ("No results found"), Find and Replace | Editable-context Find/Replace availability has no positive Arc reference; ordinary Find works. |
+| L497: Developer mode for a site, DevTools | Other loopback-address policy is unqualified; current site developer mode works. |
+| L510: Per-tab audio activity | Windows/Linux native A/V acceptance remains; measured macOS route/timestamp behavior works. |
+| L550: Battery Saver Mode Activated/Deactivated | Automatic Battery Saver active state/eligibility has no qualified reference. |
+| L600: Battery Saver mode | No exposed manual command; automatic active-state reference required before adding controls. |
+
+## Delivery evidence
+
+No status is promoted by triage alone. Keep a mixed row partial if broader functional or cosmetic qualification remains. A visual pair is required only when the change introduces or changes presentation.
+
+### Reveal Current Tab — completed
+
+Added Control-Space to the single shared GPUI/CEF shortcut registry. Existing Settings shortcut rebinding can now find its baseline action. The existing reveal transaction handles hidden/floating sidebar, collapsed ancestors and Split anchors without creating or navigating a page.
+
+- Full workspace: `CARGO_TARGET_DIR=/tmp/echo-audit-build-9e64e52b CARGO_BUILD_JOBS=3 RUST_TEST_THREADS=4 scripts/with-cef.sh cargo test`, green; log `/tmp/echo-functional-baseline-test.log`.
+- Eight focused Reveal tests pass, including a new renderer-origin shortcut regression and a root-keyboard collapsed-Pinned test. Fake-engine calls assert no create/close/navigation.
+- Native: disposable bundled profile, `https://example.org/`, frame `{100,100,1000,760}`; sidebar dumps `false` then `true`, selected URL unchanged, CEF Complete and process exit zero. Evidence: `target/parity/functional-release/reveal/engine.log`, `owned-windows.json`, `revealed.png` (inspected). No Arc windows, Spaces or system default were changed. Driver uses a canonical executable path, explicit bundle activation and bounded cleanup.
+- `Reveal Current Tab` is promoted to done. Baseline counts above remain an audit snapshot; one of its 103 F rows is now closed.
+
+The preliminary Save Page shortcut probe reached its handler and prepared the native sheet, but the driver rejected sheet focus before cancellation. It is **not** a passed Save Page acceptance check; format persistence and the end-to-end gate remain open.
+
+The pre-strategy rename-dialog polish is preserved in the local stash `WIP rename dialog before functional release triage`; it is intentionally excluded from release-gap implementation.

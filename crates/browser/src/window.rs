@@ -189,6 +189,7 @@ window_shortcuts! {
     "cmd-m" => crate::menus::Minimize,
     "ctrl-cmd-f" => crate::menus::ToggleFullscreen,
     "cmd-l" => EditCurrentUrl,
+    "ctrl-space" => RevealTab,
     "cmd-shift-l" => ViewLibrary,
     "cmd-shift-j" => ViewDownloads,
     "cmd-p" => PrintPage,
