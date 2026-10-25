@@ -18,6 +18,7 @@ pub mod splits;
 pub mod bulk_archive;
 pub mod preferences;
 pub mod settings;
+pub mod shortcuts;
 pub mod max;
 pub mod routing;
 pub mod site_settings;

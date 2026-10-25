@@ -119,6 +119,8 @@ use window::BrowserWindow;
 
 actions!(app, [Quit]);
 
+mod shortcuts;
+
 pub fn init(cx: &mut App) {
     quit::init(cx);
     scripting::init(cx);
@@ -146,6 +148,7 @@ pub fn init(cx: &mut App) {
     user_profile_dialog::bind_keys(cx);
     space_creation_view::bind_keys(cx);
     downloads_view::bind_keys(cx);
+    shortcuts::init(cx);
 }
 
 /// Content of the first launch.

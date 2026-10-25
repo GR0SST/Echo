@@ -4432,6 +4432,7 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(pages)=&self.pages { pages.borrow_mut().sync_shortcuts(crate::shortcuts::page(cx)); }
         if window.is_window_active() {
             let sidebar = self.command_bar.is_none() && self.tab_rename.is_none()
                 && !self.browser.active_tab().is_some_and(|tab| self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));

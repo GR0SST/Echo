@@ -135,6 +135,7 @@ pub trait WebEngine {
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
     fn set_link_preview(&mut self, _view: ViewId, _token: u64) {}
+    fn set_shortcuts(&mut self, _shortcuts: Vec<engine::Shortcut>) {}
     fn set_peek_policy(&mut self, _view: ViewId, _policy: engine::PeekPolicy) {}
     fn set_corner_radius(&mut self, _view: ViewId, _radius: f64) {}
     fn set_visible(&mut self, view: ViewId, visible: bool);
@@ -213,6 +214,7 @@ impl WebEngine for Chromium {
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.engine.copy_context_image(view,request,page_url,url)}
     fn set_page_context_policy(&mut self, view: ViewId, policy: engine::page_context::Policy) { self.engine.set_page_context_policy(view, policy); }
     fn set_link_preview(&mut self, view: ViewId, token: u64) { self.engine.set_link_preview(view, token); }
+    fn set_shortcuts(&mut self, shortcuts: Vec<engine::Shortcut>) { self.engine.set_shortcuts(shortcuts); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
         if let Ok(context) = self.resolve_storage(storage) {
@@ -542,6 +544,7 @@ impl PageViewport {
 }
 
 pub struct Pages {
+    applied_shortcuts: Option<u64>,
     viewport: PageViewport,
     viewport_generation: u64,
     store: Rc<RefCell<PageStore>>,
@@ -622,8 +625,18 @@ impl WebEngine for RetiredEngine {
 }
 
 impl Pages {
+    // Covered hosts may miss an intermediate change through their shared engine.
+    // Compare revisions so returning to an earlier key vector still refreshes it.
+    pub(crate) fn sync_shortcuts(&mut self, shortcuts: Option<(u64, Vec<engine::Shortcut>)>) {
+        let Some((revision,shortcuts))=shortcuts else{return;};
+        if self.applied_shortcuts==Some(revision) {return;}
+        self.store.borrow_mut().engine.set_shortcuts(shortcuts.clone());
+        self.applied_shortcuts=Some(revision);
+    }
+
     pub fn new(engine: Box<dyn WebEngine>) -> Self {
         let pages = Self {
+            applied_shortcuts: None,
             store: Rc::new(RefCell::new(PageStore {
                 #[cfg(test)]
                 clock: None,
@@ -816,7 +829,7 @@ impl Pages {
         store.next_host += 1;
         let host = store.next_host;
         store.hosts.insert(host, parent);
-        Self { viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
+        Self { applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, peek_mode: false, preview_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 

@@ -74,6 +74,7 @@ mod appearance;
 mod app_icon;
 mod previews;
 mod profiles;
+mod shortcuts;
 
 pub(crate) struct SettingsWindow {
     colors: appearance::Colors,
@@ -94,6 +95,7 @@ pub(crate) struct SettingsWindow {
     atc_return_focus: bool,
     _atc_dismiss: Option<Subscription>,
     max: max::State,
+    shortcuts: shortcuts::State,
     shortcut_search: Entity<crate::text_input::TextInput>,
     _search_changed: Subscription,
     _observe: Subscription,
@@ -216,6 +218,7 @@ fn open(
                     |_, _, _: &crate::text_input::Changed, cx| cx.notify(),
                 );
                 let max = max::State::new(&profile, cx);
+                let shortcuts = shortcuts::State::new(cx);
                 let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
                 let mut view = SettingsWindow {
                     colors: appearance::Colors::from_appearance(window.appearance()),
@@ -236,6 +239,7 @@ fn open(
                     atc: None,
                     atc_return_focus: false,
                     _atc_dismiss: None,
+                    shortcuts,
                     shortcut_search,
                     _search_changed: search_changed,
                     _observe: observe,
@@ -403,6 +407,7 @@ impl SettingsWindow {
         cx.notify();
     }
     fn change_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.shortcuts.armed = false;
         self.tab = tab;
         self.popup = None;
         self.previews = false;
@@ -897,40 +902,6 @@ impl SettingsWindow {
                     .child(div().flex_1())
                     .child(self.settings_button("Export Data").opacity(0.5)),
             )
-            .into_any_element()
-    }
-    fn shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
-        let colors = self.colors;
-        static CATALOG: std::sync::LazyLock<Vec<(String, String)>> =
-            std::sync::LazyLock::new(|| {
-                serde_json::from_str(include_str!("../assets/settings-shortcuts.json"))
-                    .expect("embedded settings shortcut catalog")
-            });
-        let query = self.shortcut_search.read(cx).text().trim().to_lowercase();
-        let mut entries = CATALOG.clone();
-        self.profile.read_settings(|b| {
-            entries.extend(b.spaces.iter().take(9).enumerate().map(|(index, space)| {
-                (format!("Go to “{}”", space.name), format!("⌃{}", index + 1))
-            }));
-        });
-        entries.sort_by_key(|(label, _)| label.to_lowercase());
-        let entries = entries.into_iter().filter(|(label, key)| {
-            query.is_empty() || format!("{label} {key}").to_lowercase().contains(&query)
-        });
-        div().w(px(556.)).flex().flex_col().gap(px(30.))
-            .child(div().flex().justify_center().child(div().flex().items_center().gap(px(10.)).p(px(6.)).rounded(px(6.)).bg(colors.rgb(0x5b575f)).when(colors.light, |callout| callout.border_1().border_color(rgb(0xe7e7e7)).shadow_sm()).child("Start with the basics").child(self.settings_button("Learn the Essential Shortcuts").id("learn-essential-shortcuts").debug_selector(|| "learn-essential-shortcuts".into()).bg(colors.rgb(0x147bff)).text_color(rgb(0xffffff)).cursor_pointer().on_click(|_, _, cx| cx.defer(crate::essential_shortcuts::open)))))
-            .child(div().flex().gap(px(16.)).h(px(450.))
-                .child(self.settings_group().when(colors.light, |list| list.bg(rgb(0xffffff))).w(px(340.)).flex_none().px_0()
-                    .child(div().h(px(40.)).flex_none().px(px(16.)).bg(colors.rgb(0x3b3e3e)).flex().items_center().gap(px(6.)).text_color(colors.rgb(0xa6a8a8)).child(icons::control_sized(Icon::Search, 14.)).child(self.shortcut_search.clone()))
-                    .child(div().h(px(28.)).flex_none().px(px(16.)).flex().items_center().text_size(px(11.)).text_color(colors.rgb(0x929494)).child("Default Shortcuts"))
-                    .child(div().id("settings-shortcuts-list").min_h_0().flex_1().overflow_y_scroll().px(px(24.)).children(entries.map(|(label, key)| {
-                        row().h(px(48.)).flex_none().border_b_1().border_color(colors.rgb(0x3e3f41)).child(div().flex_1().min_w_0().child(label)).child(self.settings_button(key).w(px(64.)).when(colors.light, |key| key.bg(rgb(0xffffff)).border_1().border_color(rgb(0xe7e7e7)).text_color(rgb(0x808080))).when(!colors.light, |key| key.opacity(0.5)))
-                    }))))
-                .child(div().w(px(200.)).min_w_0().flex_none().flex().flex_col().gap(px(10.))
-                    .child(div().flex().gap(px(4.)).text_color(colors.rgb(0x1686ff)).child(div().size(px(64.)).rounded(px(12.)).bg(colors.rgb(0x75acff)).border_2().border_color(colors.rgb(0x0788ff)).flex().items_center().justify_center().child(icons::control_sized(Icon::Command, 40.))).child(div().size(px(64.)).rounded(px(12.)).bg(colors.rgb(0x75acff)).border_2().border_color(colors.rgb(0x0788ff)).flex().items_center().justify_center().child(icons::ionicon("happy-outline", 42., 1.))))
-                    .child(div().mt(px(12.)).font_weight(gpui::FontWeight::BOLD).child("Custom Shortcuts"))
-                    .child(div().text_size(px(11.)).line_height(px(14.)).text_color(colors.rgb(0x929494)).child("Change shortcuts for your favorite actions, and even choose whether Echo or a website takes priority."))
-                    .child(div().flex_1()).child(div().flex().gap(px(4.)).child(self.settings_button("Reset All Shortcuts").px(px(8.)).opacity(0.5)).child(div().size(px(24.)).rounded_full().bg(colors.rgb(0x393b3d)).child(icons::more()).opacity(0.5)))))
             .into_any_element()
     }
     fn popup_options(&self, popup: Popup) -> Vec<(String, bool)> {

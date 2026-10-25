@@ -114,6 +114,12 @@ fn sync_native_appearance(cx: &mut App) {
     }
 }
 
+pub(crate) fn refresh_shortcuts(cx: &mut App) {
+    let labels = cx.try_global::<SidebarUndoLabels>().copied().unwrap_or_default();
+    cx.set_menus(build_with_sidebar_undo(labels.0, labels.1, labels.2));
+    sync_native_appearance(cx);
+}
+
 pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None, false) }
 fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str>, multiple: bool) -> Vec<Menu> {
     let mut app = vec![MenuItem::action("About Echo", About), MenuItem::separator(), MenuItem::action("Preferences…", Settings),

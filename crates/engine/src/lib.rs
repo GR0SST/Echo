@@ -184,7 +184,7 @@ enum RawEvent {
 pub mod page_context;
 mod routed_events;
 type EventQueue = routed_events::RoutedEvents<RawEvent>;
-type Shortcuts = Arc<Vec<Shortcut>>;
+type Shortcuts = Arc<Mutex<Vec<Shortcut>>>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PeekPolicy {
@@ -353,7 +353,7 @@ impl Engine {
     pub fn start(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
         let runtime = Self::start_runtime(data_dir)?;
         let context = runtime.default_context()?;
-        Ok(Self::with_context(runtime, context, Arc::new(shortcuts)))
+        Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(shortcuts))))
     }
 
     fn start_runtime(data_dir: &Path) -> Result<std::rc::Rc<Runtime>, String> {
@@ -474,14 +474,14 @@ impl Engine {
             runtime.readiness.track(&context, ready);
             context
         };
-        Ok(Self::with_context(runtime, context, Arc::new(shortcuts)))
+        Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(shortcuts))))
     }
 
     /// Creates an empty, independent page pool using this engine's actual
     /// CEF request context and initialized runtime. No CEF initialization or
     /// new request context/cache is created. Cookies and origin storage are
     /// shared; views, callbacks, snapshots, inspectors and ID counters are new.
-    /// Shortcuts retain the source's immutable configuration.
+    /// Shortcuts retain the source's live shortcut configuration.
     ///
     /// This is profile-neutral: a private source produces a private fork.
     /// Callers implementing Blank windows must choose a normal-profile source,
@@ -949,6 +949,12 @@ impl Engine {
     }
     pub fn set_page_context_policy(&mut self, id: ViewId, policy: page_context::Policy) {
         if let Some(view) = self.views.get(&id).filter(|view| view.role == ViewRole::Page) { page_context::set_policy(view.browser.identifier(), policy); }
+    }
+
+    /// Updates keyboard capture for existing pages and shared-storage forks.
+    /// This changes only the shared callback data; it never calls CEF.
+    pub fn set_shortcuts(&mut self, shortcuts: Vec<Shortcut>) {
+        *self.shortcuts.lock().unwrap() = shortcuts;
     }
 
     pub fn set_peek_policy(&mut self, id: ViewId, policy: PeekPolicy) {
@@ -1857,7 +1863,7 @@ wrap_keyboard_handler! {
             }
             let escape = shortcut_for(event);
             let peek_escape = policy.capture_escape && event.type_ == KeyEventType::RAWKEYDOWN && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
-            let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts)) else { return 0; };
+            let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts.lock().unwrap())) else { return 0; };
             if shortcut.key == "z" {
                 if let Some(browser) = browser.as_ref() { self.events.push((browser.identifier(), RawEvent::EditFocus(false))); }
             }
@@ -1950,6 +1956,19 @@ mod tests {
         assert_eq!(page_event(view, ViewRole::Page, RawEvent::Capture(state)), Some(Event::MediaCaptureChanged { view, state }));
         assert_eq!(browser_input(view, ViewRole::Page, &RawEvent::Capture(state)), None);
         assert_eq!(inspector_input(InspectorId(1), &RawEvent::Capture(state)), None);
+    }
+
+    #[test]
+    fn shortcut_callbacks_observe_replacement_and_removal_through_a_shared_fork() {
+        let live: Shortcuts=Arc::new(Mutex::new(Vec::new()));
+        let fork=live.clone();
+        let event=KeyEvent {type_:KeyEventType::RAWKEYDOWN,windows_key_code:b'1'.into(),unmodified_character:b'1'.into(),modifiers:sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 | sys::cef_event_flags_t::EVENTFLAG_ALT_DOWN.0,..Default::default()};
+        let custom=Shortcut {ctrl:true,alt:true,key:"1".into(),..Default::default()};
+        assert_eq!(intercepted_shortcut(&event,&fork.lock().unwrap()),None);
+        *live.lock().unwrap()=vec![custom.clone()];
+        assert_eq!(intercepted_shortcut(&event,&fork.lock().unwrap()),Some(custom));
+        live.lock().unwrap().clear();
+        assert_eq!(intercepted_shortcut(&event,&fork.lock().unwrap()),None);
     }
 
     #[test]

@@ -11016,3 +11016,6 @@ mod capture_tests;
 
 #[path = "settings_appearance_tests.rs"]
 mod settings_appearance_tests;
+
+#[path = "shortcut_settings_tests.rs"]
+mod shortcut_settings_tests;

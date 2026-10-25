@@ -70,6 +70,7 @@ impl AppIcon {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub shortcuts: crate::shortcuts::Shortcuts,
     pub app_icon: AppIcon,
     pub max: echo_ai::MaxSettings,
     /// Shared across local website profiles; absent in older sessions.

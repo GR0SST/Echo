@@ -237,3 +237,66 @@ are not safe templates: always close Settings in its own nested finally.
 ## Profile isolation after rename and restart
 
 `isolation-native-run.hMix7u/{first,restart}.log` and `reports.jsonl` verify three private fixture profiles visiting the same localhost origin. Each starts without another profile’s data, retains only its own session/persistent/HTTP-only cookies, localStorage and IndexedDB markers, and writes only its own URL path into its profile history. Renaming profile 2 preserves its ID, Space assignment and storage identity. After native quit / CEF Complete and a full process restart, newly generated documents read the original stores before writing anything. `echo-isolation-{A,B,C}-restart.png` show those read-only results. Password/autofill and extension management remain outside this check.
+
+## Shortcut recording and runtime binding
+
+The bundled catalog supplies exact action names/defaults. The accepted source
+states are `arc-shortcut-recording.png`, `arc-shortcut-disabled-conflict.png`
+and the earlier `parity/settings/arc_shortcut_edit.png`. Existing owner custom
+bindings are reference content, never copied as Echo defaults. The conflict
+copy uses the bundled “is already in use by” string and the other action’s
+name. The source uses 64 × 64 keycaps, a 56 × 51 inset face at (4,4), rounded
+system glyphs, and white 64 × 24 row keys even under Dark appearance. Source
+Display P3 samples are converted to sRGB for GPUI, rather than treating raw
+P3 components as sRGB. Row content starts 10 px below its section heading.
+
+Install-local overrides distinguish an inherited default from an explicit
+removal. Recording is intercepted before application bindings: Escape cancels
+without mutation, Delete clears, and a valid modified/function key commits.
+The catalog groups customized actions before defaults. Reset one/all rebuilds
+the app keymap from its original bindings and refreshes native equivalents.
+Changed defaults are removed together before replacements are added, allowing
+a key released by another customization to be reused. Text-input bindings
+retain their original focus predicates. Unsupported actions and Space
+reassignment remain unavailable. Unknown stored action keys survive upgrades.
+
+CEF callbacks read a shared live shortcut configuration, including retained
+engine forks; replacement/reset reaches existing pages without calling CEF
+under the configuration lock. Native runs use a private fixture, record a
+conflict on Blank Window, create a Duplicate binding, invoke it with real web
+focus, restart the entire process, invoke it again, reset it and verify that
+the old key no longer duplicates. Ctrl+Option+1 did not reach the recorder during the first
+native attempt; the accepted fixture uses Option+Command+1. All windows close
+through native Cmd+Q / CEF Complete on successful runs.
+
+Tooltip placement/timing, priority selection/two-press timing, Remove Conflicting Shortcut, extension
+shortcut routes, system-reserved-key warnings, the no-binding/function-key/long-chord
+selected appearance and remaining list materials stay partial. A conflict is
+reported while the existing browser binding retains precedence; exact Arc
+conflict-dispatch priority is not claimed. The source’s unverified More menu
+placement is not reproduced.
+
+The remaining action-only routes have no backing implementation: Search
+Settings needs custom provider management beyond the existing six defaults;
+profile-wide Clear Browsing Data needs an asynchronous, time-scoped deletion
+API (the current engine clears one page origin or its context cache); Passwords
+needs a credential-store UI/backend. They remain unavailable. Chromium WebUI
+settings are not used as browser chrome.
+
+Bindings with both a browser focus predicate and a global fallback retain both
+contexts after customization. Configuration revisions advance even when a
+reset returns to an earlier key vector, so a covered host cannot mistake an
+old shared-engine configuration for the current one. GPUI regressions cover
+both cases, in addition to native recording/dispatch/reset checks.
+
+Final validation: `shortcut-full-tests-6.log` is green (1,109 browser, 242 core,
+18 AI, 154 engine, two bundle and four importer tests; one AI test ignored).
+`shortcuts-native-run.aUiY5k/{first,restart}.log` verifies the final bundle,
+including its SHA-256 match, native web focus, persisted custom dispatch and
+reset with strict exit 0. Reviewed final pairs are
+`pair-shortcut-{conflict,custom,tooltip}-2x.png` and
+`pair-shortcut-{conflict,custom}-keys-4x.png`. The conflict source has the
+owner’s existing customized rows; Echo filters its private fixture to Blank
+Window. Plain keycaps compare the source’s Add Split View chord with Echo’s
+Duplicate chord; only the shared keycap layout is claimed. The final tooltip
+pair intentionally records the remaining placement difference.
