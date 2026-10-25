@@ -2,6 +2,29 @@
 use crate::Bounds;
 use std::ffi::c_void;
 
+// CEF's generated bindings use an HWND newtype on Windows, an XID integer
+// on Linux and an NSView pointer on macOS. Keep those ABI details here.
+pub(crate) fn cef_handle(view: *mut c_void) -> cef::sys::cef_window_handle_t {
+    #[cfg(target_os = "windows")]
+    { cef::sys::HWND(view.cast()) }
+    #[cfg(not(target_os = "windows"))]
+    { view as _ }
+}
+
+pub(crate) fn native_handle(handle: cef::sys::cef_window_handle_t) -> *mut c_void {
+    #[cfg(target_os = "windows")]
+    { handle.0.cast() }
+    #[cfg(not(target_os = "windows"))]
+    { handle as _ }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) type KeyEvent<'a> = *mut u8;
+#[cfg(target_os = "windows")]
+pub(crate) type KeyEvent<'a> = Option<&'a mut cef::sys::MSG>;
+#[cfg(target_os = "linux")]
+pub(crate) type KeyEvent<'a> = Option<&'a mut cef::sys::XEvent>;
+
 pub(crate) fn parent_of(ui_view: *mut c_void) -> *mut c_void {
     #[cfg(target_os = "macos")]
     { crate::mac::content_view_of(ui_view) }

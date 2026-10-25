@@ -4,6 +4,11 @@ edition.workspace = true
 version.workspace = true
 publish.workspace = true
 
+[features]
+# Type-check the real CEF bindings without downloading or compiling native CEF.
+# This cannot produce a runnable/linked browser.
+check-only = ["cef/dox"]
+
 [dependencies]
 base64 = "0.22"
 cpal = "0.16"

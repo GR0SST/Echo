@@ -281,14 +281,15 @@ pub(crate) fn pump() {
         ));
     }
 }
+// CEF enum storage is signed on Windows; masks in the public API remain u32.
 fn media_kinds(mask: u32) -> Option<Vec<PermissionKind>> {
     let flags = [
         (
-            MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw(),
+            MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw() as u32,
             PermissionKind::Camera,
         ),
         (
-            MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw(),
+            MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw() as u32,
             PermissionKind::Microphone,
         ),
     ];
@@ -296,10 +297,10 @@ fn media_kinds(mask: u32) -> Option<Vec<PermissionKind>> {
 }
 fn prompt_kinds(mask: u32) -> Option<Vec<PermissionKind>> {
     let permissions=kinds(mask,&[
-        (PermissionRequestTypes::CAMERA_STREAM.get_raw(),PermissionKind::Camera),
-        (PermissionRequestTypes::MIC_STREAM.get_raw(),PermissionKind::Microphone),
-        (PermissionRequestTypes::GEOLOCATION.get_raw(),PermissionKind::Location),
-        (PermissionRequestTypes::NOTIFICATIONS.get_raw(),PermissionKind::Notifications),
+        (PermissionRequestTypes::CAMERA_STREAM.get_raw() as u32,PermissionKind::Camera),
+        (PermissionRequestTypes::MIC_STREAM.get_raw() as u32,PermissionKind::Microphone),
+        (PermissionRequestTypes::GEOLOCATION.get_raw() as u32,PermissionKind::Location),
+        (PermissionRequestTypes::NOTIFICATIONS.get_raw() as u32,PermissionKind::Notifications),
     ])?;
     (permissions.len()==1 || permissions==[PermissionKind::Camera,PermissionKind::Microphone]).then_some(permissions)
 }
@@ -432,8 +433,8 @@ mod tests {
     }
     #[test]
     fn device_access_never_grants_desktop_capture_or_unknown_permission_bits() {
-        let camera = MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw();
-        let mic = MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw();
+        let camera = MediaAccessPermissionTypes::DEVICE_VIDEO_CAPTURE.get_raw() as u32;
+        let mic = MediaAccessPermissionTypes::DEVICE_AUDIO_CAPTURE.get_raw() as u32;
         assert_eq!(
             media_kinds(camera | mic),
             Some(vec![PermissionKind::Camera, PermissionKind::Microphone])
@@ -441,16 +442,16 @@ mod tests {
         for mask in [
             0,
             1 << 31,
-            camera | MediaAccessPermissionTypes::DESKTOP_VIDEO_CAPTURE.get_raw(),
+            camera | MediaAccessPermissionTypes::DESKTOP_VIDEO_CAPTURE.get_raw() as u32,
         ] {
             assert!(media_kinds(mask).is_none());
         }
         assert_eq!(
-            prompt_kinds(PermissionRequestTypes::NOTIFICATIONS.get_raw()),
+            prompt_kinds(PermissionRequestTypes::NOTIFICATIONS.get_raw() as u32),
             Some(vec![PermissionKind::Notifications])
         );
         assert_eq!(
-            prompt_kinds(PermissionRequestTypes::GEOLOCATION.get_raw()),
+            prompt_kinds(PermissionRequestTypes::GEOLOCATION.get_raw() as u32),
             Some(vec![PermissionKind::Location])
         );
     }

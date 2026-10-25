@@ -168,12 +168,12 @@ fn binary_bytes(value: BinaryValue) -> Option<Vec<u8>> {
     (value.data(Some(&mut bytes), 0) == bytes.len()).then_some(bytes)
 }
 fn connection_is_secure(connection: bool, status: u32, content: u32) -> bool {
-    let informational = CertStatus::IS_EV.get_raw()
-        | CertStatus::REV_CHECKING_ENABLED.get_raw()
-        | CertStatus::SHA1_SIGNATURE_PRESENT.get_raw();
+    let informational = CertStatus::IS_EV.get_raw() as u32
+        | CertStatus::REV_CHECKING_ENABLED.get_raw() as u32
+        | CertStatus::SHA1_SIGNATURE_PRESENT.get_raw() as u32;
     connection
         && status & !informational == 0
-        && content == SslContentStatus::NORMAL_CONTENT.get_raw()
+        && content == SslContentStatus::NORMAL_CONTENT.get_raw() as u32
 }
 impl Engine {
     pub fn zoom_percent(&self, id: ViewId) -> u16 {
@@ -215,8 +215,8 @@ impl Engine {
         let secure = ssl.as_ref().is_some_and(|ssl| {
             connection_is_secure(
                 ssl.is_secure_connection() != 0,
-                ssl.cert_status().get_raw(),
-                ssl.content_status().get_raw(),
+                ssl.cert_status().get_raw() as u32,
+                ssl.content_status().get_raw() as u32,
             )
         });
         let certificate = ssl.as_ref().and_then(|ssl| {
@@ -236,7 +236,7 @@ impl Engine {
                     .map(|p| CefString::from(&p.display_name()).to_string())
                     .unwrap_or_default(),
                 der_chain,
-                status: ssl.cert_status().get_raw(),
+                status: ssl.cert_status().get_raw() as u32,
             })
         });
         Some(SiteInfo {
@@ -312,10 +312,10 @@ mod tests {
     #[test]
     fn https_alone_and_certificate_or_mixed_content_errors_are_not_secure() {
         assert!(!connection_is_secure(false, 0, 0));
-        assert!(connection_is_secure(true, CertStatus::IS_EV.get_raw(), 0));
+        assert!(connection_is_secure(true, CertStatus::IS_EV.get_raw() as u32, 0));
         for status in [
-            CertStatus::DATE_INVALID.get_raw(),
-            CertStatus::AUTHORITY_INVALID.get_raw(),
+            CertStatus::DATE_INVALID.get_raw() as u32,
+            CertStatus::AUTHORITY_INVALID.get_raw() as u32,
             1 << 31,
         ] {
             assert!(!connection_is_secure(true, status, 0));
@@ -323,7 +323,7 @@ mod tests {
         assert!(!connection_is_secure(
             true,
             0,
-            SslContentStatus::RAN_INSECURE_CONTENT.get_raw()
+            SslContentStatus::RAN_INSECURE_CONTENT.get_raw() as u32
         ));
     }
 }

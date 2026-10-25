@@ -927,7 +927,7 @@ fn copy_item(item: Option<&mut DownloadItem>) -> Option<(u32, DownloadInfo)> {
             item.id(),
             DownloadInfo {
                 phase,
-                interrupt_reason: item.interrupt_reason().get_raw(),
+                interrupt_reason: item.interrupt_reason().get_raw() as u32,
                 current_speed: item.current_speed(),
                 percent_complete: item.percent_complete(),
                 total_bytes: item.total_bytes(),

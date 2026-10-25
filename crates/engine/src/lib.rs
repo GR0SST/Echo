@@ -766,7 +766,7 @@ impl Engine {
             runtime_style: RuntimeStyle::ALLOY,
             ..Default::default()
         }
-        .set_as_child(page_parent as _, &bounds);
+        .set_as_child(host::cef_handle(page_parent), &bounds);
         let weak=std::rc::Rc::downgrade(&context);
         let boost_state=if let Some((_,boosts))=self.boosts.iter().find(|(context,_)|std::rc::Weak::ptr_eq(context,&weak)){boosts.clone()}else{let state=Arc::new(Mutex::new(Vec::<SiteBoost>::new()));self.boosts.push((weak,state.clone()));state};
         let mut extra=if role==ViewRole::Page { boosts::extra(&boost_state.lock().unwrap()) } else {None};
@@ -829,7 +829,7 @@ impl Engine {
         } else { true };
         let page_view = browser
             .host()
-            .map_or(std::ptr::null_mut(), |host| host.window_handle() as *mut c_void);
+            .map_or(std::ptr::null_mut(), |host| host::native_handle(host.window_handle()));
         #[cfg(target_os = "macos")]
         let host = {
             mac::fill_superview(page_view);
@@ -1787,7 +1787,7 @@ wrap_life_span_handler! {
             #[cfg(not(target_os = "linux"))]
             {
                 if let Some(browser) = browser {
-                    let child = browser.host().map(|host| host.window_handle() as usize).unwrap_or(0);
+                    let child = browser.host().map(|host| host::native_handle(host.window_handle()) as usize).unwrap_or(0);
                     shutdown::enqueue(&self.lifecycle, shutdown::Callback::DestroyChild(browser.identifier(), child));
                 }
                 // macOS/Windows default close targets the GPUI top-level window.
@@ -1807,7 +1807,7 @@ const VKEY_F12: i32 = 0x7b;
 
 fn shortcut_for(event: &KeyEvent) -> Shortcut {
     let flags = event.modifiers;
-    let has = |flag: sys::cef_event_flags_t| flags & flag.0 != 0;
+    let has = |flag: sys::cef_event_flags_t| flags & (flag.0 as u32) != 0;
     let key = match event.windows_key_code {
         0x1b => "escape".to_string(),
         VKEY_TAB => "tab".to_string(),
@@ -1855,14 +1855,14 @@ wrap_keyboard_handler! {
             &self,
             browser: Option<&mut Browser>,
             event: Option<&KeyEvent>,
-            _os_event: *mut u8,
+            _os_event: host::KeyEvent<'_>,
             _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let Some(event) = event else {
                 return 0;
             };
             let policy=*self.policy.lock().unwrap();
-            let shift=event.modifiers & sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 != 0;
+            let shift=event.modifiers & (sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 as u32) != 0;
             if policy.capture_link_modifiers && (shift || matches!(event.windows_key_code,16|160|161)) {
                 if let Some(browser)=browser.as_ref(){self.events.push((browser.identifier(),RawEvent::PreviewModifiers(shift)));}
             }
