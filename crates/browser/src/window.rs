@@ -4138,7 +4138,8 @@ impl BrowserWindow {
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
                 let ask_chatgpt = matches!(&suggestion, Suggestion::AskChatGpt { .. });
-                let search_row = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }) | Suggestion::Calculator { .. });
+                let direct_search = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }));
+                let search_row = direct_search || matches!(&suggestion, Suggestion::Calculator { .. });
                 let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
                     Suggestion::AskChatGpt { query } => (crate::icons::Icon::Search, query, "Ask ChatGPT".into()),
                     Suggestion::Load(Resolved::Search { query, .. }) => {
@@ -4189,8 +4190,8 @@ impl BrowserWindow {
                     .mx_2()
                     .rounded(px(8.0))
                     .text_color(hsla(0.0, 0.0, if selected { 1. } else { ink }, if selected { 1.0 } else { 0.82 }))
-                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if chatgpt_keyword && index == 0 { gpui::rgb(0x4248d8).into() } else { row_selection }))
-                    .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, ink, 0.04))))
+                    .when(selected, |this| this.bg(if bar.site_search.is_some() { gpui::rgb(scope_color).into() } else if ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if direct_search || (chatgpt_keyword && index == 0) { gpui::rgb(0x4248d8).into() } else { row_selection }))
+                    .when(!selected, |this| this.hover(|s| s.bg(hsla(0.0, 0.0, ink, if direct_search || ask_chatgpt { 0.05 } else { 0.04 }))))
                     .on_click(cx.listener(move |this, _, _, cx| this.confirm(index, cx)))
                     .child(tile)
                     .child(
@@ -4231,7 +4232,7 @@ impl BrowserWindow {
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when(!search_row && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
                         .bg(if selected { gpui::white() } else { hsla(0.0, 0.0, ink, 0.06) })
-                        .text_color(if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
+                        .text_color(if selected && ask_chatgpt { gpui::rgb(0x64ab9c).into() } else if selected { hsla(0.0, 0.0, 0.12, 1.0) } else { hsla(0.0, 0.0, ink, 0.6) })
                         .child(crate::icons::control_sized(crate::icons::Icon::Arrow, 15.0))));
                 div().flex().flex_col().flex_none()
                     .children(date.map(|date| div().debug_selector(|| self.sidebar_debug_name((move || format!("archive-date-{index}"))())).h(px(24.)).flex_none().px_4().text_xs().text_color(hsla(0., 0., 1., 0.5)).child(date)))

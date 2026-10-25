@@ -1781,8 +1781,9 @@ the flag have GPUI regressions.
 The private native fixture disables remote search suggestions to match the
 reference's two-row state. Compare `arc_instant_existing_query.png` with
 `echo_instant_query.png` under `target/parity/arc-max/`.
-`echo_chatgpt_generic_selected.png` also records native keyboard selection;
-there is no selected-Ask Arc pair, so that exact state remains unverified. The
+`arc_ask_chatgpt_selected.png` / `echo_ask_selected_colors.png` record the
+keyboard-selected Ask row, with `arc_search_hover_with_ask_selected.png` /
+`echo_search_hover_colors.png` covering hover while Ask stays selected. The
 Instant Links loading label was raised to 14 px medium after the original
 13 px label measured two pixels shorter than Arc's text in the paired captures.
 Loading/result capture names remain those in the Instant Links section. The
@@ -1791,6 +1792,33 @@ fidelity and exact ranking remain partial. The authenticated loopback fixture
 returns ten public sources; its body is checked to contain only the explicit
 query and standard search controls, without browser context. Its synthetic
 credential is saved via Max settings and deleted after clean native shutdown.
+
+A later guarded read-only inspection confirmed the primary search selection is
+blue with Instant Links off as well (`selection-max-values.json`: Instant 0,
+Previews 0, Downloads 0, ChatGPT 1). Search selection converts from Display P3
+to sRGB `#4248d8`; Ask selection is `#64ab9c`, including its arrow on the white
+tile. Hover is a separate translucent fill while keyboard selection persists.
+Only these result classes use the measured colors; page/tab result materials
+retain their existing policy. The public IANA reference fixture was archived
+and the later keyboard/hover session opened no tabs. No Max setting changed.
+`arc_search_selection_readonly.png` / `echo_search_selected_colors.png` are
+empty-Space comparisons; the `_wiki` Echo capture also pairs with the earlier
+public-page query reference. Icon/font/blur differences remain partial.
+
+Native color verification used a disconnected provider with no credentials.
+After the private public Wiki tab was closed, the same 1000×760 window showed
+an empty Space. The harness now verifies its post-resize position at (100,100)
+before global pointer input; its initial early-position attempt had left the
+window at (1320,680). `command-result-color-comparison.json` records exact
+sRGB selection samples (search 66/72/216, Ask 100/171/156); hover differs by at
+most two levels in that sample. A real mouse click opened ChatGPT and the
+public query appeared in its logged-out website UI (`echo_chatgpt_mouse_handoff.png`).
+The website auto-submits in this logged-out state, as in the prior native
+handoff check; Echo only navigates to the observed handoff URL. Shutdown
+completed normally. One earlier launch trapped in a CEF image on a libdispatch
+background thread before automation; a fresh private-profile retry completed
+normally. The exact startup cause remains unresolved, with a stripped summary
+in `max-colors-startup-crash.json`.
 
 Ask on Page still exposes no Ask control in the installed desktop Command-F
 flow, including the available permitted Max flags. There is no separate Ask
