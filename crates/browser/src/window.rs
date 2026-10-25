@@ -5,6 +5,8 @@
 mod pinned_url;
 #[path = "suggestions_notice.rs"]
 mod suggestions_notice;
+#[path = "sidebar_scroll.rs"]
+mod sidebar_scroll;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -701,7 +703,7 @@ pub struct FloatingSidebar {
 
 
 #[derive(Default)]
-struct SidebarScrolls { pinned: gpui::ScrollHandle, today: gpui::ScrollHandle, pending: Rc<Cell<Option<(Section, usize)>>> }
+struct SidebarScrolls { list: gpui::ScrollHandle, pending: Rc<Cell<Option<(Section, usize)>>> }
 
 pub struct BrowserWindow {
     pub browser: browser_core::windows::WindowProjection,
@@ -723,6 +725,7 @@ pub struct BrowserWindow {
     pub(crate) sidebar_render_width: Option<f32>,
     sidebar_reveal: Option<PinnedReveal>,
     sidebar_scrolls: HashMap<SpaceId, SidebarScrolls>,
+    sidebar_drag_scroll: Option<sidebar_scroll::DragScroll>,
     pub(crate) icon_anchors: Rc<RefCell<HashMap<crate::icons::IconTarget, Bounds<gpui::Pixels>>>>,
     pub(crate) last_icon_catalog: crate::icon_catalog::Catalog,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
@@ -1030,6 +1033,7 @@ impl BrowserWindow {
             sidebar_render_width: None,
             sidebar_reveal: None,
             sidebar_scrolls: HashMap::new(),
+            sidebar_drag_scroll: None,
             icon_anchors: Default::default(),
             last_icon_catalog: Default::default(),
             pinned_reveals: HashMap::new(),
@@ -2460,7 +2464,15 @@ impl BrowserWindow {
 
     pub(crate) fn render_overlay_shell(&self, content: AnyElement, focus:Option<&FocusHandle>, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().when_some(focus,|root,focus|root.track_focus(focus)).key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { if !this.capture_max_preview_key(event,cx) {this.capture_sidebar_resize_key(event, window, cx);} }))
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && cx.stop_active_drag(window) {
+                    this.sidebar_drag_scroll = None;
+                    this.cancel_space_drag_hover();
+                    this.close_split_drop(cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                } else if !this.capture_max_preview_key(event,cx) { this.capture_sidebar_resize_key(event, window, cx); }
+            }))
             .on_action(cx.listener(|this, _: &crate::menus::BlankWindow, _, cx| this.blank_window(cx)))
             .when(self.peek_owner.is_some(), |this| this
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, window, cx| this.edit_undo(false, window, cx)))
@@ -3468,6 +3480,8 @@ impl BrowserWindow {
             .child(self.render_press_highlight(id, hsla(0., 0., 0., 0.08), active));
         let address_actions_shown = controls_open || self.sidebar_hovered;
         let favorites: Vec<_> = self.browser.active_user_profile().favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).collect();
+        let mini_player = self.render_mini_player(cx);
+        let has_mini_player = mini_player.is_some();
         // Favorites stretch to fill each row, as in the reference.
         let columns = favorites.len().clamp(1, FAVORITE_COLUMNS) as f32;
         let favorite_width = ((self.sidebar_width() - 2. * SIDEBAR_INSET - FAVORITE_GAP * (columns - 1.)) / columns).floor();
@@ -3584,8 +3598,11 @@ impl BrowserWindow {
                         .children(pages),
                 ),
             )
-            .when_some(self.render_mini_player(cx),|this,player|this.child(player))
-            .when(!private && !blank, |this| this.child(self.render_space_switcher(cx)))
+            .when_some(mini_player, |this, player| this.child(player))
+            // Arc's scrolling region meets the 50 px dock; the workspace's
+            // general 8 px gap must not shorten the drag edge hit region.
+            .when(!private && !blank, |this| this.child(self.render_space_switcher(cx)
+                .when(!has_mini_player, |this| this.mt(px(-8.)))))
             .when(private, |this| this.child(div().h(px(SPACE_BAR_HEIGHT)).flex_none().px(px(7.)).flex().items_center()
                 .text_color(hsla(0., 0., 1., 0.5))
                 .child(div().size(px(32.)).flex().items_center().justify_center().child(crate::icons::control(crate::icons::Icon::Library)))
@@ -3745,17 +3762,25 @@ impl BrowserWindow {
 
     fn sidebar_list(&self, space: SpaceId, section: Section, cx: &mut Context<Self>) -> gpui::Div {
         let Some(scrolls) = self.sidebar_scrolls.get(&space) else { return div(); };
-        let scroll = match section { Section::Pinned => scrolls.pinned.clone(), Section::Today => scrolls.today.clone() };
+        let scroll = scrolls.list.clone();
         let pending = scrolls.pending.clone();
         let browser = cx.entity().downgrade();
-        div().on_children_prepainted(move |_, _, cx| {
+        div().on_children_prepainted(move |rows, _, cx| {
             if let Some((_, index)) = pending.get().filter(|(kind, _)| *kind == section) {
+                let Some(row) = rows.get(index).copied() else { return; };
                 pending.set(None);
                 let scroll = scroll.clone();
                 let browser = browser.clone();
-                // The section now has child bounds, including after unfolding it.
+                // Pinned and Today share one viewport. Reveal the actual row,
+                // including expanded folders, rather than a section container.
                 cx.defer(move |cx| {
-                    scroll.scroll_to_item(index);
+                    let viewport = scroll.bounds();
+                    let delta = if row.top() < viewport.top() { viewport.top() - row.top() }
+                        else if row.bottom() > viewport.bottom() { viewport.bottom() - row.bottom() }
+                        else { px(0.) };
+                    let mut offset = scroll.offset();
+                    offset.y = (offset.y + delta).clamp(-scroll.max_offset().height, px(0.));
+                    scroll.set_offset(offset);
                     let _ = browser.update(cx, |_, cx| cx.notify());
                 });
             }
@@ -3768,6 +3793,7 @@ impl BrowserWindow {
         let space_id = space.id;
         let hue = space.accent_hue() / 360.0;
         let current = index == self.browser.active_space;
+        let interactive = self.sidebar_page_interactive;
         let pinned = self.render_folder_rows(space.id, hue, cx);
         let today = self.render_today_rows(space.id, hue, cx);
         let reveal = self.pinned_reveals.get(&space.id)
@@ -3844,13 +3870,25 @@ impl BrowserWindow {
                         }))
                         .child(crate::icons::more())),
             ))
+            .child(div().id(("sidebar-content", index))
+                .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "sidebar-content".into())())))
+                .flex().flex_col().flex_1().min_h_0().gap(px(SIDEBAR_ROW_GAP)).overflow_y_scroll()
+                // The native viewport starts 4 px above its first row's layout
+                // origin. Preserve the rows while matching the upper drag edge.
+                .mt(px(-4.)).pt(px(4.))
+                .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.list))
+                .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, _, cx| {
+                    if current && interactive {
+                        let drag = event.drag(cx).clone();
+                        this.update_sidebar_drag_scroll(&drag, space_id, event.event.position, cx);
+                    }
+                }))
             .when(!pinned.is_empty(), |this| this.child(
                 div().id(("pinned-reveal", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "pinned-reveal".into())())))
-                    .flex_none().h(px(pinned_height * reveal)).max_h(gpui::relative(0.45 * reveal))
+                    .flex_none().h(px(pinned_height * reveal))
                     .mb(px(-4. * (1. - reveal))).overflow_hidden()
                     .child(self.sidebar_list(space.id, Section::Pinned, cx).id(("pinned-list", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "pinned-list".into())())))
-                        .relative().top(px(-12. * (1. - reveal))).size_full().flex().flex_col().gap(px(SIDEBAR_ROW_GAP)).overflow_y_scroll()
-                        .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.pinned))
+                        .relative().top(px(-12. * (1. - reveal))).size_full().flex().flex_col().gap(px(SIDEBAR_ROW_GAP))
                         .children(pinned)),
             ))
             // The divider doubles as the Today drop target. Tidy and Clear show on
@@ -3884,7 +3922,7 @@ impl BrowserWindow {
                         .child("Clear")), SharedString::from(format!("today-actions-{index}")), today_actions))))
             .child(
                 div()
-                    .id(("new-tab", index))
+                    .id(("new-tab", index)).flex_none()
                     .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "new-tab".into())())))
                     .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.4)))
                     .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_on_section(drag, space_id, Section::Today, cx)))
@@ -3907,16 +3945,14 @@ impl BrowserWindow {
                     .id(("today", index))
                     .flex()
                     .flex_col()
-                    .flex_1()
+                    .flex_none()
                     .gap(px(SIDEBAR_ROW_GAP))
-                    .overflow_y_scroll()
                     .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "today-list".into())())))
-                    .when_some(self.sidebar_scrolls.get(&space.id), |this, scrolls| this.track_scroll(&scrolls.today))
                     .children(today),
-            )
+            ))
     }
 
-    fn render_space_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_space_switcher(&self, cx: &mut Context<Self>) -> gpui::Div {
         let ink = if self.theme_uses_light_ink_for(self.browser.space().id) {1.} else {0.};
         // Layout the stationary marks first, then paint the active dot between
         // their actual centers. The reference moves one dot along the rail.
@@ -4723,7 +4759,7 @@ impl Render for BrowserWindow {
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
-                    pages.preview_escape=self.max.preview.open.is_some();
+                    pages.overlay_escape=self.max.preview.open.is_some() || cx.has_active_drag();
                     pages.set_top_toolbar(self.page_toolbar_shown() && self.browser.active_split().is_none());
                     pages.set_top_toolbar_height(self.page_toolbar_height());
                     pages.sync(&self.browser, self.page_content_visible());
@@ -4733,7 +4769,10 @@ impl Render for BrowserWindow {
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),
             }
         }
-        if self.split_drop.is_some() && !cx.has_active_drag() { self.close_split_drop(cx); }
+        if !cx.has_active_drag() {
+            self.sidebar_drag_scroll = None;
+            if self.split_drop.is_some() { self.close_split_drop(cx); }
+        }
         self.sync_live_folders(cx);
         self.sync_max_previews(window,cx);
         self.sync_link_status(window, cx);
@@ -4761,7 +4800,15 @@ impl Render for BrowserWindow {
                 let drag = event.drag(cx).clone();
                 this.update_split_drop(&drag, event.event.position, window, cx);
             }))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| { if !this.capture_max_preview_key(event,cx) {this.capture_sidebar_resize_key(event, window, cx);} }))
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && cx.stop_active_drag(window) {
+                    this.sidebar_drag_scroll = None;
+                    this.cancel_space_drag_hover();
+                    this.close_split_drop(cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                } else if !this.capture_max_preview_key(event,cx) { this.capture_sidebar_resize_key(event, window, cx); }
+            }))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.sidebar_resize.is_some() { return; }

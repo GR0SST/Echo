@@ -607,7 +607,7 @@ pub struct Pages {
     top_toolbar: bool,
     top_toolbar_height: f32,
     pub(crate) peek_mode: bool,
-    pub(crate) preview_escape: bool,
+    pub(crate) overlay_escape: bool,
     visible: HashSet<TabId>,
     shown: Option<TabId>,
     bounds: Option<Bounds>,
@@ -702,7 +702,7 @@ impl Pages {
             pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
-            square_top: false, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, preview_escape: false,
+            square_top: false, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -883,7 +883,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, viewport_clip: None, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, preview_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -1140,7 +1140,7 @@ impl Pages {
             allow_little: !browser.is_private(), can_print: store.engine.supports_printing(),
         })).collect();
         for (view, policy) in contexts { store.engine.set_page_context_policy(view, policy); }
-        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode || self.preview_escape, capture_link_modifiers: !browser.is_private() && !browser.is_blank() && browser.settings.max.enabled(echo_ai::MaxFeature::FiveSecondPreviews) }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
+        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode || self.overlay_escape, capture_link_modifiers: !browser.is_private() && !browser.is_blank() && browser.settings.max.enabled(echo_ai::MaxFeature::FiveSecondPreviews) }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
     /// Browser appearance applies to every retained page owned by this host.

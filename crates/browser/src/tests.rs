@@ -4351,6 +4351,84 @@ fn open_long_sidebar(cx: &mut TestAppContext, pinned: bool) -> (Entity<BrowserWi
 }
 
 #[gpui::test]
+fn sidebar_pinned_and_today_scroll_beneath_the_fixed_space_header(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_long_sidebar(cx, false);
+    view.update(cx, |w, cx| {
+        w.edit_browser(|browser| browser.toggle_pin(browser.space().today[0].id));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let header = cx.debug_bounds("space-header-0").unwrap();
+    let pinned = cx.debug_bounds("pinned-list").unwrap();
+    let new_tab = cx.debug_bounds("new-tab").unwrap();
+    fake.take_calls();
+    scroll(cx, "sidebar-content", gpui::TouchPhase::Moved, 0., -120.);
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("space-header-0").unwrap(), header);
+    let distance = pinned.top() - cx.debug_bounds("pinned-list").unwrap().top();
+    assert!(distance > gpui::px(0.));
+    assert_eq!(new_tab.top() - cx.debug_bounds("new-tab").unwrap().top(), distance);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn held_sidebar_drag_scrolls_without_further_pointer_events_and_escape_stops_it(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_long_sidebar(cx, false);
+    view.update(cx, |w, cx| { w.edit_browser(|browser| { browser.add_space("Other", 40.); }); cx.notify(); });
+    cx.run_until_parked();
+    let viewport = cx.debug_bounds("sidebar-content").unwrap();
+    let height = cx.update(|window, _| window.viewport_size().height);
+    assert_eq!(viewport.bottom(), height - gpui::px(50.));
+    let source = cx.debug_bounds("tab-33").unwrap();
+    assert!(source.top() >= viewport.top() && source.bottom() <= viewport.bottom());
+    let header = cx.debug_bounds("space-header-0").unwrap();
+    let initial = cx.debug_bounds("tab-32").unwrap().top();
+    let original = active_url(&view, cx);
+    let order = view.read_with(cx, |w, _| w.browser.space().today.iter().map(|tab| tab.id).collect::<Vec<_>>());
+    fake.take_calls();
+    let edge = gpui::point(viewport.center().x, viewport.bottom() - gpui::px(11.));
+    begin_drag_to_point(cx, "tab-33", edge);
+    for _ in 0..60 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    let shifted = cx.debug_bounds("tab-32").unwrap().top();
+    assert!(initial - shifted > gpui::px(45.) && initial - shifted < gpui::px(70.), "distance={:?}", initial - shifted);
+    assert_eq!(cx.debug_bounds("space-header-0").unwrap(), header);
+    assert!(fake.0.borrow().peek_policies.values().any(|policy| policy.capture_escape));
+    fake.send(cx, fake.shortcut(Shortcut { key: "escape".into(), ..Default::default() }));
+    cx.run_until_parked();
+    assert!(fake.0.borrow().peek_policies.values().all(|policy| !policy.capture_escape));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("tab-32").unwrap().top(), shifted);
+    cx.simulate_mouse_up(edge, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().today.iter().map(|tab| tab.id).collect::<Vec<_>>()), order);
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn sidebar_drag_scrolling_stops_outside_its_viewport_and_clamps_at_the_content_end(cx: &mut TestAppContext) {
+    let (_view, cx, _) = open_long_sidebar(cx, false);
+    let viewport = cx.debug_bounds("sidebar-content").unwrap();
+    begin_drag_to_point(cx, "tab-33", gpui::point(viewport.center().x, viewport.bottom() - gpui::px(1.)));
+    for _ in 0..400 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    let end = cx.debug_bounds("today-list").unwrap();
+    assert!((end.bottom() - viewport.bottom()).abs() < gpui::px(1.));
+    cx.simulate_mouse_move(gpui::point(viewport.right() + gpui::px(20.), viewport.bottom() - gpui::px(1.)), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("today-list").unwrap(), end);
+    cx.simulate_keystrokes("escape");
+}
+
+#[gpui::test]
 fn reveal_tab_unfolds_and_scrolls_pinned_without_changing_the_page(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_long_sidebar(cx, true);
     let active = active_url(&view, cx);
@@ -4366,7 +4444,7 @@ fn reveal_tab_unfolds_and_scrolls_pinned_without_changing_the_page(cx: &mut Test
     });
     assert_eq!(active_url(&view, cx), active);
     let row = cx.debug_bounds("tab-32").unwrap();
-    let list = cx.debug_bounds("pinned-list").unwrap();
+    let list = cx.debug_bounds("sidebar-content").unwrap();
     assert!(row.origin.y >= list.origin.y && row.bottom() <= list.bottom(), "row={row:?}, list={list:?}");
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
@@ -4380,7 +4458,7 @@ fn reveal_tab_scrolls_to_the_split_anchor_and_keeps_its_selected_pane(cx: &mut T
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
     let row = cx.debug_bounds("tab-2").unwrap();
-    let list = cx.debug_bounds("today-list").unwrap();
+    let list = cx.debug_bounds("sidebar-content").unwrap();
     assert!(row.origin.y >= list.origin.y && row.bottom() <= list.bottom(), "row={row:?}, list={list:?}");
     assert_eq!(active_url(&view, cx), active);
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id.get()), 3);

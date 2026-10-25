@@ -126,7 +126,7 @@ impl BrowserWindow {
                     .iter()
                     .any(|(id, _, loading)| *id == p.identity && !*loading)
         });
-        pages.preview_escape = self.max.preview.open.is_some();
+        pages.overlay_escape = self.max.preview.open.is_some() || cx.has_active_drag();
         drop(pages);
         if !valid {
             self.close_max_preview(cx);
