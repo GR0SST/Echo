@@ -408,3 +408,20 @@ actor with zero-status CEF teardown. All five 3× submenu pairs and both native
 panel pairs were inspected. `arc-menu-key-probe/` additionally verifies the
 physical Command-Shift-semicolon spelling shortcut in the owned Arc editor;
 remaining hardware acceptance stays explicitly partial.
+
+
+### Saved-shortcut menu replacement
+
+The custom-shortcut implementation added a third native menu replacement path.
+Menu installation is now centralized so every replacement reapplies standard
+responder selectors, Font trait tags and Appearance checks. A GPUI regression
+sets a saved Duplicate override, invokes it and dispatches Underline through
+the rebuilt menu. Native acceptance uses a separate private profile seeded
+with that override and compares the five submenu enabled-state lists with the
+previously validated editor. Evidence: `echo-standard-edit-shortcuts/`.
+
+The seeded-profile native actor exits zero after both panels are closed and
+CEF shuts down. The five inspected submenu bodies preserve the source geometry
+and enabled states after startup applies the saved override. Full validation:
+1,116 browser, 242 core, 157 engine and 18 AI tests pass (one existing native
+credential integration test ignored), plus importer and bundle checks.

@@ -482,3 +482,20 @@ fn standard_edit_from_a_command_draft_targets_its_overlay_window(cx: &mut TestAp
     assert_eq!(bar_text(&view, visual).as_deref(), Some("Mispelled command draft"));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_) | Call::Create(..) | Call::Navigate(..))));
 }
+
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn saved_custom_shortcuts_keep_standard_edit_actions_routable(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    let before = today_urls(&view, visual).len();
+    view.update(visual, |view, cx| {
+        view.edit_browser(|browser| { browser.settings.shortcuts.bindings.insert("Duplicate".into(), Some("ctrl-alt-1".into())); });
+        crate::shortcuts::apply(&view.browser.settings.shortcuts, cx);
+    });
+    visual.simulate_keystrokes("ctrl-alt-1");
+    visual.run_until_parked();
+    assert_eq!(today_urls(&view, visual).len(), before + 1);
+    dispatch_menu(visual, "Edit", "Underline");
+    visual.run_until_parked();
+    assert_eq!(visual.cx.read(|cx| cx.global::<crate::standard_edit::Requests>().commands.clone()), vec![crate::standard_edit::Command::Underline]);
+}

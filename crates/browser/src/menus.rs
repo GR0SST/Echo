@@ -80,8 +80,7 @@ pub(crate) fn init(cx: &mut App) {
             KeyBinding::new("cmd-alt-h", HideOthers, None),
         ]);
     }
-    cx.set_menus(build());
-    native::configure_standard_edit_menu();
+    install_menu_model(build(), cx);
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -92,9 +91,7 @@ pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'stati
     let labels = SidebarUndoLabels(undo, redo, multiple);
     if cx.try_global::<SidebarUndoLabels>() == Some(&labels) { return; }
     cx.set_global(labels);
-    cx.set_menus(build_with_sidebar_undo(undo, redo, multiple));
-    native::configure_standard_edit_menu();
-    sync_native_appearance(cx);
+    install_menu_model(build_with_sidebar_undo(undo, redo, multiple), cx);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -118,7 +115,14 @@ fn sync_native_appearance(cx: &mut App) {
 
 pub(crate) fn refresh_shortcuts(cx: &mut App) {
     let labels = cx.try_global::<SidebarUndoLabels>().copied().unwrap_or_default();
-    cx.set_menus(build_with_sidebar_undo(labels.0, labels.1, labels.2));
+    install_menu_model(build_with_sidebar_undo(labels.0, labels.1, labels.2), cx);
+}
+
+// Replacing GPUI menus replaces their native NSMenu objects as well. Reapply
+// responder bindings and appearance checks at every installation boundary.
+fn install_menu_model(menus: Vec<Menu>, cx: &mut App) {
+    cx.set_menus(menus);
+    native::configure_standard_edit_menu();
     sync_native_appearance(cx);
 }
 
