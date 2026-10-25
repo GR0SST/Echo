@@ -24,7 +24,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 10 | L399: Shift-click opens a link in Peek (option) | M | Handle links opened inside Peek/Little without losing or replacing the wrong retained document. |
 | 11 | L599: Quiet downloads and the downloads tray | M | Support deliberate replacement of an existing download destination without weakening staged publication. |
 | 12 | L440: General → Arc is not the default browser ("Set as default" button) | S | Connect General's default-browser status and action to the existing serialized platform registration interface. |
-| 13 | L298: **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | S | Add About Echo, Import and conditionally available Set as Default Browser Command Bar routes. |
+| 13 | L298: **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | S | **Sub-gap fixed:** About Echo, Import and conditionally available Set as Default Browser now route to existing handlers; the complete in-scope action catalogue remains partial. |
 | 14 | L492: Crashed tab page (Sad Tab) | M | Present recoverable renderer-crash state with Reload, scoped to the failed retained page. |
 | 15 | L558: Import from Chrome-like browsers, Safari, Firefox: history, cookies, passwords (Passwords.csv), autofill, bookmarks with folder selection | L | Add supported modern Safari/session readers and local cookie/autofill/source-password import adapters. |
 | 16 | L183: Go Back / Go Forward | M | Expose retained back/forward history on a long press and navigate to the selected entry. |
@@ -245,5 +245,14 @@ Added Control-Space to the single shared GPUI/CEF shortcut registry. Existing Se
 - `Reveal Current Tab` is promoted to done. Baseline counts above remain an audit snapshot; one of its 103 F rows is now closed.
 
 The preliminary Save Page shortcut probe reached its handler and prepared the native sheet, but the driver rejected sheet focus before cancellation. It is **not** a passed Save Page acceptance check; format persistence and the end-to-end gate remain open.
+
+### App-menu Command Bar routes — three missing routes completed; parent row partial
+
+About Echo, Import from Another Browser… and Set as Default Browser now call the existing utility/setup/registration handlers. Import is unavailable in private, Blank and Little contexts. A Command Bar snapshots the registration state once; the existing serialized request rechecks it before requesting platform consent. Ours and Unavailable states omit the action.
+
+- Five new GPUI tests exercise actual typed queries/Enter, utility creation, import Escape with no engine navigation, private/Blank rejection, availability refresh and one serialized mocked request. All five pass. The full workspace suite passes: 1,259 browser tests, 264 core tests and all other enabled suites; `/tmp/echo-functional-command-test-passed.log`.
+- Native About open/Cmd-W and default query → in-memory request → action hidden are under `target/parity/functional-release/commands/`. `BROWSER_TEST_DEFAULT_BROWSER=1` installs the existing automation-only registration fixture; no OS registration/default is changed. The import fixture is a disposable empty directory, not an owner's browser profile. Native exit is zero.
+- The combined System Events probe did **not** establish Import acceptance: its screenshot retained the Command Bar. A fresh standard NSEvent-driver check independently opens the actual picker, captures it, cancels with Escape, dumps `command_bar=None` before/after, retains the one `https://example.org/` tab and exits zero. Accepted Import evidence is `target/parity/functional-release/import-route/{engine.log,import-screen.png}`; its screenshot was inspected. Rapid utility-to-utility re-entry remains unqualified; do not treat the combined probe's window count as proof of a specific dialog.
+- No new Arc session, pixel calibration, owner Space or system default modification. Existing action-row/dialog presentation is reused; no new visual parity claim. The broader Type Travel row stays partial for the remaining action catalogue. Baseline classification counts remain unchanged; only Reveal is promoted to done in this batch.
 
 The pre-strategy rename-dialog polish is preserved in the local stash `WIP rename dialog before functional release triage`; it is intentionally excluded from release-gap implementation.

@@ -57,6 +57,12 @@ impl gpui::Global for ImportSources {}
 #[derive(Clone)]
 pub(crate) struct Registration(pub Arc<dyn BrowserRegistration>);
 impl gpui::Global for Registration {}
+/// Snapshot availability when the Command Bar opens, rather than querying the OS per keystroke.
+pub(crate) fn default_browser_available(cx: &App) -> bool {
+    cx.try_global::<Registration>()
+        .map_or_else(|| SystemRegistration.state(), |registration| registration.0.state())
+        == DefaultState::Other
+}
 #[derive(Clone)]
 pub(crate) struct CredentialStorage(pub Arc<dyn importer::CredentialStore>);
 impl gpui::Global for CredentialStorage {}

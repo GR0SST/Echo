@@ -11534,3 +11534,6 @@ fn split_header_site_controls_anchor_to_and_clear_only_the_focused_document(cx: 
         assert_eq!(view.browser.active_split().unwrap().panes.len(), 2);
     });
 }
+
+#[path = "menu_command_tests.rs"]
+mod menu_command_tests;
