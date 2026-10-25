@@ -296,7 +296,7 @@ fn right_edge_page_selection_opens_one_draft_and_preserves_it_on_reentry(cx: &mu
 }
 
 #[gpui::test]
-fn spaces_manager_and_creation_hide_existing_engine_views_without_loading_or_closing_them(
+fn spaces_manager_retains_document_and_creation_hides_it_without_loading_or_closing(
     cx: &mut TestAppContext,
 ) {
     let (view, visual, engine) = open(cx, crate::demo_browser());
@@ -315,11 +315,12 @@ fn spaces_manager_and_creation_hide_existing_engine_views_without_loading_or_clo
         select(&view, visual, page);
         if page == SidebarPage::Library { click(visual, "library-nav-spaces"); }
         assert!(!view.read_with(visual, |view, _| view.page_content_visible()));
-        assert!(!view.read_with(visual, |view, _| {
+        let retained = page == SidebarPage::Library;
+        assert_eq!(view.read_with(visual, |view, _| {
             view.pages.as_ref().unwrap().borrow().is_visible(tab)
-        }));
+        }), retained);
         let state = engine.0.borrow();
-        assert!(state.visible.values().all(|visible| !visible));
+        assert_eq!(state.visible.values().any(|visible| *visible), retained);
         assert_eq!(state.document_changes, documents);
     }
     view.update(visual, |view, cx| {

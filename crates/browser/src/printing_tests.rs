@@ -125,10 +125,10 @@ fn print_from_cef_and_library_preview_uses_registered_shortcut_without_new_page(
     dispatch(cx);
     assert_eq!(printed(&fake), [native]);
     click(cx, "library-nav-spaces");
-    assert!(!cx.update(|window, cx| window.is_action_available(&crate::window::PrintPage, cx)));
+    assert!(cx.update(|window, cx| window.is_action_available(&crate::window::PrintPage, cx)));
     view.update(cx, |view, cx| view.print_page(cx));
     dispatch(cx);
-    assert!(printed(&fake).is_empty());
+    assert_eq!(printed(&fake), [native]);
 }
 
 #[gpui::test]

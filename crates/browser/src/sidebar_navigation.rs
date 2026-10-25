@@ -108,8 +108,11 @@ impl BrowserWindow {
         }
     }
     pub(crate) fn library_page_offset(&self) -> f32 {
-        (112. + library::media::MEDIA_REFERENCE_COLUMN_WIDTH - self.sidebar_navigation.normal_content_left)
-            * self.sidebar_navigation.library_slide_amount
+        let target = if self.sidebar_navigation.library_section == LibrarySection::Spaces {
+            self.sidebar_navigation.normal_content_left + f32::from(self.sidebar_navigation.normal_content_size.width)
+                - 46.
+        } else { 112. + library::media::MEDIA_REFERENCE_COLUMN_WIDTH };
+        (target - self.sidebar_navigation.normal_content_left) * self.sidebar_navigation.library_slide_amount
     }
     pub(crate) fn library_preview_left(&self) -> f32 {
         self.sidebar_navigation.normal_content_left + self.library_page_offset() - 112.
@@ -795,6 +798,10 @@ impl BrowserWindow {
             empty = Some(div().relative().size_full().child(view)
                 .child(library::media::render_preview_at(fill, Some(preview), preview_left))
                 .into_any_element());
+        }
+        if section == LibrarySection::Spaces && self.browser.active_tab().is_some() {
+            let preview = self.render_library_page_preview(cx);
+            empty = Some(library::media::render_preview_at(self.theme_empty_panel_fill(), Some(preview), preview_left));
         }
         library::render_library(
             &projection,

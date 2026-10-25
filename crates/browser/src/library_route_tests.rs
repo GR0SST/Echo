@@ -21,7 +21,7 @@ fn assert_library(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) {
         assert!(view.command_bar.is_none());
         assert!(view.find_bar.is_none());
         assert!(view.new_menu.is_none());
-        assert_eq!(view.sidebar_navigation.library_section == LibrarySection::Media, view
+        assert_eq!(view.native_page_content_visible(), view
             .pages
             .as_ref()
             .unwrap()
@@ -75,7 +75,7 @@ fn library_shortcut_menu_and_command_preserve_the_original_page_and_spaces(
         return_to_origin(&view, cx);
         let calls = fake.take_calls();
         assert_no_document_changes(&calls);
-        assert!(calls.contains(&Call::Visible(raw(document), true)));
+        assert!(!calls.contains(&Call::Visible(raw(document), false)));
         assert!(calls.contains(&Call::FocusPage(raw(document))));
         assert_eq!(fake.0.borrow().focused_page, Some(document));
         assert_eq!(

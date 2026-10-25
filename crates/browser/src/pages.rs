@@ -568,10 +568,11 @@ pub(crate) enum PageViewport {
     LibraryDownloads,
     LibraryBoosts,
     LibraryArchive,
+    LibrarySpaces,
 }
 impl PageViewport {
     fn retains_library_page(self) -> bool {
-        matches!(self, Self::LibraryMedia | Self::LibraryDownloads | Self::LibraryBoosts | Self::LibraryArchive)
+        matches!(self, Self::LibraryMedia | Self::LibraryDownloads | Self::LibraryBoosts | Self::LibraryArchive | Self::LibrarySpaces)
     }
 }
 

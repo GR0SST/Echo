@@ -29,6 +29,7 @@ impl LibrarySection {
             Self::Downloads => crate::pages::PageViewport::LibraryDownloads,
             Self::Boosts => crate::pages::PageViewport::LibraryBoosts,
             Self::ArchivedTabs => crate::pages::PageViewport::LibraryArchive,
+            Self::Spaces => crate::pages::PageViewport::LibrarySpaces,
             _ => crate::pages::PageViewport::Hidden,
         }
     }
@@ -343,6 +344,9 @@ pub(crate) fn render_library(
                     ),
             ),
         );
+        if let Some(content) = other_section {
+            root = root.child(div().absolute().left(px(112.)).right_0().top_0().bottom_0().child(content));
+        }
     } else if let Some(content) = other_section {
         root = root.child(
             div()

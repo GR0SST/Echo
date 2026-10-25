@@ -267,11 +267,11 @@ fn clear_site_menu_and_commands_target_the_active_document_origin_without_replac
 }
 
 #[gpui::test]
-fn clear_site_menu_actions_are_unavailable_on_internal_pages_and_hidden_library_sections(cx: &mut TestAppContext) {
+fn clear_site_menu_actions_follow_retained_library_pages_and_reject_internal_pages(cx: &mut TestAppContext) {
     let (view, visual, fake) = open_pages(cx);
     dispatch_menu(visual, "Window", "Open Library…");
     click(visual, "library-nav-spaces");
-    assert!(!visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCookiesAndRefresh, cx)));
+    assert!(visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCookiesAndRefresh, cx)));
     visual.simulate_keystrokes("cmd-t");
     bar(&view, visual).simulate_input("browser://history");
     bar(&view, visual).simulate_keystrokes("enter");

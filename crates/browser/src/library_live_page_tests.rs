@@ -58,23 +58,28 @@ fn media_retains_the_same_page_in_measured_preview_and_search_keeps_focus(cx: &m
 }
 
 #[gpui::test]
-fn spaces_hides_media_preview_and_return_restores_the_same_document(cx: &mut TestAppContext) {
+fn spaces_retains_clipped_document_sliver_without_reflow(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let document = fake.0.borrow().focused_page.unwrap();
     enter(&view, cx);
     fake.take_calls();
     click(cx, "library-nav-spaces");
     view.read_with(cx, |view, _| {
-        assert!(!view.native_page_content_visible());
-        assert!(!view.pages.as_ref().unwrap().borrow().is_visible(view.browser.active_tab().unwrap().id));
+        assert!(view.native_page_content_visible());
+        assert!(view.pages.as_ref().unwrap().borrow().is_visible(view.browser.active_tab().unwrap().id));
     });
-    assert!(fake.take_calls().contains(&Call::Visible(raw(document), false)));
+    cx.executor().advance_clock(Duration::from_millis(400));
+    cx.run_until_parked();
+    assert_preview(&fake, document, cx);
+    let clip = cx.debug_bounds("library-media-preview").unwrap();
+    assert_eq!(clip.size.width, px(46.));
+    unchanged(&fake.take_calls());
     click(cx, "library-nav-media");
     assert_preview(&fake, document, cx);
     view.read_with(cx, |view, _| assert!(view.pages.as_ref().unwrap().borrow().is_visible(view.browser.active_tab().unwrap().id)));
     let calls = fake.take_calls();
     unchanged(&calls);
-    assert!(calls.contains(&Call::Visible(raw(document), true)));
+    assert!(!calls.contains(&Call::Visible(raw(document), false)));
     assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))));
 }
 
@@ -318,7 +323,7 @@ fn media_preserves_native_source_and_existing_split_layout_contracts(cx: &mut Te
 
 
 #[gpui::test]
-fn native_library_page_shortcuts_reach_the_same_document_but_spaces_rejects_them(cx: &mut TestAppContext) {
+fn native_library_page_shortcuts_reach_the_same_document_including_spaces_sliver(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let document = fake.0.borrow().focused_page.unwrap();
     enter(&view, cx);
@@ -342,15 +347,12 @@ fn native_library_page_shortcuts_reach_the_same_document_but_spaces_rejects_them
     }
     click(cx, "library-nav-spaces");
     fake.take_calls();
-    // Exercise the GPUI actions too: native provenance rejects hidden input,
-    // while the shared page-command helper must independently exclude Spaces.
-    cx.simulate_keystrokes("cmd-r cmd-[ cmd-] cmd-= cmd-- cmd-0");
-    for (key, _) in &cases {
+    for (key, expected) in &cases {
         fake.send(cx, Event::Shortcut { view: document, shortcut: Shortcut {
             cmd: true, key: (*key).into(), ..Default::default()
         }});
+        assert_eq!(fake.take_calls(), vec![expected.clone()]);
     }
-    assert!(fake.take_calls().is_empty());
     assert_eq!(view.read_with(cx, |view, _| view.sidebar_navigation.library_section), LibrarySection::Spaces);
 }
 
@@ -637,7 +639,7 @@ fn library_from_an_empty_space_never_leaks_the_other_spaces_live_page(cx: &mut T
     click(cx, "library-space-select-0");
     let calls = fake.take_calls();
     unchanged(&calls);
-    assert!(calls.contains(&Call::Visible(raw(document), true)));
+    assert!(!calls.contains(&Call::Visible(raw(document), false)));
 }
 
 #[gpui::test]
@@ -739,7 +741,7 @@ fn archive_retains_selected_document_without_navigation_or_recreation(cx: &mut T
 }
 
 #[gpui::test]
-fn archive_preview_clips_the_original_viewport_without_document_reflow(cx: &mut TestAppContext) {
+fn archive_and_spaces_clip_the_original_viewport_without_document_reflow(cx: &mut TestAppContext) {
     let (view, visual, fake) = open_pages(cx);
     visual.simulate_resize(gpui::size(px(1000.), px(760.)));
     visual.run_until_parked();
@@ -748,14 +750,13 @@ fn archive_preview_clips_the_original_viewport_without_document_reflow(cx: &mut 
     enter(&view, visual);
     visual.executor().advance_clock(Duration::from_millis(400));
     visual.run_until_parked();
-    for (selector, left, width) in [("library-nav-archive",417.,573.)] {
+    for (selector, left, width) in [("library-nav-archive",417.,573.),("library-nav-spaces",944.,46.)] {
         click(visual, selector);
         let state = fake.0.borrow();
         assert_eq!(state.bounds[&document].width, original.width);
         assert_eq!(state.bounds[&document].x, left);
         assert_eq!(state.viewport_clips[&document], Some(Bounds { x:0., y:0., width, height:740. }));
     }
-    click(visual, "library-nav-spaces");
     click(visual, "library-space-select-0");
     assert_eq!(fake.0.borrow().viewport_clips[&document], None);
 }
