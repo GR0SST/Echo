@@ -346,3 +346,22 @@ The scripted source before/after pair also measures the dimmer without relying
 on a guessed theme color. Four GPUI checks cover cancellation without sealing,
 repeat presentation, remembered disable, disabled bypass and private preference
 routing. The existing pre-quit producer test explicitly disables the warning.
+
+## Round 2 shortcut footer actions
+
+The live source selected-action footer uses Remove Shortcut, the conditional
+Remove Conflicting Shortcut / Remove Conflicting Shortcuts, Reset All Shortcuts
+and Extension Shortcuts…. The source references, temporary-binding restoration,
+native CEF dispatch qualification and remaining functional limits are recorded
+in [the closeout review](PARTIAL_ROW_REVIEW.md#round-2--shortcut-conflict-actions).
+The selected footer is now present and all supported local binding actions are
+connected. Extension editing and dynamic Space assignment remain unavailable.
+Remaining menu material and text raster differences are cosmetic.
+
+The successful native receipt is
+`target/parity/partial-closeout/echo-shortcut-popup-retry.log` (exit 0, both CEF
+shortcut outcomes, persisted Reset All). The subsequent correctly positioned
+pair run repeats both action checks but reaches the drive timeout in CEF's
+ShuttingDown phase; it does not qualify shutdown. Its log is
+`echo-shortcut-functional-final.log`. No CEF source/build/publication was changed
+to work around this separate teardown result.

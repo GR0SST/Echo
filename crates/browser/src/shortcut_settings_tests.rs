@@ -122,3 +122,158 @@ fn a_released_default_can_be_reassigned_and_reset_all_restores_both_actions(
     click(&mut visual, "reset-all-shortcuts");
     assert!(view.read_with(cx, |v, _| v.browser.settings.shortcuts.bindings.is_empty()));
 }
+
+fn footer_menu(
+    settings: &Entity<crate::settings::SettingsWindow>,
+    visual: &mut VisualTestContext,
+) -> VisualTestContext {
+    click(visual, "shortcut-footer-more");
+    let handle = settings
+        .read_with(visual, |s, _| s.shortcut_footer_window())
+        .unwrap();
+    let menu = VisualTestContext::from_window(handle, &visual.cx);
+    menu.run_until_parked();
+    menu
+}
+#[gpui::test]
+fn shortcut_menu_removes_the_other_default_and_the_reassigned_key_dispatches_the_selected_action(
+    cx: &mut TestAppContext,
+) {
+    let (browser, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    search_shortcuts(&settings, &mut visual, "Copy URL");
+    click(&mut visual, "shortcut-record-Copy URL");
+    visual.simulate_keystrokes("cmd-r");
+    let mut menu = footer_menu(&settings, &mut visual);
+    assert_eq!(
+        menu.debug_bounds("shortcut-footer-menu").unwrap().size,
+        gpui::size(gpui::px(206.), gpui::px(117.))
+    );
+    menu.simulate_keystrokes("down enter");
+    assert!(!settings.read_with(&visual, |s, _| s.shortcut_has_conflict("Copy URL")));
+    browser.read_with(cx, |v, _| {
+        assert_eq!(
+            v.browser.settings.shortcuts.bindings.get("Copy URL"),
+            Some(&Some("cmd-r".into()))
+        );
+        assert_eq!(
+            v.browser
+                .settings
+                .shortcuts
+                .bindings
+                .get("Refresh the Page"),
+            Some(&None)
+        );
+    });
+    visual.simulate_keystrokes("cmd-w");
+    cx.update(|w, cx| browser.read(cx).focus_handle.focus(w));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-r");
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()));
+    assert_eq!(copied, active_url(&browser, cx));
+    assert!(!fake
+        .take_calls()
+        .iter()
+        .any(|c| matches!(c, Call::Reload(..))));
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    search_shortcuts(&settings, &mut visual, "Copy URL");
+    click(&mut visual, "shortcut-select-Copy URL");
+    let mut menu = footer_menu(&settings, &mut visual);
+    assert_eq!(
+        menu.debug_bounds("shortcut-footer-menu").unwrap().size,
+        gpui::size(gpui::px(164.), gpui::px(93.))
+    );
+    click(&mut menu, "shortcut-menu-reset-all");
+    assert!(browser.read_with(cx, |v, _| v.browser.settings.shortcuts.bindings.is_empty()));
+    visual.simulate_keystrokes("cmd-w");
+    cx.update(|w, cx| browser.read(cx).focus_handle.focus(w));
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-r");
+    assert!(fake
+        .take_calls()
+        .iter()
+        .any(|c| matches!(c, Call::Reload(..))));
+}
+#[gpui::test]
+fn shortcut_menu_removes_all_other_custom_conflicts_without_changing_the_selected_binding(
+    cx: &mut TestAppContext,
+) {
+    let (browser, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    for action in ["Duplicate", "Refresh the Page", "Copy URL"] {
+        search_shortcuts(&settings, &mut visual, action);
+        click(
+            &mut visual,
+            test_selector(format!("shortcut-record-{action}")),
+        );
+        visual.simulate_keystrokes("ctrl-alt-1");
+    }
+    let mut menu = footer_menu(&settings, &mut visual);
+    assert_eq!(
+        menu.debug_bounds("shortcut-footer-menu").unwrap().size,
+        gpui::size(gpui::px(212.), gpui::px(117.))
+    );
+    click(&mut menu, "shortcut-menu-remove-conflicts");
+    browser.read_with(cx, |v, _| {
+        assert_eq!(
+            v.browser.settings.shortcuts.bindings.get("Copy URL"),
+            Some(&Some("ctrl-alt-1".into()))
+        );
+        assert_eq!(
+            v.browser.settings.shortcuts.bindings.get("Duplicate"),
+            Some(&None)
+        );
+        assert_eq!(
+            v.browser
+                .settings
+                .shortcuts
+                .bindings
+                .get("Refresh the Page"),
+            Some(&None)
+        );
+    });
+    assert!(!settings.read_with(&visual, |s, _| s.shortcut_has_conflict("Copy URL")));
+    let mut menu = footer_menu(&settings, &mut visual);
+    click(&mut menu, "shortcut-menu-remove");
+    browser.read_with(cx, |v, _| {
+        assert_eq!(
+            v.browser.settings.shortcuts.bindings.get("Copy URL"),
+            Some(&None)
+        )
+    });
+}
+#[gpui::test]
+fn stale_shortcut_conflict_menu_does_not_delete_a_new_assignment(cx: &mut TestAppContext) {
+    let (browser, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    search_shortcuts(&settings, &mut visual, "Copy URL");
+    click(&mut visual, "shortcut-record-Copy URL");
+    visual.simulate_keystrokes("cmd-r");
+    let mut menu = footer_menu(&settings, &mut visual);
+    browser.update(cx, |v, _| {
+        v.edit_profile(|b| {
+            b.settings
+                .shortcuts
+                .set("Refresh the Page", Some("ctrl-alt-9".into()))
+        })
+    });
+    click(&mut menu, "shortcut-menu-remove-conflicts");
+    browser.read_with(cx, |v, _| {
+        assert_eq!(
+            v.browser.settings.shortcuts.bindings.get("Copy URL"),
+            Some(&Some("cmd-r".into()))
+        );
+        assert_eq!(
+            v.browser
+                .settings
+                .shortcuts
+                .bindings
+                .get("Refresh the Page"),
+            Some(&Some("ctrl-alt-9".into()))
+        );
+    });
+}

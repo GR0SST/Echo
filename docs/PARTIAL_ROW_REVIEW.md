@@ -158,19 +158,19 @@ account consent or owner profile mutation was used to make a row look complete.
 | 12 — Space profile warning | The existing captured confirmation is implemented; empty-window warning conditions, switcher/material and split/window variants are not established by the new profile-list overview. No assignment was saved. |
 | 12 — profile deletion | Exact-name single-profile deletion works in the model/GPUI tests; the bundle still contains Delete unused Profiles and its warning. A bulk UI and lease-safe disk reclamation are absent. The observed fifth footer button is Rename, not a bulk-delete control. |
 | 12 — per-profile settings | Search, archive, download preferences and native data removal work. New documents still persist an app choice without the document-app integration; the overview does not close that backend gap. |
-| 13 — Archive tabs after | Four choices and selection work; the fresh menu crop still differs in vibrant material/corners/rasterization. |
+| 13 — Archive tabs after | Four choices and selection work. Cosmetic: the fresh menu crop still differs in vibrant material/corners/rasterization. |
 | 13 — Previews Settings | The fresh 422 × 370 pair still differs in checkbox, keycap and border treatment; site-specific hover previews are missing. |
 | 13 — Warn before quitting | The measured local confirmation now gates menu/Cmd+Q before teardown is sealed. Native Cancel, Return, remembered disable and cold-restart bypass pass with a disposable session. Private/Blank preference routing has GPUI coverage. Light, animation, OS/no-window entry and auxiliary-window host selection remain unqualified. |
 | 13 — Profiles tab | Rename/delete/search/data/manager entry points exist. The broader row still includes bulk deletion, document-app behavior and incomplete search/manager visual details. |
 | 13 — Links tab | Existing ATC is retained; remaining Little Arc launch preferences are not closed by the read-only Links overview. |
-| 13 — Shortcuts | Recording/reset/conflict markers work; priority/two-press dispatch, Remove Conflicting Shortcut, extension bindings, Space reassignment and Favorites ordering remain missing. Owner shortcuts were not edited. |
+| 13 — Shortcuts | Selected footer Remove Shortcut, Remove Conflicting Shortcut(s) and Reset All now work, including live CEF dispatch and stale-menu guards. Priority/two-press dispatch, extension bindings, Space reassignment and Favorites ordering remain missing. Menu material/raster differences are cosmetic. Source temporary disabled-test binding was restored; no competing owner binding was removed. |
 | 13 — Max tab | Fresh overview retains link/font differences; no exposed Ask-on-Page control was observed and the owner's disabled download-renaming preference was not changed. Plain/accessory toast layout reuse is not qualification of that Max feedback. |
 | 13 — 5-Second Previews | Anonymous public-page/provider fixture checks cover the implemented panel; automatic-site coverage, exact blur/fonts/icons/motion, image/system-share payloads and non-macOS behavior remain incomplete. |
 | 13 — ChatGPT OAuth | Offline security/loopback checks do not establish live account consent and inference. No owner account was used. |
 | 13 — manual provider credentials | Local keychain/loopback streaming checks do not establish live providers or Windows/Linux credential stores. No owner key was read. |
 | 13 — Advanced tab | Export's stale locked-session note is handled separately. Seeded translation-reset persistence, full global Settings, managed/no-owner behavior and remaining integration/visual states stay unqualified. |
 | 13 — alternative icons | The original Echo variants are intentional; remaining radio/material/font differences and Windows/Linux native icon application keep this partial. Arc art/referral controls are excluded. |
-| 16 — page card | Fresh empty/loaded corner crops retain 10 px insets and 6 px radius; opacity, shadow and border calibration remain open. Sidebar width is owned by another section. |
+| 16 — page card | Fresh empty/loaded corner crops retain 10 px insets and 6 px radius. Cosmetic: opacity, shadow and border calibration are deferred. Sidebar width is owned by another section. |
 | 16 — loading glow | Prior measured pulse evidence remains valid for the implemented phase; exact finishing curve and split/other-platform variants are not newly qualified. |
 | 16 — zoom badge | Fresh 110% geometry agrees; click/dismissal motion, material/theme and other-platform input behavior remain unqualified. |
 | 16 — Site Control Center | Full Page/Portrait, extension management, usage/media counts, main-panel keyboard traversal and embedded cross-origin permission coverage remain missing/unqualified; existing permission tests do not close them. |
@@ -178,10 +178,40 @@ account consent or owner profile mutation was used to make a row look complete.
 | 16 — Find | The fresh NOT FOUND panel now clears the developer toolbar. Arc disables Find and Replace on this ordinary document; editable-context replacement remains unqualified. |
 | 16 — Developer Mode | Fresh localhost default/disable/reload/restoration is implemented and tested. Toolbar glyph/material polish, split variants and other loopback-address defaults remain unqualified. |
 | 18 — copied links | Ordered tab/Split/folder copying is wired; the vague old advanced-selection note is not treated as an absent toast hook. The verified copy pair is reused. Normal-pointer share-menu anchoring/hover and non-macOS sharing remain incomplete. Arc-hosted Shared Quotes are excluded; the local text-fragment action is separate. |
-| 18 — pin/unpin | Fresh plain-feedback pairs confirm exact text, position, height and route conditions; small width/edge/text raster differences remain. Drag and folder hooks retain their existing regression coverage. |
+| 18 — pin/unpin | Fresh plain-feedback pairs confirm exact text, position, height and route conditions; Cosmetic: small width/edge/text raster differences remain. Drag and folder hooks retain their existing regression coverage. |
 | 18 — archive/restore | Auto-archive and tab restore feedback work; the archived-folder model/restore is absent. Library ownership remains with the section 14 agent. |
 | 18 — background tab/Space | Background tab reveal works; the New Space Created trigger is not implemented/qualified. No extra test Space was created to force a string-only state. |
 
 No ordinary download-completion toast was added. The inventory contains Max
 rename/revert copy, not an ordinary completion string. “We cleaned up!” remains
 partial without a safe live/layout reference; no banner layout is guessed.
+
+## Round 2 — shortcut conflict actions
+
+Arc's actual pointer-opened footer menu was inspected in the shared Echo Test
+Space. A previously disabled Blank Window binding was temporarily assigned for
+the conflict reference and restored to disabled before closing Settings and the
+owned browser. No competing owner binding was removed. Exact singular/plural
+copy also appears in the installed executable. References are
+`arc-shortcut-native-menu.png` and `arc-shortcut-menu-no-conflict.png` beneath
+`target/parity/partial-closeout/`.
+
+The selected footer exposes Remove Shortcut, conditional Remove Conflicting
+Shortcut(s), Reset All Shortcuts and Extension Shortcuts…. Extension editing
+remains disabled until its GPUI route exists. Conflict removal revalidates both
+the selected assignment and complete conflicting set, clears all supported
+competitors and reapplies runtime dispatch. Dynamic Space conflicts remain
+disabled because their reassignment is not implemented. Three new GPUI checks
+cover default/custom and plural conflicts, selected removal, Reset All, actual
+action dispatch and stale menu state.
+
+The disposable native fixture records Copy URL as Command-R, removes Refresh's
+competing binding, proves Command-R copies the local page URL without reloading,
+then uses the footer's Reset All and proves native Command-R reloads again. The
+existing 3× pair is `pair-shortcut-conflict-menu-3x.png`. Native-menu material and
+font raster are cosmetic; the row stays partial for priority/two-press policy,
+extension editing, dynamic Space reassignment and Favorites ordering.
+
+Per the functional-only closeout instruction, remaining shadows, pixel offsets,
+raster differences and motion timing are cosmetic and are deferred; they are
+not promoted to done.

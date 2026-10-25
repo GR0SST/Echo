@@ -65,36 +65,56 @@ impl SettingsWindow {
             .effective(id, default.as_deref())
             .map(str::to_owned)
     }
-    fn shortcut_conflict(&self, id: &str, value: Option<&str>) -> Option<String> {
-        let value = value?;
+    pub(super) fn shortcut_conflicts(&self, id: &str, value: Option<&str>) -> Vec<String> {
+        let Some(value) = value else { return Vec::new(); };
         let mut entries = CATALOG.clone();
         self.profile.read_settings(|browser| {
-            entries.extend(
-                browser
-                    .spaces
-                    .iter()
-                    .take(9)
-                    .enumerate()
-                    .map(|(index, space)| {
-                        (format!("Go to “{}”", space.name), format!("⌃{}", index + 1))
-                    }),
-            )
+            entries.extend(browser.spaces.iter().take(9).enumerate().map(|(index, space)| {
+                (format!("Go to “{}”", space.name), format!("⌃{}", index + 1))
+            }));
         });
-        entries
-            .iter()
-            .find(|(other, default)| {
-                other != id && self.shortcut_value(other, default).as_deref() == Some(value)
-            })
-            .map(|(id, _)| id.clone())
+        entries.iter().filter(|(other, default)| {
+            other != id && self.shortcut_value(other, default).as_deref() == Some(value)
+        }).map(|(id, _)| id.clone()).collect()
     }
-    fn edit_shortcut(&mut self, id: &str, value: Option<String>, cx: &mut Context<Self>) {
+    fn shortcut_conflict(&self, id: &str, value: Option<&str>) -> Option<String> {
+        self.shortcut_conflicts(id, value).into_iter().next()
+    }
+    pub(super) fn shortcut_menu_subject(&self) -> Option<(String, Option<String>)> {
+        let id = self.shortcuts.selected.as_ref()?;
+        let (_, default) = CATALOG.iter().find(|(label, _)| label == id)?;
+        Some((id.clone(), self.shortcut_value(id, default)))
+    }
+    pub(super) fn shortcut_supported(&self, id: &str, cx: &App) -> bool {
+        CATALOG.iter().find(|(label, _)| label == id).is_some_and(|(_, default)| {
+            runtime::supported(id, runtime::default_key(default).as_deref(), cx)
+        })
+    }
+    pub(super) fn remove_shortcut_conflicts(
+        &mut self, subject: &(String, Option<String>), expected: &[String], cx: &mut Context<Self>,
+    ) -> bool {
+        let conflicts = self.shortcut_conflicts(&subject.0, subject.1.as_deref());
+        if expected.is_empty() || self.shortcut_menu_subject().as_ref() != Some(subject)
+            || conflicts != expected || !self.shortcut_supported(&subject.0, cx)
+            || !conflicts.iter().all(|id| self.shortcut_supported(id, cx)) {
+            return false;
+        }
+        self.profile.edit_settings(|b| {
+            for id in &conflicts { b.settings.shortcuts.set(id.clone(), None); }
+        });
+        runtime::apply(&self.profile.settings_snapshot().settings.shortcuts, cx);
+        self.shortcuts.armed = false;
+        cx.notify();
+        true
+    }
+    pub(super) fn edit_shortcut(&mut self, id: &str, value: Option<String>, cx: &mut Context<Self>) {
         self.profile
             .edit_settings(|browser| browser.settings.shortcuts.set(id, value));
         runtime::apply(&self.profile.settings_snapshot().settings.shortcuts, cx);
         self.shortcuts.armed = false;
         cx.notify();
     }
-    fn reset_shortcut(&mut self, id: Option<&str>, cx: &mut Context<Self>) {
+    pub(super) fn reset_shortcut(&mut self, id: Option<&str>, cx: &mut Context<Self>) {
         self.profile.edit_settings(|b| {
             if let Some(id) = id {
                 b.settings.shortcuts.reset(id)
@@ -227,8 +247,8 @@ impl SettingsWindow {
                     )
                 })
                 .child(div().flex_1())
-                .child(
-                    self.settings_button("Reset Shortcut to Default")
+                .child(div().h(px(24.)).w(px(200.)).flex().gap(px(4.))
+                    .child(self.settings_button("Reset Shortcut to Default")
                         .id("reset-one-shortcut")
                         .debug_selector(|| "reset-one-shortcut".into())
                         .w(px(172.))
@@ -238,8 +258,8 @@ impl SettingsWindow {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.reset_shortcut(Some(&reset_id), cx)
                                 }))
-                        }),
-                )
+                        }))
+                    .child(self.shortcut_more_button(cx)))
                 .into_any_element()
         } else {
             div().w(px(200.)).min_w_0().flex().flex_col().gap(px(10.)).h_full()
@@ -250,10 +270,7 @@ impl SettingsWindow {
                 .child(div().w(px(168.)).h(px(24.)).mb(px(1.)).flex().gap(px(4.))
                     .child(self.settings_button("Reset All Shortcuts").id("reset-all-shortcuts").debug_selector(|| "reset-all-shortcuts".into())
                         .w(px(140.)).px(px(8.)).cursor_pointer().on_click(cx.listener(|this, _, _, cx| this.reset_shortcut(None, cx))))
-                    .child(div().id("shortcut-footer-more").debug_selector(|| "shortcut-footer-more".into())
-                        .size(px(24.)).flex_none().rounded_full().bg(colors.rgb(0x393b3d)).flex().items_center().justify_center()
-                        .hover(move |s| s.bg(colors.rgb(0x484a4a))).cursor_pointer().child(icons::more())
-                        .on_click(cx.listener(|this, _, window, cx| this.toggle_shortcuts_menu(window, cx)))))
+                    .child(self.shortcut_more_button(cx)))
                 .into_any_element()
         };
         let mut last_group = None;
