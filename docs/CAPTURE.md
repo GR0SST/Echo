@@ -14,7 +14,7 @@ sRGB before being supplied to GPUI. The rounded selection is subtracted from the
 mask, and shadows are clipped outside it so captured content stays unshaded.
 
 Implemented entry points: Shift-Command-2, Command Bar → Capture, and the URL
-field's Capture… context-menu item. Drag selection, main-frame element hover,
+field's Capture… context-menu item, and the Site Control Center camera tile. Drag selection, main-frame element hover,
 Copy, Save…, Retake, Escape/Command-W, and Save to Library are connected. Saved to
 Library is an idempotent checked state (confirmed by clicking Arc’s checked row again); local image bytes and a stable model
 record are written beside the canonical session in its profile's Captures folder.
@@ -50,3 +50,10 @@ connected. The Send To… field retains text but does not route a destination.
 Those secondary actions, full-page capture, private/Blank Library behavior,
 frame/shadow-DOM picking, exact remaining glyph/font/motion details and native
 Save… panel presentation need further work. Cloud/gallery publishing is excluded.
+
+The Round 2 SCC entry qualification is recorded in
+[the closeout review](PARTIAL_ROW_REVIEW.md#round-2--scc-region-capture-entry). A
+fresh guarded Arc click enters selection; the Echo native fixture verifies the
+formerly inert tile, Escape, subsequent Command Bar navigation and exit 0. The
+source/echo entry pair is evidence for behavior, not completion of cosmetic or
+remaining full-page/destination features.

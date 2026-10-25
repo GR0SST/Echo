@@ -107,6 +107,13 @@ pub(crate) struct SettingsWindow {
     _search_changed: Subscription,
     _observe: Subscription,
 }
+
+impl SettingsWindow {
+    pub(crate) fn browser_owner(&self, cx: &App) -> Option<gpui::WindowHandle<BrowserWindow>> {
+        let owner = self.owner.as_ref()?.upgrade()?;
+        owner.read(cx).main_window.downcast::<BrowserWindow>()
+    }
+}
 impl Focusable for SettingsWindow {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()

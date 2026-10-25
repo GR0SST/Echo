@@ -242,6 +242,14 @@ impl BrowserWindow {
             })
     }
 
+    fn capture_site_region(&mut self, cx: &mut Context<Self>) {
+        if self.site_controls.as_ref().is_some_and(|panel| {
+            panel.permission_request.is_none() && self.site_scope_is_current(&panel.scope)
+        }) {
+            self.capture_page(cx);
+        }
+    }
+
     fn share_current_site(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(panel) = self.site_controls.as_ref().filter(|panel| {
             panel.permission_request.is_none() && self.site_scope_is_current(&panel.scope)
@@ -934,6 +942,7 @@ impl BrowserWindow {
                             )
                             .child(
                                 top_tile("site-capture")
+                                    .on_click(cx.listener(|this, _, _, cx| this.capture_site_region(cx)))
                                     .child(crate::icons::control_sized(Icon::Capture, 22.)),
                             )
                             .child(

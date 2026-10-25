@@ -125,3 +125,31 @@ fn quit_from_a_private_window_uses_the_install_preference_and_its_own_host(
     );
     visual.cx.update(crate::quit::reset_for_test);
 }
+
+#[gpui::test]
+fn settings_quit_confirmation_uses_its_browser_instead_of_the_first_window(
+    cx: &mut TestAppContext,
+) {
+    let (first, visual) = open(cx);
+    let (second, mut browser) = another_profile_window(&first, visual);
+    let second_window = second.read_with(&mut browser, |view, _| view.main_window);
+    browser.update(|window, _| window.activate_window());
+    browser.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(&mut browser);
+    settings.update(|window, _| window.activate_window());
+    settings.cx.update(crate::quit_confirmation::request);
+    let mut sheet = warning(&mut settings);
+    sheet.cx.update(|cx| {
+        let handle = cx
+            .windows()
+            .into_iter()
+            .find_map(|w| w.downcast::<crate::quit_confirmation::Confirmation>())
+            .unwrap();
+        assert_eq!(
+            handle.read(cx).unwrap().owner_id(),
+            second_window.window_id()
+        );
+    });
+    sheet.simulate_keystrokes("escape");
+    assert!(!crate::quit::is_quitting());
+}

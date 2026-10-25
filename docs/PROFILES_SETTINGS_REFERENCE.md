@@ -365,3 +365,11 @@ pair run repeats both action checks but reaches the drive timeout in CEF's
 ShuttingDown phase; it does not qualify shutdown. Its log is
 `echo-shortcut-functional-final.log`. No CEF source/build/publication was changed
 to work around this separate teardown result.
+
+Settings quit intent now resolves the retained browser owner before the fallback
+window search. A disposable native two-window run verifies actual confirmation
+bounds, Escape returning to that host, preservation of the first root and exit
+0. See [Settings quit ownership](PARTIAL_ROW_REVIEW.md#round-2--settings-quit-ownership)
+for the native receipt and the reused-layout Arc/Echo card pair. OS/no-browser
+and other auxiliary-host policy remain partial; remaining Light/raster/motion
+work is cosmetic.

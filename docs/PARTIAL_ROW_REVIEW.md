@@ -160,7 +160,7 @@ account consent or owner profile mutation was used to make a row look complete.
 | 12 — per-profile settings | Search, archive, download preferences and native data removal work. New documents still persist an app choice without the document-app integration; the overview does not close that backend gap. |
 | 13 — Archive tabs after | Four choices and selection work. Cosmetic: the fresh menu crop still differs in vibrant material/corners/rasterization. |
 | 13 — Previews Settings | The fresh 422 × 370 pair still differs in checkbox, keycap and border treatment; site-specific hover previews are missing. |
-| 13 — Warn before quitting | The measured local confirmation now gates menu/Cmd+Q before teardown is sealed. Native Cancel, Return, remembered disable and cold-restart bypass pass with a disposable session. Private/Blank preference routing has GPUI coverage. Light, animation, OS/no-window entry and auxiliary-window host selection remain unqualified. |
+| 13 — Warn before quitting | The measured local confirmation now gates menu/Cmd+Q before teardown is sealed. Native Cancel, Return, remembered disable and cold-restart bypass pass with a disposable session. Private/Blank preference routing has GPUI coverage. Settings uses its retained browser owner; the native two-window check preserves both roots and returns to that owner. OS/no-window entry and other auxiliary hosts remain unqualified. Cosmetic: Light and animation are deferred. |
 | 13 — Profiles tab | Rename/delete/search/data/manager entry points exist. The broader row still includes bulk deletion, document-app behavior and incomplete search/manager visual details. |
 | 13 — Links tab | Existing ATC is retained; remaining Little Arc launch preferences are not closed by the read-only Links overview. |
 | 13 — Shortcuts | Selected footer Remove Shortcut, Remove Conflicting Shortcut(s) and Reset All now work, including live CEF dispatch and stale-menu guards. Priority/two-press dispatch, extension bindings, Space reassignment and Favorites ordering remain missing. Menu material/raster differences are cosmetic. Source temporary disabled-test binding was restored; no competing owner binding was removed. |
@@ -173,7 +173,7 @@ account consent or owner profile mutation was used to make a row look complete.
 | 16 — page card | Fresh empty/loaded corner crops retain 10 px insets and 6 px radius. Cosmetic: opacity, shadow and border calibration are deferred. Sidebar width is owned by another section. |
 | 16 — loading glow | Prior measured pulse evidence remains valid for the implemented phase; exact finishing curve and split/other-platform variants are not newly qualified. |
 | 16 — zoom badge | Fresh 110% geometry agrees; click/dismissal motion, material/theme and other-platform input behavior remain unqualified. |
-| 16 — Site Control Center | Full Page/Portrait, extension management, usage/media counts, main-panel keyboard traversal and embedded cross-origin permission coverage remain missing/unqualified; existing permission tests do not close them. |
+| 16 — Site Control Center | The camera tile now enters the existing scoped region capture; native Escape preserves browser/Command Bar input. Full Page/Portrait, extension management, usage/media counts, main-panel keyboard traversal and embedded cross-origin permission coverage remain missing/unqualified. Remaining visual differences are cosmetic. |
 | 16 — hovered URL | Fresh Dark capsule geometry/colors/font are corrected. Shadow/transition curves, Light and remaining elision/host variants are not accepted. |
 | 16 — Find | The fresh NOT FOUND panel now clears the developer toolbar. Arc disables Find and Replace on this ordinary document; editable-context replacement remains unqualified. |
 | 16 — Developer Mode | Fresh localhost default/disable/reload/restoration is implemented and tested. Toolbar glyph/material polish, split variants and other loopback-address defaults remain unqualified. |
@@ -215,3 +215,67 @@ extension editing, dynamic Space reassignment and Favorites ordering.
 Per the functional-only closeout instruction, remaining shadows, pixel offsets,
 raster differences and motion timing are cosmetic and are deferred; they are
 not promoted to done.
+
+## Functional-only scope limits
+
+The Little Arc global shortcut, external-link routing and expiry choices already
+have consumers; the remaining launch toggle is Option-Command clicking a page
+link. Its setting currently persists without a click-routing consumer. Site
+Previews are also persisted choices rather than an implemented site-preview
+backend. Neither is accepted by its Settings overview pair.
+
+Shortcut website priority/two-press dispatch, extension bindings and dynamic
+Space reassignment remain functional work. The existing Command Bar Favorites
+ordering toggle works; its missing Settings menu is an entry-point gap, not an
+absent ordering model. Folder archive/restore needs a canonical archived-folder
+model. Background Space creation has no qualified source trigger: creating a
+new source Space only for this observation would violate the shared Echo Test
+rule. The shared source Space is nonempty and contains other agents' tabs, so
+an empty-Space profile-warning condition cannot be manufactured by clearing it.
+No owner profile or assignment was changed for this review.
+
+SCC full-page/Portrait capture, extension management, counters/media indicators,
+main-panel keyboard traversal and embedded permission qualification remain
+separate functional gaps. The ordinary region capture entry is handled below.
+The source full-page action was observed copying a screenshot and showing
+"Screenshot Copied to Clipboard" with Save/Share; this is not an ordinary
+download-completion toast and does not qualify a new full-page backend.
+
+## Round 2 — SCC region capture entry
+
+A fresh guarded source session clicked the SCC camera on a disposable local page
+in Echo Test. It enters region selection; Escape returns to the page. The script
+archived only its own fixture tab, closed its one browser and preserved every
+baseline window. No Settings window or extra Space was created.
+
+Echo now routes this formerly inert tile through the existing document/profile
+capture scope and checked capture backend. Two GPUI regressions drive the tile,
+Escape and a subsequent Command Bar open, and reject an unavailable backend.
+The native fixture also navigates through the Command Bar after Escape, verifies
+two persisted local fixture tabs, CEF Complete and exit 0. Its log is
+`target/parity/partial-closeout/echo-scc-camera-round2.log`.
+
+Reviewed pairs in that directory: `pair-scc-region-entry.png` and
+`pair-scc-region-instructions-2x.png`. These qualify entry/dismissal, not remaining
+hover-state or pixel parity. Both instruction variants in the pair (Drag / Click
+or drag) occur in the installed executable. Initial pointer/hover-state parity remains unqualified; remaining capture
+material/raster differences are cosmetic and deferred. Full Page/Portrait and the
+other functional SCC gaps above remain partial.
+
+## Round 2 — Settings quit ownership
+
+Settings now supplies its retained browser handle to quit confirmation instead
+of falling back to the first browser in the install. The existing guarded Arc
+Settings-to-browser warning reference and the approved card layout are reused;
+no owner Arc window or profile was modified. A new GPUI regression opens two
+normal hosts and verifies the warning belongs to Settings' second host.
+
+The native disposable two-window fixture opens Settings from the second root,
+invokes Command-Q, compares the confirmation's actual CG bounds to that root,
+then verifies Escape returns to it while preserving the first root. CEF Complete
+and exit 0 are recorded in `echo-quit-settings-owner.log`; the captured IDs and
+bounds are in `echo-quit-settings-owner-receipt.json`. The inspected reused-layout
+pair is `pair-quit-settings-owner-2x.png`, all beneath
+`target/parity/partial-closeout/`. OS/no-browser and other auxiliary-host entry
+conditions remain unqualified. The remaining card/font/Light/motion differences
+are cosmetic and deferred. No row is promoted to done on that evidence.

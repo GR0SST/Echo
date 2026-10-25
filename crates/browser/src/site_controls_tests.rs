@@ -512,3 +512,41 @@ fn site_share_uses_the_current_url_after_navigation_within_the_same_origin(
         assert_eq!(view.share_picker.as_ref().unwrap().urls, vec![url])
     });
 }
+
+#[gpui::test]
+fn site_camera_enters_the_existing_capture_flow_and_escape_restores_browser_input(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, fake) = open_pages(cx);
+    fake.0.borrow_mut().capture_supported = true;
+    let before = active_url(&view, cx);
+    click(cx, "address-site-controls");
+    let mut controls = panel(&view, cx);
+    click(&mut controls, "site-capture");
+    cx.run_until_parked();
+    let capture = view.read_with(cx, |view, _| {
+        assert!(view.site_controls.is_none());
+        view.capture.as_ref().unwrap().overlay.unwrap()
+    });
+    let mut capture = VisualTestContext::from_window(capture.into(), &cx.cx);
+    capture.run_until_parked();
+    assert!(capture.debug_bounds("page-capture").is_some());
+    capture.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.capture.is_none()));
+    assert_eq!(active_url(&view, cx), before);
+    cx.simulate_keystrokes("cmd-t");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.command_bar.is_some()));
+}
+
+#[gpui::test]
+fn site_camera_does_not_open_an_unavailable_capture_backend(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    click(cx, "address-site-controls");
+    let mut controls = panel(&view, cx);
+    click(&mut controls, "site-capture");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.capture.is_none()));
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_some()));
+}

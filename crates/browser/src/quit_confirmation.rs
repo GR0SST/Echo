@@ -29,6 +29,9 @@ pub(crate) fn request(cx: &mut App) {
         }
     }
     let active = cx.active_window();
+    let settings_owner = active
+        .and_then(|window| window.downcast::<crate::settings::SettingsWindow>())
+        .and_then(|settings| settings.read(cx).ok()?.browser_owner(cx));
     let overlay = active.and_then(|w| w.downcast::<crate::window::Overlay>());
     let overlay_owner = overlay.and_then(|overlay| {
         cx.windows().into_iter().find_map(|window| {
@@ -43,6 +46,7 @@ pub(crate) fn request(cx: &mut App) {
     let owner = active
         .and_then(|w| w.downcast::<BrowserWindow>())
         .or(overlay_owner)
+        .or(settings_owner)
         .or_else(|| {
             cx.windows()
                 .into_iter()
