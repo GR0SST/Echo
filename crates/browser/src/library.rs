@@ -355,7 +355,7 @@ pub(crate) fn render_library(
 }
 
 /// Retain the previously calibrated empty-state illustration independently of rail artwork.
-fn navigation_icon(section: LibrarySection, scale: f32) -> AnyElement {
+pub(crate) fn navigation_icon(section: LibrarySection, scale: f32) -> AnyElement {
     let contours = match section {
         LibrarySection::Media => vec![
             vec![

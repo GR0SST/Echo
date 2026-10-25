@@ -1339,3 +1339,68 @@ fn library_archive_route_search_and_filters_preserve_inventory_and_profile_scope
     view.read_with(visual, |view, _| assert_eq!(view.browser.active_user_profile_id(), profile));
     assert_eq!(session(&view, visual), before);
 }
+
+#[gpui::test]
+fn library_archive_hover_actions_preserve_selection_and_reject_stale_rows(cx: &mut TestAppContext) {
+    use crate::library_archive::ArchiveAction;
+    let mut browser = Browser::new();
+    let now = SystemTime::now();
+    let profile = browser.active_user_profile_id();
+    let first = browser.new_tab("https://example.org/first", now);
+    browser.set_title(first, "Fixture One");
+    browser.close_tab(first, now);
+    let second = browser.new_tab("https://example.org/second", now);
+    browser.set_title(second, "Fixture Two");
+    browser.close_tab(second, now);
+    let other = browser.add_space("Other", 120.);
+    browser.switch_space(1);
+    let selected = browser.new_tab("https://selected.example/", now);
+    let foreign = browser.create_user_profile("Foreign").unwrap();
+    let (view, visual, _) = open(cx, browser);
+    select(&view, visual, SidebarPage::Library);
+    click(visual, "library-nav-archive");
+    click(visual, "library-archive-search");
+    visual.simulate_input("Fixture");
+    visual.run_until_parked();
+    let selector = |action: &str, id: browser_core::TabId| -> &'static str {
+        Box::leak(format!("library-archive-{action}-{}", id.get()).into_boxed_str())
+    };
+    let hover_row = |visual: &mut VisualTestContext, id| {
+        let row = visual.debug_bounds(selector("row", id)).unwrap();
+        visual.simulate_mouse_move(row.center(), None, Modifiers::none());
+        visual.run_until_parked();
+    };
+    hover_row(visual, second);
+    let text = visual.debug_bounds(selector("text", second)).unwrap();
+    let action = visual.debug_bounds(selector("delete", second)).unwrap();
+    assert!(text.right() <= action.left(), "hover text cannot paint beneath Archive controls");
+    click(visual, selector("delete", second));
+    view.read_with(visual, |view, _| {
+        assert!(!view.browser.archive.iter().any(|entry| entry.tab.id == second));
+        assert!(view.peek_child.is_none(), "action clicks cannot bubble into row Peek");
+        assert_eq!(view.browser.space().active_tab, Some(selected));
+    });
+    hover_row(visual, first);
+    click(visual, selector("restore", first));
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert!(view.browser.archive.is_empty());
+        assert_eq!(view.browser.space().id, other);
+        assert_eq!(view.browser.space().active_tab, Some(selected));
+        assert!(view.browser.spaces[0].today.iter().any(|tab| tab.id == first));
+        assert_eq!(view.browser.spaces[0].active_tab, None);
+        assert!(view.peek_child.is_none());
+        assert_eq!(view.sidebar_navigation.controller.selected(), SidebarPage::Library);
+    });
+    assert!(visual.debug_bounds("library-archive-empty").is_some());
+    let later = now + std::time::Duration::from_secs(1);
+    view.update(visual, |view, cx| {
+        view.edit_browser(|browser| { browser.switch_space(0); browser.close_tab(first, later); browser.switch_space(1); });
+        view.apply_library_archive_action(profile, first, "https://example.org/first", now, ArchiveAction::Delete, cx);
+        view.apply_library_archive_action(foreign, first, "https://example.org/first", later, ArchiveAction::Delete, cx);
+    });
+    view.read_with(visual, |view, _| assert_eq!(view.browser.archive.len(), 1));
+    click(visual, "library-nav-media");
+    view.update(visual, |view, cx| view.apply_library_archive_action(profile, first, "https://example.org/first", later, ArchiveAction::Delete, cx));
+    view.read_with(visual, |view, _| assert_eq!(view.browser.archive.len(), 1));
+}

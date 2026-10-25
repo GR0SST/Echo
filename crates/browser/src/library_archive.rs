@@ -10,12 +10,16 @@ use chrono::{DateTime, Local};
 use gpui::{
     div, prelude::*, px, Context, Entity, Focusable, Hsla, Subscription, WeakEntity, Window,
 };
-use std::collections::HashSet;
+use std::{collections::HashSet, time::SystemTime};
+
+#[derive(Clone, Copy)]
+pub(crate) enum ArchiveAction { Restore, Delete }
 
 pub(crate) struct ArchiveLibrary {
     owner: WeakEntity<BrowserWindow>,
     input: Entity<TextInput>,
     filters: bool,
+    hovered: Option<TabId>,
     reason: Option<ArchiveReason>,
     spaces: HashSet<SpaceId>,
     profile: Option<UserProfileId>,
@@ -39,6 +43,7 @@ impl ArchiveLibrary {
             owner,
             input,
             filters: false,
+            hovered: None,
             reason: None,
             spaces: HashSet::new(),
             profile: None,
@@ -84,6 +89,7 @@ impl Render for ArchiveLibrary {
                 self.input.update(cx, |input, cx| input.set_text("", cx));
             }
             self.profile = Some(profile);
+            self.hovered = None;
             self.spaces.clear();
             self.reason = None;
         }
@@ -94,6 +100,7 @@ impl Render for ArchiveLibrary {
             reason: self.reason,
         };
         entries.retain(|entry| filter.matches(entry, profile));
+        let empty = entries.is_empty();
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.archived_at));
         let mut list = div()
             .id("library-archive-rows")
@@ -131,6 +138,28 @@ impl Render for ArchiveLibrary {
             let id = entry.tab.id;
             let url = entry.tab.url.clone();
             let captured_url = url.clone();
+            let archived_at = entry.archived_at;
+            let group = gpui::SharedString::from(format!("archive-hover-{}", id.get()));
+            let mut actions = div().absolute().right(px(12.)).top(px(12.)).h(px(32.))
+                .flex().gap(px(2.)).invisible().group_hover(group.clone(), |style| style.visible());
+            for (action, name, icon) in [
+                (ArchiveAction::Delete, "Delete", "trash-outline"),
+                (ArchiveAction::Restore, "Restore", "arrow-undo-outline"),
+            ] {
+                let owner = self.owner.clone();
+                let url = url.clone();
+                actions = actions.child(div()
+                    .id((gpui::SharedString::from(format!("archive-{name}")), id.get() as usize))
+                    .debug_selector(move || format!("library-archive-{}-{}", name.to_lowercase(), id.get()))
+                    .size(px(32.)).rounded(px(8.)).flex().items_center().justify_center()
+                    .cursor_pointer().text_color(colors.muted).hover(|style| style.bg(colors.hover).text_color(colors.text))
+                    .tooltip(move |_, cx| cx.new(|_| ArchiveTooltip(name)).into())
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let _ = owner.update(cx, |view, cx| view.apply_library_archive_action(profile, id, &url, archived_at, action, cx));
+                    })
+                    .child(icons::ionicon(icon, 16., 1.)));
+            }
             let subtitle = url
                 .strip_prefix("https://")
                 .or_else(|| url.strip_prefix("http://"))
@@ -146,6 +175,12 @@ impl Render for ArchiveLibrary {
                 div()
                     .id(("archive-row", id.get() as usize))
                     .debug_selector(move || format!("library-archive-row-{}", id.get()))
+                    .relative().group(group.clone())
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered { this.hovered = Some(id); }
+                        else if this.hovered == Some(id) { this.hovered = None; }
+                        cx.notify();
+                    }))
                     .h(px(56.))
                     .flex_none()
                     .rounded(px(10.))
@@ -154,7 +189,7 @@ impl Render for ArchiveLibrary {
                     .items_center()
                     .gap(px(10.))
                     .cursor_pointer()
-                    .hover(move |style| style.bg(colors.hover))
+                    .hover(move |style| style.bg(colors.selected))
                     .on_click(move |_, window, cx| {
                         let _ = owner.update(cx, |view, cx| {
                             view.open_library_archived_tab(profile, id, &captured_url, window, cx)
@@ -171,6 +206,9 @@ impl Render for ArchiveLibrary {
                         div()
                             .min_w_0()
                             .flex_1()
+                            .debug_selector(move || format!("library-archive-text-{}", id.get()))
+                            .overflow_hidden()
+                            .when(self.hovered == Some(id), |style| style.mr(px(76.)))
                             .flex()
                             .flex_col()
                             .gap(px(2.))
@@ -184,14 +222,25 @@ impl Render for ArchiveLibrary {
                             )
                             .child(
                                 div()
-                                    .truncate()
+                                    .truncate().w_full().min_w_0().overflow_hidden()
                                     .text_size(px(12.))
                                     .line_height(px(15.))
                                     .text_color(colors.muted)
-                                    .child(subtitle),
+                                    .child(crate::sidebar_title::SidebarTitle::new(subtitle)),
                             ),
-                    ),
+                    )
+                    .child(actions),
             );
+        }
+        if empty && !filter.query.is_empty() {
+            list = div().id("library-archive-empty-list").absolute().left(px(8.)).right(px(8.)).top(px(64.)).bottom(px(10.))
+                .flex().items_center().justify_center().child(
+                    div().debug_selector(|| "library-archive-empty".into()).w_full().flex().flex_col().items_center()
+                        .text_color(colors.muted)
+                        .child(div().size(px(56.)).child(crate::library::navigation_icon(crate::library::LibrarySection::ArchivedTabs, 56. / 24.)))
+                        .child(div().mt(px(12.)).max_w(px(200.)).text_center().text_size(px(14.)).line_height(px(17.)).font_weight(gpui::FontWeight::MEDIUM)
+                            .child(format!("No results found for “{}”", self.input.read(cx).text().trim().replace('-', "-\u{200b}"))))
+                );
         }
         let input = self.input.clone();
         let mut column = div()
@@ -394,6 +443,26 @@ impl Render for ArchiveLibrary {
     }
 }
 impl BrowserWindow {
+    pub(crate) fn apply_library_archive_action(
+        &mut self, profile: UserProfileId, id: TabId, url: &str, archived_at: SystemTime,
+        action: ArchiveAction, cx: &mut Context<Self>,
+    ) {
+        if self.sidebar_navigation.controller.selected() != crate::sidebar_pages::SidebarPage::Library
+            || self.sidebar_navigation.library_section != crate::library::LibrarySection::ArchivedTabs
+            || self.browser.active_user_profile_id() != profile
+            || !self.browser.archive.iter().any(|entry| entry.tab.id == id && entry.user_profile_id == profile
+                && entry.tab.url == url && entry.archived_at == archived_at) { return; }
+        match action {
+            ArchiveAction::Restore => {
+                if self.edit_browser(|browser| browser.restore_archived_in_background(id, profile, SystemTime::now())).is_some() {
+                    let space = self.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)).map(|space| space.name.clone()).unwrap_or_default();
+                    self.show_reveal_toast(format!("Tab restored to {space}. Click to view."), id, cx);
+                }
+            }
+            ArchiveAction::Delete => { self.edit_browser(|browser| browser.delete_archived(id)); }
+        }
+        cx.notify();
+    }
     pub(crate) fn open_library_archived_tab(
         &mut self,
         profile: UserProfileId,
@@ -428,4 +497,16 @@ fn archive_filter_icon() -> gpui::AnyElement {
             if let Ok(stroke) = stroke.build() { window.paint_path(stroke, color); }
         }
     }).size(px(16.)).flex_none().into_any_element()
+}
+
+struct ArchiveTooltip(&'static str);
+impl Render for ArchiveTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // GPUI anchors at pointer + (1, 1); Arc's visible pill starts at (9, 12).
+        div().pl(px(8.)).pt(px(11.)).child(
+            div().px(px(10.)).py(px(6.)).rounded_full().bg(gpui::rgb(0x0b0a48))
+                .text_color(gpui::white()).text_size(px(12.)).line_height(px(16.))
+                .font_weight(gpui::FontWeight::MEDIUM).child(self.0)
+        )
+    }
 }

@@ -61,6 +61,16 @@ impl Browser {
         selection
     }
 
+    /// Library's Restore returns inventory without changing this window's page.
+    /// The profile argument is the owner captured by the painted Archive row.
+    pub fn restore_archived_in_background(&mut self, id: TabId, profile: crate::UserProfileId, now: std::time::SystemTime) -> Option<TabId> {
+        if !self.archive.iter().any(|entry| entry.tab.id == id && entry.user_profile_id == profile) { return None; }
+        let selection = self.window_selection();
+        let restored = self.restore_archived(id, now);
+        self.apply_window_selection(&selection);
+        restored
+    }
+
     pub fn window_projection(&self, selection: &WindowSelection) -> WindowProjection {
         let mut browser = self.clone();
         browser.apply_window_selection(selection);
@@ -307,5 +317,30 @@ mod tests {
         assert_eq!(profile.window_projection(&work).active_split().unwrap().active, right);
         assert_eq!(personal.selected_tabs().count(), 2);
         assert_eq!(crate::session::to_json(&profile), original);
+    }
+}
+
+#[cfg(test)]
+mod archive_background_tests {
+    use super::*;
+    use std::time::SystemTime;
+    #[test]
+    fn archive_background_restore_preserves_each_spaces_selection_and_rejects_a_foreign_owner() {
+        let mut browser = Browser::new();
+        let now = SystemTime::now();
+        let profile = browser.active_user_profile_id();
+        let restored = browser.new_tab("https://restored.example/", now);
+        browser.close_tab(restored, now);
+        let other = browser.add_space("Other", 120.);
+        browser.switch_space(1);
+        let current = browser.new_tab("https://selected.example/", now);
+        let foreign = browser.create_user_profile("Foreign").unwrap();
+        assert_eq!(browser.restore_archived_in_background(restored, foreign, now), None);
+        assert_eq!(browser.restore_archived_in_background(restored, profile, now), Some(restored));
+        assert_eq!(browser.space().id, other);
+        assert_eq!(browser.space().active_tab, Some(current));
+        assert_eq!(browser.spaces[0].active_tab, None);
+        assert!(browser.spaces[0].today.iter().any(|tab| tab.id == restored));
+        assert!(browser.archive.is_empty());
     }
 }
