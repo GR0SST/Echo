@@ -1980,3 +1980,23 @@ Fine glyph/corner raster, truncation-boundary and shadow-falloff differences,
 initial-center release and exact motion curves remain partial. The full-window
 pair also retains existing sidebar/header/theme differences outside this drag
 change; it is not a claim that those entire surfaces match.
+
+## Library partial-row review — 2026-10-25
+
+Fresh guarded Arc 1.170 captures in Echo Test and native Echo CEF pairs are
+under `target/parity/partial-sections/`. Both use a 1000×760 frame at (100,100)
+and Light/Dark appearance. Arc's bottom-left Back target is 32×32 at x8,
+7 px above the bottom. The arrow ink bounds are x17–30/y731–742 in both
+appearances. Echo's final 20 px vector slot reproduces those 14×12 ink bounds:
+`arc_spaces_back_hover_{Light,Dark}.png` versus
+`echo_final_back_library_back_hover_{Light,Dark}.png`. Clicking it returns to
+the captured Space and retained document from every supported Library section;
+GPUI tests cover the captured identity, geometry and absence of navigation,
+reload, page recreation or session changes. Both native processes exited 0
+with CEF Complete. `back-tests-20px.log` is the complete green workspace run.
+
+This closes Back navigation, not the entire Spaces row. The fresh card-overflow
+reference opens at its clicked footer and extends below the host; Echo still
+uses the wrong origin and clamps its menu inside the host. Media discovery,
+Archive inventory/filtering and Boost naming/deletion remain separate gaps;
+the precise qualifications stay in section 14 of `ARC_PARITY.md`.

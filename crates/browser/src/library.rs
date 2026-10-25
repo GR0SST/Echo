@@ -289,7 +289,26 @@ pub(crate) fn render_library(
         .size_full()
         .bg(colors.background)
         .text_color(colors.text)
-        .child(nav);
+        .child(nav)
+        .child(
+            action(
+                "library-back".into(),
+                LibraryIntent::SelectSpace(projection.origin),
+                true,
+                events.clone(),
+            )
+            .absolute()
+            .left(px(8.))
+            .bottom(px(7.))
+            .size(px(32.))
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(colors.muted)
+            .hover(move |style| style.bg(colors.hover))
+            .child(crate::icons::control_sized(crate::icons::Icon::Back, 20.)),
+        );
     if section == LibrarySection::Spaces {
         let cards = projection
             .spaces

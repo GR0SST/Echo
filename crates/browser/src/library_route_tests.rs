@@ -375,3 +375,23 @@ fn manage_spaces_menu_follows_the_space_switching_group() {
     assert!(matches!(&menu.items[previous + 2], gpui::MenuItem::Action { name, .. }
         if name.as_ref() == "Manage Spaces…"));
 }
+
+#[gpui::test]
+fn library_back_returns_to_origin_from_each_route_without_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = view.read_with(cx, |view, _| view.browser.space().id);
+    let document = fake.0.borrow().focused_page.unwrap();
+    let before = view.read_with(cx, |view, _| view.session_json());
+    for selector in ["library-nav-spaces", "library-nav-media", "library-nav-downloads", "library-nav-boosts", "library-nav-archive"] {
+        route(&view, cx, 0);
+        click(cx, selector);
+        fake.take_calls();
+        click(cx, "library-back");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.sidebar_navigation.controller.selected(), SidebarPage::Space(original));
+            assert_eq!(view.session_json(), before);
+        });
+        assert_eq!(fake.0.borrow().focused_page, Some(document));
+        assert_no_document_changes(&fake.take_calls());
+    }
+}

@@ -498,3 +498,22 @@ fn hovering_another_rail_tile_preserves_selection_until_activation(cx: &mut Test
     click(visual, "library-nav-media-icon");
     assert_eq!(*log.borrow(), vec![LibraryIntent::Navigate(LibrarySection::Media)]);
 }
+
+#[gpui::test]
+fn back_button_keeps_the_captured_origin_in_every_section(cx: &mut TestAppContext) {
+    let browser = fixture();
+    let origin = browser.spaces[0].id;
+    let (view, visual, log) = open(cx, &browser, LibraryActions::default());
+    visual.simulate_resize(gpui::size(px(1000.), px(760.)));
+    for section in LibrarySection::ALL {
+        view.update(visual, |view, cx| { view.section = section; cx.notify(); });
+        visual.run_until_parked();
+        let root = visual.debug_bounds("library").unwrap();
+        let back = visual.debug_bounds("library-back").unwrap();
+        assert_eq!(back.origin.x - root.origin.x, px(8.));
+        assert_eq!(root.bottom() - back.bottom(), px(7.));
+        assert_eq!(back.size, gpui::size(px(32.), px(32.)));
+        click(visual, "library-back");
+    }
+    assert_eq!(*log.borrow(), vec![LibraryIntent::SelectSpace(origin); 6]);
+}
