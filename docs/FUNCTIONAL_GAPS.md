@@ -33,7 +33,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 19 | L231: Multi-selecting tabs (⌘/⇧-click) | M | Extend range/toggle multi-selection to Favorites and folders without activating pages. |
 | 20 | L419: Deleting a profile by typing its name, "Delete unused Profiles". The default profile can't be deleted | M | Add confirmed bulk unused-profile deletion and safe retired-storage reclamation. |
 | 21 | L420: Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | M | Honor the selected profile's document-app preference when creating a new document from the Command Bar. Arc's bundle describes creation, not opening downloaded documents; qualify the action with a selected document type before implementation. |
-| 22 | L137: Cast | L | Implement platform casting discovery/control behind the engine boundary. |
+| 22 | L137: Cast | L | **Feasibility reviewed:** CEF exposes Cast/DIAL receiver routes, but not tab/desktop mirroring through its public router API. Full Arc Cast needs an engine bridge and physical-device qualification; no substitute picker implemented. See [Cast feasibility](CAST_FEASIBILITY.md). |
 | 23 | L491: Page translation: "Translate this page to %@?", Use Original, Choose Another Language, Never Translate This Site | L | Implement page translation with per-site policy, original-language restoration and language selection. |
 | 24 | L337: **Page** (Chromium's menu plus Arc's items) (?) | L | Complete page-menu Save Page/media/editable/translation actions and clicked-node inspection. |
 | 25 | L98: Capture Full Page / Capture in Portrait Mode | M | Capture the full document or portrait viewport through a bounded retained-document engine request. |
