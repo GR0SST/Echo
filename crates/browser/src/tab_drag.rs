@@ -54,8 +54,8 @@ impl TabDrag {
 }
 
 impl BrowserWindow {
-    pub(crate) fn reorder_feedback(&self,drag:&TabDrag,target:Option<(TabId,bool)>) {
-        if !self.browser.settings.enabled(browser_core::settings::Toggle::HapticFeedback){drag.reorder_target.set(None);return;}
+    pub(crate) fn reorder_feedback(&self,drag:&TabDrag,target:Option<(TabId,bool)>,cx:&gpui::App) {
+        if !crate::feedback::enabled(self,browser_core::settings::Toggle::HapticFeedback,cx){drag.reorder_target.set(None);return;}
         let target=target.filter(|(tab,_)|self.accepts_tab_drag(drag)&&self.browser.user_profile_id_for_tab(*tab)==Some(drag.profile)&&self.browser.item_anchor(*tab)!=drag.id);
         if drag.reorder_target.get()==target{return;}
         drag.reorder_target.set(target);

@@ -70,6 +70,7 @@ pub(crate) fn more() -> AnyElement {
 pub(crate) enum Icon {
     Back, Forward, Reload, Sidebar, Split, Close, Minus, Plus, Folder,
     Search, External, History, Enter, Info, Arrow, Restore, Up, Down, Check, Mute, Command, AirTraffic, Link, Calculator,
+    HapticFeedback, SoundEffects,
     SiteControls, Library, Tidy, Share, Boost, Capture, Screenshot, Lock, Unlock, NewSpace, NewTab, Incognito,
 }
 
@@ -213,6 +214,7 @@ pub(crate) fn control_sized(icon: Icon, size: f32) -> AnyElement { zoomed(icon, 
 /// slot keeps its layout size so animated zoom stays smooth and sub-pixel.
 fn zoomed(icon: Icon, size: f32, zoom: f32) -> AnyElement {
     let name = match icon {
+        Icon::HapticFeedback | Icon::SoundEffects => return feedback_glyph(matches!(icon,Icon::HapticFeedback),size,zoom),
         Icon::Back => "arrow-back-outline", Icon::Forward => "arrow-forward-outline",
         Icon::Reload => "reload-outline", Icon::Close => "close-outline",
         Icon::Minus => "remove-outline", Icon::Plus => "add-outline",
@@ -497,4 +499,46 @@ pub(crate) fn library_section(section: crate::library::LibrarySection, selected:
             if let Ok(path) = path.build() { window.paint_path(path, if blue { accent } else { ink }); }
         }
     }).size(px(24.)).flex_none().into_any_element()
+}
+
+/// Portable feedback controls drawn from the observed 16 px Settings geometry.
+fn feedback_glyph(haptic: bool, size: f32, zoom: f32) -> AnyElement {
+    gpui::canvas(|_,_,_|(),move|bounds,_,window,_|{
+        let scale=size/16.*zoom;
+        let inset=(size-16.*scale)/2.;
+        let at=|x:f32,y:f32|bounds.origin+gpui::point(px(inset+x*scale),px(inset+y*scale));
+        let color=window.text_style().color;
+        if haptic {
+            let mut hand=gpui::PathBuilder::fill();
+            hand.move_to(at(8.5,14.5));
+            hand.curve_to(at(5.5,12.5),at(6.7,14.3));
+            hand.line_to(at(4.1,10.7));hand.curve_to(at(4.5,9.7),at(3.7,9.9));
+            hand.curve_to(at(5.8,10.5),at(5.1,9.5));hand.line_to(at(6.6,11.3));
+            hand.line_to(at(5.8,5.7));hand.curve_to(at(6.1,5.1),at(5.6,5.1));
+            hand.curve_to(at(6.8,5.6),at(6.7,4.9));hand.line_to(at(8.2,9.2));
+            hand.line_to(at(8.1,7.6));hand.curve_to(at(8.6,7.),at(8.,7.));
+            hand.curve_to(at(9.2,7.5),at(9.1,6.8));hand.line_to(at(9.5,8.5));
+            hand.line_to(at(9.8,7.2));hand.curve_to(at(10.5,7.),at(10.1,6.7));
+            hand.curve_to(at(11.1,7.7),at(11.,7.1));hand.line_to(at(11.3,8.4));
+            hand.line_to(at(11.7,7.8));hand.curve_to(at(12.4,8.3),at(12.2,7.5));
+            hand.line_to(at(12.7,10.2));hand.curve_to(at(11.8,13.8),at(13.,12.2));
+            hand.curve_to(at(8.5,14.5),at(10.8,15.4));hand.close();
+            if let Ok(path)=hand.build(){window.paint_path(path,color);}
+            let mut tap=gpui::PathBuilder::stroke(px(1.2*scale));
+            tap.move_to(at(3.5,7.5));tap.curve_to(at(3.3,4.8),at(2.8,6.));
+            tap.curve_to(at(5.3,3.),at(3.5,3.2));tap.curve_to(at(8.3,4.4),at(7.3,2.9));
+            tap.curve_to(at(8.8,6.),at(8.8,5.));
+            if let Ok(path)=tap.build(){window.paint_path(path,color.opacity(0.8));}
+        } else {
+            let mut body=gpui::PathBuilder::fill();
+            for(index,(x,y))in[(1.5,6.),(4.,6.),(8.5,3.),(8.5,13.),(4.,10.),(1.5,10.)].into_iter().enumerate(){if index==0{body.move_to(at(x,y));}else{body.line_to(at(x,y));}}
+            body.close();if let Ok(path)=body.build(){window.paint_path(path,color);}
+            for(radius,angle)in[(3.2,0.7),(6.7,0.8)]{
+                let points=arc(if radius<4.{7.4}else{6.8},8.,radius,-angle,angle);
+                let mut path=gpui::PathBuilder::stroke(px(1.05*scale));
+                for(index,(x,y))in points.into_iter().enumerate(){if index==0{path.move_to(at(x,y));}else{path.line_to(at(x,y));}}
+                if let Ok(path)=path.build(){window.paint_path(path,color.opacity(0.87));}
+            }
+        }
+    }).size(px(size)).flex_none().into_any_element()
 }

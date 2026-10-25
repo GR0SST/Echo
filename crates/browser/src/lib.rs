@@ -24,6 +24,7 @@ mod essential_shortcuts;
 mod history;
 mod tab_menu;
 mod page_context;
+mod feedback;
 mod page_swipe;
 mod site_controls;
 mod boosts;

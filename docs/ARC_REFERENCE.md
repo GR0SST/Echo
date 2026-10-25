@@ -1910,3 +1910,27 @@ flow, including the available permitted Max flags. There is no separate Ask
 toggle in this build. Browse for Me captions exist in the bundle (52626–52635)
 and an `about:blank?type=ask-arc` identifier, but no desktop invocation/result
 layout was found. Those flows remain reference-blocked; no invented controls.
+
+
+Round 2 reorder/Capture feedback (2026-10-25):
+The retained installed Arc Advanced capture (`target/parity/sweep/arc-advanced.png`)
+and fresh native Echo `target/parity/sweep-r2/echo-feedback-advanced.png` were
+converted from their embedded ICC profiles to sRGB before comparison. The top
+feedback group has borders/divider at y=108/148/188, two 40 px rows, 20 px blue
+(#0091ff) tiles and 36 × 16 px switches with 21 × 14 px capsule thumbs. Echo
+uses original hand-tap/speaker vector geometry. The zoomed pairs are
+`pair-feedback-controls.png` and `pair-feedback-glyphs-zoom.png` in the same
+directory. Exact physical haptic strength/timing is still unverified.
+
+The installed ARC_SoundEffects bundle has capture.wav and event.m4a. Neither
+asset is copied. Echo generates its own quiet 140 ms double-tick Capture cue,
+once after a successful fresh crop, behind the live normal-owner preference.
+A separate, bounded CPAL stream selects the current default output per cue;
+CEF timestamped media playback is unchanged. Native on/off capture checks
+(`native-cue-assertions.json`, `native-capture-cue-on/off.log`) rendered exactly
+6720/0 frames at 48 kHz and both exited status 0 with CEF Complete. GPUI tests
+cover disabled/enabled completion, no duplicate retained-image cue, and live
+Little/private normal-owner preferences; engine tests cover waveform bounds
+and multichannel buffer completion. Arc's exact acoustic trigger/timing was
+not recorded; the event cue remains blocked with deferred calendar/meeting
+commands. This work does not claim renewed media A/V measurements.

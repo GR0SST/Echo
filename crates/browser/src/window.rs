@@ -3070,8 +3070,8 @@ impl BrowserWindow {
                 let drag=event.drag(cx);
                 if !drag_moves_active||!this.accepts_tab_drag(drag)||drag.id==id{return;}
                 let after=event.event.position.y>event.bounds.center().y;
-                if event.bounds.contains(&event.event.position){move_edge.set(after);this.reorder_feedback(drag,Some((id,after)));}
-                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None);}
+                if event.bounds.contains(&event.event.position){move_edge.set(after);this.reorder_feedback(drag,Some((id,after)),cx);}
+                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None,cx);}
             }))
             .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {
                 let style = style.border_color(hsla(0., 0., 0.2, 0.6));
@@ -3170,8 +3170,8 @@ impl BrowserWindow {
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this,event:&gpui::DragMoveEvent<crate::tab_drag::TabDrag>,_,cx| {
                 let drag=event.drag(cx);
                 if !this.accepts_tab_drag(drag)||drag.id==id{return;}
-                if event.bounds.contains(&event.event.position){this.reorder_feedback(drag,Some((id,false)));}
-                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None);}
+                if event.bounds.contains(&event.event.position){this.reorder_feedback(drag,Some((id,false)),cx);}
+                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None,cx);}
             }))
             .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.9)))
             .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_at_favorite(drag, id, cx); } }))

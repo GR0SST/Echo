@@ -302,6 +302,7 @@ impl BrowserWindow {
                         eprintln!("[capture-ready] {width}x{height}");
                     }
                     capture.png = Some(Arc::new(png));
+                    crate::feedback::capture(self,cx);
                     capture.dimensions = (width, height);
                     let overlay = capture.overlay;
                     let input = capture.destination.clone();

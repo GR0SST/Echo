@@ -657,6 +657,10 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 },
+                "settings-section" => {
+                    let section=match arg {"advanced"=>crate::settings::Tab::Advanced,"links"=>crate::settings::Tab::Links,_=>panic!("settings-section: advanced or links required")};
+                    let _=cx.update(|cx|crate::settings::open_section(section,cx));
+                }
                 "little-age" => {
                     let seconds=arg.parse::<u64>().expect("little-age requires seconds");
                     let _=view.update(cx,|this,cx|{

@@ -1,3 +1,6 @@
+#[path = "capture_sound_tests.rs"]
+mod capture_sound_tests;
+
 use super::*;
 use std::io::Cursor;
 fn current(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {

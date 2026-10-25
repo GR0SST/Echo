@@ -76,16 +76,16 @@ impl super::SettingsWindow {
             .w(px(36.))
             .h(px(16.))
             .rounded_full()
-            .bg(colors.rgb(if enabled { 0x1678ff } else { 0x494b4b }))
+            .bg(colors.rgb(if enabled { 0x107cfc } else { 0x494b4b }))
             .child(
                 div()
                     .relative()
-                    .left(px(if enabled { 14. } else { 2. }))
+                    .left(px(if enabled { 14. } else { 1. }))
                     .top(px(1.))
-                    .w(px(20.))
+                    .w(px(21.))
                     .h(px(14.))
                     .rounded_full()
-                    .bg(colors.rgb(if enabled { 0xc9dafa } else { 0xdfdfdf })),
+                    .bg(colors.rgb(if enabled { 0xdfebff } else { 0xdfdfdf })),
             )
             .into_any_element()
     }

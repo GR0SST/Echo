@@ -34,6 +34,8 @@ mod audio;
 mod audio_clock;
 mod media;
 pub use media::{MediaState, MediaAction};
+mod ui_sound;
+pub use ui_sound::{play_ui_sound,UiSound};
 mod page_swipe;
 pub use page_swipe::PageSwipe;
 mod capture;

@@ -305,15 +305,15 @@ fn switch(enabled: bool) -> AnyElement {
         .w(px(36.))
         .h(px(16.))
         .rounded_full()
-        .bg(rgb(if enabled { 0x1678ff } else { 0x494b4b }))
+        .bg(rgb(if enabled { 0x107cfc } else { 0x494b4b }))
         .child(
             div()
                 .relative()
-                .left(px(if enabled { 16. } else { 2. }))
+                .left(px(if enabled { 14. } else { 1. }))
                 .top(px(1.))
-                .size(px(14.))
+                .w(px(21.)).h(px(14.))
                 .rounded_full()
-                .bg(rgb(if enabled { 0xc9dafa } else { 0xdfdfdf })),
+                .bg(rgb(if enabled { 0xdfebff } else { 0xdfdfdf })),
         )
         .into_any_element()
 }
@@ -816,14 +816,14 @@ impl SettingsWindow {
                 (
                     "Play Echo sound effects",
                     Toggle::SoundEffects,
-                    Icon::Mute,
-                    0x0095ff,
+                    Icon::SoundEffects,
+                    0x0091ff,
                 ),
                 (
                     "Haptic feedback when reordering tabs",
                     Toggle::HapticFeedback,
-                    Icon::Info,
-                    0x0095ff,
+                    Icon::HapticFeedback,
+                    0x0091ff,
                 ),
             ],
             vec![
@@ -877,14 +877,16 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .gap(px(10.))
-            .children(sections.into_iter().map(|rows| {
-                self.settings_group().children(rows.into_iter().enumerate().map(
-                    |(index, (label, toggle, icon, color))| {
-                        div()
-                            .when(index > 0, |s| s.child(self.settings_rule()))
-                            .child(self.advanced_row(label, toggle, icon, color, cx))
-                    },
-                ))
+            .children(sections.into_iter().enumerate().map(|(group_index,rows)| {
+                self.settings_group().when(group_index==0 && !self.colors.light,|group|group.border_color(rgb(0x414244))).child(
+                    // AppKit's reference border overlays the two 40 px feedback rows.
+                    div().flex().flex_col().when(group_index==0,|rows|rows.my(px(-1.)))
+                        .children(rows.into_iter().enumerate().map(
+                            |(index,(label,toggle,icon,color))|div()
+                                .when(index>0,|s|s.child(self.settings_rule().when(group_index==0 && !self.colors.light,|rule|rule.bg(rgb(0x414244)))))
+                                .child(self.advanced_row(label,toggle,icon,color,cx))
+                        ))
+                )
             }))
             .child(
                 div()
@@ -1341,7 +1343,9 @@ impl Render for SettingsWindow {
 }
 
 /// Help's View All opens the existing local Shortcuts settings section.
-pub(crate) fn open_shortcuts(cx: &mut App) {
+pub(crate) fn open_shortcuts(cx: &mut App) { open_section(Tab::Shortcuts,cx); }
+
+pub(crate) fn open_section(section:Tab,cx: &mut App) {
     let source = match crate::new_window::normal_source(cx) {
         Ok(source) => source,
         Err(error) => { crate::show_session_error(error, cx); return; }
@@ -1352,7 +1356,7 @@ pub(crate) fn open_shortcuts(cx: &mut App) {
         if let Some(handle) = handle.downcast::<SettingsWindow>() {
             let _ = handle.update(cx, |view, window, cx| {
                 if view.profile.same_workspace(&profile) {
-                    view.change_tab(Tab::Shortcuts, window, cx);
+                    view.change_tab(section, window, cx);
                     window.activate_window();
                     view.focus.focus(window);
                     cx.notify();
