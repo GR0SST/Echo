@@ -68,3 +68,106 @@ mod tests {
         );
     }
 }
+
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+#[derive(Clone)]
+pub(super) struct Attachment {
+    pub(super) parent: usize,
+    pub(super) placement: Placement,
+    lease: Rc<()>,
+}
+impl Attachment {
+    pub(super) fn new(parent: usize, placement: Placement) -> Self {
+        Self {
+            parent,
+            placement,
+            lease: Rc::new(()),
+        }
+    }
+}
+pub(super) type Registry = RefCell<HashMap<usize, Attachment>>;
+
+/// HWND movement synchronously dispatches WM_SIZE/WM_MOVE. Snapshot and release
+/// the registry before entering native code, which can re-enter this function or
+/// release/replace an overlay. A failed old request must not remove a new lease.
+pub(super) fn synchronize(
+    registry: &Registry,
+    parent: usize,
+    mut update: impl FnMut(usize, Placement) -> bool,
+) {
+    let snapshot = registry
+        .borrow()
+        .iter()
+        .filter(|(_, attachment)| attachment.parent == parent)
+        .map(|(handle, attachment)| (*handle, attachment.clone()))
+        .collect::<Vec<_>>();
+    for (handle, attachment) in snapshot {
+        // An earlier synchronous callback may have retired another snapshot
+        // entry before its turn. Never move that entry's replacement.
+        let live = registry
+            .borrow()
+            .get(&handle)
+            .is_some_and(|current| Rc::ptr_eq(&current.lease, &attachment.lease));
+        if !live {
+            continue;
+        }
+        if update(handle, attachment.placement) {
+            continue;
+        }
+        let mut registry = registry.borrow_mut();
+        if registry
+            .get(&handle)
+            .is_some_and(|current| Rc::ptr_eq(&current.lease, &attachment.lease))
+        {
+            registry.remove(&handle);
+        }
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    #[test]
+    fn native_callbacks_can_reenter_and_replace_an_overlay_without_losing_its_new_lease() {
+        let registry = Registry::default();
+        let placement = Placement::new([0, 0, 800, 600], [0, 0, 800, 600], 1.);
+        registry
+            .borrow_mut()
+            .insert(1, Attachment::new(10, placement));
+        synchronize(&registry, 10, |handle, _| {
+            assert!(registry.try_borrow_mut().is_ok());
+            synchronize(&registry, 10, |_, _| true);
+            registry.borrow_mut().remove(&handle);
+            registry
+                .borrow_mut()
+                .insert(handle, Attachment::new(10, placement));
+            registry
+                .borrow_mut()
+                .insert(2, Attachment::new(10, placement));
+            false // Failure belongs only to the snapshotted, released lease.
+        });
+        assert_eq!(registry.borrow().len(), 2);
+        synchronize(&registry, 10, |_, _| false);
+        assert!(registry.borrow().is_empty());
+
+        registry
+            .borrow_mut()
+            .insert(1, Attachment::new(10, placement));
+        registry
+            .borrow_mut()
+            .insert(2, Attachment::new(10, placement));
+        let mut calls = 0;
+        synchronize(&registry, 10, |handle, _| {
+            calls += 1;
+            registry
+                .borrow_mut()
+                .remove(&if handle == 1 { 2 } else { 1 });
+            true
+        });
+        assert_eq!(
+            calls, 1,
+            "a retired snapshot entry must never enter native code"
+        );
+    }
+}

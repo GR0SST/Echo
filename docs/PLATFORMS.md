@@ -155,7 +155,10 @@ ICCCM `WM_TRANSIENT_FOR`, a dialog window type and decoration hints. Their owner
 bounds observer moves them with the browser; full-window surfaces follow both
 axes, while narrow sidebar surfaces keep their logical width. Placement tracks
 fractional DPI changes without activating passive overlays. GPUI `Overlay` release
-removes its native tracking registration. This is a separate GPUI window above
+removes its native tracking registration. Native movement runs outside the tracking
+registry borrow because Win32 synchronously delivers move/resize callbacks; lease
+identity prevents an old failed update from removing a re-entrantly replaced overlay.
+This is a separate GPUI window above
 the CEF child, preserving the existing engine/UI boundary.
 
 Passive HUDs use Win32 transparent/no-activate extended styles or an empty X11
