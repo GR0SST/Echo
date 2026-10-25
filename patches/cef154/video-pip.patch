@@ -1,0 +1,94 @@
+diff --git a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
+index 0fbb40d24f..4ba90bc956 100644
+--- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
++++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
+@@ -8,6 +8,7 @@
+ #include <string>
+ 
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/memory/ptr_util.h"
+@@ -103,6 +104,12 @@
+ 
+ namespace {
+ 
++// Echo keeps the measured video-only pointer presentation. Keyboard users
++// retain Chromium's transport and window controls. Other embedders are unchanged.
++bool EchoVideoOnlyPip() {
++  return base::CommandLine::ForCurrentProcess()->HasSwitch("echo-video-only-pip");
++}
++
+ // Lower bound size of the window is a fixed value to allow for minimal sizes
+ // on UI affordances, such as buttons.
+ constexpr gfx::Size kMinWindowSize(284, 160);
+@@ -602,6 +609,10 @@ void VideoOverlayWindowViews::OnNativeWidgetSizeChanged(
+ }
+ 
+ void VideoOverlayWindowViews::OnKeyEvent(ui::KeyEvent* event) {
++  if (event->type() == ui::EventType::kKeyPressed ||
++      event->key_code() == ui::VKEY_TAB) {
++    echo_keyboard_controls_ = true;
++  }
+   // Every time a user uses a keyboard to interact on the window, restart the
+   // timer to automatically hide the controls.
+   hide_controls_timer_.Reset();
+@@ -669,6 +680,7 @@ void VideoOverlayWindowViews::OnMouseEvent(ui::MouseEvent* event) {
+           progress_view_drag_state_ ==
+               global_media_controls::DragState::kDragEnded;
+       if (should_update_control_visibility) {
++        echo_keyboard_controls_ = false;
+         UpdateControlsVisibility(false);
+       }
+       break;
+@@ -776,6 +788,11 @@ bool VideoOverlayWindowViews::AreControlsVisible() const {
+ 
+ void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
+                                                        bool should_animate) {
++  const bool video_only = EchoVideoOnlyPip() && !echo_keyboard_controls_;
++  if (video_only) {
++    is_visible = false;
++    should_animate = false;
++  }
+   if (is_moving_) {
+     // If we've already queued a visibility change for the same visibility, then
+     // only animate if both should animate (which matches what would have
+@@ -800,7 +817,8 @@ void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
+ 
+   // If the overlay view is shown, then the other controls are always hidden.
+   const bool wanted_visibility =
+-      !IsOverlayViewShown() && force_controls_visible_.value_or(is_visible);
++      !video_only && !IsOverlayViewShown() &&
++      force_controls_visible_.value_or(is_visible);
+ 
+   // The title and scrim can be hidden if the overlay window is trusted or meets
+   // the user interaction criteria.
+@@ -820,11 +838,11 @@ void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
+   //   * We are in the initial "show" period, or
+   //   * The overlay window does not meet the user interaction criteria and is
+   //   not trusted for media playback
+-  const bool title_is_visible =
++  const bool title_is_visible = !video_only && (
+       force_title_and_scrim_visible_.has_value()
+           ? force_title_and_scrim_visible_.value()
+           : wanted_visibility || initial_title_hide_timer_.IsRunning() ||
+-                !can_hide_title_and_scrim;
++                !can_hide_title_and_scrim);
+ 
+   if (should_animate) {
+     // Animate the title and top scrim.
+diff --git a/chrome/browser/ui/views/overlay/video_overlay_window_views.h b/chrome/browser/ui/views/overlay/video_overlay_window_views.h
+index 222a5167b5..221dc2f51d 100644
+--- a/chrome/browser/ui/views/overlay/video_overlay_window_views.h
++++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.h
+@@ -585,6 +585,9 @@ class VideoOverlayWindowViews : public content::VideoOverlayWindow,
+   // True if the playback controls should be visible.
+   bool show_playback_controls_ = true;
+ 
++  // Pointer presentation is video-only for Echo; keyboard controls remain usable.
++  bool echo_keyboard_controls_ = false;
++
+   base::WeakPtrFactory<VideoOverlayWindowViews> weak_factory_{this};
+ };
+ 

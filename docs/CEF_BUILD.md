@@ -436,3 +436,10 @@ The locked native codec check rendered 100 frames and decoded AAC successfully;
 its screenshot was inspected. Evidence:
 `/Users/grosstgrosst/Documents/Bot/cef-src/qualification/2026-10-25T11-31-51.636Z/`.
 `scripts/with-cef.sh cargo test` passed all 1,610 tests (one existing ignored).
+
+## Video PiP presentation
+
+The source recipe also applies `patches/cef154/video-pip.patch`. Echo opts into
+video-only pointer presentation through an engine-owned command-line switch;
+upstream keyboard controls remain available. See [native PiP reference and
+qualification](VIDEO_PIP.md) for evidence and remaining interaction gaps.

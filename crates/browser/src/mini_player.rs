@@ -255,7 +255,7 @@ impl BrowserWindow {
                 .child(div().absolute().bottom_0().left_0().right_0().h(px(ROW)).flex().items_center().pl(px(14.)).pr(px(10.)).gap(px(8.))
                     .child(div().id("media-title").debug_selector(||"media-title".into()).flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(gpui::FontWeight::MEDIUM).text_color(gpui::rgb(if dark{0xcdcdd4}else{0x262727})).child(crate::sidebar_title::SidebarTitle::new(tab.title.clone())))
                     .child(div().flex().flex_none()
-                        .when(state.video,|group|group.child(div().id("media-pip").debug_selector(||"media-pip".into()).size(px(24.)).flex().items_center().justify_center().rounded(px(4.)).text_color(ink)
+                        .child(div().id("media-pip").debug_selector(||"media-pip".into()).size(px(24.)).flex().items_center().justify_center().rounded(px(4.)).text_color(ink)
                             .hover(move|style|style.bg(hover).text_color(hover_ink))
                             .tooltip(|_,cx|cx.new(|_|MediaTooltip("Open Picture in Picture")).into())
                             .on_click(cx.listener(move|this,_,_,cx|{
@@ -263,7 +263,7 @@ impl BrowserWindow {
                                 if this.mini_player_source().is_some_and(|(current,state)|current==id&&state.video) {
                                     if let Some(pages)=&this.pages{pages.borrow_mut().open_media_pip(id,identity,epoch);}
                                 }
-                            })).child(crate::icons::media_pip())))
+                            })).child(crate::icons::media_pip()))
                     .child(div().id("media-dismiss").debug_selector(||"media-dismiss".into()).size(px(24.)).flex().items_center().justify_center().rounded(px(4.)).text_color(ink)
                         .hover(move|style|style.bg(hover).text_color(hover_ink))
                         .on_click(cx.listener(move|this,_,_,cx|{cx.stop_propagation();if !this.pages.as_ref().is_some_and(|pages|pages.borrow().media_identity(id)==Some(identity)){return;}

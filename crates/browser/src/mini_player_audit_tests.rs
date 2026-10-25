@@ -6,7 +6,6 @@ fn video_mini_player_header_opens_pip_for_the_retained_source_without_switching_
 ) {
     let (view, visual, fake) = open_pages(cx);
     background_media(&view, visual, &fake);
-    assert!(visual.debug_bounds("media-pip").is_none());
     let foreground = active_url(&view, visual);
     let mut video = playing_media();
     video.video = true;
@@ -89,6 +88,28 @@ fn mini_header_hover_outside_the_collapsed_layout_slot_stays_expanded(cx: &mut T
     visual.run_until_parked();
     visual.executor().advance_clock(Duration::from_secs(3));
     visual.run_until_parked();
-    assert_eq!(visual.debug_bounds("mini-player").unwrap().size.height, gpui::px(66.));
+    assert_eq!(
+        visual.debug_bounds("mini-player").unwrap().size.height,
+        gpui::px(66.)
+    );
     assert_eq!(active_url(&view, visual), foreground);
+}
+
+#[gpui::test]
+fn audio_mini_player_retains_pip_affordance_without_requesting_video(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    background_media(&view, visual, &fake);
+    let foreground = active_url(&view, visual);
+    let center = visual.debug_bounds("mini-player").unwrap().center();
+    visual.simulate_mouse_move(center, None, Modifiers::none());
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
+    fake.take_calls();
+    click(visual, "media-pip");
+    assert_eq!(active_url(&view, visual), foreground);
+    assert!(!fake
+        .take_calls()
+        .iter()
+        .any(|call| matches!(call, Call::PictureInPicture(..))));
 }

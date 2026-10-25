@@ -1925,6 +1925,7 @@ wrap_app! {
             // Development builds are unsigned, so macOS asks for the keychain
             // password after every rebuild. Release builds use the real keychain.
             if let Some(command_line) = command_line {
+                command_line.append_switch(Some(&CefString::from("echo-video-only-pip")));
                 if cfg!(debug_assertions) {
                     command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 }

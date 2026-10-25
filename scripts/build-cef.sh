@@ -58,6 +58,13 @@ if [[ "$MODE" == all || "$MODE" == build || "$MODE" == distrib ]]; then
     git -C "$SRC" apply --reverse --check "$SHUTDOWN_PATCH"
     echo "Verified shutdown patch is already applied"
   fi
+  PIP_PATCH="$ROOT/patches/cef154/video-pip.patch"
+  if git -C "$SRC" apply --check "$PIP_PATCH" 2>/dev/null; then
+    git -C "$SRC" apply "$PIP_PATCH"
+  else
+    git -C "$SRC" apply --reverse --check "$PIP_PATCH"
+    echo "Verified video PiP patch is already applied"
+  fi
   BRIDGE_PATCH="$ROOT/patches/cef154/extensions-bridge.patch"
   if [[ "${ECHO_CEF_EXTENSIONS_BRIDGE:-0}" == 1 ]]; then
     if git -C "$SRC" apply --check "$BRIDGE_PATCH" 2>/dev/null; then
