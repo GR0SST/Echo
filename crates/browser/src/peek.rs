@@ -330,6 +330,7 @@ impl BrowserWindow {
                 .when(self.pages.is_none(), |view| view.child(self.browser.active_tab().map(|tab| tab.url.clone()).unwrap_or_default()))
                 .overflow_hidden()
                 .when_some(close_image.clone(), |card, image| card.child(div().debug_selector(|| "peek-closing-image".into()).w(px(width)).h(px(height)).child(gpui::img(image).w(px(width)).h(px(height)).object_fit(gpui::ObjectFit::Fill))))
+                .children((close_image.is_none() && !self.site_settings_is_open()).then(||self.browser.active_tab()).flatten().and_then(|tab|self.render_crashed_tab(tab.id,cx)))
                 .when(close_image.is_none() && self.site_settings_is_open(), |card|card.child(self.render_site_settings_page(cx)))
                 .when(close_image.is_none() && !self.site_settings_is_open(), |card| card.children(self.render_page_viewport_canvas())))
             .child(div().absolute().left(px(left + width + 13.)).top(px(20.)).opacity(amount.clamp(0., 1.)).flex().flex_col().gap(px(9.5))

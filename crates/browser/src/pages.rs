@@ -28,7 +28,7 @@ fn retarget_page_metadata(event: &mut Event, previous: ViewId, current: ViewId) 
         Event::DocumentColor { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::EditFocusChanged { view, .. }
         | Event::MediaCaptureChanged { view, .. }
         | Event::FindResult { view, .. } | Event::UrlChanged { view, .. } | Event::StatusChanged { view, .. }
-        | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => view,
+        | Event::RendererStateChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => view,
         _ => return false,
     };
     if *view != previous { return false; }
@@ -41,7 +41,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::DocumentColor { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::PageSwipe { view,.. } | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::PageSwipe { view,.. } | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::RendererStateChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::Password {view,..} | Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -412,6 +412,7 @@ impl WebEngine for Chromium {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageState {
+    pub crashed: Option<i32>,
     pub loading_progress: u16,
     pub document_color: Option<[u8; 3]>,
     pub loading: bool,
@@ -491,7 +492,7 @@ pub(crate) struct PageEvent {
 
 impl PageEvent {
     pub(crate) fn is_metadata(&self) -> bool {
-        matches!(self.event, Event::DocumentColor { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
+        matches!(self.event, Event::RendererStateChanged { .. } | Event::DocumentColor { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::UrlChanged { .. }
             | Event::MediaCaptureChanged { .. } | Event::MediaStateChanged { .. } | Event::AudioStateChanged { .. } | Event::StatusChanged { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } | Event::EditFocusChanged { .. } | Event::FindResult { .. })
     }
 }
@@ -1364,13 +1365,18 @@ impl Pages {
             engine.set_viewport_clip(pages[&tab].view, clip);
             engine.set_top_corners_rounded(pages[&tab].view, !self.split && !self.square_top && !self.top_toolbar);
             let page = pages.get_mut(&tab).unwrap();
+            if page.state.crashed.is_some() {
+                if page.visible {engine.set_visible(page.view,false);page.visible=false;}
+                self.visible.remove(&tab);
+                continue;
+            }
             if !page.visible { engine.set_visible(page.view, true); page.visible = true; created = true; }
             self.visible.insert(tab);
         }
         // Creating a native browser may take the responder even when the
         // intended active pane has not changed. Reassert it after all creates.
         if active && !self.resize_focus_suppressed && self.page_focus && (!self.devtools_focused || focused != self.shown) && !self.preserve_ui_focus && (focused != self.shown || created || !self.page_has_focus) {
-            if let Some((tab, view)) = focused.and_then(|id| pages.get(&id).filter(|page| page.owner == self.host).map(|page| (id, page.view))) {
+            if let Some((tab, view)) = focused.and_then(|id| pages.get(&id).filter(|page| page.owner == self.host && page.state.crashed.is_none()).map(|page| (id, page.view))) {
                 engine.focus_page(view);
                 self.shown = Some(tab);
                 self.devtools_focused = false;
@@ -1915,8 +1921,30 @@ impl Pages {
     /// Records what the engine reported so it is not re-sent by `sync`.
     pub fn record(&mut self, event: &Event) {
         let mut store = self.store.borrow_mut();
-        let PageStore { pages, .. } = &mut *store;
+        let return_focus=self.page_has_focus && self.page_focus && store.active_host==self.host;
+        if let Event::RendererStateChanged {view,error:Some(_)}=event {
+            if let Some(tab)=store.pages.iter().find_map(|(tab,page)|(page.view==*view).then_some(*tab)) {
+                store.cancel_handoff(tab);
+                store.frozen.retain(|(_,id),_|*id!=tab);
+            }
+        }
+        let PageStore { engine, pages, .. } = &mut *store;
         match event {
+            Event::RendererStateChanged {view,error} => {
+                if let Some((tab,page))=pages.iter_mut().find(|(_,page)|page.view==*view) {
+                    page.state.crashed=*error;
+                    if error.is_some() {
+                        page.state.loading=false;page.state.loading_progress=0;page.state.status.clear();
+                        page.state.editable=false;page.state.audible=false;
+                        page.state.capture=engine::MediaCaptureState::default();page.state.media=engine::MediaState::default();
+                        page.snapshot=None;page.snapshot_pending=None;page.snapshot_good_origin=None;
+                        if page.owner==self.host {
+                            engine.set_visible(*view,false);page.visible=false;self.visible.remove(tab);
+                            if self.shown==Some(*tab) {self.shown=None;self.page_has_focus=false;if return_focus {engine.focus_ui_in_host(self.parent);}}
+                        }
+                    }
+                }
+            }
             Event::DocumentColor { view, url, color } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view && page.url == *url) { page.state.document_color = Some(*color); }
             }
@@ -1960,7 +1988,7 @@ impl Pages {
                 can_go_forward,
             } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
-                    page.state.loading = *loading;
+                    page.state.loading = *loading && page.state.crashed.is_none();
                     page.state.can_go_back = *can_go_back;
                     page.state.can_go_forward = *can_go_forward;
                     if *loading { page.state.status.clear(); }

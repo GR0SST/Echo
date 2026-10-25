@@ -217,6 +217,7 @@ impl BrowserWindow {
                         .on_click(cx.listener(|this, _, window, cx| this.toggle_transient_picker(window, cx))))))
             .child(div().debug_selector(|| "transient-page".into()).relative().flex_1().min_h_0().w_full()
                 .bg(gpui::white())
+                .children(self.browser.active_tab().and_then(|tab|self.render_crashed_tab(tab.id,cx)))
                 .when(self.pages.is_none(), |surface| surface.child(self.browser.active_tab().map(|tab| tab.url.clone()).unwrap_or_default()))
                 .children(self.render_page_viewport_canvas()))
             .into_any_element()

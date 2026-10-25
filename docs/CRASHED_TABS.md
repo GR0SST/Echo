@@ -1,0 +1,11 @@
+# Recoverable crashed tabs
+
+CEF renderer termination reports an error code through page metadata. A replacement renderer's ready callback clears the failure. The event keeps the existing page identity and follows live transfers; inspector callbacks cannot become tab metadata. Neither failure nor recovery edits the saved tab, URL, Space, profile or Split group.
+
+The failed native view is hidden and its stale snapshots/handoffs are discarded. GPUI displays Arc's observed sentence, inline `reload` action and numeric error code. The same recovery surface works in ordinary pages, individual Split panes, Peek and Little windows. Healthy panes remain visible. Reload targets the retained browser; the recovery view stays until a new renderer is ready. Queued loading callbacks do not dismiss it. Background failure does not take focus from the Command Bar.
+
+The installed Arc bundle's `SadTab/SadTabHostView.swift` localization is `Tab crashed. Maybe [reload] the page?`. A guarded dedicated `.localhost` tab in the shared Echo Test Space reproduces the crash without touching other sites. Arc accessibility exposes that sentence and `Error code: 11`; Command-R reloads the original tab and makes a new fixture request. The tab and owned root are closed in cleanup. Evidence: `target/parity/crashed-tab/arc-{crashed,reloaded}.png` and `target/parity/reaudit2/sessions/sad-tab-functional-reference/`. The crash screenshot's page area is blank despite the recovery view being present in AX, so it is not a pixel-parity reference.
+
+Three GPUI tests cover retained-identity reload and queued loading events, Command Bar typing/keyboard reload, and isolated Split-pane failure/reload. An engine test covers failure/ready ordering through live metadata transfer; existing inspector-isolation coverage includes both events.
+
+Passed native acceptance navigates one disposable Echo tab, crashes only its renderer through `chrome://crash`, recovers through both Command-R and a real click on the inline link, and goes back in retained history. It checks renderer state/visibility, the original TabId and native clean quit. Evidence is under `target/parity/crashed-tab/{native,native-click}/`. The Arc illustration and exact presentation remain cosmetic follow-up; no Arc image assets are included in the repository.

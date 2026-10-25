@@ -7,6 +7,7 @@ mod scripting;
 mod capture;
 mod task_manager;
 mod find;
+mod crashed_tab;
 mod max;
 mod live_folders;
 mod max_previews;

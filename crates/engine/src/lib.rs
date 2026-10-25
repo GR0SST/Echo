@@ -122,6 +122,8 @@ pub struct Shortcut {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    /// None means a replacement renderer is ready after reload.
+    RendererStateChanged { view: ViewId, error: Option<i32> },
     Password { view: ViewId, event: PasswordEvent },
     ContextImage { view: ViewId, request: u64, page_url: String, png: Vec<u8> },
     PageContext { view: ViewId, request: page_context::Request },
@@ -167,6 +169,7 @@ pub enum Event {
 /// Events keyed by CEF browser id, filled in by CEF callbacks.
 #[derive(Debug)]
 enum RawEvent {
+    RendererState(Option<i32>),
     Password(PasswordEvent),
     Context(page_context::Request),
     ContextImage(u64, String, Vec<u8>),
@@ -1443,7 +1446,7 @@ fn inspector_input(inspector: InspectorId, event: &RawEvent) -> Option<Inspector
 fn transferable_metadata(event: &RawEvent) -> bool {
     matches!(event, RawEvent::DocumentColor(..) | RawEvent::Audio(_) | RawEvent::Capture(_) | RawEvent::Media(_) | RawEvent::Title(_) | RawEvent::Favicon(..)
         | RawEvent::EditFocus(_) | RawEvent::Find(..) | RawEvent::Url(_)
-        | RawEvent::Progress(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..))
+        | RawEvent::Progress(_) | RawEvent::Status(_) | RawEvent::Loading(..) | RawEvent::LoadError(..) | RawEvent::RendererState(_))
 }
 
 fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
@@ -1452,6 +1455,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         return Some(Event::Shortcut { view, shortcut });
     }
     Some(match event {
+        RawEvent::RendererState(error) => Event::RendererStateChanged { view, error },
         RawEvent::Password(event) => Event::Password { view, event },
         RawEvent::ContextImage(request, page_url, png) => Event::ContextImage { view, request, page_url, png },
         RawEvent::Context(request) => Event::PageContext { view, request },
@@ -1626,11 +1630,11 @@ fn peek_cross_domain(current: &str, target: &str, pinned: bool, gesture: bool, r
 wrap_request_handler! {
     struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>>, boosts: Arc<Mutex<Vec<SiteBoost>>> }
     impl RequestHandler {
-        fn on_render_process_terminated(&self, browser: Option<&mut Browser>, _status: TerminationStatus, _error_code: i32, _error_string: Option<&CefString>) {
-            if let Some(browser) = browser { task_manager::forget_process(browser.identifier()); page_swipe::cancel(browser.identifier()); report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); }
+        fn on_render_process_terminated(&self, browser: Option<&mut Browser>, _status: TerminationStatus, error_code: i32, _error_string: Option<&CefString>) {
+            if let Some(browser) = browser { task_manager::forget_process(browser.identifier()); page_swipe::cancel(browser.identifier()); report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); push(&self.events, Some(&mut *browser), RawEvent::RendererState(Some(error_code))); }
         }
         fn on_render_view_ready(&self,browser:Option<&mut Browser>) {
-            if let Some(browser)=browser { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
+            if let Some(browser)=browser { push(&self.events, Some(&mut *browser), RawEvent::RendererState(None)); let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
         }
         fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, gesture: i32, redirect: i32) -> i32 {
             if let Some(browser)=browser.as_deref() { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
@@ -2038,12 +2042,25 @@ mod tests {
     }
 
     #[test]
+    fn renderer_failure_and_ready_follow_live_page_metadata_ownership() {
+        let source=EventQueue::default();let target=EventQueue::default();
+        source.push((7,RawEvent::RendererState(Some(11))));
+        source.redirect(7,&source,&target,transferable_metadata);
+        source.push((7,RawEvent::RendererState(None)));
+        let view=ViewId::from_raw(4);
+        let events:Vec<_>=target.take().into_iter().filter_map(|(_,event)|page_event(view,ViewRole::Page,event)).collect();
+        assert_eq!(events,vec![Event::RendererStateChanged{view,error:Some(11)},Event::RendererStateChanged{view,error:None}]);
+        assert!(source.take().is_empty());
+    }
+
+    #[test]
     fn inspector_callbacks_never_become_tab_events() {
         let view = ViewId::from_raw(8);
         let role = ViewRole::Inspector(InspectorId(3));
         for event in [
             RawEvent::Capture(MediaCaptureState { video: true, audio: true }),
             RawEvent::Audio(true), RawEvent::Title("DevTools".into()), RawEvent::Url(INSPECTOR_FRONTEND_URL.into()),
+            RawEvent::RendererState(Some(11)), RawEvent::RendererState(None),
             RawEvent::Loading(false, false, false), RawEvent::Focused, RawEvent::PipReturn,
             RawEvent::EditFocus(true), RawEvent::Status("internal".into()),
             RawEvent::Popup("https://example.com".into()), RawEvent::Shortcut(Shortcut::default()),

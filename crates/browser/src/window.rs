@@ -1483,7 +1483,7 @@ impl BrowserWindow {
                         if let Some((url, Some(title))) = entry { self.edit_profile(|browser| browser.update_history_title(page_profile.expect("page provenance"), &url, &title)); }
                     }
                 }
-                Event::DocumentColor { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } => {}
+                Event::RendererStateChanged {..} | Event::DocumentColor { .. } | Event::LoadingProgress { .. } | Event::LoadingChanged { .. } => {}
             }
         }
         }
@@ -4247,6 +4247,7 @@ impl BrowserWindow {
                         .top(px(if has_page && self.page_toolbar_shown() && !split_open { self.page_toolbar_height() } else { 0. }))
                         .flex().flex_col().items_center().justify_center().gap_2()
                         .when(!split_open, |this| this.px_8())
+                    .children((!virtual_page && !split_open).then(||self.browser.active_tab()).flatten().and_then(|tab|self.render_crashed_tab(tab.id,cx)))
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .when(search_settings_open, |this| this.child(self.render_search_settings(window,cx)))

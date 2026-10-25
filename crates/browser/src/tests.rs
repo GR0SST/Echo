@@ -9,6 +9,9 @@ mod live_folders_tests;
 #[path = "feedback_owner_tests.rs"]
 mod feedback_owner_tests;
 
+#[path = "crashed_tab_tests.rs"]
+mod crashed_tab_tests;
+
 #[path = "reorder_haptics_tests.rs"]
 mod reorder_haptics_tests;
 
