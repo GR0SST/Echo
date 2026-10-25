@@ -6,9 +6,14 @@ use crate::{
 };
 use browser_core::routing::{LinkDestination, LinkMatch};
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, SharedString, Subscription, Window, div, prelude::*, px, rgb,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, SharedString, Subscription, Task, Window, div, prelude::*, px, rgb,
 };
+
+use std::time::{Duration, Instant};
+
+const ENTRY_DURATION: Duration = Duration::from_millis(200);
+const ENTRY_FRAME: Duration = Duration::from_millis(16);
 
 pub(crate) struct Dismiss;
 struct RouteRow {
@@ -26,6 +31,8 @@ enum Menu {
 }
 pub(crate) struct AtcPanel {
     profile: ProfileHandle,
+    entry_started: Instant,
+    _entry_task: Task<()>,
     palette: crate::material::DialogPalette,
     rows: Vec<RouteRow>,
     next_key: u64,
@@ -77,9 +84,25 @@ impl AtcPanel {
     }
     pub(crate) fn new(profile: ProfileHandle, cx: &mut Context<Self>) -> Self {
         let routes = profile.read_settings(|browser| browser.settings.routing());
+        // GPUI's generic AnimationElement uses wall time. Keep both motion and
+        // hit-test geometry on the executor clock so tests control every frame.
+        let entry_started = cx.background_executor().now();
+        let entry_task = cx.spawn(async move |this, cx| loop {
+            let elapsed = cx.background_executor().now().saturating_duration_since(entry_started);
+            let remaining = ENTRY_DURATION.saturating_sub(elapsed);
+            if remaining.is_zero() {
+                // Also settle if the first task poll was delayed past entry.
+                let _ = this.update(cx, |_, cx| cx.notify());
+                break;
+            }
+            cx.background_executor().timer(remaining.min(ENTRY_FRAME)).await;
+            if this.update(cx, |_, cx| cx.notify()).is_err() { break; }
+        });
         let mut panel = Self {
             _observe: profile.observe_settings(cx),
             profile,
+            entry_started,
+            _entry_task: entry_task,
             palette: crate::material::DialogPalette::new(true),            rows: vec![],
             next_key: 0,
             popup: None,
@@ -435,6 +458,8 @@ impl AtcPanel {
         destination_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let little_window_index = self.destinations().iter()
+            .position(|(_, destination)| *destination == LinkDestination::LittleWindow);
         let labels: Vec<String> = match menu {
             Menu::Match(_) => vec!["Is equal to".into(), "Contains".into()],
             _ => self
@@ -528,6 +553,8 @@ impl AtcPanel {
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .children(labels.into_iter().enumerate().map(|(index, label)| {
                         div()
+                            .when(matches!(menu, Menu::Destination(_)) && Some(index) == little_window_index,
+                                |s| s.debug_selector(|| "atc-option-little-window".into()))
                             .flex()
                             .flex_col()
                             .when(
@@ -591,6 +618,10 @@ impl Render for AtcPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.palette = crate::material::DialogPalette::new(matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark));
         let palette = self.palette;
+        let elapsed = cx.background_executor().now().saturating_duration_since(self.entry_started);
+        let progress = if crate::native::prefers_reduced_motion() { 1. }
+            else { (elapsed.as_secs_f32() / ENTRY_DURATION.as_secs_f32()).clamp(0., 1.) };
+        let entry = 0.5 - 0.5 * (std::f32::consts::PI * progress).cos();
         let destination_width = self.destination_width(window);
         let destination = self
             .profile
@@ -780,19 +811,8 @@ impl Render for AtcPanel {
             })
             // Native Arc recording: 24px descent, settling over 200ms; the
             // surface fade completes before the positional easing settles.
-            .with_animation(
-                "atc-entry",
-                Animation::new(if crate::native::prefers_reduced_motion() {
-                    std::time::Duration::ZERO
-                } else {
-                    std::time::Duration::from_millis(200)
-                })
-                .with_easing(|t| 0.5 - 0.5 * (std::f32::consts::PI * t).cos()),
-                |panel, delta| {
-                    panel
-                        .top(px(-24. * (1. - delta)))
-                        .opacity((delta * 2.).min(1.))
-                },
-            )
+            .top(px(-24. * (1. - entry)))
+            .opacity((entry * 2.).min(1.))
+
     }
 }

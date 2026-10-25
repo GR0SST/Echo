@@ -10349,9 +10349,21 @@ fn air_traffic_default_and_little_links_toggle_stay_consistent(cx: &mut TestAppC
     use browser_core::routing::LinkDestination;
     let (source, cx) = open(cx);
     run_named_command(&source, cx, "air traffic control");
-    let (_, mut settings) = settings_window(cx);
+    let (settings_view, mut settings) = settings_window(cx);
+    // The sheet's geometry is driven only by this test's virtual executor.
+    // Finish its entrance before pointer hit-testing; never sleep for a frame.
+    let initial = settings.debug_bounds("atc-sheet").unwrap();
+    settings.update(|window, _| window.refresh());
+    settings.run_until_parked();
+    assert_eq!(settings.debug_bounds("atc-sheet").unwrap(), initial);
+    settings.executor().advance_clock(Duration::from_millis(200));
+    settings.run_until_parked();
+    let settled = settings.debug_bounds("atc-sheet").unwrap();
+    assert_eq!(settled.origin.y - initial.origin.y, gpui::px(24.));
     click(&mut settings, "atc-default");
-    click(&mut settings, "atc-option-4");
+    // Select the destination by identity, independent of Space count/order.
+    assert!(settings_view.read_with(&settings, |view, cx| view.atc.as_ref().unwrap().read(cx).menu_is_open()));
+    click(&mut settings, "atc-option-little-window");
     settings.run_until_parked();
     source.read_with(cx, |view, _| view.profile.handle.read_settings(|browser| {
         assert_eq!(browser.settings.routing().default_destination, LinkDestination::LittleWindow);
