@@ -42,7 +42,9 @@ No Spaces or tabs were deleted during that cleanup. The later qualified AX/CG
 inventory is in `final-cleanup/`; its header montage was inspected. A subsequent
 read-only CG check after the audit still found the same four owner window IDs
 32153–32156. The offscreen, non-AX surface 32164 is excluded from browser counts.
-Final header reinspection is blocked by the locked macOS session.
+Final header reinspection is blocked by the locked macOS session. The restoration
+check found AX reporting zero while CG retained all four owner windows; the
+orchestrator confirmed they remain intact. No restoration windows were created.
 
 ## Folder menu (#16)
 
@@ -100,5 +102,6 @@ ownership and absence of a CEF settings renderer. The core export test checks
 nested hierarchy, original pinned URLs and model immutability. Full workspace
 validation: `audit-full-r3.log` (1,137 browser tests; 1,562 total passed, one ignored).
 Footer native verification/pairs and final developer/folder polish are blocked by
-the locked macOS session. These audit commits remain local checkpoints and are
-not pushed as completed work.
+the locked macOS session. The orchestrator authorized publishing these audit commits with native
+validation explicitly pending. Publication does not qualify the final visual
+corrections or footer runtime behavior. Arc must remain untouched while locked.
