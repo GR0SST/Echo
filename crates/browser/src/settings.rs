@@ -2,6 +2,7 @@
 pub(crate) mod max;
 mod max_art;
 use crate::{
+    browser_registration::DefaultState,
     icons::{self, Icon},
     profile::ProfileHandle,
     window::BrowserWindow,
@@ -81,6 +82,9 @@ pub(crate) mod shortcuts_menu;
 pub(crate) struct SettingsWindow {
     colors: appearance::Colors,
     _appearance: Subscription,
+    default_browser: DefaultState,
+    default_browser_busy: bool,
+    _default_browser_activation: Subscription,
     profile: ProfileHandle,
     owner: Option<WeakEntity<BrowserWindow>>,
     pub(crate) tab: Tab,
@@ -190,6 +194,7 @@ fn open(
                     if owner.is_some() {
                         view.owner = owner.clone();
                     }
+                    view.default_browser = crate::setup::default_browser_state(cx);
                     window.activate_window();
                     view.focus.focus(window);
                     if air_traffic { view.present_atc(window, cx); }
@@ -236,10 +241,19 @@ fn open(
                 let max = max::State::new(&profile, cx);
                 let shortcuts = shortcuts::State::new(cx);
                 let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
+                let default_browser_activation = cx.observe_window_activation(window, |view: &mut SettingsWindow, window, cx| {
+                    if window.is_window_active() {
+                        view.default_browser = crate::setup::default_browser_state(cx);
+                        cx.notify();
+                    }
+                });
                 cx.on_release(|view, cx| view.close_shortcuts_menu(cx)).detach();
                 let mut view = SettingsWindow {
                     colors: appearance::Colors::from_appearance(window.appearance()),
                     _appearance: appearance,
+                    default_browser: crate::setup::default_browser_state(cx),
+                    default_browser_busy: false,
+                    _default_browser_activation: default_browser_activation,
                     max,
                     profile,
                     owner,
@@ -522,9 +536,38 @@ impl SettingsWindow {
     fn general(&self, cx: &mut Context<Self>) -> AnyElement {
         div().w(px(556.)).flex().flex_col().gap(px(8.))
             .child(self.settings_group().child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
+            .when(self.default_browser == DefaultState::Other, |body| body.child(
+                self.settings_group().child(row().min_h(px(42.))
+                    .child("Echo isn‘t your default browser.")
+                    .child(self.settings_button("Set as default")
+                        .when(self.default_browser_busy, |button| button.opacity(0.5))
+                        .on_click(cx.listener(|this, _, _, cx| this.set_default_browser(cx)))))))
             .child(self.settings_group().child(self.action_row("Previews", "Previews Settings…", None, cx)).child(self.settings_rule())
                 .child(self.action_row("Manage your default search engine, Auto-Archive, and downloads in Profile Settings.", "Profile Settings…", Some(Tab::Profiles), cx)))
             .into_any_element()
+    }
+    fn set_default_browser(&mut self, cx: &mut Context<Self>) {
+        if self.default_browser_busy { return; }
+        let Some(task) = crate::setup::request_default_browser_task(cx) else { return; };
+        self.default_browser_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.default_browser_busy = false;
+                match result {
+                    Ok(state) => this.default_browser = state,
+                    Err(error) => {
+                        this.default_browser = crate::setup::default_browser_state(cx);
+                        eprintln!("[default-browser] {error}");
+                        if let Some(owner) = this.owner.as_ref().and_then(|owner| owner.upgrade()) {
+                            owner.update(cx, |owner, cx| owner.show_toast(error, cx));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
     }
     fn popup_row(
         &self,

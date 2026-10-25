@@ -59,9 +59,17 @@ pub(crate) struct Registration(pub Arc<dyn BrowserRegistration>);
 impl gpui::Global for Registration {}
 /// Snapshot availability when the Command Bar opens, rather than querying the OS per keystroke.
 pub(crate) fn default_browser_available(cx: &App) -> bool {
+    default_browser_state(cx) == DefaultState::Other
+}
+pub(crate) fn default_browser_state(cx: &App) -> DefaultState {
     cx.try_global::<Registration>()
         .map_or_else(|| SystemRegistration.state(), |registration| registration.0.state())
-        == DefaultState::Other
+}
+pub(crate) fn request_default_browser_task(cx: &mut App) -> Option<gpui::Task<Result<DefaultState, String>>> {
+    let registration = cx.try_global::<Registration>()
+        .map(|registration| registration.0.clone())
+        .unwrap_or_else(|| Arc::new(SystemRegistration));
+    registration_task(registration, cx)
 }
 #[derive(Clone)]
 pub(crate) struct CredentialStorage(pub Arc<dyn importer::CredentialStore>);
@@ -1519,11 +1527,7 @@ impl BrowserWindow {
         )
     }
     pub(crate) fn request_default_browser(&mut self, cx: &mut Context<Self>) {
-        let registration = cx
-            .try_global::<Registration>()
-            .map(|r| r.0.clone())
-            .unwrap_or_else(|| Arc::new(SystemRegistration));
-        let Some(task) = registration_task(registration, cx) else {
+        let Some(task) = request_default_browser_task(cx) else {
             return;
         };
         cx.spawn(async move |this, cx| {

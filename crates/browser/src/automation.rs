@@ -769,6 +769,7 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
     }));
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
     out += &format!("[dump] history_count={}\n", browser.active_user_profile().history.len());
+    out += &format!("[dump] default_browser={:?}\n", crate::setup::default_browser_state(cx));
     out += &format!("[dump] password_prompt={}\n", this.passwords.prompt.is_some());
     out += &format!("[dump] speech_speaking={}\n", engine::speech::is_speaking());
     if let Some((_, records)) = this.profile.handle.download_inventory() {
