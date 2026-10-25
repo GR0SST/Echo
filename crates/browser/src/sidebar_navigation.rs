@@ -682,7 +682,7 @@ impl BrowserWindow {
             }
             LibraryIntent::Overflow(space) => {
                 if self.browser.spaces.iter().any(|entry| entry.id == space) {
-                    self.open_space_menu(space, gpui::point(px(0.), px(48.)), window, cx);
+                    self.open_space_menu(space, window.mouse_position(), window, cx);
                 }
             }
             _ => {}
@@ -810,6 +810,7 @@ impl BrowserWindow {
             LibraryActions {
                 theme: true,
                 profile: true,
+                overflow: true,
                 media: true,
                 downloads: true,
                 boosts: true,

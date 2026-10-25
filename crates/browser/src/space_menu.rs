@@ -8,6 +8,11 @@ use browser_core::SpaceId;
 use gpui::{AnyElement, Context, Pixels, Point, Window, div, prelude::*, px, rgb};
 
 impl BrowserWindow {
+    pub(crate) fn space_menu_is_in_library(&self) -> bool {
+        self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library
+            && self.sidebar_navigation.library_section == crate::library::LibrarySection::Spaces
+    }
+
     pub(crate) fn open_space_menu(
         &mut self,
         space: SpaceId,
@@ -53,7 +58,7 @@ impl BrowserWindow {
                     .into()
             })
             .collect();
-        vec![
+        let mut entries = vec![
             item("Change Space Icon…", Command::SpaceIcon).into(),
             item("Rename Space…", Command::SpaceRename).into(),
             item("Edit Theme Color…", Command::SpaceTheme).into(),
@@ -73,7 +78,13 @@ impl BrowserWindow {
             item("Delete Space", Command::SpaceDelete)
                 .enabled(self.browser.spaces.len() > 1 && !self.browser.is_private())
                 .into(),
-        ]
+        ];
+        if self.space_menu_is_in_library() {
+            if let Some(Entry::Item(first)) = entries.first_mut() { first.label = "Change Space Icon".into(); }
+            entries.retain(|entry| !matches!(entry, Entry::Item(item) if matches!(item.command, Some(Command::SpaceManage))));
+            entries.dedup_by(|a, b| matches!((a, b), (Entry::Separator, Entry::Separator)));
+        }
+        entries
     }
 
     pub(crate) fn confirm_space_menu(
@@ -122,7 +133,17 @@ impl BrowserWindow {
                     self.settle_sidebar_pager(cx);
                 }
             }
-            Command::SpaceTheme => self.open_theme_editor(id, window, cx),
+            Command::SpaceTheme => {
+                // The footer menu's child can be larger than the host. Theme
+                // placement still uses the original browser window's geometry.
+                let main = self.main_window;
+                let owner = cx.weak_entity();
+                cx.defer(move |cx| {
+                    let _ = main.update(cx, |_, window, cx| {
+                        let _ = owner.update(cx, |view, cx| view.open_theme_editor(id, window, cx));
+                    });
+                });
+            },
             Command::SpaceProfile => self.open_user_profile_switch(id, cx),
             Command::SpaceRename => {
                 let name = space.name.clone();

@@ -1460,3 +1460,49 @@ fn global_archive_actions_keep_the_row_profile_and_host_selection(cx: &mut TestA
         assert!(!foreign.today.iter().any(|tab| tab.id == deleted));
     });
 }
+
+#[gpui::test]
+fn library_footer_menu_anchors_to_its_card_and_can_cross_the_host_edge(cx: &mut TestAppContext) {
+    let mut browser = Browser::new();
+    let origin = browser.space().id;
+    let target = browser.add_space("Echo Test", 200.);
+    let (view, visual, engine) = open(cx, browser);
+    visual.simulate_resize(gpui::size(px(1000.), px(480.)));
+    select(&view, visual, SidebarPage::Library);
+    click(visual, "library-nav-spaces");
+    let before = session(&view, visual);
+    let calls = engine.0.borrow().document_changes;
+    let footer = visual.debug_bounds("library-space-overflow-1").unwrap();
+    click(visual, "library-space-overflow-1");
+    let overlay = view.read_with(visual, |view, _| {
+        assert_eq!(view.tab_menu.as_ref().unwrap().target, crate::tab_menu::MenuTarget::Space(target));
+        view.tab_menu.as_ref().unwrap().overlay.unwrap()
+    });
+    let mut popup = VisualTestContext::from_window(overlay.into(), &visual.cx);
+    popup.run_until_parked();
+    let menu = popup.debug_bounds("tab-context-menu").unwrap();
+    assert!((menu.left() - footer.center().x - px(1.)).abs() < px(1.));
+    assert!((menu.top() - footer.center().y + px(6.)).abs() < px(1.));
+    assert!(menu.bottom() > px(480.), "the child menu must not be clamped to the parent");
+    view.read_with(visual, |view, _| {
+        assert!(!view.space_menu_commands(target).iter().any(|entry| matches!(entry,
+            crate::tab_menu::Entry::Item(item) if matches!(item.command, Some(crate::tab_menu::Command::SpaceManage)))));
+    });
+    popup.simulate_keystrokes("escape");popup.run_until_parked();visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert!(view.tab_menu.is_none());
+        assert_eq!(view.browser.space().id, origin);
+    });
+    assert_eq!(engine.0.borrow().document_changes, calls);
+    assert_eq!(session(&view, visual), before);
+    click(visual, "library-space-overflow-1");
+    let handle = view.read_with(visual, |view, _| view.tab_menu.as_ref().unwrap().overlay.unwrap());
+    let mut popup = VisualTestContext::from_window(handle.into(), &visual.cx);
+    click(&mut popup, "tab-menu-edit-theme-color");
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert!(view.tab_menu.is_none());
+        assert!(view.theme_editor.is_some(), "the footer child must hand theme placement back to the main window");
+        assert_eq!(view.browser.space().id, origin);
+    });
+}

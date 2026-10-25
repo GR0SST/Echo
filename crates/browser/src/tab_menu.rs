@@ -262,6 +262,7 @@ impl BrowserWindow {
         }
         let width = self.menu_level_width(&entries, false, window);
         if let Some(menu) = &mut self.tab_menu { menu.width = width; }
+        let library_space = matches!(target, MenuTarget::Space(_)) && self.space_menu_is_in_library();
         let origin = window.bounds().origin;
         let main = self.main_window;
         let parent = self.native_view;
@@ -269,9 +270,21 @@ impl BrowserWindow {
         cx.notify();
         cx.defer(move |cx| {
             if !browser.read_with(cx, |this, _| this.tab_menu.as_ref().is_some_and(|menu| menu.focus == focus)).unwrap_or(false) { return; }
-            let Ok(bounds) = main.update(cx, |_, window, _| window.bounds()) else { return; };
+            let Ok((mut bounds, screen)) = main.update(cx, |_, window, cx| (window.bounds(), window.display(cx).map(|display| display.bounds()))) else { return; };
             let _ = browser.update(cx, |this, _| {
-                let height = px(entries_height(&this.menu_entries())).min((bounds.size.height - px(16.)).max(px(32.)));
+                let full_height = px(entries_height(&this.menu_entries()));
+                if library_space {
+                    // Library's footer menu can cross the parent window edge.
+                    // Keep the host/document frame unchanged; extend only its child.
+                    let at = position + point(px(1.), px(-6.)) + (origin - bounds.origin);
+                    let width = this.tab_menu.as_ref().map(|menu| menu.width).unwrap_or_default();
+                    let desired = gpui::size(bounds.size.width.max(at.x + width + px(8.)), bounds.size.height.max(at.y + full_height + px(8.)));
+                    bounds.size = screen.map(|screen| gpui::size(
+                        desired.width.min((screen.right() - bounds.origin.x - px(8.)).max(bounds.size.width)),
+                        desired.height.min((screen.bottom() - bounds.origin.y - px(8.)).max(bounds.size.height)),
+                    )).unwrap_or(desired);
+                }
+                let height = full_height.min((bounds.size.height - px(16.)).max(px(32.)));
                 if let Some(menu) = &mut this.tab_menu {
                     menu.max_height = (bounds.size.height - px(16.)).max(px(32.));
                     menu.viewport = bounds.size;
