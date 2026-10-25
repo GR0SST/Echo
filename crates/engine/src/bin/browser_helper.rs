@@ -26,5 +26,11 @@ fn main() {
         Some(&mut app),
         std::ptr::null_mut(),
     );
+    if std::env::var_os("ECHO_SHUTDOWN_TRACE").is_some() {
+        let kind = std::env::args().find(|arg| arg.starts_with("--utility-sub-type="))
+            .or_else(|| std::env::args().find(|arg| arg.starts_with("--type=")));
+        eprintln!("[cef-helper pid={}] execute-process-return code={code} type={kind:?}",
+            std::process::id());
+    }
     std::process::exit(code);
 }

@@ -389,7 +389,9 @@ impl Engine {
                 root_cache_path: CefString::from(storage::utf8_path(&root_cache)?),
                 cache_path: CefString::from(storage::utf8_path(&default_cache)?),
                 persist_session_cookies: 1,
-                log_severity: LogSeverity::WARNING,
+                log_severity: if std::env::var_os("ECHO_SHUTDOWN_TRACE").is_some() {
+                    LogSeverity::VERBOSE
+                } else { LogSeverity::WARNING },
                 ..Default::default()
             };
             let args = args::Args::new();

@@ -13,6 +13,14 @@ use std::thread::ThreadId;
 static INIT_THREAD: OnceLock<ThreadId> = OnceLock::new();
 static CLOSING: AtomicBool = AtomicBool::new(false);
 
+fn trace(event: std::fmt::Arguments<'_>) {
+    if std::env::var_os("ECHO_SHUTDOWN_TRACE").is_some() {
+        static STARTED: OnceLock<std::time::Instant> = OnceLock::new();
+        let elapsed = STARTED.get_or_init(std::time::Instant::now).elapsed();
+        eprintln!("[cef-shutdown +{}ms {:?}] {event}", elapsed.as_millis(), std::thread::current().id());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShutdownPhase {
     Running,
@@ -304,6 +312,7 @@ impl Lifecycle {
                 self.unknown_browsers.borrow_mut().remove(&id);
                 let lease = self.browsers.borrow_mut().close(id);
                 release(id);
+                trace(format_args!("browser-lease-release id={id}"));
                 drop(lease); // Never release native/context leases under a borrow.
                 crate::downloads::native_lease_released(id);
             }
@@ -381,11 +390,13 @@ impl Lifecycle {
                     }
                 }
                 Callback::CookieReady(id) => {
+                    trace(format_args!("cookie-ready-collected id={id}"));
                     if let Some(flush) = self.flushes.borrow_mut().get_mut(id) {
                         flush.state.ready();
                     }
                 }
                 Callback::Flushed(id) => {
+                    trace(format_args!("cookie-flushed-collected id={id}"));
                     if let Some(flush) = self.flushes.borrow_mut().get_mut(id) {
                         flush.state.complete();
                     }
@@ -473,7 +484,10 @@ pub(crate) fn pump_once() {
     }
     let _guard = Guard(&lifecycle.pumping);
     crate::permissions::pump();
+    let closing = lifecycle.phase.get() != ShutdownPhase::Running;
+    if closing { trace(format_args!("pump-enter")); }
     do_message_loop_work();
+    if closing { trace(format_args!("pump-return")); }
     lifecycle.after_closed(crate::downloads::poll_runtime);
     lifecycle.collect();
 }
@@ -486,6 +500,7 @@ impl Engine {
         check_thread()?;
         CLOSING.store(true, Ordering::SeqCst);
         if let Some(runtime) = runtime() {
+            trace(format_args!("begin"));
             runtime.lifecycle.begin();
             runtime.downloads.borrow_mut().seal();
         }
@@ -574,6 +589,7 @@ impl Engine {
                 // Snapshot retains contexts only while initializing cookie managers.
                 let contexts = runtime.persistent.snapshot();
                 for (path, context) in contexts {
+                    trace(format_args!("cookie-manager-request path={} leases={}", path.display(), Rc::strong_count(&context)));
                     let id = lifecycle.flushes.borrow().len();
                     lifecycle.flushes.borrow_mut().push(Flush {
                         path,
@@ -606,8 +622,10 @@ impl Engine {
                         .collect()
                 };
                 for (id, manager, path) in requests {
+                    trace(format_args!("cookie-flush-request id={id} path={}", path.display()));
                     let mut callback = CookieCallback::new(lifecycle.queue.clone(), id, true);
                     let accepted = manager.is_some_and(|m| m.flush_store(Some(&mut callback)) != 0);
+                    trace(format_args!("cookie-flush-accepted id={id} accepted={accepted}"));
                     lifecycle.flushes.borrow_mut()[id].state.accepted(accepted);
                     if !accepted {
                         lifecycle.fail(format!("Cookie flush rejected for {}", path.display()));
@@ -619,12 +637,25 @@ impl Engine {
                 let downloads_released = runtime.downloads.borrow().downloads_native_handles_released();
                 if downloads_released && lifecycle.start_finalizing(Rc::strong_count(&runtime).saturating_sub(2)) {
                     let flushes = std::mem::take(&mut *lifecycle.flushes.borrow_mut());
+                    trace(format_args!("cookie-managers-release count={}", flushes.len()));
                     drop(flushes);
-                    runtime.persistent.clear();
+                    trace(format_args!("request-contexts-release-enter"));
+                    for (path, context) in runtime.persistent.drain() {
+                        trace(format_args!("request-context-release path={} leases={}", path.display(), Rc::strong_count(&context)));
+                        drop(context);
+                        trace(format_args!("request-context-released path={}", path.display()));
+                    }
+                    trace(format_args!("request-contexts-release-return"));
                     *runtime.private.borrow_mut() = std::rc::Weak::new();
                     // All app CEF browser/context/manager/registration handles
                     // are gone. Runtime and its framework loader stay alive.
+                    // The coordinator cannot report a new status while this
+                    // synchronous call is blocked. Do not leave FlushingCookies
+                    // as the last default diagnostic after its callbacks finish.
+                    eprintln!("[cef-shutdown] ShuttingDown; owners=0; browsers=[]; cookie_flushes=0; app_contexts_released=true");
+                    trace(format_args!("cef-shutdown-enter phase=ShuttingDown owners=0 browsers=[] cookie_flushes=0"));
                     cef::shutdown();
+                    trace(format_args!("cef-shutdown-return"));
                     lifecycle.phase.set(ShutdownPhase::Complete);
                 }
             }
@@ -639,6 +670,7 @@ wrap_completion_callback! {
     struct CookieCallback { queue: Queue, id: usize, flushed: bool }
     impl CompletionCallback {
         fn on_complete(&self) {
+            trace(format_args!("cookie-callback id={} flushed={}", self.id, self.flushed));
             enqueue(&self.queue, if self.flushed { Callback::Flushed(self.id) } else { Callback::CookieReady(self.id) });
         }
     }

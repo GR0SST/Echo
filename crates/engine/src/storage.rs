@@ -214,10 +214,10 @@ impl<T> PersistentContexts<T> {
             .collect()
     }
 
-    pub(crate) fn clear(&self) {
-        // Drop native handles outside the registry borrow.
+    /// Detach the registry before individually releasing native contexts.
+    pub(crate) fn drain(&self) -> Vec<(PathBuf, Rc<T>)> {
         let contexts = std::mem::take(&mut *self.0.borrow_mut());
-        drop(contexts);
+        contexts.into_iter().collect()
     }
 
     pub(crate) fn resolve(
@@ -240,6 +240,30 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn draining_retains_contexts_until_explicit_release_and_allows_drop_reentry() {
+        struct Context { registry: std::rc::Weak<PersistentContexts<Context>>, released: Rc<Cell<usize>> }
+        impl Drop for Context {
+            fn drop(&mut self) {
+                assert!(self.registry.upgrade().unwrap().snapshot().is_empty());
+                self.released.set(self.released.get() + 1);
+            }
+        }
+        let registry = Rc::new(PersistentContexts::default());
+        let released = Rc::new(Cell::new(0));
+        for path in ["Default", "Work"] {
+            let context = registry.resolve(path.into(), || Ok(Context {
+                registry: Rc::downgrade(&registry), released: released.clone(),
+            })).unwrap();
+            drop(context);
+        }
+        let contexts = registry.drain();
+        assert_eq!(released.get(), 0);
+        assert!(registry.snapshot().is_empty());
+        drop(contexts);
+        assert_eq!(released.get(), 2);
+    }
 
     #[test]
     fn readiness_requires_callback_and_uses_the_exact_shared_lease() {
