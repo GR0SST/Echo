@@ -6,7 +6,7 @@
 use std::path::Path;
 use crate::acknowledgements;
 
-use cef::build_util::mac::{build_bundle, BundleInfo};
+use cef::build_util::mac::{build_bundle, bundle, BundleInfo};
 
 pub(super) fn run() {
     // Cargo's configured CEF_PATH remains the CDN fallback. The bundle utility
@@ -24,7 +24,7 @@ pub(super) fn run() {
         "dev.echo.browser",
         "Echo",
         "English",
-        semver::Version::new(0, 1, 0),
+        semver::Version::parse(&std::env::var("ECHO_RELEASE_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into())).expect("invalid ECHO_RELEASE_VERSION"),
     );
     // Replace, never overwrite in place: macOS kills processes whose mapped
     // executable changes underneath them (e.g. a running copy of the app).
@@ -32,7 +32,15 @@ pub(super) fn run() {
     if app.exists() {
         std::fs::remove_dir_all(app).expect("cannot remove the old bundle");
     }
-    match build_bundle(Path::new("target/bundle"), "Echo", info) {
+    let release = std::env::args().any(|arg| arg == "--release");
+    let result = if release {
+        for executable in ["Echo", "browser_helper"] {
+            let status = std::process::Command::new("cargo").args(["build", "--locked", "--release", "--bin", executable]).status().expect("cannot run cargo");
+            assert!(status.success(), "release compilation failed");
+        }
+        bundle(Path::new("target/bundle"), Path::new("target/release"), "Echo", "browser_helper", None, info)
+    } else { build_bundle(Path::new("target/bundle"), "Echo", info) };
+    match result {
         Ok(path) => {
             install_icon(&path);
             install_scripting(&path);

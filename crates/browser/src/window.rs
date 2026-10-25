@@ -3599,6 +3599,7 @@ impl BrowserWindow {
                 ),
             )
             .when_some(mini_player, |this, player| this.child(player))
+            .when(!private && !blank && crate::updates::banner_visible(cx), |this| this.child(crate::updates::banner(cx)))
             // Arc's scrolling region meets the 50 px dock; the workspace's
             // general 8 px gap must not shorten the drag edge hit region.
             .when(!private && !blank, |this| this.child(self.render_space_switcher(cx)

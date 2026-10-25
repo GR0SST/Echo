@@ -6,12 +6,12 @@ mod macos;
 #[cfg(target_os = "macos")]
 mod cef_dist;
 
+#[cfg(any(not(target_os = "macos"), test))]
+mod native_bundle;
+
 fn main() {
     #[cfg(target_os = "macos")]
     macos::run();
     #[cfg(not(target_os = "macos"))]
-    {
-        eprintln!("The bundle utility currently supports macOS only; Windows/Linux packaging is not implemented.");
-        std::process::exit(2);
-    }
+    native_bundle::run();
 }

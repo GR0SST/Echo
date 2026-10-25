@@ -511,6 +511,7 @@ pub(crate) fn init(cx: &mut App) {
                     },
                     || downloads.as_ref().map_or(Ok(()), ShutdownDownloads::finish),
                     || {
+                        app.borrow_mut().update(crate::updates::arm_after_shutdown).map_err(|error| error.to_string())??;
                         #[cfg(all(target_os = "macos", not(test)))]
                         {
                             let completed = state.borrow().last_status.clone().expect("completed engine status");

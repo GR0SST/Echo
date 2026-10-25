@@ -27,7 +27,7 @@ documents) are mentioned once.
 
 Echo is a **local-only browser** by the owner's decision. There is no
 Echo/Arc account, browser-account sign-in, unified browser login, cross-device
-sync or cloud backend of ours. Anything dependent on The Browser Company's
+sync or cloud app server/user-data backend of ours. A static update host is allowed. Anything dependent on The Browser Company's
 servers or an Arc account is permanently out of scope: Arc Members and account
 recovery; syncing Spaces, tabs, Favorites or settings; arc.net cloud sharing of
 Spaces/Folders/Easels/Splits; publishing Easels/Boosts to the gallery; "Share
@@ -36,7 +36,8 @@ Do not add UI for these features, including placeholder buttons, sync notices
 or synchronization icons. Existing inert controls described below are inventory
 observations, not permission to retain or implement excluded UI.
 Local profiles, local sessions, browsing data, website logins/passwords, local
-import from other browsers and the system share sheet remain in scope.
+import from other browsers and the system share sheet remain in scope. Echo's own
+signed static update channel is in scope; it contains no accounts or user data.
 
 Arc Max parity is in scope by the owner's decision (2026-10-24): Tidy Tabs,
 tab/download renaming, 5-Second Previews, Ask on Page, ChatGPT in the Command
@@ -70,7 +71,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | Share Arc (referral link) | — | out of scope | Permanently excluded: Arc service/account dependency; no UI, including placeholders |
 | Set as Default Browser | — | partial | Application-menu action and explicit first-run prompt use isolated macOS LaunchServices/NSWorkspace consent requests; duplicate requests serialized. Windows/Linux stubs; native OS consent and weekly prompts remain unvalidated. See docs/ONBOARDING_IMPORT_WIP.md |
 | Import from Another Browser… | — | partial | GPUI import flow in the app menu, matching the installed Arc menu location. Source picker geometry and fixture import checked natively; later-screen visual parity and unsupported formats remain. See "Onboarding and import" |
-| Check for Updates… | — | missing | Echo-owned signed static update channel; Arc feed and telemetry excluded |
+| Check for Updates… | — | partial | Echo-owned signed static channel, periodic/manual checks and quit-gated restart implemented. Native menu/status check and local old→new delta installation pass; available-update Arc banner layout and Apple signing/notarization remain unqualified. See docs/UPDATES.md |
 | Privacy Policy | — | partial | Own local privacy document and app-menu route; packaged with the app. OS document-opening acceptance remains |
 | Hide Arc / Hide Others / Show All | ⌘H / ⌥⌘H / — | partial | Native menu and shortcuts wired through the platform interface on macOS, omitted elsewhere. Final native behavior check awaits an unlocked desktop |
 | Quit | ⌘Q | partial | The first Quit intent hides the app immediately while retaining data-safe teardown; three macOS native measurements were 23.9–32.3 ms to all owned windows disappearing. Failed barriers show one diagnostic. Windows/Linux visibility is unqualified. No "Warn before quitting" confirmation. Native captured-private-page and closed-private-tab cases assert actual zero-status process exit after the complete CEF barrier with `scripts/check-private-quit.sh`; the driver strict mode rejects timeouts and signals. The source-built CEF corrects the enclosing watchdog/network-wait deadline collision and passes the normal/multi-profile/private/reset/separate-GPU/PiP matrix: 16/16 exits, sixteen graceful zero-status network-helper exits and twelve persistent cookie checks. Atomic flushes and completion barriers remain intact. Select the patched distribution; the original prebuilt fallback retains the documented risk. [Shutdown investigation](CEF_SHUTDOWN.md) |
@@ -241,7 +242,7 @@ Folder duplication follows the right-click action documented in the
 | "+" button in the dock: New Tab, New Space, New Folder, New Split, New Boost | — | partial | Fresh Arc 1.170 has New Space / New Folder / New Easel / New Boost / New Split / New Tab; no New Note in this menu. Echo omits the excluded Easel row, giving the measured 210 × 250 px in-scope card versus Arc’s 210 × 290 px. The 40 px rows, 13 px labels, pointer, default New Tab highlight and Light/Dark fills are paired. Original fixed vectors reproduce the stacked pages, folder, paintbrush, split-plus and square-plus control shapes; small raster differences remain. Keyboard/click routes are retained. Exact popover motion and translucency remain unqualified; evidence: `target/parity/command-sidebar/pairs/new-menu-*.png` |
 | "Springy" click animation on sidebar items | — | partial | Ordinary tab rows ease 1 px inward per edge over 60 ms, then expand from the current inset on release; nested indentation and drag-card grab points are retained. Native Arc/Echo recordings confirm 212 → 210 → 212 px at the same sidebar width. Other sidebar item types and reorder settling remain unfinished |
 | Incognito window sidebar ("Incognito Tabs") | — | partial | Dark sidebar with the installed reference's "Incognito" header, empty tab list and focused Command Bar on opening; no regular Favorites, Pinned items or Space switcher. Tab selection and closure work. Private New-menu/context-menu behavior and complete visual-state matching remain |
-| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | partial | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. No nib/layout was found for the SwiftUI education banner; existing education eligibility is false and was not modified. Round 3 leaves the local education banner partial without a reference. Local blocker banners remain missing; Echo update banner is missing; Arc update-feed and account banners are out of scope |
+| Banners at the bottom of the sidebar: update, "We cleaned up!" after auto-archiving, speed-up (several ad blockers) | — | partial | Auto-archive toast is wired; the education banner still needs a live Arc layout reference. No nib/layout was found for the SwiftUI education banner; existing education eligibility is false and was not modified. Round 3 leaves the local education banner partial without a reference. Local blocker banners remain missing; Echo restart/update banner is wired, but its available-update Arc layout is unqualified; Arc update-feed and account banners are out of scope |
 | Media controls in the sidebar | — | partial | Background-audio transport, hover title and tab-volume rows are implemented; video uses native Chromium PiP. The hover header now retains Arc’s two-window PiP affordance for audio-only sources as well, without requesting video PiP. Source-built CEF matches the observed video-only floating window on pointer hover. See section 17 for remaining controls and visual gaps |
 
 
@@ -545,7 +546,7 @@ Max download rename/revert uses the verified toast layouts; its live Arc feedbac
 | Cannot Add New Pane (Split View) | done |
 | Import: Now importing… / Success / partial / failure | missing |
 | Translation: Translated to %@ / back to %@ / error | missing |
-| Updates: update pending / failed / in progress | missing (Echo-owned signed static channel; Arc feed excluded) |
+| Updates: update pending / failed / in progress | partial (Echo-owned signed static channel; GPUI check/failure/ready states, sidebar restart banner, download guard and completed quit barrier; live Arc available-update visual reference and install-failure presentation remain) |
 | Battery Saver Mode Activated/Deactivated | missing |
 | Shortcut tips ("Copy links faster by pressing…", "… to easily show and hide your Sidebar!", Site Search) | missing |
 | Screenshot Copied to Clipboard, Capture in Progress… | missing |

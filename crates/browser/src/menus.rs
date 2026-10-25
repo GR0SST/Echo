@@ -171,6 +171,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
     let mut app = vec![MenuItem::action("About Echo", About), MenuItem::separator(), MenuItem::action("Preferences…", Settings),
         MenuItem::action("Set as Default Browser", SetDefaultBrowser), MenuItem::separator(),
         MenuItem::action("Import from Another Browser…", ImportFromBrowser), MenuItem::separator()];
+    app.push(MenuItem::action("Check for Updates…", crate::updates::CheckForUpdates));
     app.extend([MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
         MenuItem::action("Privacy Policy", PrivacyPolicy), MenuItem::separator()]);
     if native::supports_app_visibility() {

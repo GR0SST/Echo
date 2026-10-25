@@ -136,8 +136,11 @@ actions!(app, [Quit]);
 
 mod shortcuts;
 
+mod updates;
+
 pub fn init(cx: &mut App) {
     quit::init(cx);
+    updates::init(cx);
     scripting::init(cx);
     task_manager::init(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -343,6 +346,7 @@ fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
 }
 
 pub fn run() {
+    echo_updater::startup();
     if let Some(status) = engine::run_storage_verifier_process() {
         std::process::exit(status);
     }

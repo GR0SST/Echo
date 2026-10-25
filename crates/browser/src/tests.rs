@@ -11410,3 +11410,39 @@ fn theme_noise_marker_is_hidden_when_idle_even_after_a_color_is_picked(cx: &mut 
 
 #[path = "quit_confirmation_tests.rs"]
 mod quit_confirmation_tests;
+#[gpui::test]
+fn update_menu_opens_status_and_close_preserves_browsing(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let before = view.read_with(cx, |view, _| view.browser.space().active_tab);
+    dispatch_menu(cx, "Echo", "Check for Updates…");
+    assert_eq!(cx.cx.update(|app| app.global::<crate::updates::Updates>().status.clone()), crate::updates::Status::Checking);
+    let handle = cx.cx.update(|app| app.windows().into_iter().find(|h| h.downcast::<crate::updates::UpdateWindow>().is_some()).unwrap());
+    dispatch_menu(cx, "Echo", "Check for Updates…");
+    assert_eq!(cx.cx.update(|app| app.windows().into_iter().filter(|h| h.downcast::<crate::updates::UpdateWindow>().is_some()).count()), 1);
+    let mut dialog = VisualTestContext::from_window(handle, &cx.cx);
+    click(&mut dialog, "update-action");
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().active_tab), before);
+    assert!(!crate::quit::is_quitting());
+}
+
+#[gpui::test]
+fn update_banner_click_cannot_quit_without_a_verified_package(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    assert!(cx.debug_bounds("update-banner").is_none());
+    cx.cx.update(|app| { app.global_mut::<crate::updates::Updates>().status = crate::updates::Status::Ready("0.2.0".into()); app.refresh_windows(); });
+    click(cx, "update-banner");
+    assert!(!crate::quit::is_quitting());
+    assert!(view.read_with(cx, |view, _| !view.browser.spaces.is_empty()));
+}
+
+#[gpui::test]
+fn update_window_keyboard_close_keeps_the_browser_open(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Echo", "Check for Updates…");
+    let handle = cx.cx.update(|app| app.windows().into_iter().find(|h| h.downcast::<crate::updates::UpdateWindow>().is_some()).unwrap());
+    let mut dialog = VisualTestContext::from_window(handle, &cx.cx);
+    dialog.simulate_keystrokes("cmd-w");
+    assert_eq!(cx.cx.update(|app| app.windows().into_iter().filter(|h| h.downcast::<crate::updates::UpdateWindow>().is_some()).count()), 0);
+    assert!(view.read_with(cx, |view, _| !view.browser.spaces.is_empty()));
+    assert!(!crate::quit::is_quitting());
+}
