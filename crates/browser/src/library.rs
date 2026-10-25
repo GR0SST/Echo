@@ -80,6 +80,8 @@ pub(crate) struct LibrarySpace {
     pub profile_name: String,
     pub icon: Option<String>,
     pub hue: f32,
+    pub theme_image: Option<std::sync::Arc<gpui::RenderImage>>,
+    pub foreground: Option<Hsla>,
 }
 
 /// Snapshot metadata only. Favorites, tabs, folders and their interactions are
@@ -108,6 +110,8 @@ impl LibraryProjection {
                     profile_name: browser.user_profile(space.user_profile_id)?.name().into(),
                     icon: space.custom_icon.clone(),
                     hue: space.hue,
+                    theme_image: None,
+                    foreground: None,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -309,7 +313,7 @@ pub(crate) fn render_library(
                     .h_full()
                     .items_center()
                     .gap(px(24.))
-                    .px(px(28.))
+                    .px(px(24.))
                     .children(cards)
                     .child(
                         action(
@@ -475,6 +479,9 @@ fn render_card(
     events: LibraryEvents,
     sidebar: AnyElement,
 ) -> AnyElement {
+    let foreground = space.foreground.unwrap_or(colors.text);
+    let ink = if foreground.l > 0.5 { 1. } else { 0. };
+    let colors = LibraryColors { text: foreground, muted: foreground.opacity(0.6), selected: gpui::hsla(0., 0., ink, 0.10), ..colors };
     let header = action(
         format!("library-space-select-{index}"),
         LibraryIntent::SelectSpace(space.id),
@@ -487,16 +494,9 @@ fn render_card(
     .w_full()
     .items_center()
     .gap(px(8.))
-    .h(px(32.))
-    .child(match &space.icon {
-        Some(icon) => crate::icons::glyph(icon),
-        None => div()
-            .flex_none()
-            .size(px(7.))
-            .rounded_full()
-            .bg(colors.text)
-            .into_any_element(),
-    })
+    .h(px(28.))
+    .text_size(px(13.)).font_weight(gpui::FontWeight::BOLD).text_color(colors.muted)
+    .children(space.icon.as_deref().map(crate::icons::glyph))
     .child(
         div()
             .debug_selector(move || format!("library-space-name-{index}"))
@@ -517,13 +517,14 @@ fn render_card(
     .flex()
     .items_center()
     .min_w_0()
-    .max_w(px(180.))
-    .h(px(24.))
+    .max_w(px(90.))
+    .h(px(22.))
     .rounded_full()
-    .px(px(8.))
-    .py(px(4.))
+    .px(px(6.))
+    .gap(px(3.))
     .bg(colors.selected)
-    .text_size(px(11.))
+    .text_size(px(10.)).font_weight(gpui::FontWeight::MEDIUM).text_color(colors.muted)
+    .child(crate::icons::ionicon("happy-outline", 13., 1.))
     .child(
         div()
             .debug_selector(move || format!("library-space-profile-name-{index}"))
@@ -537,12 +538,12 @@ fn render_card(
         actions.theme,
         events.clone(),
     )
-    .size(px(28.))
+    .size(px(20.))
     .flex_none()
     .flex()
     .items_center()
-    .justify_center()
-    .child(crate::icons::control(crate::icons::Icon::SiteControls));
+    .justify_center().text_color(colors.muted)
+    .child(crate::icons::ionicon("pencil", 14., 1.));
     div()
         .id(("library-space", index))
         .debug_selector(move || format!("library-space-{index}"))
@@ -552,24 +553,15 @@ fn render_card(
         .rounded_xl()
         .overflow_hidden()
         // The host supplies its established Space theme mapping.
-        .bg((colors.card_surface)(space.hue))
+        .bg(if space.theme_image.is_some() { gpui::transparent_black() } else { (colors.card_surface)(space.hue) })
+        .relative()
+        .when_some(space.theme_image.clone(), |card, image| card.child(gpui::img(image).absolute().inset_0().size_full().rounded_xl()))
+        .text_color(colors.text)
         .flex()
         .flex_col()
-        .p(px(12.))
+        .px(px(8.)).py(px(12.))
         .gap(px(8.))
-        .child(header)
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .min_w_0()
-                .h(px(28.))
-                .gap(px(8.))
-                .items_center()
-                .justify_between()
-                .child(profile)
-                .child(theme),
-        )
+        .child(div().relative().px(px(8.)).flex().items_center().gap(px(6.)).h(px(28.)).flex_none().child(header.flex_1()).child(profile).child(theme))
         .child(
             div()
                 .debug_selector(move || format!("library-space-body-{index}"))

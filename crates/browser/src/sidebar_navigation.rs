@@ -44,6 +44,7 @@ pub(crate) struct SidebarNavigation {
     pub(crate) media: Option<Entity<library::media::MediaView>>,
     boosts:Option<Entity<crate::boost_library::BoostLibrary>>,
     archive: Option<Entity<crate::library_archive::ArchiveLibrary>>,
+    card_images: std::collections::HashMap<SpaceId, crate::space_theme::ProfileCardPreview>,
     media_events: Option<Subscription>,
     pub(crate) media_search_focus: bool,
     pub(crate) downloads: crate::library_downloads::DownloadsNavigation,
@@ -71,6 +72,7 @@ impl SidebarNavigation {
             media: None,
             boosts:None,
             archive: None,
+            card_images: Default::default(),
             media_events: None,
             media_search_focus: false,
             downloads: Default::default(),
@@ -695,11 +697,19 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn render_library_host(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(projection) =
+        let Some(mut projection) =
             LibraryProjection::from_browser(&self.browser, self.sidebar_navigation.library_origin)
         else {
             return div().into_any_element();
         };
+        for card in &mut projection.spaces {
+            if let Some(space) = self.browser.spaces.iter().find(|space| space.id == card.id) {
+                let surface = self.theme_surface_for(space);
+                let height = (f32::from(self.sidebar_navigation.normal_content_size.height) - 76.).max(2.) as u32;
+                card.theme_image = Some(self.sidebar_navigation.card_images.entry(card.id).or_default().image_sized(surface, 240, height));
+                card.foreground = Some(self.theme_foreground_for(card.id));
+            }
+        }
         let owner = cx.entity().downgrade();
         let events: library::LibraryEvents = Rc::new(move |intent, window, cx| {
             let _ = owner.update(cx, |this, cx| {
@@ -850,14 +860,6 @@ impl BrowserWindow {
         let saved_namespace = self
             .sidebar_debug_namespace
             .replace(format!("library-{:?}", card.id));
-        let favorites = self
-            .browser
-            .active_user_profile()
-            .favorites
-            .iter()
-            .filter(|tab| !self.browser.is_split_secondary(tab.id))
-            .map(|tab| self.render_favorite(tab, 60., cx).into_any_element())
-            .collect::<Vec<_>>();
         let pinned = self
             .render_folder_rows(card.id, card.hue / 360., cx)
             .into_iter()
@@ -927,17 +929,16 @@ impl BrowserWindow {
             .flex_col()
             .gap(px(4.))
             .overflow_hidden()
-            .child(div().flex().flex_wrap().gap(px(6.)).children(favorites))
             .child(
                 div()
                     .w_full()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(3.))
                     .children(pinned),
             )
-            .child(div().h(px(1.)).my(px(8.)).bg(hsla(0., 0., 0., 0.12)))
+            .child(div().h(px(1.)).my(px(6.)).bg(hsla(0., 0., 0., 0.12)))
             .child(
                 div()
                     .id(gpui::SharedString::from(format!(
@@ -947,7 +948,7 @@ impl BrowserWindow {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(3.))
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()

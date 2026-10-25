@@ -480,7 +480,7 @@ fn invalid_commit_request_preserves_authoritative_session_and_live_draft(cx: &mu
 }
 
 #[gpui::test]
-fn library_cards_render_favorites_from_each_cards_assigned_profile(cx: &mut TestAppContext) {
+fn library_cards_omit_favorites_without_changing_profile_data(cx: &mut TestAppContext) {
     let mut browser = Browser::new();
     let origin = browser.space().id;
     let personal_profile = browser.active_user_profile_id();
@@ -510,16 +510,8 @@ fn library_cards_render_favorites_from_each_cards_assigned_profile(cx: &mut Test
             )
             .into_boxed_str(),
         );
-        let body_selector: &'static str =
-            Box::leak(format!("library-space-body-{index}").into_boxed_str());
-        let item = visual
-            .debug_bounds(selector)
-            .expect("card's own profile Favorite");
-        let body = visual
-            .debug_bounds(body_selector)
-            .expect("card sidebar body");
-        assert!(item.left() >= body.left() && item.right() <= body.right());
-        assert!(item.top() >= body.top() && item.bottom() <= body.bottom());
+        assert!(visual.debug_bounds(selector).is_none(), "Favorites belong to the regular sidebar, not Library cards");
+
     }
     view.read_with(visual, |view, _| {
         assert_eq!(
@@ -1216,7 +1208,13 @@ fn library_real_tab_rows_fill_the_card_and_short_titles_fit_without_clipping(
     select(&view, visual, SidebarPage::Library);
     click(visual, "library-nav-spaces");
     let body = visual.debug_bounds("library-space-body-0").unwrap();
-    assert_eq!(body.size.width, px(216.));
+    assert_eq!(body.size.width, px(224.));
+    for pair in rows[2..].windows(2) {
+        let selectors = pair.iter().map(|(tab, _)| Box::leak(format!("library-{space:?}/tab-{}", tab.get()).into_boxed_str()) as &'static str).collect::<Vec<_>>();
+        let first = visual.debug_bounds(selectors[0]).unwrap();
+        let second = visual.debug_bounds(selectors[1]).unwrap();
+        assert_eq!(second.top() - first.top(), px(41.));
+    }
     crate::sidebar_title::take_painted_titles();
     for (tab, title) in rows {
         let row_selector: &'static str =

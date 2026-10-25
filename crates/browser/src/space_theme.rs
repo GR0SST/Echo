@@ -241,14 +241,18 @@ impl ThemePaintCache {
 /// The profile sheet previews each Space's actual pigments and texture.
 /// It uses the sidebar's field and noise functions rather than a hue swatch.
 #[derive(Clone, Default)]
-pub(crate) struct ProfileCardPreview(Rc<RefCell<Option<(Surface, Arc<RenderImage>)>>>);
+pub(crate) struct ProfileCardPreview(Rc<RefCell<Option<(Surface, u32, u32, Arc<RenderImage>)>>>);
 impl ProfileCardPreview {
     pub(crate) fn image(&self, surface: Surface) -> Arc<RenderImage> {
-        if let Some((key, image)) = self.0.borrow().as_ref().filter(|(key, _)| key == &surface) {
+        self.image_sized(surface, 64, 96)
+    }
+    pub(crate) fn image_sized(&self, surface: Surface, width: u32, height: u32) -> Arc<RenderImage> {
+        let (width, height) = (width.max(2), height.max(2));
+        if let Some((_, _, _, image)) = self.0.borrow().as_ref().filter(|(key, w, h, _)| key == &surface && *w == width && *h == height) {
             return image.clone();
         }
-        let image = image::RgbaImage::from_fn(64, 96, |x, y| {
-            let base = surface.sample(x as f32 / 63., y as f32 / 95.);
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            let base = surface.sample(x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32);
             let (tint, alpha) = if surface.default_style {
                 default_grain(&surface, x, y)
             } else {
@@ -270,7 +274,7 @@ impl ProfileCardPreview {
             ])
         });
         let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
-        *self.0.borrow_mut() = Some((surface, image.clone()));
+        *self.0.borrow_mut() = Some((surface, width, height, image.clone()));
         image
     }
 }
@@ -541,7 +545,7 @@ impl BrowserWindow {
             1.,
         )
     }
-    fn theme_surface_for(&self, space: &browser_core::Space) -> Surface {
+    pub(crate) fn theme_surface_for(&self, space: &browser_core::Space) -> Surface {
         let mut theme = self
             .theme_editor
             .as_ref()

@@ -110,7 +110,7 @@ fn five_cards_match_observed_library_geometry(cx: &mut TestAppContext) {
     .enumerate()
     {
         let card = visual.debug_bounds(selector).unwrap();
-        assert_eq!(card.origin.x - root.origin.x, px(140. + i as f32 * 264.));
+        assert_eq!(card.origin.x - root.origin.x, px(136. + i as f32 * 264.));
         assert_eq!(card.origin.y - root.origin.y, px(48.));
         assert_eq!(card.size.width, px(240.));
         assert_eq!(root.bottom() - card.bottom(), px(48.));
@@ -118,7 +118,7 @@ fn five_cards_match_observed_library_geometry(cx: &mut TestAppContext) {
     let plus = visual.debug_bounds("library-new-space").unwrap();
     assert_eq!(
         plus.center() - root.origin,
-        gpui::point(px(1484.), px(525.))
+        gpui::point(px(1480.), px(525.))
     );
     assert_eq!(plus.size, gpui::size(px(48.), px(48.)));
     assert!(visual.debug_bounds("injected-Space 1").is_some());
@@ -254,14 +254,14 @@ fn long_names_keep_controls_inside_cards_in_a_small_window(cx: &mut TestAppConte
     let profile_name = visual.debug_bounds("library-space-profile-name-0").unwrap();
     let theme = visual.debug_bounds("library-space-theme-0").unwrap();
     assert_eq!(card.size, gpui::size(px(240.), px(384.)));
-    assert_eq!(header.size.height, px(32.));
+    assert_eq!(header.size.height, px(28.));
     assert!(name.right() <= card.right() - px(12.));
-    assert!(name.origin.x > header.origin.x);
-    assert!(pill.size.width <= px(180.));
-    assert!(profile_name.right() <= pill.right() - px(8.));
-    assert!(pill.right() + px(8.) <= theme.origin.x);
-    assert_eq!(theme.size, gpui::size(px(28.), px(28.)));
-    assert_eq!(theme.right(), card.right() - px(12.));
+    assert!(name.origin.x >= header.origin.x);
+    assert!(pill.size.width <= px(90.));
+    assert!(profile_name.right() <= pill.right() - px(6.));
+    assert!(pill.right() + px(6.) <= theme.origin.x);
+    assert_eq!(theme.size, gpui::size(px(20.), px(20.)));
+    assert_eq!(theme.right(), card.right() - px(16.));
     click(visual, "library-space-theme-0");
     assert_eq!(
         *log.borrow(),

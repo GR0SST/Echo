@@ -186,7 +186,7 @@ fn real_query_survives_route_and_semantic_color_updates_without_global_appearanc
     });
     visual.run_until_parked();
     let card = visual.debug_bounds("library-space-0").unwrap();
-    assert_eq!(card.origin.x, px(140.));
+    assert_eq!(card.origin.x, px(136.));
     assert_eq!(card.size.width, px(240.));
     // GPUI can retain debug bounds from an earlier frame. Verify the mounted
     // paint path instead of treating a stale selector as visible Media.
