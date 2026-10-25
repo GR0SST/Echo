@@ -34,6 +34,7 @@ mod audio;
 mod audio_clock;
 mod media;
 pub use media::{MediaState, MediaAction};
+pub mod speech;
 mod ui_sound;
 pub use ui_sound::{play_ui_sound,UiSound};
 mod page_swipe;
@@ -1935,7 +1936,7 @@ mod tests {
         let target = EventQueue::default();
         original.push((7, RawEvent::Audio(true)));
         original.push((7, RawEvent::Focused));
-        original.push((7, RawEvent::Context(page_context::Request { page_url: "https://source.example/".into(), action: page_context::Action::Copy("must not follow a transfer".into()) })));
+        original.push((7, RawEvent::Context(page_context::Request { page_url: "https://source.example/".into(), document_epoch: 0, action: page_context::Action::Copy("must not follow a transfer".into()) })));
         original.redirect(7, &original, &target, transferable_metadata);
         assert!(original.take().is_empty());
         let events = target.take();

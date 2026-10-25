@@ -20,10 +20,13 @@ pub enum Action {
     Inspect { x: i32, y: i32 },
     Print,
     ViewSource,
+    Speak(String),
+    StopSpeaking,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Request {
     pub page_url: String,
+    pub document_epoch: u64,
     pub action: Action,
 }
 
@@ -64,10 +67,10 @@ fn begin(browser: i32) {
         });
     }
 }
-fn accept(browser: i32) -> bool {
+fn accept(browser: i32) -> Option<u64> {
     MENUS
         .with_borrow_mut(|menus| menus.remove(&browser))
-        .is_some_and(|epoch| crate::site_data::document_epoch(browser) == Some(epoch))
+        .filter(|epoch| crate::site_data::document_epoch(browser) == Some(*epoch))
 }
 pub(super) fn forget(browser: i32) {
     cancel(browser);
@@ -97,6 +100,9 @@ const SAVE_PAGE: i32 = 26515;
 const CAST: i32 = 26516;
 const TRANSLATE: i32 = 26517;
 const HIGHLIGHT: i32 = 26518;
+const SPEECH: i32 = 26519;
+const START_SPEAKING: i32 = 26520;
+const STOP_SPEAKING: i32 = 26521;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Row {
     id: i32,
@@ -112,6 +118,9 @@ fn row(id: i32, label: impl Into<String>, enabled: bool) -> Row {
 }
 fn separator() -> Row {
     row(-1, "", false)
+}
+fn speech_rows(speaking: bool) -> [Row; 2] {
+    [row(START_SPEAKING, "Start Speaking", true), row(STOP_SPEAKING, "Stop Speaking", speaking)]
 }
 #[derive(Default)]
 struct Context {
@@ -201,7 +210,7 @@ fn rows(context: &Context) -> Vec<Row> {
     out.push(row(INSPECT, "Inspect", true));
     out
 }
-fn request(command: i32, params: &ContextMenuParams) -> Option<Request> {
+fn request(command: i32, params: &ContextMenuParams, document_epoch: u64) -> Option<Request> {
     let link = CefString::from(&params.link_url()).to_string();
     let image = CefString::from(&params.source_url()).to_string();
     let action = match command {
@@ -232,10 +241,17 @@ fn request(command: i32, params: &ContextMenuParams) -> Option<Request> {
         },
         PRINT => Action::Print,
         command if command == *MenuId::PRINT.as_ref() as i32 => Action::Print,
+        START_SPEAKING => {
+            let text = CefString::from(&params.selection_text()).to_string();
+            if text.is_empty() || !crate::speech::available() { return None; }
+            Action::Speak(text)
+        }
+        STOP_SPEAKING if crate::speech::available() => Action::StopSpeaking,
         _ => return None,
     };
     Some(Request {
         page_url: CefString::from(&params.page_url()).to_string(),
+        document_epoch,
         action,
     })
 }
@@ -251,13 +267,22 @@ wrap_context_menu_handler! {
                 selection:CefString::from(&params.selection_text()).to_string(),editable,back:browser.can_go_back()!=0,forward:browser.can_go_forward()!=0,policy:policy(browser.identifier())};
             if editable && model.count()>0 {model.add_separator();}
             for row in rows(&context) {if row.id<0 {model.add_separator();}else{model.add_item(row.id,Some(&CefString::from(row.label.as_str())));model.set_enabled(row.id,i32::from(row.enabled));}}
+            if !context.editable && !context.selection.is_empty() && crate::speech::available() {
+                model.add_separator();
+                if let Some(mut speech) = model.add_sub_menu(SPEECH, Some(&CefString::from("Speech"))) {
+                    for row in speech_rows(crate::speech::is_speaking()) {
+                        speech.add_item(row.id, Some(&CefString::from(row.label.as_str())));
+                        speech.set_enabled(row.id, i32::from(row.enabled));
+                    }
+                }
+            }
         }
         fn on_context_menu_command(&self,browser:Option<&mut Browser>,_frame:Option<&mut Frame>,params:Option<&mut ContextMenuParams>,command_id:i32,_event_flags:EventFlags)->i32 {
             let Some(browser)=browser else{return 1;};
-            if !accept(browser.identifier()) {return 1;}
+            let Some(epoch) = accept(browser.identifier()) else {return 1;};
             let Some(params)=params else{return 1;};
-            if let Some(request)=request(command_id,params) { push(&self.events,Some(browser),RawEvent::Context(request));return 1; }
-            i32::from((26500..=26518).contains(&command_id))
+            if let Some(request)=request(command_id,params,epoch) { push(&self.events,Some(browser),RawEvent::Context(request));return 1; }
+            i32::from((26500..=26521).contains(&command_id))
         }
         fn on_context_menu_dismissed(&self, browser:Option<&mut Browser>, _frame:Option<&mut Frame>) {
             if let Some(browser)=browser {cancel(browser.identifier());}
@@ -274,13 +299,13 @@ mod tests {
         let browser = 8721;
         begin(browser);
         crate::site_data::navigated(browser);
-        assert!(!accept(browser));
+        assert!(accept(browser).is_none());
         begin(browser);
         cancel(browser);
-        assert!(!accept(browser));
+        assert!(accept(browser).is_none());
         begin(browser);
-        assert!(accept(browser));
-        assert!(!accept(browser));
+        assert!(accept(browser).is_some());
+        assert!(accept(browser).is_none());
         forget(browser);
         crate::site_data::destroyed(browser);
     }

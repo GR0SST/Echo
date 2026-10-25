@@ -45,6 +45,7 @@ impl BrowserWindow {
         // A context menu is input, never metadata that may follow a transfer.
         // Its document may have navigated while the native menu tracked input.
         if !self.page_content_visible()
+            || self.pages.as_ref().is_none_or(|pages| pages.borrow().page_document_epoch(identity.tab) != Some(request.document_epoch))
             || self.browser.space().active_tab != Some(identity.tab)
             || !self
                 .browser
@@ -55,6 +56,8 @@ impl BrowserWindow {
             return;
         }
         match request.action {
+            Action::Speak(text) => self.queue_context_speech(identity, request.document_epoch, request.page_url, Some(text), cx),
+            Action::StopSpeaking => self.queue_context_speech(identity, request.document_epoch, request.page_url, None, cx),
             Action::CopyImage(url) => {
                 self.pending_quote = None;
                 self.quote_request = self.quote_request.wrapping_add(1);
@@ -163,4 +166,37 @@ impl BrowserWindow {
         }
         cx.notify();
     }
+
+    fn queue_context_speech(&self, identity: PageIdentity, epoch: u64, url: String, text: Option<String>, cx: &mut Context<Self>) {
+        let main = self.main_window;
+        cx.spawn(async move |owner, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(8)).await;
+            let accepted = cx.update(|cx| main.update(cx, |_, window, cx| owner.read_with(cx, |view, _| {
+                window.is_window_active() && view.page_content_visible()
+                    && view.browser.active_tab().is_some_and(|tab| tab.id == identity.tab && tab.url == url)
+                    && view.browser.user_profile_id_for_tab(identity.tab) == Some(identity.profile)
+                    && view.pages.as_ref().is_some_and(|pages| {
+                        let pages = pages.borrow();
+                        pages.media_identity(identity.tab) == Some(identity)
+                            && pages.page_document_epoch(identity.tab) == Some(epoch)
+                    })
+            }).unwrap_or(false)).unwrap_or(false)).unwrap_or(false);
+            if !accepted { return; }
+            // No application, window, page-store or engine borrow crosses the
+            // platform speech operation, which may re-enter AppKit.
+            #[cfg(not(test))]
+            match text { Some(text) => { engine::speech::speak(&text); }, None => engine::speech::stop() }
+            #[cfg(test)]
+            let _ = cx.update(|cx| {
+                if !cx.has_global::<SpeechRequests>() { cx.set_global(SpeechRequests::default()); }
+                cx.global_mut::<SpeechRequests>().0.push(text);
+            });
+        }).detach();
+    }
 }
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct SpeechRequests(pub Vec<Option<String>>);
+#[cfg(test)]
+impl gpui::Global for SpeechRequests {}

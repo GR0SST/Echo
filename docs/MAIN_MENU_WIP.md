@@ -574,3 +574,41 @@ the cookie-flush watchdog failure at native quit. Its visuals are retained,
 its exit is rejected, and the recurrence was reported to the orchestrator's
 shutdown investigation. The successful light actor remains recorded separately;
 this is not a waiver for a failed exit or any test.
+
+
+## Audit continuation: page context Speech and Save Link As
+
+Guarded Arc references are `arc-page-menu-reference/{link,selection}.png` and
+`arc-page-menu-details/{speech,save-dialog}.png`. The Save Link As reference
+opens a native destination panel and was canceled. Echo's ordinary download
+producer is still explicitly gated by `docs/DOWNLOADS_INTEGRATION.md`; no
+replacement download path or falsely enabled save action was added. That part
+of audit item 20 remains blocked on the shared download integration.
+
+The selected-text Speech submenu has Start Speaking and a state-dependent
+Stop Speaking. Echo uses an isolated local macOS speech interface; unavailable
+platforms omit the submenu. Delayed execution validates the retained page
+identity, profile, URL and exact document epoch after leaving UI/engine borrows.
+Native `echo-context-speech/accepted.json` records strict exit zero, real local
+speech starting and stopping, and the retained page. Compared submenu images
+are source `arc-page-menu-details/speech.png` and Echo
+`echo-context-speech/{start,stop}-submenu-0.png` (122 × 58 px); the captured
+menu union includes the owned root and parent menu. Three GPUI regressions
+cover deferred start/stop, stale same-URL menu input and replacement before
+deferred execution. Native host services remain supplied by macOS.
+
+An initial rejected Speech actor guessed the last OS-added submenu and entered
+Services. It was stopped without accepted speech evidence. The corrected actor
+uses the measured Speech row and exact owned submenu bounds, then verifies
+actual synthesizer state. Native focus/exit failures are never treated as
+acceptance.
+
+The complete standalone audit suite passes with `RUST_TEST_THREADS=4` and
+`CARGO_BUILD_JOBS=3`: 1,148 browser, 246 core, 161 engine and 18 AI tests,
+plus importer, bundle and doc checks. The existing native AI credential
+integration test remains ignored. Seven new GPUI regressions cover Command
+Bar drafts/selection, retained video PiP and page-context Speech/document
+races; the earlier Find regression is in `412fca5`. Full log:
+`target/parity/main-menu/audit-complete-full-test.log`. Native accepted runs
+use the final compiled product code; the subsequent correction only changes
+the deferred-race test, whose helper had advanced virtual time prematurely.
