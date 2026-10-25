@@ -11619,3 +11619,23 @@ mod menu_command_tests;
 mod extensions_tests;
 #[path = "media_route_tests.rs"]
 mod media_route_tests;
+
+#[gpui::test]
+fn local_import_dropped_firefox_export_uses_the_existing_sheet_and_cannot_replace_a_running_read(cx: &mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let _fixture=import_fixture(cx);
+    let dir=tempfile::tempdir().unwrap();let path=dir.path().join("bookmarks.json");
+    std::fs::write(&path,r#"{"type":"text/x-moz-place-container","children":[{"type":"text/x-moz-place","title":"Exported fixture","uri":"https://exported.example/"}]}"#).unwrap();
+    dispatch_menu(cx,"Echo","Import from Another Browser…");let (dialog,mut panel)=local_setup(&view,cx);
+    fake.take_calls();
+    dialog.update(&mut panel,|d,cx|d.accept_export(path.clone(),cx));panel.run_until_parked();
+    panel.simulate_keystrokes("enter");panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Destination);
+    // Another OS drop after choosing a destination must not retarget the read.
+    dialog.update(&mut panel,|d,cx|d.accept_export(dir.path().join("other.json"),cx));
+    click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");
+    panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Bookmarks);
+    click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();
+    view.read_with(cx,|v,_|assert!(v.browser.space().pinned.iter().any(|t|t.title=="Exported fixture")));
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..))));
+}

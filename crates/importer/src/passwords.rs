@@ -16,6 +16,15 @@ pub trait CredentialStore: Send + Sync {
 }
 /// The bounded source buffer is zeroed on every return path.
 pub fn read_password_file(path: &std::path::Path) -> Result<Vec<Credential>> {
+    if path.extension().is_some_and(|v| v.eq_ignore_ascii_case("zip")) {
+        let mut credentials = None;
+        crate::exports::for_each_entry(path, &[".csv"], 8 * 1024 * 1024, |_, bytes| {
+            if credentials.is_some() { return Err("Choose a password CSV when an archive has multiple CSV files.".into()); }
+            credentials = Some(parse_password_csv(bytes)?);
+            Ok(())
+        })?;
+        return credentials.ok_or("The archive contains no password CSV.".into());
+    }
     use std::io::Read;
     let file = std::fs::File::open(path)
         .map_err(|_| "The passwords file could not be opened.".to_string())?;

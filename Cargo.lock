@@ -3675,6 +3675,7 @@ version = "0.1.0"
 dependencies = [
  "core",
  "csv",
+ "html5ever",
  "lz4_flex",
  "plist",
  "rusqlite",
@@ -3682,6 +3683,7 @@ dependencies = [
  "tempfile",
  "url",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

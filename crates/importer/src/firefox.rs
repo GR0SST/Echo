@@ -1,4 +1,4 @@
-use crate::{BrowserKind, Category, Result, SourceProfile, bytes, database, read_json, timestamp};
+use crate::{BrowserKind, Category, Result, SourceProfile, database, timestamp};
 use browser_core::{
     history::HistoryEntry,
     import::{Bookmark, ImportedData, ImportedPage},
@@ -61,24 +61,17 @@ pub fn read(
         let Some(path) = path else {
             return Ok(());
         };
-        let data = bytes(&path)?;
-        let json = if data.starts_with(b"mozLz40\0") {
-            let size = data.get(8..12).ok_or("The Firefox session is truncated.")?;
-            let size = u32::from_le_bytes(size.try_into().unwrap()) as usize;
-            if size > 128 * 1024 * 1024 {
-                return Err("The Firefox session is too large to import.".into());
-            }
-            let data = lz4_flex::block::decompress_size_prepended(&data[8..])
-                .map_err(|_| "Cannot decode the Firefox session.")?;
-            serde_json::from_slice(&data).map_err(|e| e.to_string())?
-        } else {
-            read_json(&path)?
-        };
+        let json = crate::exports::json(&path)?;
         out.tabs = session_pages(&json, cancel)?;
         return Ok(());
     }
     let path = root.join("places.sqlite");
     if !path.exists() {
+        if category == Category::Bookmarks {
+            let mut candidates = std::fs::read_dir(root.join("bookmarkbackups")).into_iter().flatten().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonlz4" || e == "json")).take(256).collect::<Vec<_>>();
+            candidates.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+            if let Some(path) = candidates.first() { out.bookmarks = crate::exports::firefox_bookmarks(path, cancel)?; }
+        }
         return Ok(());
     }
     let db = database(&path)?;

@@ -2,6 +2,8 @@
 mod chromium;
 mod firefox;
 mod passwords;
+mod exports;
+pub use exports::export_source;
 mod safari;
 use browser_core::import::ImportedData;
 pub use passwords::{Credential, CredentialStore, parse_password_csv, read_password_file};
@@ -217,11 +219,13 @@ pub fn read_profile(
         }
         progress(category);
         let mut data = ImportedData::default();
-        let result = match source.browser {
+        let result = if source.path.is_file() {
+            exports::read(source, category, cancel, &mut data)
+        } else { match source.browser {
             BrowserKind::Firefox => firefox::read(&source.path, category, cancel, &mut data),
             BrowserKind::Safari => safari::read(&source.path, category, cancel, &mut data),
             _ => chromium::read(&source.path, category, cancel, &mut data),
-        };
+        }};
         match result {
             Err(message) => report.issues.push(ImportIssue { category, message }),
             Ok(()) => {

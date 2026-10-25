@@ -358,6 +358,14 @@ impl SetupDialog {
             }
         }
     }
+    pub(crate) fn accept_export(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if self.busy || self.step != Step::Sources { return; }
+        let Some(source) = importer::export_source(&path) else { return; };
+        self.sources.push(source);
+        self.source = Some(self.sources.len() - 1);
+        self.error = None;
+        cx.notify();
+    }
     fn read(&mut self, cx: &mut Context<Self>) {
         let Some(source) = self.source.and_then(|i| self.sources.get(i)).cloned() else {
             return;
@@ -1144,6 +1152,11 @@ impl gpui::Render for SetupDialog {
                 })
         });
         div()
+            .id("local-import-sheet")
+            .debug_selector(|| "local-import-sheet".into())
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                if paths.paths().len() == 1 { this.accept_export(paths.paths()[0].clone(), cx); }
+            }))
             .key_context("LocalSetup")
             .track_focus(&self.focus)
             .size_full()

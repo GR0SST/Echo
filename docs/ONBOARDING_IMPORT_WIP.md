@@ -127,3 +127,17 @@ All paths below are relative to `target/parity/onboarding-import/`:
   https://chromium.googlesource.com/chromium/src/+/main/chrome/utility/importer/safari_importer.mm
 - macOS browser registration/consent:
   https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/shell_integration_mac.mm
+
+## Additional export adapters (2026-10-26)
+
+The existing source sheet accepts one dropped Safari export ZIP/HTML or Firefox
+JSON/JSONLZ4 bookmark backup. Source recognition does not read file contents on the
+UI thread. ZIP history uses Apple’s version-1 metadata/content schema rather than
+localized names; all included histories target the explicitly selected local
+profile. Firefox profiles missing places.sqlite fall back to a dated backup.
+Existing password upload can read one CSV from a Safari ZIP; passwords remain
+explicit and outside the browser session/model. Archives are read in memory, never
+extracted; file count, expansion, nesting, node count and password size are bounded.
+This closes an export-format subset, not cookie/autofill or encrypted live-database
+import. Source-sheet export selection, step guards and publication have GPUI coverage;
+fixtures never contain owner data. See FUNCTIONAL_GAPS.md for remaining contracts.
