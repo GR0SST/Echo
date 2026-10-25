@@ -824,6 +824,7 @@ impl BrowserWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let dark=self.theme_is_dark(); let rgb=move|v|manager_color(dark,v);
         let Some(scope) = self
             .password_manager
             .scope
@@ -856,25 +857,25 @@ impl BrowserWindow {
     .when(!query.is_empty(),|row|row.child(div().id("password-filter-clear").debug_selector(||"password-filter-clear".into()).size(px(32.)).flex().items_center().justify_center().cursor_pointer()
       .on_click(cx.listener(move|this,_,window,cx|{if this.manager_current(&clear_scope){this.password_manager.filter.update(cx,|i,cx|i.set_text("",cx));this.password_manager.filter.read(cx).focus_handle(cx).focus(window);}}))
       .child(div().size(px(16.)).rounded_full().bg(rgb(0xbdc1c6)).text_color(rgb(0x202124)).flex().items_center().justify_center().child(icons::control_sized(Icon::Close,10.)))))
-    .child(div().id("password-manager-help").size(px(32.)).ml(px(6.)).flex().items_center().justify_center().cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{if this.manager_current(&help_scope){this.manager_open_site(help_scope.profile,HELP.into(),cx);}})).child(help_icon())))
+    .child(div().id("password-manager-help").size(px(32.)).ml(px(6.)).flex().items_center().justify_center().cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{if this.manager_current(&help_scope){this.manager_open_site(help_scope.profile,HELP.into(),cx);}})).child(help_icon(dark))))
    .child(div().id("password-manager-scroll").flex_1().min_h_0().w_full().overflow_y_scroll().track_scroll(&self.password_manager.scroll)
     .child(div().w_full().max_w(px(680.)).mx_auto().pt(px(8.)).pb(px(24.))
      .when(self.password_manager.detail.is_none(),|body|body
       .child(div().h(px(36.)).flex().items_center().justify_between().child(div().relative().top(px(-1.)).font_family("SF Pro Display").text_size(px(20.)).line_height(px(24.)).font_weight(gpui::FontWeight::MEDIUM).child("Passwords"))
-       .child(pill("Add",66.,false).id("password-add").track_focus(&self.password_manager.add).debug_selector(||"password-add".into()).cursor_pointer().on_click(cx.listener(move|this,_,window,cx|{if this.manager_current(&add_scope){this.present_password_editor(None,window,cx);}}))))
+       .child(pill("Add",66.,false,dark).id("password-add").track_focus(&self.password_manager.add).debug_selector(||"password-add".into()).cursor_pointer().on_click(cx.listener(move|this,_,window,cx|{if this.manager_current(&add_scope){this.present_password_editor(None,window,cx);}}))))
       .when(self.password_manager.loaded && origins.is_empty(),|body|body.child(div().mt(px(8.)).child(if query.is_empty(){"Saved passwords will appear here."}else{"No passwords found"})))
       .when(!origins.is_empty(),|body|body.child(div().mt(px(28.)).rounded(px(8.)).overflow_hidden().bg(rgb(0x292a2d)).shadow_sm().children(origins.into_iter().enumerate().map(|(index,origin)|{
        let source=scope.clone();let click_origin=origin.clone();let matching=self.password_manager.rows.iter().find(|r|r.origin==origin && !query.is_empty() && r.credential.username().to_lowercase().contains(query.trim()));let count=self.password_manager.rows.iter().filter(|r|r.origin==origin).count();
        div().id(("password-row",index)).debug_selector(move||format!("password-row-{index}")).h(px(48.)).px(px(20.)).flex().items_center().gap(px(20.)).cursor_pointer().hover(|s|s.bg(rgb(0x3c4043))).when(index>0,|s|s.border_t_1().border_color(rgb(0x3c4043)))
         .on_click(cx.listener(move|this,_,_,cx|{if this.manager_current(&source){this.manager_select(click_origin.clone(),cx);}}))
-        .child(div().text_color(rgb(0x9aa0a6)).child(manager_globe(16.)))
+        .child(div().text_color(rgb(0x9aa0a6)).child(manager_globe(16.,dark)))
         .child(div().flex_1().min_w_0().overflow_hidden().flex().items_center().child(site_name(&origin)).when_some(matching,|label,r|label.child(" • ").child(div().font_weight(gpui::FontWeight::BOLD).child(r.credential.username().to_owned()))).when(count>1 && query.is_empty(),|label|label.child(format!("  {count} accounts"))))
-        .child(div().text_color(rgb(0x9aa0a6)).child(row_arrow()))
+        .child(div().text_color(rgb(0x9aa0a6)).child(row_arrow(dark)))
       })))))
      .when_some(self.password_manager.detail.as_ref(),|body,origin|body
       .child(div().h(px(36.)).mb(px(28.)).flex().items_center().gap(px(12.))
        .child(div().id("password-details-back").debug_selector(||"password-details-back".into()).size(px(32.)).track_focus(&self.password_manager.back).cursor_pointer().child(icons::control(Icon::Back)).on_click(cx.listener(|this,_,_,cx|this.manager_route(None,cx))))
-       .child(manager_globe(20.)).child(div().relative().top(px(-1.)).font_family("SF Pro Display").text_size(px(20.)).line_height(px(24.)).font_weight(gpui::FontWeight::MEDIUM).child(site_name(origin))))
+       .child(manager_globe(20.,dark)).child(div().relative().top(px(-1.)).font_family("SF Pro Display").text_size(px(20.)).line_height(px(24.)).font_weight(gpui::FontWeight::MEDIUM).child(site_name(origin))))
       .children(self.password_manager.rows.iter().filter(|r|r.origin==*origin).enumerate().map(|(index,r)|self.render_password_record(index,r,&scope,cx))))));
         if let Some(e) = &self.password_manager.editor {
             page = page.child(self.render_password_editor(e, window, cx));
@@ -930,6 +931,7 @@ impl BrowserWindow {
         scope: &Scope,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let dark=self.theme_is_dark(); let rgb=move|v|manager_color(dark,v);
         let copy_user = r.clone();
         let copy_password = r.clone();
         let edit = r.clone();
@@ -943,21 +945,21 @@ impl BrowserWindow {
         let d = scope.clone();
         let e = scope.clone();
         let f = scope.clone();
-        let copy_user = icon_button("password-copy-user", index, copy_icon()).on_click(
+        let copy_user = icon_button("password-copy-user", index, copy_icon(dark),dark).on_click(
             cx.listener(move |this, _, _, cx| {
                 if this.manager_current(&a) {
                     this.manager_copy(copy_user.clone(), false, cx);
                 }
             }),
         );
-        let copy_password = icon_button("password-copy-password", index, copy_icon()).on_click(
+        let copy_password = icon_button("password-copy-password", index, copy_icon(dark),dark).on_click(
             cx.listener(move |this, _, _, cx| {
                 if this.manager_current(&b) {
                     this.manager_copy(copy_password.clone(), true, cx);
                 }
             }),
         );
-        let reveal = icon_button("password-reveal", index, eye_icon(revealed)).on_click(
+        let reveal = icon_button("password-reveal", index, eye_icon(revealed,dark),dark).on_click(
             cx.listener(move |this, _, _, cx| {
                 if this.manager_current(&c) {
                     this.manager_reveal(reveal_record.clone(), cx);
@@ -981,7 +983,7 @@ impl BrowserWindow {
                             .mt(px(16.))
                             .flex()
                             .child(
-                                div().w_1_2().pr(px(16.)).child(label("Username")).child(
+                                div().w_1_2().pr(px(16.)).child(label("Username",dark)).child(
                                     div()
                                         .h(px(36.))
                                         .flex()
@@ -1000,7 +1002,7 @@ impl BrowserWindow {
                                 ),
                             )
                             .child(
-                                div().w_1_2().child(label("Sites")).child(
+                                div().w_1_2().child(label("Sites",dark)).child(
                                     div()
                                         .id(("password-site", index))
                                         .text_color(rgb(0x8ab4f8))
@@ -1020,7 +1022,7 @@ impl BrowserWindow {
                             .mt(px(16.))
                             .flex()
                             .child(
-                                div().w_1_2().pr(px(16.)).child(label("Password")).child(
+                                div().w_1_2().pr(px(16.)).child(label("Password",dark)).child(
                                     div()
                                         .h(px(36.))
                                         .flex()
@@ -1039,7 +1041,7 @@ impl BrowserWindow {
                                 ),
                             )
                             .child(
-                                div().w_1_2().child(label("Note")).child(
+                                div().w_1_2().child(label("Note",dark)).child(
                                     div().whitespace_normal().child(
                                         if r.note.is_empty() {
                                             "No note added"
@@ -1062,7 +1064,7 @@ impl BrowserWindow {
                     .flex()
                     .gap(px(8.))
                     .child(
-                        pill("Edit", 66., false)
+                        pill("Edit",66.,false,dark)
                             .id(("password-edit", index))
                             .when_some(
                                 self.password_manager.edit_focus.get(&record_key(r)),
@@ -1077,7 +1079,7 @@ impl BrowserWindow {
                             })),
                     )
                     .child(
-                        pill("Delete", 76., false)
+                        pill("Delete",76.,false,dark)
                             .id(("password-delete", index))
                             .debug_selector(move || format!("password-delete-{index}"))
                             .cursor_pointer()
@@ -1096,6 +1098,7 @@ impl BrowserWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let dark=self.theme_is_dark(); let rgb=move|v|manager_color(dark,v);
         let valid = self.password_editor_value(cx).is_some();
         let id = e.id;
         let old = e.old.is_some();
@@ -1118,19 +1121,20 @@ impl BrowserWindow {
    .child(div().id("password-editor").debug_selector(||"password-editor".into()).w(px(512.)).max_w_full().rounded(px(8.)).bg(rgb(0x292a2d)).shadow_lg().relative().px(px(20.)).pt(px(20.)).pb(px(15.)).flex().flex_col().text_color(rgb(0xe8eaed))
     .child(div().relative().top(px(-2.)).text_size(px(15.)).line_height(px(20.)).font_weight(gpui::FontWeight::SEMIBOLD).child(if old{"Edit password"}else{"Add new password"}))
     .child(div().mt(px(16.)).flex().flex_col()
-     .when_some(e.old.as_ref(),|body,r|body.child(label("Sites")).child(div().text_color(rgb(0x8ab4f8)).mb(px(20.)).child(site_name(&r.origin))))
-     .children(rows.into_iter().map(|(name,input)|div().when(name!="Password",|row|row.mb(px(18.))).child(label(name)).child(div().mt(px(6.)).h(px(36.)).rounded_t(px(8.)).bg(rgb(0x444746)).border_b_1().border_color(rgb(0x9aa0a6)).when(input.read(cx).focus_handle(cx).is_focused(window),|s|s.border_color(rgb(0xa8c7fa)).border_b_2()).px(px(10.)).text_size(px(12.)).line_height(px(16.)).flex().items_center().child(div().flex_1().min_w_0().child(input.clone())).when(name=="Password",|field|field.child(div().id("password-editor-eye").debug_selector(||"password-editor-eye".into()).key_context("PasswordManagerButton").track_focus(&e.eye).size(px(32.)).flex().items_center().justify_center().text_color(rgb(0xbdc1c6)).cursor_pointer().on_click(cx.listener(move |this,_,_,cx|{if this.password_editor_is(id){this.toggle_password_editor(cx)}})).child(eye_icon(e.reveal)))))))
+     .when_some(e.old.as_ref(),|body,r|body.child(label("Sites",dark)).child(div().text_color(rgb(0x8ab4f8)).mb(px(20.)).child(site_name(&r.origin))))
+     .children(rows.into_iter().map(|(name,input)|div().when(name!="Password",|row|row.mb(px(18.))).child(label(name,dark)).child(div().mt(px(6.)).h(px(36.)).rounded_t(px(8.)).bg(rgb(0x444746)).border_b_1().border_color(rgb(0x9aa0a6)).when(input.read(cx).focus_handle(cx).is_focused(window),|s|s.border_color(rgb(0xa8c7fa)).border_b_2()).px(px(10.)).text_size(px(12.)).line_height(px(16.)).flex().items_center().child(div().flex_1().min_w_0().child(input.clone())).when(name=="Password",|field|field.child(div().id("password-editor-eye").debug_selector(||"password-editor-eye".into()).key_context("PasswordManagerButton").track_focus(&e.eye).size(px(32.)).flex().items_center().justify_center().text_color(rgb(0xbdc1c6)).cursor_pointer().on_click(cx.listener(move |this,_,_,cx|{if this.password_editor_is(id){this.toggle_password_editor(cx)}})).child(eye_icon(e.reveal,dark)))))))
      .child(div().ml(px(2.)).mt(px(16.)).child(if old{format!("Make sure the password you are saving matches your password for {}",site_name(&e.old.as_ref().unwrap().origin))}else{"Make sure you're saving your current password for this site".into()}))
-     .child(div().mt(px(16.)).when(!old,|line|line.border_t_1().border_color(rgb(0x3c4043)).pt(px(16.))).child(label("Note")).child(div().mt(px(8.)).h(px(68.)).rounded_t(px(8.)).bg(rgb(0x444746)).border_b_1().border_color(rgb(0x9aa0a6)).px(px(10.)).py(px(8.)).child(e.note.clone()))))
+     .child(div().mt(px(16.)).when(!old,|line|line.border_t_1().border_color(rgb(0x3c4043)).pt(px(16.))).child(label("Note",dark)).child(div().mt(px(8.)).h(px(68.)).rounded_t(px(8.)).bg(rgb(0x444746)).border_b_1().border_color(rgb(0x9aa0a6)).px(px(10.)).py(px(8.)).child(e.note.clone()))))
     .child(div().mt(px(43.)).mr(px(-4.)).h(px(36.)).flex().items_center().justify_end().gap(px(8.))
-     .child(pill("Cancel",76.,false).id("password-editor-cancel").debug_selector(||"password-editor-cancel".into()).key_context("PasswordManagerButton").track_focus(&e.cancel).cursor_pointer().on_click(cx.listener(move |this,_,window,cx|{if this.password_editor_is(id){this.cancel_password_editor(window,cx)}})))
-     .child(pill("Save",66.,true).id("password-editor-save").debug_selector(||"password-editor-save".into()).key_context("PasswordManagerButton").track_focus(&e.save).when(!valid,|b|b.bg(rgb(0x404043)).text_color(rgb(0x80868b))).when(valid,|b|b.cursor_pointer()).on_click(cx.listener(move |this,_,window,cx|{if this.password_editor_is(id){this.accept_password_editor(window,cx)}})))))
+     .child(pill("Cancel",76.,false,dark).id("password-editor-cancel").debug_selector(||"password-editor-cancel".into()).key_context("PasswordManagerButton").track_focus(&e.cancel).cursor_pointer().on_click(cx.listener(move |this,_,window,cx|{if this.password_editor_is(id){this.cancel_password_editor(window,cx)}})))
+     .child(pill("Save",66.,true,dark).id("password-editor-save").debug_selector(||"password-editor-save".into()).key_context("PasswordManagerButton").track_focus(&e.save).when(!valid,|b|b.bg(rgb(0x404043)).text_color(rgb(0x80868b))).when(valid,|b|b.cursor_pointer()).on_click(cx.listener(move |this,_,window,cx|{if this.password_editor_is(id){this.accept_password_editor(window,cx)}})))))
    .into_any_element()
     }
 }
 // Arc's cr-form-field-label has 0.4 px tracking. These labels are fixed ASCII;
 // individual text runs preserve that spacing without changing editable fields.
-fn label(text: &'static str) -> impl IntoElement {
+fn label(text: &'static str,dark:bool) -> impl IntoElement {
+    let rgb=move|v|manager_color(dark,v);
     div()
         .h(px(16.))
         .flex()
@@ -1145,7 +1149,8 @@ fn label(text: &'static str) -> impl IntoElement {
                 .map(|ch| div().relative().top(px(-2.)).child(ch.to_string())),
         )
 }
-fn pill(text: &'static str, width: f32, primary: bool) -> gpui::Stateful<gpui::Div> {
+fn pill(text: &'static str, width: f32, primary: bool,dark:bool) -> gpui::Stateful<gpui::Div> {
+    let rgb=move|v|manager_color(dark,v);
     div()
         .id(text)
         .h(px(36.))
@@ -1167,8 +1172,9 @@ fn pill(text: &'static str, width: f32, primary: bool) -> gpui::Stateful<gpui::D
 fn icon_button(
     name: &'static str,
     index: usize,
-    icon: impl IntoElement,
+    icon: impl IntoElement, dark:bool,
 ) -> gpui::Stateful<gpui::Div> {
+    let rgb=move|v|manager_color(dark,v);
     div()
         .id((name, index))
         .debug_selector(move || format!("{name}-{index}"))
@@ -1181,19 +1187,19 @@ fn icon_button(
         .text_color(rgb(0xbdc1c6))
         .child(icon)
 }
-fn help_icon() -> impl IntoElement {
-    glyph(0)
+fn help_icon(dark:bool) -> impl IntoElement {
+    glyph(0,dark)
 }
-fn eye_icon(shown: bool) -> impl IntoElement {
-    glyph(if shown { 3 } else { 1 })
+fn eye_icon(shown: bool,dark:bool) -> impl IntoElement {
+    glyph(if shown { 3 } else { 1 },dark)
 }
-fn copy_icon() -> impl IntoElement {
-    glyph(2)
+fn copy_icon(dark:bool) -> impl IntoElement {
+    glyph(2,dark)
 }
 pub(crate) fn favicon() -> AnyElement {
-    glyph(4).into_any_element()
+    glyph(4,true).into_any_element()
 }
-fn glyph(kind: u8) -> impl IntoElement {
+fn glyph(kind: u8,dark:bool) -> impl IntoElement {
     gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
@@ -1246,7 +1252,7 @@ fn glyph(kind: u8) -> impl IntoElement {
             if let Ok(path) = p.build() {
                 window.paint_path(
                     path,
-                    rgb(if kind == 4 {
+                    manager_color(dark,if kind == 4 {
                         0x1a73e8
                     } else if kind == 1 || kind == 3 {
                         0xbdc1c6
@@ -1394,7 +1400,7 @@ impl BrowserWindow {
     }
 }
 
-fn row_arrow() -> AnyElement {
+fn row_arrow(dark:bool) -> AnyElement {
     div()
         .size(px(32.))
         .mr(px(-10.))
@@ -1405,7 +1411,7 @@ fn row_arrow() -> AnyElement {
         .child(
             gpui::canvas(
                 |_, _, _| (),
-                |bounds, _, window, _| {
+                move |bounds, _, window, _| {
                     let at = |x, y| bounds.origin + gpui::point(px(x), px(y));
                     let mut p = gpui::PathBuilder::fill();
                     p.move_to(at(10.1, 7.8));
@@ -1417,7 +1423,7 @@ fn row_arrow() -> AnyElement {
                     p.line_to(at(10.4, 8.0));
                     p.close();
                     if let Ok(path) = p.build() {
-                        window.paint_path(path, rgb(0x9aa0a6));
+                        window.paint_path(path, manager_color(dark,0x9aa0a6));
                     }
                 },
             )
@@ -1425,7 +1431,7 @@ fn row_arrow() -> AnyElement {
         )
         .into_any_element()
 }
-fn manager_globe(size: f32) -> AnyElement {
+fn manager_globe(size: f32,dark:bool) -> AnyElement {
     gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
@@ -1491,10 +1497,22 @@ fn manager_globe(size: f32) -> AnyElement {
                 p.close();
             }
             if let Ok(path) = p.build() {
-                window.paint_path(path, rgb(0x9aa0a6));
+                window.paint_path(path, manager_color(dark,0x9aa0a6));
             }
         },
     )
     .size(px(size))
     .into_any_element()
+}
+
+// Light values sampled from our filtered Arc Add reference; dark values retain
+// the previously verified surface. Website appearance controls this WebUI peer.
+fn manager_color(dark:bool,value:u32)->gpui::Rgba {
+    rgb(if dark {value} else {match value {
+        0x202124|0x292a2d=>0xffffff,0xe8eaed=>0x1f1f1f,
+        0xbdc1c6=>0x444746,0x9aa0a6=>0x757775,0x444746=>0xe1e3e1,
+        0xa8c7fa|0x8ab4f8=>0x2656c9,0x0086bd=>0xaec6f6,
+        0x3c4043=>0xf0f0f0,0x404043=>0xe4e4e4,0x80868b=>0x999999,
+        _=>value,
+    }})
 }

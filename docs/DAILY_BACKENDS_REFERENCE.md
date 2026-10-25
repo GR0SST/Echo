@@ -291,6 +291,11 @@ localStorage, IndexedDB and CacheStorage; the callback reports failed bits zero,
 all four values disappear, and CEF completes native termination with exit 0.
 The CEF agent owns final candidate qualification and canonical publication.
 
+Manager Light reference is `arc-password-manager-light-{list,add}.png`.
+The GPUI manager follows the measured white card/background, gray fields,
+blue focus/links, pale Cancel border and disabled Save colors. Changing appearance
+retains the current editor and focused input; no owner credentials were inspected.
+
 Real-button native deletion also passes for Default and named profile 2:
 `ui-release-smoke/abi-smoke-vb0y7isd/result.json` and
 `ui-named-release-smoke/abi-smoke-wdksnmgq/result.json`. Those runs use Command Bar
@@ -301,7 +306,8 @@ across navigation, direct-route Enter isolation, focus after deletion, and the
 Settings entry for an unused profile.
 
 Comparison crops: `clear-dialog-pair.png`, `clear-ranges-pair.png`,
-`clear-other-pair.png`; zoomed inspection is `clear-dialog-zoom.png`. These compare the component
+`clear-other-pair.png`, `manager-light-pair.png`; zoomed inspections are
+`clear-dialog-zoom.png` and `manager-light-zoom.png`. These compare the component
 at its original pixel dimensions, accounting for the existing sidebar-width
 difference. Shared sidebar/header, exact typography/icons and non-macOS rendering
 remain partial; these captures do not close those independent rows.

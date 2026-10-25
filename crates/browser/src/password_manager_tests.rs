@@ -246,3 +246,13 @@ fn password_manager_credentials_are_available_to_the_login_autofill_service(
     );
     assert!(fake.take_calls().iter().any(|c|matches!(c,Call::PasswordFill(_,_,origin,credential) if origin==ORIGIN && credential.username()=="shared-autofill-user" && credential.password()=="synthetic-manager-test-password")));
 }
+
+#[gpui::test]
+fn password_manager_appearance_changes_preserve_editor_input_and_focus(cx:&mut TestAppContext){
+    let(v,cx)=open(cx);manager(&v,cx);click(cx,"password-add");cx.simulate_input("https://light-manager.test");cx.simulate_keystrokes("tab");cx.simulate_input("light-test-user");
+    for mode in [browser_core::themes::ThemeAppearance::Light,browser_core::themes::ThemeAppearance::Dark] {
+        v.update(cx,|v,_|v.edit_profile(|b|b.settings.theme_appearance=mode));cx.run_until_parked();
+        assert!(cx.debug_bounds("password-editor").is_some());assert!(v.read_with(cx,|v,_|v.password_manager_snapshot().1));
+    }
+    cx.simulate_keystrokes("tab");cx.simulate_input("synthetic-light-test-only");cx.simulate_keystrokes("enter");cx.run_until_parked();assert_eq!(v.read_with(cx,|v,_|v.password_manager_snapshot().0),1);
+}
