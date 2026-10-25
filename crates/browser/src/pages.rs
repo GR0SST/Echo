@@ -1617,6 +1617,13 @@ impl Pages {
 
     pub(crate) fn supports_snapshots(&self) -> bool { self.store.borrow().engine.supports_snapshots() }
 
+    /// A capture owns a fresh request. Never adopt a photograph already in
+    /// flight before this document's epoch was captured (e.g. after reload).
+    pub(crate) fn request_fresh_snapshot(&mut self,tab:TabId)->Option<u64> {
+        if self.store.borrow().pages.get(&tab)?.snapshot_pending.is_some() { return None; }
+        self.request_snapshot(tab)
+    }
+
     /// Captures the existing document; concurrent requests for a tab coalesce.
     pub fn request_snapshot(&mut self, tab: TabId) -> Option<u64> {
         let mut store = self.store.borrow_mut();

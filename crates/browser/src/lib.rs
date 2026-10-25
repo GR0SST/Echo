@@ -3,6 +3,7 @@ mod automation;
 mod native;
 mod quit;
 mod scripting;
+mod capture;
 mod task_manager;
 mod find;
 mod max;
@@ -136,6 +137,7 @@ pub fn init(cx: &mut App) {
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
     boosts::bind_keys(cx);
+    capture::bind_keys(cx);
     new_menu::bind_keys(cx);
     theme_editor::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);

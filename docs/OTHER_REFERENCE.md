@@ -59,3 +59,19 @@ Completing missing engine metrics would require extending CEF task info with the
 Chromium process ID and network-usage fields, enabling the network refresh flag,
 and exposing task grouping/parent identity. That is a small API/wrapper patch but
 requires a local CEF build to validate. No `src/` patch or source build was made.
+
+## Battery Saver and quiet downloads
+
+`target/parity/site-controls/other-battery/command.png` shows the guarded Battery
+Saver query: web suggestions, with no exposed matching command in this build.
+The machine was on AC at 69% at inspection; no OS power setting was changed to
+force a mode. Automatic activation/deactivation and its native presentation need
+a qualified reference. No inferred toggle or battery indicator was added.
+
+Quiet downloads cannot be activated independently of normal download ownership
+and destination policy. [Downloads integration](../DOWNLOADS_INTEGRATION.md)
+retains the general admission/fence and continuation gaps; the receipt experiment
+has not enabled production admission. No fake active transfers or bypass of that
+gate was added. A tray still needs its live download integration and reference.
+
+Capture observations and qualified local behavior are in [Capture](CAPTURE.md).

@@ -65,7 +65,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
@@ -76,6 +76,7 @@ impl Command {
         match self {
             Self::Share => "share", Self::SelectionSplit => "selection-split", Self::SelectionMove(_) => "selection-move", Self::SelectionNewSpace => "selection-new-space", Self::SelectionArchiveBelow => "selection-archive-below", Self::SelectionArchiveAbove => "selection-archive-above", Self::SelectionArchiveOthers => "selection-archive-others",
             Self::ToggleToolbar => "toggle-toolbar",
+            Self::Capture => "capture",
             Self::Download(action) => action.selector(),
             Self::CustomizePage => "customize-page",
             Self::SpaceSetProfile(_) => "space-set-profile", Self::SpaceNewProfile => "space-new-profile", Self::SpaceManage => "manage-spaces", Self::SpaceDelete => "delete-space", Self::SpaceExport(_) => "space-export",
@@ -306,7 +307,7 @@ impl BrowserWindow {
             MenuTarget::Address => vec![
                 item("Copy URL", Command::Copy).into(),
                 pending("Share").submenu(vec![item("Copy URL as Markdown", Command::CopyMarkdown).into()]).into(),
-                pending("Capture…").into(),
+                item("Capture…",Command::Capture).enabled(self.capture_available()).into(),
                 pending("Capture Full Page").into(),
                 Entry::Separator,
                 item(if self.toolbar_shown() { "Hide Toolbar" } else { "Show as Toolbar" }, Command::ToggleToolbar).into(),
@@ -484,12 +485,13 @@ impl BrowserWindow {
             MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
             MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }
             MenuTarget::Address => {
-                match command { Command::ToggleToolbar => self.toggle_toolbar(cx), Command::Copy => self.copy_url(false, cx), Command::CopyMarkdown => self.copy_url(true, cx), _ => {} }
+                match command { Command::Capture => self.capture_page(cx), Command::ToggleToolbar => self.toggle_toolbar(cx), Command::Copy => self.copy_url(false, cx), Command::CopyMarkdown => self.copy_url(true, cx), _ => {} }
                 return;
             }
             MenuTarget::Tab(id) => item.pane.unwrap_or(id),
         };
         match command {
+            Command::Capture => self.capture_page(cx),
             Command::ToggleToolbar => self.toggle_toolbar(cx),
             Command::CustomizePage => { self.edit_browser(|browser|browser.activate_tab(id,std::time::SystemTime::now()));self.customize_page(cx); }
             Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),

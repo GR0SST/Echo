@@ -68,6 +68,12 @@ pub(crate) struct ProfileHandle {
 }
 
 impl ProfileHandle {
+    /// Data is published beside this canonical session, never via a process-wide
+    /// fallback that could target another running profile or a test owner's data.
+    pub(crate) fn storage_directory(&self, cx:&App)->Option<PathBuf> {
+        self.owner.read(cx).path.as_ref()?.parent().map(|path|path.to_path_buf())
+    }
+
     pub(crate) fn new(browser: Browser, cx: &mut App) -> Self {
         let data = Rc::new(RefCell::new(browser));
         let drafts = Drafts::default();

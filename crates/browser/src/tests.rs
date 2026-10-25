@@ -10977,3 +10977,6 @@ fn preview_preferences_sheet_keeps_seven_choices_and_dismisses_without_changing_
 
 #[path = "app_icon_tests.rs"]
 mod app_icon_tests;
+
+#[path="capture_tests.rs"]
+mod capture_tests;

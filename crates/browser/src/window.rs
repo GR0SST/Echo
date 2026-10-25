@@ -83,6 +83,7 @@ actions!(
         CopyUrl,
         CopyUrlAsMarkdown,
         CopyUrlAsQuote,
+        CapturePage,
         NewBoost,
         NewFolder,
         CollapseAllFolders,
@@ -182,6 +183,7 @@ window_shortcuts! {
     "cmd-p" => PrintPage,
     "cmd-shift-s" => SavePage,
     "cmd-shift-c" => CopyUrl,
+    "cmd-shift-2" => CapturePage,
     "cmd-alt-shift-c" => CopyUrlAsMarkdown,
     "cmd-w" => CloseTab,
     "cmd-shift-w" => crate::menus::CloseWindow,
@@ -454,6 +456,7 @@ pub enum Command {
     CopyUrl,
     CopyUrlAsMarkdown,
     CopyUrlAsQuote,
+    CapturePage,
     OpenTaskManager,
     AirTrafficControl,
     ToggleSpaceHeader,
@@ -542,6 +545,7 @@ pub enum OverlayKind {
     Sidebar,
     TabMenu,
     SiteControls,
+    Capture,
     NewMenu,
     UserProfileDialog,
     Setup,
@@ -609,6 +613,7 @@ impl Render for Overlay {
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
                     OverlayKind::SiteControls => browser.render_site_controls(window, cx),
+                    OverlayKind::Capture => browser.render_capture(window, cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
@@ -711,6 +716,7 @@ pub struct BrowserWindow {
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
+    pub(crate) capture: Option<crate::capture::Capture>,
     pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     pub(crate) new_menu: Option<crate::new_menu::NewMenu>,
     pub(crate) boost_editor: Option<WindowHandle<crate::boosts::BoostEditor>>,
@@ -1001,6 +1007,7 @@ impl BrowserWindow {
             floating_sidebar: None,
             tab_menu: None,
             site_controls: None,
+            capture: None,
             site_controls_anchor: Default::default(),
             new_menu: None,
             boost_editor: None,
@@ -1181,6 +1188,7 @@ impl BrowserWindow {
             self.find_bar.take().and_then(|bar| bar.overlay).map(|handle| handle.into()),
             self.tab_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
             self.site_controls.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
+            self.capture.take().and_then(|state|state.overlay).map(|handle|handle.into()),
             self.new_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
             self.toast.take().and_then(|toast| toast.overlay).map(|handle| handle.into()),
             self.link_status.take().and_then(|status| status.overlay).map(|handle| handle.into()),
@@ -1653,7 +1661,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.save_prompt_active || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.save_prompt_active || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1684,6 +1692,7 @@ impl BrowserWindow {
         self.close_user_profile_dialog_with_focus(focus, cx);
         self.close_setup_with_focus(focus,cx);
         self.close_site_controls_with_focus(focus, cx);
+        self.close_capture(focus,cx);
         self.close_new_menu_with_focus(focus, cx);
         self.close_command_bar_with_focus(focus, cx);
         self.close_find_with_focus(focus, cx);
@@ -1838,6 +1847,7 @@ impl BrowserWindow {
                 (Command::RequestClearArchive, "Clear Archive…", "clear archive|delete archived tabs", !self.browser.archive.is_empty()),
                 (Command::CopyUrl, "Copy URL", "copy url|copy link|copy clean link", active.is_some()),
                 (Command::OpenTaskManager, "Open Task Manager", "open task manager|process manager|task manager", true),
+                (Command::CapturePage, "Capture", "capture|capture page|take screenshot", self.capture_available()),
                 (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::Settings, "Settings…", "settings|preferences|search settings", true),
@@ -2217,6 +2227,7 @@ impl BrowserWindow {
             Command::CopyUrl => self.copy_url(false, cx),
             Command::CopyUrlAsMarkdown => self.copy_url(true, cx),
             Command::CopyUrlAsQuote => self.copy_url_as_quote(cx),
+            Command::CapturePage => self.capture_page(cx),
             Command::OpenTaskManager => self.open_menu_utility(crate::task_manager::open, cx),
             Command::Settings => self.open_settings(cx),
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
@@ -4541,6 +4552,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &CopyUrl, _, cx| this.copy_url(false, cx)))
             .on_action(cx.listener(|this, _: &CopyUrlAsMarkdown, _, cx| this.copy_url(true, cx)))
             .on_action(cx.listener(|this, _: &CopyUrlAsQuote, _, cx| this.copy_url_as_quote(cx)))
+            .on_action(cx.listener(|this, _: &CapturePage, _, cx| this.capture_page(cx)))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(|this, _: &crate::peek::ExitPeek, _, cx| this.exit_peek(cx)))
             .on_action(cx.listener(|this, _: &crate::transient::NewLittleWindow, _, cx| this.new_little_window(cx)))
