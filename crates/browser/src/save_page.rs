@@ -75,7 +75,8 @@ impl BrowserWindow {
             url: tab.url.clone(),
             generation: self.save_page_generation,
         };
-        let name = export::suggested_name(&tab.title, Format::Complete);
+        let format = self.browser.active_user_profile().settings.save_page_format;
+        let name = export::suggested_name(&tab.title, format);
         self.close_user_profile_dialog_with_focus(PopupFocus::Restore, cx);
         self.close_site_controls_with_focus(PopupFocus::Restore, cx);
         self.close_new_menu_with_focus(PopupFocus::Restore, cx);
@@ -112,6 +113,7 @@ impl BrowserWindow {
                                     Some(Some(save_dialog::prepare(
                                         crate::native::view_of(window),
                                         &name,
+                                        format,
                                         cx,
                                     )))
                                 })
@@ -144,6 +146,7 @@ impl BrowserWindow {
                                 if !view.save_source_matches(&source) {
                                     return None;
                                 }
+                                view.edit_browser(|browser| browser.active_user_profile_mut().settings.save_page_format = choice.format);
                                 view.pages
                                     .as_ref()?
                                     .borrow_mut()

@@ -7,7 +7,8 @@ use url::Url;
 pub const MAX_ARCHIVE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PARTS: usize = 2048;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Format {
     HtmlOnly,
     SingleFile,

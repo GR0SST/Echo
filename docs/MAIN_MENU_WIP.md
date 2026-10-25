@@ -152,8 +152,9 @@ inspected against the Arc Format crop.
 
 Windows and
 Linux currently have the shared path prompt with Complete as the default,
-without the macOS native format accessory. Save-folder/format persistence and
-full Chromium serializer equivalence remain unverified.
+without the macOS native format accessory. Accepted format persistence is now
+qualified through native picker reuse and relaunch; see [format evidence](SAVE_PAGE_FORMAT.md).
+Save-folder persistence and full Chromium serializer equivalence remain unverified.
 
 New Arc reference sessions use `target/parity/main-menu/owned_arc_session.py`: a
 settled process/window baseline, exact owned IDs, no inline restart and no

@@ -62,6 +62,30 @@ fn save_as_shortcut_writes_the_document_and_resources_without_reloading(cx: &mut
 }
 
 #[gpui::test]
+fn save_as_uses_the_profile_format_and_cancel_keeps_the_preference(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    enable(&fake, cx);
+    view.update(cx, |view, _| view.edit_browser(|browser| {
+        browser.active_user_profile_mut().settings.save_page_format = browser_core::save_page::Format::SingleFile;
+    }));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Remembered.mhtml");
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-shift-s");
+    ready(cx);
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read(&path).unwrap(), include_bytes!("save_page_test_fixture.mhtml"));
+    cx.simulate_keystrokes("cmd-shift-s");
+    ready(cx);
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    let restored = view.read_with(cx, |view, _| browser_core::session::from_json(&browser_core::session::to_json(&view.browser)).unwrap());
+    assert_eq!(restored.active_user_profile().settings.save_page_format, browser_core::save_page::Format::SingleFile);
+    no_navigation(&fake);
+}
+
+#[gpui::test]
 fn save_as_cancels_a_same_address_reload_while_the_path_panel_is_open(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     enable(&fake, cx);

@@ -135,6 +135,7 @@ pub struct ProfileSettings {
     pub document_app: String,
     pub download_location: String,
     pub ask_for_download_location: bool,
+    pub save_page_format: crate::save_page::Format,
 }
 impl Default for ProfileSettings {
     fn default() -> Self {
@@ -143,6 +144,7 @@ impl Default for ProfileSettings {
             document_app: "—".into(),
             download_location: "Downloads".into(),
             ask_for_download_location: false,
+            save_page_format: crate::save_page::Format::default(),
         }
     }
 }
@@ -151,6 +153,21 @@ impl Default for ProfileSettings {
 mod tests {
     use super::*;
     use crate::{session, Browser};
+    #[test]
+    fn saved_page_format_is_profile_local_persistent_and_defaults_for_older_sessions() {
+        let mut browser = Browser::new();
+        let first = browser.active_user_profile_id();
+        browser.active_user_profile_mut().settings.save_page_format = crate::save_page::Format::SingleFile;
+        let second = browser.create_user_profile("Other").unwrap();
+        let restored = session::from_json(&session::to_json(&browser)).unwrap();
+        assert_eq!(restored.user_profile(first).unwrap().settings.save_page_format, crate::save_page::Format::SingleFile);
+        assert_eq!(restored.user_profile(second).unwrap().settings.save_page_format, crate::save_page::Format::Complete);
+        let mut old: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
+        old["profiles"][first.0.to_string()]["settings"].as_object_mut().unwrap().remove("save_page_format");
+        let restored = session::from_json(&old.to_string()).unwrap();
+        assert_eq!(restored.user_profile(first).unwrap().settings.save_page_format, crate::save_page::Format::Complete);
+    }
+
     #[test]
     fn legacy_command_bar_preferences_migrate_to_canonical_profile_settings() {
         let mut value = serde_json::to_value(Browser::new()).unwrap();

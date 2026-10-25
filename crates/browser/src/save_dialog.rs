@@ -15,12 +15,12 @@ pub(crate) enum Prepared {
     Native(mac::Prepared),
     Toolkit(ToolkitReply),
 }
-pub(crate) fn prepare(parent: Option<*mut std::ffi::c_void>, name: &str, cx: &mut App) -> Prepared {
+pub(crate) fn prepare(parent: Option<*mut std::ffi::c_void>, name: &str, format: Format, cx: &mut App) -> Prepared {
     let directory = dirs::download_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
     #[cfg(target_os = "macos")]
-    if let Some(request) = mac::prepare(parent, name, directory.clone()) {
+    if let Some(request) = mac::prepare(parent, name, directory.clone(), format) {
         return Prepared::Native(request);
     }
     let _ = parent;
@@ -32,7 +32,7 @@ pub(crate) fn prepare(parent: Option<*mut std::ffi::c_void>, name: &str, cx: &mu
             .map_err(|error| error.to_string())?;
         Ok(chosen.map(|path| Choice {
             path,
-            format: Format::Complete,
+            format,
         }))
     }))
 }
@@ -77,6 +77,7 @@ mod mac {
         parent: Retained<AnyObject>,
         name: String,
         directory: PathBuf,
+        format: Format,
     }
     struct Controls {
         panel: Retained<AnyObject>,
@@ -93,6 +94,7 @@ mod mac {
         view: Option<*mut c_void>,
         name: &str,
         directory: PathBuf,
+        format: Format,
     ) -> Option<Prepared> {
         if cfg!(test) {
             return None;
@@ -103,6 +105,7 @@ mod mac {
                 parent: Retained::retain(msg_send![view, window])?,
                 name: name.into(),
                 directory,
+                format,
             })
         }
     }
@@ -152,7 +155,7 @@ mod mac {
                 let _: () = msg_send![&*panel,setCanCreateDirectories:Bool::YES];
                 let _: () = msg_send![&*panel,setExtensionHidden:Bool::NO];
                 let _: () = msg_send![&*panel,setCanSelectHiddenExtension:Bool::YES];
-                allowed(&panel, Format::Complete);
+                allowed(&panel, self.format);
                 let name = NSString::from_str(&self.name);
                 let _: () = msg_send![&*panel,setNameFieldStringValue:&*name];
                 let directory = NSString::from_str(&self.directory.to_string_lossy());
@@ -189,7 +192,8 @@ mod mac {
                     let item: *mut AnyObject = msg_send![&*popup,itemAtIndex:index as isize];
                     let _: () = msg_send![item,setRepresentedObject:represented];
                 }
-                let _: () = msg_send![&*popup,selectItemAtIndex:2isize];
+                let index = Format::ALL.iter().position(|format| *format == self.format).unwrap() as isize;
+                let _: () = msg_send![&*popup,selectItemAtIndex:index];
                 let class = if let Some(class) = AnyClass::get(c"EchoSaveFormatTarget") {
                     class
                 } else {
