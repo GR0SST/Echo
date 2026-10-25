@@ -514,7 +514,7 @@ impl BrowserWindow {
                                 .hover(move |s| s.bg(hsla(0., 0., if dark { 1. } else { 0. }, 0.12)))
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.edit_profile(|browser| browser.settings.theme_appearance = mode);
+                                    this.edit_profile(|browser| browser.set_browser_appearance(mode));
                                     cx.notify();
                                 }))
                                 .child(mode_icon(mode))

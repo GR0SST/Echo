@@ -264,3 +264,58 @@ fn page_suggestions_match_separate_words_in_title_and_url(cx: &mut TestAppContex
     bar(&view, cx).simulate_input("rust absent");
     assert!(!view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|row| matches!(row, Suggestion::History { .. }))));
 }
+
+#[gpui::test]
+fn empty_command_bar_uses_recency_instead_of_favorite_section_order(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let recent = view.update(cx, |w, cx| {
+        let id = w.edit_browser(|b| {
+            let now = std::time::SystemTime::now();
+            for space in &mut b.spaces { for tab in space.pinned.iter_mut().chain(&mut space.today) { tab.last_active = now - std::time::Duration::from_secs(60); } }
+            let favorite = b.new_tab("https://unused-favorite.example", now - std::time::Duration::from_secs(30));
+            b.favorite_tab(favorite);
+            let recent = b.new_tab("https://recent.example", now + std::time::Duration::from_secs(20));
+            b.set_title(recent, "Recent local page");
+            b.new_tab("https://active.example", now + std::time::Duration::from_secs(30));
+            for favorite in &mut b.active_user_profile_mut().favorites { favorite.last_active = now - std::time::Duration::from_secs(30); }
+            recent
+        }); cx.notify(); id
+    });
+    cx.simulate_keystrokes("cmd-t");
+    view.read_with(cx, |w, cx| assert!(matches!(w.suggestions(cx).first(), Some(Suggestion::SwitchToTab { id, .. }) if *id == recent)));
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().id), recent);
+}
+
+#[gpui::test]
+fn command_history_routes_replay_appearance_and_respect_an_editable_page(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, cx, fake) = open_pages(cx);
+    view.update(cx, |w, cx| {
+        w.edit_profile(|b| { b.clear_sidebar_history(); b.settings.theme_appearance = ThemeAppearance::Automatic; }); cx.notify();
+    });
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("switch to dark mode");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    fake.take_calls();
+    for (query, expected) in [("undo", ThemeAppearance::Automatic), ("redo", ThemeAppearance::Dark)] {
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input(query);
+        bar(&view, cx).simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |w, _| { assert!(w.command_bar.is_none()); assert_eq!(w.theme_appearance(), expected); });
+    }
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Undo(..) | Call::Redo(..))));
+    fake.send(cx, Event::EditFocusChanged { view: page(1), editable: true });
+    fake.take_calls();
+    for query in ["undo", "redo"] {
+        cx.simulate_keystrokes("cmd-t");
+        bar(&view, cx).simulate_input(query);
+        bar(&view, cx).simulate_keystrokes("enter");
+        cx.run_until_parked();
+    }
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::Undo(1)) && calls.contains(&Call::Redo(1)));
+    assert_eq!(view.read_with(cx, |w, _| w.theme_appearance()), ThemeAppearance::Dark);
+}

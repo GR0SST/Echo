@@ -199,7 +199,7 @@ fn appearance_menu_updates_retained_documents_and_shared_settings_without_naviga
 }
 
 #[gpui::test]
-fn appearance_command_updates_other_window_and_survives_sidebar_undo(cx: &mut TestAppContext) {
+fn appearance_command_undo_and_redo_update_existing_windows_without_navigation(cx: &mut TestAppContext) {
     use browser_core::themes::ThemeAppearance;
     let (view, visual, fake) = open_pages(cx);
     let (other, mut other_visual) = another_profile_window(&view, visual);
@@ -212,8 +212,18 @@ fn appearance_command_updates_other_window_and_survives_sidebar_undo(cx: &mut Te
     fake.take_calls();
     visual.simulate_keystrokes("cmd-z");
     visual.run_until_parked();
+    other_visual.run_until_parked();
+    assert_eq!(view.read_with(visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Automatic);
+    assert_eq!(other.read_with(&other_visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Automatic);
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::ColorScheme(..))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..))));
+    visual.simulate_keystrokes("cmd-shift-z");
+    visual.run_until_parked();
+    other_visual.run_until_parked();
     assert_eq!(view.read_with(visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Light);
-    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ColorScheme(..))));
+    assert_eq!(other.read_with(&other_visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Light);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..))));
 }
 
 
