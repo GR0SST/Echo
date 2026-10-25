@@ -253,6 +253,28 @@ impl BrowserWindow {
             .child(self.render_inline_tab_name(tab.id, cx).unwrap_or_else(|| div().debug_selector(|| self.sidebar_debug_name(format!("sidebar-item-title-{}", tab.id.get()))).relative().top(px(if self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library { 0. } else { -1. })).flex_1().min_w_0().overflow_hidden().child(crate::sidebar_title::SidebarTitle::new(self.browser.item_title(tab.id))).into_any_element())).into_any_element()
     }
 
+    fn render_pane_site_controls(&self, id: TabId, ink: gpui::Hsla, cx: &mut Context<Self>) -> AnyElement {
+        let local: crate::site_controls::Anchor = Default::default();
+        let paint = local.clone();
+        let shared = self.site_controls_anchor.clone();
+        let fill = hsla(0., 0., if ink.l > 0.5 { 1. } else { 0. }, 0.1);
+        div().id(("pane-site-controls", id.get() as usize))
+            .debug_selector(|| self.sidebar_debug_name(format!("pane-site-controls-{}", id.get())))
+            .relative().w(px(32.)).h(px(28.)).mr(px(4.)).flex_none().rounded(px(5.))
+            .flex().items_center().justify_center().cursor_pointer()
+            .when(self.site_controls.is_some(), |button| button.bg(fill)).hover(move |button| button.bg(fill))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                if !this.page_content_visible() || this.browser.space().active_tab != Some(id) || this.browser.active_split().is_none() { return; }
+                let Some(bounds) = local.get() else { return; };
+                this.site_controls_anchor.set(Some(bounds));
+                this.toggle_site_controls(window, cx);
+            }))
+            .child(crate::icons::control_sized(crate::icons::Icon::SiteControls, 16.))
+            .child(gpui::canvas(|_, _, _| (), move |bounds, _, _, _| { paint.set(Some(bounds)); shared.set(Some(bounds)); }).absolute().inset_0())
+            .into_any_element()
+    }
+
     pub(crate) fn render_split(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(split) = self.browser.active_split() else { return div().into_any_element(); };
         let horizontal = split.axis == Axis::Horizontal;
@@ -280,9 +302,10 @@ impl BrowserWindow {
                         .border_color(pane_focus_color(self.theme_is_dark(), active)))
                     .child(div().id(("pane-header", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-header-{key}"))()))
                         .mx(px(crate::split_layout::BORDER as f32)).mt(px(crate::split_layout::BORDER as f32))
-                        .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
+                        .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS)).overflow_hidden()
                         .h(px((crate::split_layout::HEADER_HEIGHT - crate::split_layout::BORDER) as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs().relative().group(header_group.clone())
-                        .bg(header_fill).text_color(header_ink)
+                        .bg(if tab.url == EMPTY_PANE_URL { gpui::transparent_black() } else { header_fill }).text_color(header_ink)
+                        .when(tab.url == EMPTY_PANE_URL, |header| header.child(self.theme_window_field()).child(div().absolute().inset_0().bg(self.theme_empty_panel_fill())))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if this.page_content_visible() {
@@ -297,10 +320,11 @@ impl BrowserWindow {
                         .child(div().id(("pane-forward", key)).px_1().rounded_sm().child(crate::icons::control(crate::icons::Icon::Forward))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().go_forward(id); } })))
                         .child(div().id(("pane-reload", key)).px_1().rounded_sm()
-                            .when(!active, |this| this.invisible().group_hover(header_group.clone(), |style| style.visible())).child(crate::icons::control(crate::icons::Icon::Reload))
+                            .when(!active, |this| this.invisible().group_hover(header_group.clone(), |style| style.visible()))
+                            .when(tab.url == EMPTY_PANE_URL, |this| this.invisible()).child(crate::icons::control(crate::icons::Icon::Reload))
                             .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if let Some(pages) = &this.pages { pages.borrow_mut().reload(id); } })))
                         .child(div().id(("pane-address", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-address-{key}"))()))
-                            .absolute().left(px(if active { 94. } else { 56. })).right(px(if active { 94. } else { 56. })).top_0().h_full()
+                            .absolute().left(px(if active { 111. } else { 56. })).right(px(if active { 111. } else { 56. })).top_0().h_full()
                             .when(!active, |this| this.group_hover(header_group.clone(), |style| style.left(px(94.)).right(px(94.))))
                             .flex().items_center().justify_center().gap(px(6.)).text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD)
                             .when(tab.url != EMPTY_PANE_URL, |this| this.child(crate::icons::control_sized(crate::icons::Icon::Link,14.)))
@@ -315,14 +339,19 @@ impl BrowserWindow {
                                 let url = this.browser.active_tab().unwrap().url.clone();
                                 this.open_command_bar(Target::Tab(id), &url, window, cx);
                             })))
-                        .child(div().id(("pane-menu", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-menu-{key}"))())).ml_auto().px_1().rounded_sm()
-                            .when(!active, |this| this.invisible().group_hover(header_group.clone(), |style| style.visible()))
-                            .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
-                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child(crate::icons::control(crate::icons::Icon::Split)))
-                        .child(div().id(("pane-close", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-close-{key}"))())).px_1().rounded_sm()
-                            .hover(|this| this.bg(hsla(0., 0., 0., 0.1)))
-                            .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if this.split_draft.as_ref().is_some_and(|draft| draft.pane == id) { this.close_command_bar(cx); } else { this.close_split_pane(id, cx); } })).child(crate::icons::control(crate::icons::Icon::Close))))
-                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("pane-body-{key}"))())).mx(px(crate::split_layout::BORDER as f32)).mb(px(crate::split_layout::BORDER as f32)).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().when(tab.url == EMPTY_PANE_URL, |this| this.bg(hsla(self.browser.space().hue / 360., 0.35, 0.86, 1.))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
+                        .child(div().absolute().right(px(3.)).top_0().flex().items_center()
+                            .when(active && browser_core::site_settings::SiteSettings::origin(&tab.url).is_some(), |controls| controls.child(self.render_pane_site_controls(id, header_ink, cx)))
+                            .child(div().id(("pane-menu", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-menu-{key}"))()))
+                                .w(px(32.)).h(px(28.)).flex_none().flex().items_center().justify_center().rounded(px(5.))
+                                .when(!active, |this| this.invisible().group_hover(header_group.clone(), |style| style.visible()))
+                                .when(tab.url == EMPTY_PANE_URL, |this| this.invisible())
+                                .hover(move |this| this.bg(hsla(0., 0., if header_ink.l > 0.5 { 1. } else { 0. }, 0.1)))
+                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position(), window, cx); })).child(crate::icons::control(crate::icons::Icon::Split)))
+                            .child(div().id(("pane-close", key)).debug_selector(|| self.sidebar_debug_name((move || format!("pane-close-{key}"))()))
+                                .w(px(32.)).h(px(28.)).flex_none().flex().items_center().justify_center().rounded(px(5.))
+                                .hover(move |this| this.bg(hsla(0., 0., if header_ink.l > 0.5 { 1. } else { 0. }, 0.1)))
+                                .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if this.split_draft.as_ref().is_some_and(|draft| draft.pane == id) { this.close_command_bar(cx); } else { this.close_split_pane(id, cx); } })).child(crate::icons::control(crate::icons::Icon::Close)))))
+                    .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("pane-body-{key}"))())).mx(px(crate::split_layout::BORDER as f32)).mb(px(crate::split_layout::BORDER as f32)).rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS)).flex_1().min_h_0().relative().overflow_hidden().when(tab.url == EMPTY_PANE_URL, |this| this.child(div().absolute().inset_0().debug_selector(|| "split-draft-body-field".into()).child(self.theme_window_field())).child(div().absolute().inset_0().bg(self.theme_empty_panel_fill()))).when(self.pages.is_none() || omnibox::is_internal_url(&tab.url), |this| this.flex().items_center().justify_center().child(div().max_w_full().truncate().child(if tab.url == EMPTY_PANE_URL { String::new() } else { tab.url.clone() })))))
             }));
         let dividers = (0..split.panes.len().saturating_sub(1)).map(|index| {
             let fraction: f32 = weights[..=index].iter().sum();

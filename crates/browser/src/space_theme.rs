@@ -643,6 +643,17 @@ impl BrowserWindow {
             + (if key.to.default_style { 1. } else { 0. }) * key.fraction
     }
     pub(crate) fn theme_surface(&self, translucent: bool) -> AnyElement {
+        self.theme_surface_with_origin(translucent, false)
+    }
+
+    /// A pane paints the same window field through its existing rounded clip.
+    /// Gradient scaling and the grain tile origin remain fixed while it resizes.
+    pub(crate) fn theme_window_field(&self) -> AnyElement {
+        gpui::div().debug_selector(|| "theme-window-field".into()).absolute().inset_0().overflow_hidden()
+            .child(self.theme_surface_with_origin(false, true)).into_any_element()
+    }
+
+    fn theme_surface_with_origin(&self, translucent: bool, window_aligned: bool) -> AnyElement {
         let (gradient, texture) = self
             .theme_paint_cache
             .images(self.theme_paint_key(translucent));
@@ -654,6 +665,7 @@ impl BrowserWindow {
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
+                        let bounds = if window_aligned { Bounds::new(gpui::point(px(0.), px(0.)), window.viewport_size()) } else { bounds };
                         if private {
                             window.paint_quad(gpui::fill(
                                 bounds,
@@ -676,6 +688,7 @@ impl BrowserWindow {
                             return;
                         }
                         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                            let bounds = if window_aligned { Bounds::new(gpui::point(px(0.), px(0.)), window.viewport_size()) } else { bounds };
                             let cols =
                                 (f32::from(bounds.size.width) / NOISE_TILE as f32).ceil() as u32;
                             let rows =

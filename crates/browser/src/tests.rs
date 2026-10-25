@@ -11446,3 +11446,71 @@ fn update_window_keyboard_close_keeps_the_browser_open(cx: &mut TestAppContext) 
     assert!(view.read_with(cx, |view, _| !view.browser.spaces.is_empty()));
     assert!(!crate::quit::is_quitting());
 }
+
+#[gpui::test]
+fn split_draft_uses_the_window_theme_field_without_replacing_the_source_page(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    view.update(visual, |view, cx| {
+        let mut theme = browser_core::themes::SpaceTheme::from_hue(120.);
+        theme.colors = [25., 150., 270.].map(|hue| browser_core::themes::ThemeColor::from_hsv(hue, 0.6, 0.7)).into();
+        theme.noise = 0.4;
+        let id = view.browser.space().id;
+        view.edit_browser(|browser| browser.update_space_theme(id, theme));
+        cx.notify();
+    });
+    let (source, before, theme) = view.read_with(visual, |view, _| (view.browser.space().active_tab.unwrap(),
+        view.browser.all_tabs().map(|tab| (tab.id, tab.url.clone())).collect::<Vec<_>>(), view.browser.space().theme()));
+    fake.take_calls();
+    run_named_command(&view, visual, "add right split");
+    let pane = view.read_with(visual, |view, _| view.split_draft.as_ref().unwrap().pane);
+    let body = visual.debug_bounds(Box::leak(format!("pane-body-{}", pane.get()).into_boxed_str())).unwrap();
+    let field = visual.debug_bounds("split-draft-body-field").unwrap();
+    assert_eq!(field, body);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
+    bar(&view, visual).simulate_keystrokes("escape");
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert_eq!(view.browser.space().active_tab, Some(source));
+        assert!(view.split_draft.is_none());
+        assert!(view.browser.archive.is_empty());
+        assert_eq!(view.browser.all_tabs().map(|tab| (tab.id, tab.url.clone())).collect::<Vec<_>>(), before);
+        assert_eq!(view.browser.space().theme(), theme);
+    });
+}
+
+#[gpui::test]
+fn split_header_site_controls_anchor_to_and_clear_only_the_focused_document(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_split_pages(cx, 2);
+    visual.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(760.)));
+    visual.run_until_parked();
+    let (active, url) = view.read_with(visual, |view, _| (view.browser.active_tab().unwrap().id, view.browser.active_tab().unwrap().url.clone()));
+    let calls = fake.take_calls();
+    let raw = calls.iter().find_map(|call| match call { Call::Create(id, created) if created == &url => Some(*id), _ => None }).unwrap();
+    let origin = browser_core::site_settings::SiteSettings::origin(&url).unwrap();
+    fake.0.borrow_mut().site_infos.insert(raw, engine::SiteInfo {
+        origin: origin.clone(), host: crate::window::address_host(&url), secure: true,
+        certificate: None, zoom_percent: 100, permissions: Vec::new(),
+    });
+    let selector = test_selector(format!("pane-site-controls-{}", active.get()));
+    let button = visual.debug_bounds(selector).unwrap();
+    let header = visual.debug_bounds(test_selector(format!("pane-header-{}", active.get()))).unwrap();
+    assert_eq!(button.size, gpui::size(gpui::px(32.), gpui::px(28.)));
+    assert_eq!(header.right() - button.right(), gpui::px(71.), "button={button:?}; header={header:?}; menu={:?}; close={:?}",
+        visual.debug_bounds(test_selector(format!("pane-menu-{}", active.get()))), visual.debug_bounds(test_selector(format!("pane-close-{}", active.get()))));
+    click(visual, selector);
+    let handle = view.read_with(visual, |view, _| {
+        assert_eq!(view.browser.space().active_tab, Some(active));
+        view.site_controls.as_ref().unwrap().overlay.unwrap()
+    });
+    let mut panel = VisualTestContext::from_window(handle.into(), &visual.cx);
+    panel.run_until_parked();
+    click(&mut panel, "site-more");
+    click(&mut panel, "site-more-action-1");
+    visual.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::ClearSiteData(raw, origin, engine::ClearSiteData::Cookies)));
+    view.read_with(visual, |view, _| {
+        assert!(view.site_controls.is_none());
+        assert_eq!(view.browser.space().active_tab, Some(active));
+        assert_eq!(view.browser.active_split().unwrap().panes.len(), 2);
+    });
+}
