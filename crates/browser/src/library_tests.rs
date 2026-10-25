@@ -21,6 +21,7 @@ impl Render for Harness {
             LibraryColors {
                 background: gpui::rgb(0xffffff).into(),
                 card_surface: |_| gpui::rgb(0xdddddd).into(),
+                card_overlay: gpui::transparent_black(),
                 text: gpui::rgb(0x111111).into(),
                 muted: gpui::rgb(0x666666).into(),
                 hover: gpui::rgb(0xeeeeee).into(),

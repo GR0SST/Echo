@@ -148,6 +148,7 @@ impl LibraryActions {
 pub(crate) struct LibraryColors {
     pub background: Hsla,
     pub card_surface: fn(f32) -> Hsla,
+    pub card_overlay: Hsla,
     pub text: Hsla,
     pub muted: Hsla,
     pub hover: Hsla,
@@ -555,7 +556,10 @@ fn render_card(
         // The host supplies its established Space theme mapping.
         .bg(if space.theme_image.is_some() { gpui::transparent_black() } else { (colors.card_surface)(space.hue) })
         .relative()
-        .when_some(space.theme_image.clone(), |card, image| card.child(gpui::img(image).absolute().inset_0().size_full().rounded_xl()))
+        .when_some(space.theme_image.clone(), |card, image| card
+            .child(gpui::img(image).absolute().inset_0().size_full().rounded_xl())
+            .child(div().debug_selector(move || format!("library-space-material-{index}"))
+                .absolute().inset_0().rounded_xl().bg(colors.card_overlay)))
         .text_color(colors.text)
         .flex()
         .flex_col()

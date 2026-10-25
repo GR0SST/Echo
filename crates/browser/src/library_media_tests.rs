@@ -52,6 +52,7 @@ impl Render for Host {
             LibraryColors {
                 background: colors.column,
                 card_surface: |_| gpui::rgb(0xcccccc).into(),
+                card_overlay: gpui::transparent_black(),
                 text: colors.text,
                 muted: colors.muted,
                 hover: colors.hover,

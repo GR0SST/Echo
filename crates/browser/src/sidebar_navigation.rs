@@ -720,6 +720,7 @@ impl BrowserWindow {
         let colors = LibraryColors {
             background: gpui::transparent_black(),
             card_surface: |hue| crate::window::tint(hue / 360., 0.82),
+            card_overlay: gpui::hsla(0., 0., 1., if self.theme_is_dark() { 0.10 } else { 0.02 }),
             text: theme.foreground,
             muted: theme.muted,
             hover: theme.hover,

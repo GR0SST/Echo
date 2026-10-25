@@ -499,6 +499,12 @@ fn library_cards_omit_favorites_without_changing_profile_data(cx: &mut TestAppCo
     let before = session(&view, visual);
     select(&view, visual, SidebarPage::Library);
     click(visual, "library-nav-spaces");
+    for index in 0..2 {
+        let card: &'static str = Box::leak(format!("library-space-{index}").into_boxed_str());
+        let panel: &'static str = Box::leak(format!("library-space-material-{index}").into_boxed_str());
+        assert_eq!(visual.debug_bounds(panel), visual.debug_bounds(card),
+            "the lighter panel must cover the entire themed card, including its rounded edge");
+    }
     // Check actual host-injected sidebar items, not just projection metadata.
     // Selectors come from BrowserWindow::render_favorite's existing ID contract.
     for (index, favorite) in [(0, personal), (1, work_favorite)] {
