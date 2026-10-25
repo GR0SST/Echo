@@ -70,7 +70,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { ExtensionPin, ExtensionManage, ExtensionRemove, LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, EditPinnedUrl, Mute, Close,
+pub(crate) enum Command { ExtensionPin, ExtensionManage, ExtensionRemove, LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderArchive, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, EditPinnedUrl, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
@@ -93,7 +93,7 @@ impl Command {
             Self::FolderDuplicate => "folder-duplicate",
             Self::FolderIntoSpace => "folder-into-space",
             Self::NewFolderWithTab => "new-folder-with-tab", Self::MoveToFolder => "move-to-folder",
-            Self::FolderRename => "folder-rename", Self::FolderNew => "folder-new", Self::FolderMove => "folder-move", Self::FolderIcon => "folder-icon", Self::FolderCollapse => "folder-collapse", Self::FolderDelete => "folder-delete", Self::FolderCopy => "folder-copy", Self::FolderCopyMarkdown => "folder-copy-markdown",
+            Self::FolderRename => "folder-rename", Self::FolderNew => "folder-new", Self::FolderMove => "folder-move", Self::FolderIcon => "folder-icon", Self::FolderCollapse => "folder-collapse", Self::FolderArchive => "folder-archive", Self::FolderDelete => "folder-delete", Self::FolderCopy => "folder-copy", Self::FolderCopyMarkdown => "folder-copy-markdown",
             Self::Icon => "icon", Self::ResetCustomization => "reset-customization", Self::Duplicate => "duplicate", Self::Copy => "copy", Self::CopyMarkdown => "copy-markdown", Self::Pin => "pin", Self::Favorite => "favorite",
             Self::Rename => "rename", Self::Reset => "reset", Self::Replace => "replace", Self::EditPinnedUrl => "edit-pinned-url", Self::Mute => "mute", Self::Close => "close",
             Self::ArchiveRelative(browser_core::bulk_archive::Relative::Other) => "archive-other",

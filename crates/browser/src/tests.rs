@@ -11695,3 +11695,38 @@ fn local_import_dropped_firefox_export_uses_the_existing_sheet_and_cannot_replac
 
 #[path = "nested_navigation_tests.rs"]
 mod nested_navigation_tests;
+
+#[gpui::test]
+fn folder_archive_menu_and_toast_undo_restore_nested_split_without_other_edits(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_folder_pages(cx);
+    let (folder,tabs)=view.read_with(cx,|w,_| {let id=w.browser.space().folders[0].id;(id,w.browser.folder_tabs(id))});
+    fake.take_calls();right_click(cx,test_selector(format!("folder-{}",folder.get())));
+    click(&mut tab_menu(&view,cx),"tab-menu-folder-archive");
+    view.read_with(cx,|w,_| {assert!(w.browser.folder(folder).is_none());assert_eq!(w.browser.archive.len(),1);assert!(w.toast.as_ref().unwrap().message.contains("Projects"));});
+    assert!(fake.take_calls().iter().any(|c|matches!(c,Call::Close(_))));
+    click(&mut current_toast(&view,cx),"toast");cx.run_until_parked();
+    view.read_with(cx,|w,_| {assert_eq!(w.browser.folder_tabs(folder),tabs);assert!(w.browser.archive.is_empty());assert!(w.browser.split_for(tabs[0]).is_some());});
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+}
+
+#[gpui::test]
+fn restored_folder_library_toast_expands_the_tree_and_rejects_a_deleted_target(cx:&mut TestAppContext) {
+    let (view,cx,_)=open_folder_pages(cx);
+    let (folder,anchor,profile)=view.update(cx,|w,_| {
+        let folder=w.browser.space().folders[0].id;let profile=w.browser.active_user_profile_id();
+        let anchor=w.edit_browser(|b|b.archive_folder(folder,std::time::SystemTime::now())).unwrap();(folder,anchor,profile)
+    });
+    // Use the real Archive entry point, then the painted row's Restore control.
+    view.update(cx,|w,cx|w.open_library_spaces(cx));
+    cx.run_until_parked();click(cx,"library-nav-archive");
+    let row=cx.debug_bounds(test_selector(format!("library-archive-row-{}",anchor.get()))).unwrap();
+    cx.simulate_mouse_move(row.center(),None,Modifiers::none());cx.run_until_parked();
+    click(cx,test_selector(format!("library-archive-restore-{}",anchor.get())));cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|w,_|w.toast.as_ref().unwrap().message.clone()),"Folder restored to Personal. Click to view.");
+    view.update(cx,|w,_| {w.edit_browser(|b|b.set_folder_collapsed(folder,true));});
+    click(&mut current_toast(&view,cx),"toast");cx.run_until_parked();
+    view.read_with(cx,|w,_| {assert_eq!(w.browser.active_user_profile_id(),profile);assert!(!w.browser.folder(folder).unwrap().collapsed);assert!(w.sidebar_visible);});
+    view.update(cx,|w,cx| {w.show_folder_restore(folder,cx);w.edit_browser(|b|b.archive_folder(folder,std::time::SystemTime::now()));});
+    click(&mut current_toast(&view,cx),"toast");cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.browser.folder(folder).is_none()));
+}

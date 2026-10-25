@@ -446,7 +446,7 @@ impl Browser {
         page.pinned_url = None;
         page.pinned_title = None;
         let space = match scope { Scope::Favorites => self.space().id, Scope::Space(index, _) => self.spaces[index].id };
-        self.archive.push(ArchivedTab { origin: crate::ArchiveOrigin::Space, tab: page, user_profile_id: self.spaces.iter().find(|entry| entry.id == space).unwrap().user_profile_id, space, archived_at: now, reason: ArchiveReason::Manual, split: None });
+        self.archive.push(ArchivedTab { folder: None, origin: crate::ArchiveOrigin::Space, tab: page, user_profile_id: self.spaces.iter().find(|entry| entry.id == space).unwrap().user_profile_id, space, archived_at: now, reason: ArchiveReason::Manual, split: None });
         for index in selected { self.spaces[index].active_tab = Some(split.active); }
         if split.panes.len() > 1 { self.put_split(scope, split); }
         else { self.replace_pinned_item(crate::folders::PinnedItem::Split(split.id), &[crate::folders::PinnedItem::Tab(split.panes[0])]); }
@@ -466,7 +466,7 @@ impl Browser {
         let index = pages.iter().position(|page| page.id == split.anchor).unwrap();
         let page = pages.remove(index);
         let space = match scope { Scope::Favorites => self.space().id, Scope::Space(index, _) => self.spaces[index].id };
-        self.archive.push(ArchivedTab { origin: crate::ArchiveOrigin::Space, tab: page, user_profile_id: self.spaces.iter().find(|entry| entry.id == space).unwrap().user_profile_id, space, archived_at: now, reason: ArchiveReason::Manual,
+        self.archive.push(ArchivedTab { folder: None, origin: crate::ArchiveOrigin::Space, tab: page, user_profile_id: self.spaces.iter().find(|entry| entry.id == space).unwrap().user_profile_id, space, archived_at: now, reason: ArchiveReason::Manual,
             split: Some(ArchivedSplit { view: split, panes: pages }) });
         self.repair_folders();
         true
@@ -481,7 +481,7 @@ impl Browser {
             let mut pages: Vec<_> = split.panes.iter().filter_map(|id| self.take_tab(*id, scope)).collect();
             let anchor = pages.iter().position(|page| page.id == split.anchor)?;
             let page = pages.remove(anchor);
-            self.archive.push(ArchivedTab { origin: crate::ArchiveOrigin::Space, tab: page, user_profile_id: self.spaces[index].user_profile_id, space: self.spaces[index].id, archived_at: now,
+            self.archive.push(ArchivedTab { folder: None, origin: crate::ArchiveOrigin::Space, tab: page, user_profile_id: self.spaces[index].user_profile_id, space: self.spaces[index].id, archived_at: now,
                 reason: ArchiveReason::Manual, split: Some(ArchivedSplit { view: split, panes: pages }) });
             return Some(Closed::Archived);
         }
@@ -565,7 +565,7 @@ impl Browser {
         // Split IDs share the workspace allocator with Space, page and folder
         // IDs. Reserve canonical pages and archived groups before repairing
         // live groups; folder repair runs afterward against this whole union.
-        let mut used_ids: HashSet<SplitId> = self.spaces.iter().map(|space| space.id.0)
+        let mut used_ids: HashSet<SplitId> = self.archive.iter().flat_map(|entry|entry.folder.iter().flat_map(|f|f.all_ids())).chain(self.spaces.iter().map(|space| space.id.0))
             .chain(self.all_tabs().map(|tab| tab.id.0))
             .chain(self.archive.iter().flat_map(|entry| std::iter::once(entry.tab.id.0)
                 .chain(entry.split.iter().flat_map(|saved| std::iter::once(saved.view.id.get())

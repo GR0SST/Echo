@@ -70,6 +70,13 @@ impl Browser {
                 &mut next,
                 &mut mapping,
             );
+            if let Some(saved) = &mut entry.folder {
+                pages(&mut saved.tabs, &mut used, &mut next, &mut mapping);
+                for folder in &mut saved.folders { items(&mut folder.items, &mapping); }
+                views(&mut saved.splits, &mapping);
+                for id in &mut saved.pinned_order { *id=mapped(&mapping,*id); }
+                saved.selected = saved.selected.map(|id| mapped(&mapping,id));
+            }
             if let Some(saved) = &mut entry.split {
                 pages(&mut saved.panes, &mut used, &mut next, &mut mapping);
                 views(std::slice::from_mut(&mut saved.view), &mapping);

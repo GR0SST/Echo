@@ -39,7 +39,8 @@ impl BrowserWindow {
             .filter(|entry| entry.user_profile_id == self.browser.active_user_profile_id())
             .filter(|entry| space.is_none_or(|space| entry.space == space))
             .filter(|entry| {
-                entry.tab.title.to_lowercase().contains(&query)
+                entry.folder.as_ref().is_some_and(|f|f.folders.iter().any(|f|f.name.to_lowercase().contains(&query))||f.tabs.iter().any(|t|t.title.to_lowercase().contains(&query)||t.url.to_lowercase().contains(&query)))
+                    || entry.tab.title.to_lowercase().contains(&query)
                     || entry.tab.url.to_lowercase().contains(&query)
                     || entry.split.as_ref().is_some_and(|split| split.view.title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)) || split.panes.iter().any(|tab| tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)))
             })
@@ -76,7 +77,7 @@ impl BrowserWindow {
                 Suggestion::ArchivedTab {
                     id: entry.tab.id,
                     date: date_label(DateTime::<Local>::from(entry.archived_at).date_naive(), today),
-                    title: entry.split.as_ref().map_or_else(|| entry.tab.title.clone(), |split| split.view.title.clone().unwrap_or_else(|| std::iter::once(&entry.tab).chain(&split.panes).map(|tab| tab.title.clone()).collect::<Vec<_>>().join(" | "))),
+                    title: entry.folder.as_ref().map(|f|f.name().to_owned()).unwrap_or_else(||entry.split.as_ref().map_or_else(|| entry.tab.title.clone(), |split| split.view.title.clone().unwrap_or_else(|| std::iter::once(&entry.tab).chain(&split.panes).map(|tab| tab.title.clone()).collect::<Vec<_>>().join(" | ")))),
                     detail: if entry.split.is_some() { format!("{space} · Split View · {reason} · {age}") } else { format!("{space} · {reason} · {age}") },
                 }
             })

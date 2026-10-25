@@ -179,7 +179,7 @@ account consent or owner profile mutation was used to make a row look complete.
 | 16 — Developer Mode | Fresh localhost default/disable/reload/restoration is implemented and tested. Toolbar glyph/material polish, split variants and other loopback-address defaults remain unqualified. |
 | 18 — copied links | Ordered tab/Split/folder copying is wired; the vague old advanced-selection note is not treated as an absent toast hook. The verified copy pair is reused. Normal-pointer share-menu anchoring/hover and non-macOS sharing remain incomplete. Arc-hosted Shared Quotes are excluded; the local text-fragment action is separate. |
 | 18 — pin/unpin | Fresh plain-feedback pairs confirm exact text, position, height and route conditions; Cosmetic: small width/edge/text raster differences remain. Drag and folder hooks retain their existing regression coverage. |
-| 18 — archive/restore | Auto-archive and tab restore feedback work; the archived-folder model/restore is absent. Library ownership remains with the section 14 agent. |
+| 18 — archive/restore | Auto-archive and tab restore feedback work; populated ordinary-folder archive/restore is implemented, reference unqualified (see FOLDER_ARCHIVE_REFERENCE.md). Library ownership remains with the section 14 agent. |
 | 18 — background tab/Space | Background tab reveal works; the New Space Created trigger is not implemented/qualified. No extra test Space was created to force a string-only state. |
 
 No ordinary download-completion toast was added. The inventory contains Max
@@ -228,8 +228,8 @@ backend. Neither is accepted by its Settings overview pair.
 Shortcut website priority/two-press dispatch is qualified in Round 3. Extension
 bindings and dynamic Space reassignment retain their separate qualification. The existing Command Bar Favorites
 ordering toggle works; its missing Settings menu is an entry-point gap, not an
-absent ordering model. Folder archive/restore needs a canonical archived-folder
-model. Background Space creation has no qualified source trigger: creating a
+absent ordering model. Folder archive/restore now has a canonical archived-folder
+model and Echo qualification; its Arc reference remains unqualified. Background Space creation has no qualified source trigger: creating a
 new source Space only for this observation would violate the shared Echo Test
 rule. The shared source Space is nonempty and contains other agents' tabs, so
 an empty-Space profile-warning condition cannot be manufactured by clearing it.
@@ -315,7 +315,8 @@ attempts found zero fresh windows; a later session found two fresh surfaces
 and was also rejected. No fixture actions followed those failed claims. A
 subsequent locked read-only diagnostic found no remaining fresh surface.
 Existing windows were not closed to force a usable session. Folder archival
-and restoration therefore retain the canonical-model gap. Site Previews,
+and restoration are now implemented from the existing menu and exact bundle strings,
+with Echo interaction/native qualification; reference unqualified. Site Previews,
 empty-Space profile-warning conditions, OS/no-window quit policy and SCC Full
 Page/Portrait behavior retain their existing functional gaps and require
 qualified source flows. Background Space creation still has no qualified

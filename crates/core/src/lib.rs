@@ -175,6 +175,8 @@ pub enum ArchiveOrigin {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArchivedTab {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<folders::archive::ArchivedFolder>,
     #[serde(default)]
     pub origin: ArchiveOrigin,
     pub tab: Tab,
@@ -294,7 +296,7 @@ impl Browser {
             .spaces
             .iter()
             .flat_map(|space| std::iter::once(space.id.0).chain(space.tabs().map(|t| t.id.0)))
-            .chain(self.archive.iter().map(|a| a.tab.id.0))
+            .chain(self.archive.iter().flat_map(|a| std::iter::once(a.tab.id.0).chain(a.folder.iter().flat_map(|f| f.all_ids()))))
             .chain(self.profiles.values().flat_map(|profile| profile.favorites.iter().map(|tab| tab.id.0)))
             .max()
             .unwrap_or(0);
@@ -504,7 +506,7 @@ impl Browser {
             (Section::Today, _) => {
                 let space_id = space.id;
                 let tab = self.remove_tab(id)?;
-                self.archive.push(ArchivedTab { origin: ArchiveOrigin::Space, tab, user_profile_id: self.space().user_profile_id, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
+                self.archive.push(ArchivedTab { folder: None, origin: ArchiveOrigin::Space, tab, user_profile_id: self.space().user_profile_id, space: space_id, archived_at: now, reason: ArchiveReason::Manual, split: None });
                 Some(Closed::Archived)
             }
         }
@@ -536,7 +538,9 @@ impl Browser {
         let source = &self.archive[index];
         let target = self.spaces.iter().position(|space| space.id == source.space && space.user_profile_id == source.user_profile_id)
             .or_else(|| self.spaces.iter().position(|space| space.user_profile_id == source.user_profile_id))?;
+        if !self.can_restore_folder_entry(source, target) { return None; }
         let mut archived = self.archive.remove(index);
+        if archived.folder.is_some() { return self.restore_folder_archive_entry(archived, now, target); }
         archived.space = self.spaces[target].id;
         if archived.split.is_some() { return Some(self.restore_split_archived(archived, now)); }
         let index = self

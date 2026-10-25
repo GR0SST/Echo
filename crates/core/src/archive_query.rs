@@ -31,6 +31,7 @@ impl ArchiveFilter {
             tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
         };
         matches(&entry.tab)
+            || entry.folder.as_ref().is_some_and(|f|f.folders.iter().any(|f|f.name.to_lowercase().contains(&query))||f.tabs.iter().any(matches))
             || entry.split.as_ref().is_some_and(|split| {
                 split
                     .view
@@ -89,7 +90,7 @@ impl crate::Browser {
         tab.id = crate::TabId(self.next_id());
         tab.pinned_url = None;
         let id = tab.id;
-        self.archive.push(ArchivedTab { tab, space, user_profile_id: profile, archived_at: now,
+        self.archive.push(ArchivedTab { folder: None, tab, space, user_profile_id: profile, archived_at: now,
             reason, origin: crate::ArchiveOrigin::LittleArc, split: None });
         Some(id)
     }

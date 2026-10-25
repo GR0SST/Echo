@@ -121,6 +121,7 @@ impl Render for ArchiveLibrary {
                 previous = Some(day);
             }
             let favicon = self.owner.read_with(cx, |view, _| {
+                if let Some(folder)=&entry.folder {return Some(icons::folder_state(folder.folders.iter().find(|f|f.id==folder.root).and_then(|f|f.custom_icon.as_deref()),false));}
                 (entry.tab.custom_icon.is_some() || view.browser.favicon(profile, &entry.tab.url).is_some())
                     .then(|| view.render_favicon_for_profile(&entry.tab, profile, view.theme_uses_light_ink_for(view.browser.space().id)))
             }).ok().flatten();
@@ -156,10 +157,10 @@ impl Render for ArchiveLibrary {
                 .unwrap_or(&url)
                 .trim_end_matches('/')
                 .to_owned();
-            let title = entry
+            let title = entry.folder.as_ref().map(|f|f.name().to_owned()).or_else(||entry
                 .split
                 .as_ref()
-                .and_then(|split| split.view.title.clone())
+                .and_then(|split| split.view.title.clone()))
                 .unwrap_or(entry.tab.title.clone());
             list = list.child(
                 div()
@@ -470,9 +471,10 @@ impl BrowserWindow {
                 && entry.tab.url == url && entry.archived_at == archived_at) { return; }
         match action {
             ArchiveAction::Restore => {
+                let folder=self.browser.archive.iter().find(|a|a.tab.id==id).and_then(|a|a.folder.as_ref()).map(|f|f.root);
                 if self.edit_browser(|browser| browser.restore_archived_in_background(id, profile, SystemTime::now())).is_some() {
                     let space = self.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|tab| tab.id == id)).map(|space| space.name.clone()).unwrap_or_default();
-                    self.show_reveal_toast(format!("Tab restored to {space}. Click to view."), id, cx);
+                    if let Some(folder)=folder {self.show_folder_restore(folder,cx);} else {self.show_reveal_toast(format!("Tab restored to {space}. Click to view."), id, cx);}
                 }
             }
             ArchiveAction::Delete => { self.edit_browser(|browser| browser.delete_archived(id)); }

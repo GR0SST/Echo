@@ -151,7 +151,7 @@ fn favorite_count(browser: &Browser, id: crate::UserProfileId) -> usize {
     browser.user_profile(id).map_or(0, |profile| profile.favorites.iter().filter(|tab| !profile.favorite_splits.iter().any(|split| split.anchor != tab.id && split.panes.contains(&tab.id))).count())
 }
 
-fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize {
+pub(crate) fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize {
     let index = desired.iter().position(|entry| *entry == item).unwrap();
     // Neighbor identities preserve order when other pages were opened later.
     if let Some(next) = desired[index + 1..].iter().find_map(|id| current.iter().position(|entry| entry == id)) { return next; }
@@ -163,11 +163,12 @@ fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: T) -> usize
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { Space(space::SpaceEdit), Batch(Vec<SidebarEdit>), Tidy(crate::max::TidyEdit), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Appearance { before: crate::themes::ThemeAppearance, after: crate::themes::ThemeAppearance }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
+enum SidebarEdit { FolderArchive(crate::folders::archive::FolderArchiveEdit), Space(space::SpaceEdit), Batch(Vec<SidebarEdit>), Tidy(crate::max::TidyEdit), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Appearance { before: crate::themes::ThemeAppearance, after: crate::themes::ThemeAppearance }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
         match self {
+            Self::FolderArchive(edit) => edit.apply(redo, browser, now),
             Self::Space(edit) => edit.apply(redo, browser, now),
             Self::Batch(edits) => {
                 let apply = |edits: &mut Vec<SidebarEdit>, browser: &mut Browser| {
@@ -217,6 +218,7 @@ impl SidebarEdit {
 pub(crate) struct SidebarHistory { undo: Vec<SidebarEdit>, redo: Vec<SidebarEdit> }
 
 impl SidebarHistory {
+    pub(crate) fn record_folder_archive(&mut self, edit: crate::folders::archive::FolderArchiveEdit) { self.record(SidebarEdit::FolderArchive(edit)); }
     pub(crate) fn record_tidy(&mut self, space: SpaceId, profile: crate::UserProfileId, before:Vec<crate::max::TodayGroup>, after:Vec<crate::max::TodayGroup>, before_order:Vec<TabId>, after_order:Vec<TabId>) {
         self.record(SidebarEdit::Tidy(crate::max::TidyEdit {space,profile,before,after,before_order,after_order}));
     }
@@ -270,6 +272,7 @@ impl Browser {
     pub fn archive_undo_items(&self) -> Option<Vec<TabId>> {
         fn anchors(edit: &SidebarEdit) -> Option<Vec<TabId>> {
             match edit {
+                SidebarEdit::FolderArchive(edit) => Some(vec![edit.anchor()]),
                 SidebarEdit::Archive(edit) | SidebarEdit::RemovePin { archive: edit, .. } => Some(edit.anchors()),
                 SidebarEdit::Batch(edits) => Some(edits.iter().map(anchors).collect::<Option<Vec<_>>>()?.into_iter().flatten().collect()),
                 _ => None,

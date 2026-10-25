@@ -2327,9 +2327,12 @@ impl BrowserWindow {
                 if self.command_bar.as_ref().is_some_and(|bar| bar.target != target) { return; }
             }
             Suggestion::ArchivedTab { id, .. } => {
+                let folder=self.browser.archive.iter().find(|a|a.tab.id==id).and_then(|a|a.folder.as_ref()).map(|f|f.root);
                 if self.edit_browser(|browser| browser.restore_archived(id, now)).is_some() {
                     self.settle_pager(cx);
-                    self.show_reveal_toast(format!("Tab restored to {}. Click to view.", self.browser.space().name), id, cx);
+                    if let Some(folder)=folder {self.show_folder_restore(folder,cx);} else {
+                        self.show_reveal_toast(format!("Tab restored to {}. Click to view.", self.browser.space().name), id, cx);
+                    }
                 }
             }
             Suggestion::MoreArchive { .. } => {

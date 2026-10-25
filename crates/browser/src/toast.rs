@@ -27,6 +27,7 @@ enum ToastAction {
     UndoDownload(crate::max_downloads::Receipt),
     UndoMedia(gpui::WeakEntity<crate::library::media::MediaView>,browser_core::UserProfileId),
     RevealTab(browser_core::TabId, browser_core::UserProfileId),
+    RevealFolder(browser_core::folders::FolderId, browser_core::UserProfileId),
     UndoArchive(Vec<browser_core::TabId>, browser_core::UserProfileId),
 }
 
@@ -156,6 +157,13 @@ impl BrowserWindow {
         if let Some(toast) = &mut self.toast { toast.action = Some(ToastAction::RevealTab(tab, profile)); }
     }
 
+    pub(crate) fn show_folder_restore(&mut self, folder: browser_core::folders::FolderId, cx: &mut Context<Self>) {
+        let Some(space)=self.browser.folder_space(folder).and_then(|id|self.browser.spaces.iter().find(|s|s.id==id)) else{return;};
+        let (profile,name)=(space.user_profile_id,space.name.clone());
+        self.show_toast(format!("Folder restored to {name}. Click to view."),cx);
+        if let Some(toast)=&mut self.toast {toast.action=Some(ToastAction::RevealFolder(folder,profile));}
+    }
+
     pub(crate) fn show_background_tab(&mut self, tab: browser_core::TabId, cx: &mut Context<Self>) {
         if self.sidebar_visible { return; }
         if let Some(name) = self.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab)).map(|space| space.name.clone()) {
@@ -183,6 +191,15 @@ impl BrowserWindow {
                 if receipt.belongs_to(&self.profile.handle, self.browser.active_user_profile_id()) {
                     crate::max_downloads::undo(receipt, cx);
                 }
+                return;
+            }
+            ToastAction::RevealFolder(folder, profile) => {
+                if profile!=self.browser.active_user_profile_id() || self.browser.folder_space(folder).and_then(|id|self.browser.spaces.iter().find(|s|s.id==id)).is_none_or(|s|s.user_profile_id!=profile) {return;}
+                self.sidebar_visible=true;
+                self.expand_folder(folder,cx);
+                self.settle_pager(cx);
+                self.retire_toast(cx);
+                cx.notify();
                 return;
             }
             ToastAction::RevealTab(tab, profile) => {

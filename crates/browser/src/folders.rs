@@ -294,7 +294,7 @@ impl BrowserWindow {
         if folder.items.is_empty() {
             rows.push(item("Delete", MenuCommand::FolderDelete).into());
         } else {
-            rows.push(crate::tab_menu::pending("Archive Folder").into());
+            rows.push(item("Archive Folder", MenuCommand::FolderArchive).into());
         }
         rows
     }
@@ -346,6 +346,15 @@ impl BrowserWindow {
             MenuCommand::FolderCollapse => {
                 if let Some(collapsed) = self.browser.folder(id).map(|folder| !folder.collapsed) {
                     self.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed));
+                }
+            }
+            MenuCommand::FolderArchive => {
+                let name = self.browser.folder(id).map(|f|f.name.clone()).unwrap_or_default();
+                let removed = self.browser.folder_tabs(id);
+                if self.edit_browser(|browser| browser.archive_folder(id,SystemTime::now())).is_some() {
+                    if let Some(pages)=&self.pages { let mut pages=pages.borrow_mut();for tab in removed {pages.discard(tab);} pages.sync(&self.browser,self.page_content_visible()); }
+                    self.after_tab_removal(cx);
+                    self.show_archive_undo(&name,cx);
                 }
             }
             MenuCommand::FolderDelete => {

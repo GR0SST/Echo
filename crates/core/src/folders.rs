@@ -9,6 +9,7 @@ pub const MAX_FOLDER_DEPTH: usize = 32;
 mod copy;
 mod convert;
 mod order;
+pub mod archive;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FolderId(u64);
@@ -464,6 +465,7 @@ impl Browser {
             )
             .collect();
         for entry in &self.archive {
+            if let Some(folder) = &entry.folder { used.extend(folder.all_ids()); }
             if let Some(split) = &entry.split {
                 used.insert(split.view.id.get());
                 used.extend(split.panes.iter().map(|tab| tab.id.0));

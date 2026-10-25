@@ -53,7 +53,7 @@ requested title is “We cleaned up!”. No safe live trigger was found for its
 layout/count/actions, so the banner has not been guessed or marked complete.
 
 Remaining: hover duration, native sharing on Windows/Linux, background Space
-creation, archived-folder restore, unsupported feature notifications and sidebar
+creation, qualified archived-folder visuals, unsupported feature notifications and sidebar
 banners. Round 3 below records the completed existing-action hooks. Native web notification
 permission/delivery is not listed in section 18 and was not added.
 
@@ -164,7 +164,9 @@ copy. Max rename/revert feedback remains for the later Max implementation.
 
 The foreground-only Space creation route does not emit `New Space Created`:
 that inventory entry describes background creation, which Echo does not yet
-expose. Archived folders likewise have no restore model/route yet. Import,
+expose. Populated ordinary folders now have durable archive/restore, exact Undo and
+click-to-reveal feedback using lines 47523–47525 (`Folder restored to ` /
+`. Click to view.`). Reference unqualified; see [folder archive](FOLDER_ARCHIVE_REFERENCE.md). Import,
 translation, capture, battery saver and shortcut education await their owning
 features. “We cleaned up!” remains partial with no reference or guessed UI.
 
