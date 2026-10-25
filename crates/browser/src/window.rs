@@ -855,7 +855,10 @@ impl BrowserWindow {
         let browser = profile.projection(&selection);
         let profile = crate::profile::ProfileBinding::new(profile, selection, cx);
         let pages = pages.map(|mut pages| {
-            if let Some(parent) = crate::native::view_of(window) { pages.set_parent(parent); }
+            if let Some(parent) = crate::native::view_of(window) {
+                crate::ordinary_downloads::bind(parent, profile.handle.clone(), cx);
+                pages.set_parent(parent);
+            }
             Rc::new(RefCell::new(pages))
         });
         let closing_root = cx.weak_entity();
@@ -905,6 +908,7 @@ impl BrowserWindow {
                         break;
                     }
                     pump();
+                    let _ = cx.update(|_, cx| { if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>().cloned() { downloads.wake(cx); } });
                     if crate::quit::is_quitting() { break; }
                     let Some(pages) = pages.upgrade() else { break; };
                     let Ok((events, revision, retry_creation)) = pages.try_borrow_mut().map(|mut pages| {

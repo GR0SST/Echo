@@ -279,7 +279,15 @@ impl WebEngine for Chromium {
         use crate::window::download_probe::admission::{self, Decision};
         let parent = if parent.is_null() { self.parent } else { parent };
         let candidate = match admission::inspect(identity, source_space, storage, parent as usize, url) {
-            Decision::Ordinary => return self.create_page_in_storage(storage, parent, url, bounds),
+            Decision::Ordinary => {
+                let owner = (!matches!(storage, StorageSelection::Current)).then(|| crate::ordinary_downloads::owner(parent, identity)).flatten();
+                let Some(owner) = owner else { return self.create_page_in_storage(storage, parent, url, bounds); };
+                let context = match self.resolve_storage(storage) { Ok(context) => context, Err(_) => return PageCreation::Failed };
+                if !context.is_ready() { return PageCreation::Pending; }
+                return match self.engine.create_view_in_context_with_download_owner(&context, owner, parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS)) {
+                    Ok(view) => PageCreation::Created(view), Err(error) => { eprintln!("Cannot create download-enabled page: {error}"); PageCreation::Failed }
+                };
+            },
             Decision::Rejected => return PageCreation::Failed,
             Decision::Candidate(candidate) => candidate,
         };

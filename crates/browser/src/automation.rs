@@ -739,6 +739,12 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
     out += &format!("[dump] history_count={}\n", browser.active_user_profile().history.len());
     out += &format!("[dump] speech_speaking={}\n", engine::speech::is_speaking());
+    if let Some((_, records)) = this.profile.handle.download_inventory() {
+        for record in records { out += &format!("[dump] download_complete name={:?} path={:?}\n", record.final_name(), record.final_path()); }
+    }
+    if let Some(downloads) = cx.try_global::<crate::downloads::AppDownloads>() {
+        out += &format!("[dump] download_errors={:?}\n", downloads.service.borrow().errors);
+    }
     out += &format!("[dump] inline_rename={:?}\n", this.tab_rename.as_ref().map(|editor| (editor.tab.get(), editor.input.read(cx).text().to_string())));
     out += &format!("[dump] link_status={:?}\n", this.link_status.as_ref().map(|status| (status.tab.get(), &status.text, status.expanded)));
     if this.history_is_open() { out += &format!("[dump] history_query={:?}\n", this.history_page.input.read(cx).text()); }

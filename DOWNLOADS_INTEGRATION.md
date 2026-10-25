@@ -1,11 +1,13 @@
 # Engine download integration
 
-Production page creation and inspector clients still deny downloads. A narrow
-loopback-only automation probe explicitly opts in for native verification.
-Completed-record storage and the central browser router are registered but
-dormant: no production destination policy, page admission, or Library Downloads
-route is enabled. Download parity remains incomplete. The normal Arc lifetime
-reference and engine continuation boundary are described below.
+Normal-profile production pages now use explicit captured-owner admission, a
+profile-selected default folder, staged no-clobber publication and the existing
+canonical writer. The Library completed-record route is mounted. Ask-where
+requests currently defer; chooser, explicit Save Link/Image As and active surfaces
+are being integrated separately. Private/Blank and inspector clients retain deny
+admission. See [ordinary download acceptance](docs/ORDINARY_DOWNLOADS.md).
+Historical checkpoints below describe the individual dormant slices before
+this activation; they are not a claim that every lifetime/platform is qualified.
 
 ## Explicit opt-in seam
 
