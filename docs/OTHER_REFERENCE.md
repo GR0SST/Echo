@@ -75,3 +75,60 @@ has not enabled production admission. No fake active transfers or bypass of that
 gate was added. A tray still needs its live download integration and reference.
 
 Capture observations and qualified local behavior are in [Capture](CAPTURE.md).
+
+## Process metrics expansion (code/test only; native validation pending)
+
+CEF 154.5.0's bound `cef_task_info_t` contains task ID/type/title/killability,
+process CPU, processor count, memory and GPU memory. There is no OS PID, network
+counter/rate, process-group ID or parent ID. `GetTaskIdsList` promises consecutive
+rows for a shared process but supplies no boundaries; neither task IDs nor equal
+memory/CPU values establish process identity. The generated local bindings were
+checked directly; no screen or Arc interaction occurred while macOS was locked.
+
+The engine facade now distinguishes GPU and utility/zygote/sandbox-helper tasks,
+exports optional OS PID and bytes/second fields, and exposes a thread-affine
+`TaskSampler` used by both CEF and fake samplers. The browser's own PID is known
+from `std::process::id`. The renderer helper also reports its own PID over a
+CEF process message when its main-frame V8 context is created. The browser accepts
+only renderer-origin messages from its valid current main frame, associates them
+with the document epoch, and uses CEF's browser-ID-to-task-ID mapping. Identities
+expire on navigation, renderer termination and browser closure; nothing is exposed
+to page JavaScript, and termination still uses CEF task IDs, never OS PIDs. This path
+needs native acceptance after unlock. Unreported renderers, GPU/utility/worker PIDs
+and all network rates remain unavailable with the prebuilt backend. CPU and memory
+remain real retained-CEF measurements.
+Unavailable values display a dash, while measured zero remains zero. A task ID
+is never displayed as a PID.
+
+Rows with a known shared PID remain adjacent through sorting; unknown PIDs remain
+separate. The saved Arc AX evidence (`other-task2/task-ax.txt`) identifies shared
+process rows using “Another task in the same task group” and leaves follower metrics
+empty. Echo displays process metrics on the first row only, without adding shared
+process metrics together; a measured network zero displays `0`, as in that evidence.
+Network and Process ID columns sort when supplied. No unobserved group headers or other
+new chrome are introduced. Native sorting/group presentation still needs Arc/Echo
+acceptance after unlock; this does not close the parity row.
+
+Tests inject a fake sampler into the actual polling loop, covering CPU over 100%,
+network zero/unavailable, changing samples, shared tab/extension process ordering,
+GPU/utility category membership, termination intent and vanished selections. Engine
+unit tests cover CEF task classification and rejecting inferred process identity.
+
+### Minimal CEF bridge plan (not implemented)
+
+1. Extend the versioned CEF task-info API with OS PID and sampled network bytes/sec
+   from Chromium's task manager, preserving the existing task ID as the command
+   identity. Use explicit availability flags/sentinels, never zero as unavailable.
+2. Enable Chromium's network-usage refresh alongside CPU/memory in the retained
+   CEF observer; copy process identity and rate in `get_task_info`. Document the
+   process-level sharing semantics and retain stable task ordering.
+3. Generate matching C headers and Rust bindings, rebuild CEF and every helper
+   against that exact ABI. Never reinterpret a larger struct against the prebuilt
+   CEF library. Keep all native API access inside `crates/engine`.
+4. Adapt the CEF sampler's two optional fields and validate a local transfer,
+   shared renderers/extensions, process exit/reuse, task termination and shutdown.
+   Then inspect Arc/Echo pairs before changing presentation or marking parity.
+
+No Chromium/CEF source patch or source build was started. The prebuilt API cannot
+complete GPU/utility PID or network reporting; that bridge remains the
+explicit dependency for finishing per-process metrics and native grouping.

@@ -1455,6 +1455,7 @@ wrap_client! {
             if let Some((id, queue)) = &self.inspector {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
             }
+            if task_manager::receive_process(browser.as_deref(), frame.as_deref(), source_process, message.as_deref()) { return 1; }
             if source_process == ProcessId::RENDERER && frame.as_ref().is_some_and(|frame| frame.is_main()!=0) {
                 if let Some(message)=message.as_ref().filter(|m|CefString::from(&m.name()).to_string()==preview::REPORT) {
                     if let Some(args)=message.argument_list().filter(|a|a.size()==2&&a.get_type(0)==ValueType::STRING&&a.get_type(1)==ValueType::STRING) {
@@ -1540,7 +1541,7 @@ wrap_request_handler! {
     struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>>, boosts: Arc<Mutex<Vec<SiteBoost>>> }
     impl RequestHandler {
         fn on_render_process_terminated(&self, browser: Option<&mut Browser>, _status: TerminationStatus, _error_code: i32, _error_string: Option<&CefString>) {
-            if let Some(browser) = browser { page_swipe::cancel(browser.identifier()); report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); }
+            if let Some(browser) = browser { task_manager::forget_process(browser.identifier()); page_swipe::cancel(browser.identifier()); report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); }
         }
         fn on_render_view_ready(&self,browser:Option<&mut Browser>) {
             if let Some(browser)=browser { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
@@ -1555,7 +1556,7 @@ wrap_request_handler! {
             let Some(request) = request else { return 0; };
             let target = CefString::from(&request.url()).to_string();
             if CefString::from(&request.method()).to_string() != "GET" || !peek_cross_domain(&CefString::from(&frame.url()).to_string(), &target, self.policy.lock().unwrap().pinned, gesture != 0, redirect != 0) {
-                if let Some(browser) = browser.as_deref() { site_data::navigated(browser.identifier()); permissions::navigated(browser.identifier(), frame); }
+                if let Some(browser) = browser.as_deref() { task_manager::forget_process(browser.identifier()); site_data::navigated(browser.identifier()); permissions::navigated(browser.identifier(), frame); }
                 return 0;
             }
             push(&self.events, browser, RawEvent::Peek(target));
@@ -1765,6 +1766,7 @@ wrap_life_span_handler! {
             if let Some(gate) = &self.download_gate { gate.seal(); }
             if let Some(browser) = browser {
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
+                task_manager::forget_process(browser.identifier());
                 site_data::destroyed(browser.identifier());
                 permissions::destroyed(browser.identifier());
                 capture::destroyed(browser.identifier());
@@ -2196,7 +2198,7 @@ pub fn chromium_version() -> String {
 }
 
 mod task_manager;
-pub use task_manager::{TaskKind, TaskRecord, TaskMonitor};
+pub use task_manager::{group_tasks, TaskKind, TaskRecord, TaskMonitor, TaskSampler};
 impl Engine {
     /// Retain one observer while the utility is open, allowing CEF resource
     /// sampling to complete. Drop it before engine shutdown. Main thread only.

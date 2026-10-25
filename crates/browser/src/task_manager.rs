@@ -21,6 +21,8 @@ enum Column {
     Task,
     Memory,
     Cpu,
+    Network,
+    Process,
 }
 
 pub(crate) fn init(cx: &mut App) {
@@ -76,12 +78,19 @@ pub(crate) struct TaskManagerWindow {
 }
 impl TaskManagerWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with_sampler(window, cx, None)
+    }
+    fn with_sampler(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        sampler: Option<Box<dyn engine::TaskSampler>>,
+    ) -> Self {
         let search = cx.new(|cx| TextInput::new("Search", cx));
         let change = cx.subscribe(&search, |_, _, _: &Changed, cx| cx.notify());
         let focus = cx.focus_handle();
         focus.focus(window);
         cx.spawn(async move |view, cx| {
-            let mut monitor = None;
+            let mut monitor = sampler;
             loop {
                 if crate::quit::is_quitting() {
                     break;
@@ -90,7 +99,9 @@ impl TaskManagerWindow {
                     break;
                 };
                 if monitor.is_none() {
-                    monitor = engine::Engine::task_monitor().ok();
+                    monitor = engine::Engine::task_monitor()
+                        .ok()
+                        .map(|m| Box::new(m) as Box<dyn engine::TaskSampler>);
                 }
                 if let (Some(monitor), Some(id)) = (&monitor, end) {
                     let _ = monitor.end(id);
@@ -138,13 +149,16 @@ impl TaskManagerWindow {
     }
     fn visible(&self, cx: &App) -> Vec<TaskRecord> {
         let query = self.search.read(cx).text().to_lowercase();
-        let mut rows: Vec<_> = self
+        let rows: Vec<_> = self
             .rows
             .iter()
             .filter(|row| {
                 let category = match self.category {
                     Category::All => true,
-                    Category::Browser => matches!(row.kind, TaskKind::Browser | TaskKind::Other),
+                    Category::Browser => matches!(
+                        row.kind,
+                        TaskKind::Browser | TaskKind::Gpu | TaskKind::Utility | TaskKind::Other
+                    ),
                     Category::Tabs => matches!(
                         row.kind,
                         TaskKind::Renderer | TaskKind::Extension | TaskKind::Worker
@@ -154,10 +168,15 @@ impl TaskManagerWindow {
             })
             .cloned()
             .collect();
-        rows.sort_by(|a, b| {
+        let mut groups = engine::group_tasks(rows);
+        groups.sort_by(|a, b| {
+            let a = &a[0];
+            let b = &b[0];
             let order = match self.column {
                 Column::Task => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
                 Column::Memory => a.memory_bytes.cmp(&b.memory_bytes),
+                Column::Network => a.network_bytes_per_second.cmp(&b.network_bytes_per_second),
+                Column::Process => a.process_id.cmp(&b.process_id),
                 Column::Cpu => a
                     .cpu_percent
                     .unwrap_or(-1.)
@@ -169,7 +188,7 @@ impl TaskManagerWindow {
                 order
             }
         });
-        rows
+        groups.into_iter().flatten().collect()
     }
     fn end_selected(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected.filter(|id| {
@@ -191,6 +210,7 @@ impl Focusable for TaskManagerWindow {
 impl Render for TaskManagerWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.visible(cx);
+        let mut seen_processes = std::collections::HashSet::new();
         let can_end = self
             .selected
             .is_some_and(|id| rows.iter().any(|r| r.id == id && r.killable));
@@ -318,6 +338,8 @@ impl Render for TaskManagerWindow {
                                     (Column::Task, "Task", 556.),
                                     (Column::Memory, "Memory Footprint", 158.),
                                     (Column::Cpu, "CPU", 74.),
+                                    (Column::Network, "Network", 100.),
+                                    (Column::Process, "Process ID", 114.),
                                 ]
                                 .map(|(column, label, width)| {
                                     div()
@@ -345,14 +367,18 @@ impl Render for TaskManagerWindow {
                                             cx.notify();
                                         }))
                                 }),
-                            )
-                            .child(cell(100., "Network".into()))
-                            .child(cell(114., "Process ID".into())),
+                            ),
                     )
                     .child(div().id("task-list").flex_1().overflow_y_scroll().children(
                         rows.into_iter().map(|row| {
                             let id = row.id;
                             let selected = self.selected == Some(id);
+                            // Arc exposes process metrics only on the first row of a
+                            // shared-process group. Unknown PIDs are always independent.
+                            let shared = row
+                                .process_id
+                                .filter(|pid| *pid != 0)
+                                .is_some_and(|pid| !seen_processes.insert(pid));
                             div()
                                 .id(gpui::ElementId::Name(format!("task-{id}").into()))
                                 .debug_selector(move || format!("task-{id}"))
@@ -400,18 +426,51 @@ impl Render for TaskManagerWindow {
                                 )
                                 .child(cell(
                                     158.,
-                                    row.memory_bytes
-                                        .map(|v| format!("{} MB", v / (1024 * 1024)))
-                                        .unwrap_or_else(|| "–".into()),
+                                    if shared {
+                                        String::new()
+                                    } else {
+                                        row.memory_bytes
+                                            .map(|v| format!("{} MB", v / (1024 * 1024)))
+                                            .unwrap_or_else(|| "–".into())
+                                    },
                                 ))
                                 .child(cell(
                                     74.,
-                                    row.cpu_percent
-                                        .map(|v| format!("{v:.1}"))
-                                        .unwrap_or_else(|| "–".into()),
+                                    if shared {
+                                        String::new()
+                                    } else {
+                                        row.cpu_percent
+                                            .map(|v| format!("{v:.1}"))
+                                            .unwrap_or_else(|| "–".into())
+                                    },
                                 ))
-                                .child(cell(100., "–".into()))
-                                .child(cell(114., "–".into()))
+                                .child(cell(
+                                    100.,
+                                    if shared {
+                                        String::new()
+                                    } else {
+                                        row.network_bytes_per_second
+                                            .map(|v| {
+                                                if v == 0 {
+                                                    "0".into()
+                                                } else {
+                                                    format!("{v} B/s")
+                                                }
+                                            })
+                                            .unwrap_or_else(|| "–".into())
+                                    },
+                                ))
+                                .child(cell(
+                                    114.,
+                                    if shared {
+                                        String::new()
+                                    } else {
+                                        row.process_id
+                                            .filter(|pid| *pid != 0)
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "–".into())
+                                    },
+                                ))
                         }),
                     )),
             )
