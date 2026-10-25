@@ -15,7 +15,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 1 | L571: "When opening Arc, restore windows from previous session" | L | **Completed:** atomic per-window checkpoint, Space/tab/Split/folder/sidebar/frame/display restoration, lazy background pages, private exclusion and shared crash recovery. Native macOS relaunch/forced-stop/disabled-preference acceptance; see [window restoration](WINDOW_RESTORATION.md). Windows/Linux runtime qualification remains B. |
 | 2 | L416: Profile: separate history, cookies, passwords, extensions | L | **Fixed sub-gap:** iframe autofill and profile-bound username account selection now pass native synthetic checks; parent profile row remains partial. See delivery evidence. |
 | 3 | L192: Add Extension… / Manage Extensions… | L | Connect the qualified extension catalog/install/action engine bridge to Add/Manage Extensions. |
-| 4 | L499: Built-in ad and tracker blocker | L | Implement local request filtering with maintained ad/tracker rules and per-site exceptions. |
+| 4 | L499: Built-in ad and tracker blocker | L | **Reclassified — not active Arc 1.170 desktop parity:** live Settings and Site Controls expose no built-in blocker. Dormant bundle resources are insufficient; user-installed extensions cover blocking. See reference verification below. |
 | 5 | L293: History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | M | **Known frequency gap fixed:** per-profile totals persist, typed Today/history results use bounded frequency/age ranking, and Pinned/Favorites order plus empty MRU remain intact. Native six-vs-one open/closed cases match Arc; exact weights, cross-Space/bookmark rules remain B. See [ranking evidence](HISTORY_SUGGESTIONS.md). |
 | 6 | L112: Undo / Redo (including sidebar actions: "Undo moving a space", "Close Peek" etc.) | M | **Regrouping fixed:** single-tab archive Redo closes its original target after a committed Split; the next Undo restores that Split without reloading its survivor. Pinned unload is verified to preserve move Undo and empty selection; no new unloading Undo is needed. Batch regrouping and Favorite unloading remain unqualified; see [Undo evidence](SIDEBAR_UNDO.md). |
 | 7 | L99: Save Page As | S | **Fixed:** accepted format persists per local profile, initializes the picker/extension, survives native relaunch, and is unchanged by Cancel. Native NSEvent shortcut and File action pass; the physical System Events chord also fails in the saved Arc reference and remains unqualified. See [format evidence](SAVE_PAGE_FORMAT.md). |
@@ -89,7 +89,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 75 | L386: Small window for quick lookups | M | Open the initial Little lookup prompt and persist its placement instead of immediately showing a full window. |
 | 76 | L408: "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | M | Close remaining rule matching/destination limitations documented in ATC_REFERENCE without touching user rules. |
 | 77 | L418: Changing a Space's profile, with warnings ("Switch to your … Profile?") | M | Implement the empty-window warning policy for a Space profile change. |
-| 78 | L443: General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | L | Connect blocker preferences and per-site exceptions to a real local filtering backend. |
+| 78 | L443: General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | L | **Reclassified with #4:** no such controls are exposed by the installed desktop reference; do not invent them. |
 | 79 | L452: Max → 5-Second Previews | M | Complete automatic-site eligibility and image/system-share payload handling for 5-Second Previews. |
 | 80 | L463: Archive (see section 7) | M | Restore Little archive items to the correct destination and retain final-window/app-quit lookups exactly once. |
 | 81 | L464: Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | S | Handle files moved/deleted after publication in Library Open/Show actions and missing-file state. |
@@ -105,7 +105,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 91 | L509: PiP for Google Meet (with chat) and Document PiP | L | Host Document PiP through a scoped GPUI surface; Meet/chat acceptance requires a separate authenticated fixture. |
 | 92 | L548: Translation: Translated to %@ / back to %@ / error | M | Add translation outcome notifications when the underlying translation backend lands. |
 | 93 | L551: Shortcut tips ("Copy links faster by pressing…", "… to easily show and hide your Sidebar!", Site Search) | S | Connect reference-backed shortcut education to real eligibility/dismissal events without repeated prompts. |
-| 94 | L560: Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | M | Complete the local Favorites catalog, blocker and AI setup steps; exclude accounts/sync/member cards. |
+| 94 | L560: Steps: theme ("Add some flair with a theme."), Favorites ("Choose the apps you use most."), ad blocker, Arc Max, default browser, member card | M | Complete the local Favorites catalog and AI setup steps; built-in-blocker setup is not active desktop parity; exclude accounts/sync/member cards. |
 | 95 | L564: Default browser prompts ("Try Arc as default for one week" etc.) | S | Implement the qualified recurring default-browser reminder policy without repeated OS requests after cancellation. |
 | 96 | L573: CEF startup and framework lifetime | L | Remove the allocator-registration startup race with deterministic native regression acceptance. |
 | 97 | L582: Swipe back/forward on the page | M | Implement Windows/Linux gesture input bridges while preserving scroll-container cancellation policy. |
@@ -311,3 +311,11 @@ Arc uses native Cancel/Replace; no extra conflict picker was added.
   and `download-replace-focused-final.log`.
 - Parent Quiet Downloads parity stays partial for motion and platform/runtime
   qualifications. [Implementation and boundaries](DOWNLOAD_DESTINATION_REPLACEMENT.md).
+
+### Desktop blocker reference verification
+
+Read-only installed Arc 1.170 verification, 2026-10-26: General has update/quit/previews/profile links; Profiles and Advanced expose no built-in ads/trackers/cookie-banner controls. Public example.org Site Controls exposes its Extensions grid and ordinary permissions, without a built-in blocker toggle or settings action. No blocking preferences, extensions or owner accounts were changed. The unique public fixture tab was archived and every owned window closed; cleanup records are empty.
+
+The binary still contains `use_built_in_ad_blocker`, `Block Ads & Trackers`, and built-in-blocker status strings, while `ARCClients_BlockListClient.bundle` contains EasyList/EasyPrivacy and a Dia-hosted manifest. These are dormant/shared resources, not evidence of an enabled desktop flow. This supersedes the resource-only inventory inference for ranks 4/78 and the related onboarding sub-gap. Blocking through installed extensions remains in scope. Baseline triage counts are historical and unchanged.
+
+Local, inspected evidence: `target/parity/blocker-verification/arc-{general,Profiles,Advanced}.png`; `target/parity/reaudit2/sessions/blocker-readonly-site/{site-controls.png,cleanup-errors.json,owned-windows-left.json}`. No screenshot or proprietary resource is committed.
