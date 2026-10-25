@@ -8120,7 +8120,7 @@ fn sidebar_labels_and_unknown_site_tiles_keep_reference_metrics(cx: &mut TestApp
     cx.run_until_parked();
     let titles = crate::sidebar_title::take_painted_titles();
     assert!(!titles.is_empty());
-    assert!(titles.iter().all(|title| title.font_size == gpui::px(13.)));
+    assert!(titles.iter().all(|title| title.font_size == gpui::px(14.)));
     let placeholder = cx.debug_bounds("favicon-placeholder").unwrap();
     assert_eq!(placeholder.size, gpui::size(gpui::px(14.), gpui::px(14.)));
     let address = cx.debug_bounds("address").unwrap();

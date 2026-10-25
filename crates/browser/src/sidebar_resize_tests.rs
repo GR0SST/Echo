@@ -495,7 +495,7 @@ fn virtual_form_tracks_host_width_keeps_input_focus_and_library_cards_stay_fixed
                 .unwrap()
                 .size
                 .width,
-            px(216.)
+            px(224.)
         );
         assert_eq!(width(&view, visual), expected);
         select(&view, visual, SidebarPage::Space(origin));

@@ -3105,7 +3105,7 @@ impl BrowserWindow {
             // hover. Audio takes an inline slot between favicon and title.
             // Hover alone only repaints, so the padding follows hover state.
             .pr(px(if reserve_close && self.hovered_row == Some(id) { 34. } else { 6. }))
-            .text_size(px(13.))
+            .text_size(px(14.)).line_height(px(18.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered { this.hovered_row = Some(id); }

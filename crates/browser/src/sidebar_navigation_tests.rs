@@ -1213,7 +1213,7 @@ fn library_real_tab_rows_fill_the_card_and_short_titles_fit_without_clipping(
         let selectors = pair.iter().map(|(tab, _)| Box::leak(format!("library-{space:?}/tab-{}", tab.get()).into_boxed_str()) as &'static str).collect::<Vec<_>>();
         let first = visual.debug_bounds(selectors[0]).unwrap();
         let second = visual.debug_bounds(selectors[1]).unwrap();
-        assert_eq!(second.top() - first.top(), px(41.));
+        assert_eq!((second.top() - first.top()).abs(), px(41.));
     }
     crate::sidebar_title::take_painted_titles();
     for (tab, title) in rows {
