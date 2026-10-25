@@ -59,3 +59,46 @@ one-pixel height and tint adjustment, which need another native capture after
 unlock. The GPUI menu test checks 282×247 geometry. Arc's Move to submenu,
 curly-quote wording and exact edge/material calibration remain partial; the
 existing destination picker is retained. Arc-hosted sharing stays out of scope.
+
+## Advanced footer (#17)
+
+Guarded `audit-advanced-r1/` shows that More Settings closes Preferences and opens
+`arc://settings/` in the owning browser. `audit-export-r1/export-data.png` shows
+the native save panel and Markdown filename; it was canceled and the owned
+Preferences window closed. No export of owner data was written. The installed
+bundle's description of Reset Translated-site Prompts specifies automatic and
+never-translate choices for languages and sites; that action was not invoked in
+live Arc, preserving the owner's translation choices.
+
+Echo's three footer buttons now have handlers:
+
+- More Settings opens `browser://settings/` as GPUI in the normal owner, closing
+  Preferences. The observed Settings header and local profile card are rendered;
+  Arc's account/synchronization section is excluded. Global navigation/search and
+  account-only card navigation are unfinished; this is not a full global Settings
+  implementation, and no Chromium WebUI is used.
+- Export Data presents the platform save panel for `Echo Data Export.md` and
+  writes the persistent sidebar: Space/folder headings and plain URL bullets,
+  profile Favorites and original pinned destinations. Today tabs, sessions,
+  credentials and browsing history are not included. The write runs off the UI
+  thread; cancellation leaves the model unchanged.
+- Reset Translated-site Prompts resolves the selected existing profile through
+  the retained engine storage boundary. CEF restores registered defaults for the
+  automatic/never-translate lists and prompt counters, after checking mutability
+  of every registered preference. No profile fallback or engine-source patch is
+  used. Availability in the bundled CEF runtime, persistence and managed-policy
+  behavior still require the isolated native check. A missing owner/context
+  rejects the operation; global action availability in that state is unfinished.
+
+The engine mapping follows Chromium's
+[registered preference names](https://chromium.googlesource.com/chromium/src.git/%2B/refs/heads/main/components/translate/core/browser/translate_pref_names.h)
+and [TranslatePrefs reset implementation](https://chromium.googlesource.com/chromium/src/%2B/master/components/translate/core/browser/translate_prefs.cc).
+Arc's installed bundle remains the UI reference.
+
+GPUI tests cover export write/cancel, selected-profile reset routing, More Settings
+ownership and absence of a CEF settings renderer. The core export test checks
+nested hierarchy, original pinned URLs and model immutability. Full workspace
+validation: `audit-full-r3.log` (1,137 browser tests; 1,562 total passed, one ignored).
+Footer native verification/pairs and final developer/folder polish are blocked by
+the locked macOS session. These audit commits remain local checkpoints and are
+not pushed as completed work.

@@ -242,6 +242,7 @@ enum Call {
     PermissionResponse(u64,engine::PermissionRequestId,engine::PermissionDecision),
     Quote(u64, u64),
     SitePermission(u64,String,engine::PermissionKind,engine::PermissionValue),
+    ResetTranslation(crate::pages::StorageSelection),
     ProfileSiteSetting(crate::pages::StorageSelection,String,engine::PermissionKind,engine::PermissionValue),
     ClearSiteData(u64,String,engine::ClearSiteData),
     Create(u64, String),
@@ -363,6 +364,9 @@ impl WebEngine for FakeEngine {
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.call(Call::Quote(raw(view), request)); true }
     fn zoom_percent(&self, view: ViewId) -> u16 { self.0.borrow().site_infos.get(&raw(view)).map_or(100, |info| info.zoom_percent) }
     fn site_info(&self, view:ViewId)->Option<engine::SiteInfo>{self.0.borrow().site_infos.get(&raw(view)).cloned()}
+    fn reset_translation_prompts(&mut self, storage: &crate::pages::StorageSelection) -> bool {
+        self.call(Call::ResetTranslation(storage.clone()));true
+    }
     fn profile_site_settings(&self,storage:&crate::pages::StorageSelection,origin:&str)->Option<Vec<engine::SiteSetting>> {
         self.0.borrow().profile_settings.borrow().get(&(storage.clone(),origin.into())).cloned()
     }
@@ -11043,3 +11047,6 @@ mod shortcut_settings_tests;
 
 #[path = "developer_mode_tests.rs"]
 mod developer_mode_tests;
+
+#[path = "advanced_footer_tests.rs"]
+mod advanced_footer_tests;

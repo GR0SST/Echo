@@ -22,6 +22,7 @@ pub mod shortcuts;
 pub mod max;
 pub mod routing;
 pub mod site_settings;
+pub mod sidebar_export;
 pub mod icons;
 pub mod folders;
 pub mod undo;

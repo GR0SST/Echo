@@ -897,13 +897,58 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .gap(px(8.))
-                    .child(self.settings_button("More Settings…").opacity(0.5))
-                    .child(self.settings_button("Reset Translated-site Prompts").opacity(0.5))
+                    .child(self.settings_button("More Settings…").id("settings-more").debug_selector(||"settings-more".into()).cursor_pointer().on_click(cx.listener(|this,_,window,cx|this.open_more_settings(window,cx))))
+                    .child(self.settings_button("Reset Translated-site Prompts").id("settings-reset-translation").debug_selector(||"settings-reset-translation".into()).cursor_pointer().on_click(cx.listener(|this,_,_,cx|this.reset_translation_prompts(cx))))
                     .child(div().flex_1())
-                    .child(self.settings_button("Export Data").opacity(0.5)),
+                    .child(self.settings_button("Export Data").id("settings-export-data").debug_selector(||"settings-export-data".into()).cursor_pointer().on_click(cx.listener(|this,_,_,cx|this.export_data(cx)))),
             )
             .into_any_element()
     }
+    fn open_more_settings(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let owner=self.owner.clone();let profile=self.profile.clone();
+        window.remove_window();
+        cx.defer(move |cx| {
+            let find_host=|cx: &mut App| cx.windows().into_iter()
+                .filter_map(|handle|handle.downcast::<BrowserWindow>()).find_map(|handle| {
+                    let matches=handle.read(cx).is_ok_and(|view|!view.browser.is_private() && !view.browser.is_blank() && view.profile.handle.same_workspace(&profile));
+                    if matches { handle.update(cx,|_,_,cx|cx.entity()).ok() } else { None }
+                });
+            let mut host=owner.and_then(|owner|owner.upgrade()).filter(|owner| {
+                let view=owner.read(cx); !view.browser.is_private() && !view.browser.is_blank() && view.profile.handle.same_workspace(&profile)
+            }).or_else(||find_host(cx));
+            if host.is_none() { crate::new_window::open(false,cx);host=find_host(cx); }
+            if let Some(host)=host {
+                let main=host.update(cx,|view,cx| {
+                    view.edit_browser(|browser| { browser.new_tab("browser://settings/",std::time::SystemTime::now()); });
+                    if let Some(pages)=&view.pages { pages.borrow_mut().request_ui_focus(); }
+                    cx.notify();view.main_window
+                });
+                let _=main.update(cx,|_,window,_|window.activate_window());
+            }
+        });
+    }
+
+    fn reset_translation_prompts(&self, cx: &mut Context<Self>) {
+        if self.profile.read_settings(|model|model.user_profile(self.selected_profile).is_none()) { return; }
+        if let Some(owner)=self.owner.as_ref().and_then(|owner|owner.upgrade()) {
+            let selected=self.selected_profile;
+            let accepted=owner.update(cx,|view,_|view.pages.as_ref().is_some_and(|pages|pages.borrow_mut().reset_translation_prompts(selected)));
+            eprintln!("[settings] translation prompt reset accepted={accepted}");
+        }
+    }
+
+    fn export_data(&self, cx: &mut Context<Self>) {
+        let markdown=self.profile.read_settings(|browser| browser.export_sidebar_markdown());
+        let directory=dirs::download_dir().unwrap_or_else(crate::profile_dir);
+        let choice=cx.prompt_for_new_path(&directory,Some("Echo Data Export.md"));
+        cx.spawn(async move |_,cx| {
+            if let Ok(Ok(Some(path)))=choice.await {
+                let result=cx.background_executor().spawn(async move { std::fs::write(path,markdown) }).await;
+                if let Err(error)=result { eprintln!("Sidebar export failed: {error}"); }
+            }
+        }).detach();
+    }
+
     fn popup_options(&self, popup: Popup) -> Vec<(String, bool)> {
         let browser = self.profile.settings_snapshot();
         let profile = browser
@@ -1334,5 +1379,26 @@ pub(crate) fn open_section(section:Tab,cx: &mut App) {
                 }
             });
         }
+    }
+}
+
+impl BrowserWindow {
+    pub(crate) fn more_settings_is_open(&self) -> bool {
+        self.browser.active_tab().is_some_and(|tab|url::Url::parse(&tab.url).is_ok_and(|url|
+            url.scheme()=="browser" && url.host_str()==Some("settings") && matches!(url.path(),""|"/") && url.query().is_none()))
+    }
+    pub(crate) fn render_more_settings_root(&self) -> AnyElement {
+        div().debug_selector(||"more-settings-page".into()).size_full().bg(rgb(0x202124)).text_color(rgb(0xe8eaed))
+            .font_family(".SystemUIFont").flex().flex_col()
+            .child(div().h(px(56.)).flex_none().px(px(26.)).flex().items_center().gap(px(14.))
+                .child(icons::ionicon("menu-outline",18.,1.)).child(div().text_size(px(22.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Settings"))
+                .child(div().flex_1()).child(icons::ionicon("search-outline",20.,1.)))
+            // Arc's account/synchronization section is intentionally outside Echo's local profile surface.
+            .child(div().mx_auto().mt(px(75.)).w_full().max_w(px(720.)).px(px(20.))
+                .child(div().h(px(64.)).px(px(20.)).rounded(px(8.)).bg(rgb(0x292a2d)).flex().items_center().gap(px(16.))
+                    .child(icons::ionicon("person-circle-outline",32.,1.))
+                    .child(div().text_size(px(14.)).child(self.browser.active_user_profile().name().to_owned()))
+                    .child(div().flex_1())))
+            .into_any_element()
     }
 }

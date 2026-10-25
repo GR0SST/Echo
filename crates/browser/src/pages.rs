@@ -72,6 +72,7 @@ pub trait WebEngine {
     fn respond_permission(&mut self, _view: ViewId, _request: engine::PermissionRequestId, _decision: engine::PermissionDecision) -> bool { false }
     fn request_quote(&mut self, _view: ViewId, _request: u64) -> bool { false }
     fn site_info(&self, _view: ViewId) -> Option<engine::SiteInfo> { None }
+    fn reset_translation_prompts(&mut self, _storage: &StorageSelection) -> bool { false }
     fn profile_site_settings(&self, _storage: &StorageSelection, _origin: &str) -> Option<Vec<engine::SiteSetting>> { None }
     fn set_profile_site_setting(&mut self, _storage: &StorageSelection, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
 
@@ -199,6 +200,9 @@ impl WebEngine for Chromium {
     fn evaluate_script(&mut self, view: ViewId, url: &str, source: &str) -> Result<engine::ScriptTicket,String> { self.engine.evaluate_script(view,url,source) }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_quote(view, request) }
     fn site_info(&self, view: ViewId) -> Option<engine::SiteInfo> { self.engine.site_info(view) }
+    fn reset_translation_prompts(&mut self, storage: &StorageSelection) -> bool {
+        self.resolve_storage(storage).is_ok_and(|context|context.reset_translation_prompts())
+    }
     fn profile_site_settings(&self, storage: &StorageSelection, origin: &str) -> Option<Vec<engine::SiteSetting>> {
         self.resolve_storage(storage).ok()?.site_settings(origin)
     }
@@ -911,6 +915,9 @@ impl Pages {
     }
 
 
+    pub(crate) fn reset_translation_prompts(&mut self, profile: UserProfileId) -> bool {
+        self.store.borrow_mut().engine.reset_translation_prompts(&StorageSelection::for_profile(profile))
+    }
     pub(crate) fn profile_site_settings(&self, profile: UserProfileId, private: bool, origin: &str) -> Option<Vec<engine::SiteSetting>> {
         let storage=if private {StorageSelection::Current} else {StorageSelection::for_profile(profile)};
         self.store.borrow().engine.profile_site_settings(&storage,origin)

@@ -539,3 +539,22 @@ mod settings_tests {
         );
     }
 }
+
+impl crate::StorageContext {
+    /// Reset automatic/never-translate decisions in this retained profile only.
+    /// Null CEF values restore registered defaults, including blocked languages.
+    pub fn reset_translation_prompts(&self) -> bool {
+        if cef::currently_on(cef::ThreadId::UI) == 0 || !self.is_ready() { return false; }
+        let required = ["translate_site_blocklist_with_time", "translate_allowlists", "translate_blocked_languages"];
+        if required.iter().any(|name|self.context.has_preference(Some(&CefString::from(*name)))==0) { return false; }
+        let names = ["translate_site_blocklist", "translate_site_blocklist_with_time", "translate_allowlists",
+            "translate_blocked_languages", "translate_denied_count_for_language", "translate_ignored_count_for_language", "translate_accepted_count", "translate_recent_target"];
+        let registered:Vec<_> = names.into_iter().map(CefString::from).filter(|name|self.context.has_preference(Some(name))!=0).collect();
+        if registered.iter().any(|name|self.context.can_set_preference(Some(name))==0) { return false; }
+        for name in registered {
+            let mut error=CefString::default();
+            if self.context.set_preference(Some(&name), None, Some(&mut error))==0 { return false; }
+        }
+        true
+    }
+}

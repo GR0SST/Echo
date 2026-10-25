@@ -3990,7 +3990,8 @@ impl BrowserWindow {
             size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
         let history_open = !virtual_page && self.history_is_open();
-        let site_settings_open = !virtual_page && self.site_settings_is_open();
+        let more_settings_open = !virtual_page && self.more_settings_is_open();
+        let site_settings_open = !virtual_page && (self.site_settings_is_open() || more_settings_open);
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
         let placeholder = if virtual_page || split_open || history_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
@@ -4040,7 +4041,7 @@ impl BrowserWindow {
                         .when(!split_open, |this| this.px_8())
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
-                    .when(site_settings_open, |this| this.child(self.render_site_settings_page(cx)))
+                    .when(site_settings_open, |this| this.child(if more_settings_open { self.render_more_settings_root() } else { self.render_site_settings_page(cx) }))
                     .children(placeholder.map(|(title, url)| {
                         div().debug_selector(|| "page-placeholder".into())
                             .flex()
