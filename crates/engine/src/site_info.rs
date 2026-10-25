@@ -540,21 +540,139 @@ mod settings_tests {
     }
 }
 
+/// cef-rs represents a default CefString as a null optional argument. CEF's
+/// preference setter requires a non-null error output even on success. Borrow
+/// an actual UTF-16 struct for the synchronous call and release CEF's allocation.
+fn preference_call(call: impl FnOnce(&mut CefString) -> i32) -> Result<(), String> {
+    struct Output(sys::cef_string_utf16_t);
+    impl Drop for Output {
+        fn drop(&mut self) {
+            if !self.0.str_.is_null() {
+                if let Some(dtor) = self.0.dtor {
+                    unsafe { dtor(self.0.str_) };
+                }
+            }
+        }
+    }
+    let mut output = Output(unsafe { std::mem::zeroed() });
+    let success = {
+        let mut error = CefString::from(&mut output.0 as *mut sys::cef_string_utf16_t);
+        call(&mut error) != 0
+    };
+    if success {
+        return Ok(());
+    }
+    let message = if output.0.str_.is_null() || output.0.length == 0 {
+        String::new()
+    } else {
+        String::from_utf16_lossy(unsafe {
+            std::slice::from_raw_parts(output.0.str_, output.0.length)
+        })
+    };
+    Err(message)
+}
+
 impl crate::StorageContext {
     /// Reset automatic/never-translate decisions in this retained profile only.
     /// Null CEF values restore registered defaults, including blocked languages.
     pub fn reset_translation_prompts(&self) -> bool {
-        if cef::currently_on(cef::ThreadId::UI) == 0 || !self.is_ready() { return false; }
-        let required = ["translate_site_blocklist_with_time", "translate_allowlists", "translate_blocked_languages"];
-        if required.iter().any(|name|self.context.has_preference(Some(&CefString::from(*name)))==0) { return false; }
-        let names = ["translate_site_blocklist", "translate_site_blocklist_with_time", "translate_allowlists",
-            "translate_blocked_languages", "translate_denied_count_for_language", "translate_ignored_count_for_language", "translate_accepted_count", "translate_recent_target"];
-        let registered:Vec<_> = names.into_iter().map(CefString::from).filter(|name|self.context.has_preference(Some(name))!=0).collect();
-        if registered.iter().any(|name|self.context.can_set_preference(Some(name))==0) { return false; }
+        if cef::currently_on(cef::ThreadId::UI) == 0 || !self.is_ready() {
+            return false;
+        }
+        let required = [
+            "translate_site_blocklist_with_time",
+            "translate_allowlists",
+            "translate_blocked_languages",
+        ];
+        if required
+            .iter()
+            .any(|name| self.context.has_preference(Some(&CefString::from(*name))) == 0)
+        {
+            return false;
+        }
+        let names = [
+            "translate_site_blocklist",
+            "translate_site_blocklist_with_time",
+            "translate_allowlists",
+            "translate_blocked_languages",
+            "translate_denied_count_for_language",
+            "translate_ignored_count_for_language",
+            "translate_accepted_count",
+            "translate_recent_target",
+        ];
+        let registered: Vec<_> = names
+            .into_iter()
+            .map(CefString::from)
+            .filter(|name| self.context.has_preference(Some(name)) != 0)
+            .collect();
+        if registered
+            .iter()
+            .any(|name| self.context.can_set_preference(Some(name)) == 0)
+        {
+            return false;
+        }
         for name in registered {
-            let mut error=CefString::default();
-            if self.context.set_preference(Some(&name), None, Some(&mut error))==0 { return false; }
+            if let Err(error) =
+                preference_call(|error| self.context.set_preference(Some(&name), None, Some(error)))
+            {
+                eprintln!("[translation-reset] {name}: {error}");
+                return false;
+            }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod preference_error_tests {
+    use super::*;
+    #[test]
+    fn preference_calls_supply_a_real_output_buffer_and_preserve_utf16_errors() {
+        let mut missing = CefString::default();
+        let pointer: *mut sys::cef_string_utf16_t = (&mut missing).into();
+        assert!(
+            pointer.is_null(),
+            "A default CefString is an absent API argument"
+        );
+        assert_eq!(
+            preference_call(|error| {
+                let pointer: *mut sys::cef_string_utf16_t = error.into();
+                assert!(!pointer.is_null());
+                1
+            }),
+            Ok(())
+        );
+        let mut message: Vec<u16> = "Managed preference 💜".encode_utf16().collect();
+        assert_eq!(
+            preference_call(|error| {
+                let pointer: *mut sys::cef_string_utf16_t = error.into();
+                unsafe {
+                    (*pointer).str_ = message.as_mut_ptr();
+                    (*pointer).length = message.len();
+                }
+                0
+            }),
+            Err("Managed preference 💜".into())
+        );
+    }
+    #[test]
+    fn preference_error_storage_is_released_after_the_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn release(pointer: *mut u16) {
+            drop(unsafe { Box::from_raw(pointer.cast::<[u16; 2]>()) });
+            DROPS.fetch_add(1, Ordering::SeqCst);
+        }
+        let result = preference_call(|error| {
+            let pointer: *mut sys::cef_string_utf16_t = error.into();
+            unsafe {
+                (*pointer).str_ = Box::into_raw(Box::new([b'x' as u16, b'y' as u16])).cast();
+                (*pointer).length = 2;
+                (*pointer).dtor = Some(release);
+            }
+            0
+        });
+        assert_eq!(result, Err("xy".into()));
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
     }
 }

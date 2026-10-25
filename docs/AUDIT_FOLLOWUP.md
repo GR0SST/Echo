@@ -105,3 +105,20 @@ Footer native verification/pairs and final developer/folder polish are blocked b
 the locked macOS session. The orchestrator authorized publishing these audit commits with native
 validation explicitly pending. Publication does not qualify the final visual
 corrections or footer runtime behavior. Arc must remain untouched while locked.
+
+
+## Validation after unlock
+
+The pending audit pieces were recaptured in the real CEF bundle and compared with
+Arc after macOS unlocked. [Native validation](NATIVE_UNLOCKED_VALIDATION.md) records
+Developer Mode on/off, the final folder geometry/material capture, footer export
+save/cancel and owning-browser More Settings, and the two native-discovered fixes
+for scripting property counts and CEF's required preference-error output.
+`target/parity/native-unlocked/pairs/` contains the reviewed crops; its source
+manifests identify the reused same-version Arc folder reference. Remaining visual,
+managed-policy/no-owner, extension and broader settings gaps stay partial.
+
+The exact-host leftover fixture was explicitly archived through Archive Tab;
+closing its page had preserved its sidebar entry. The shared Echo Test Space and
+all owner Spaces/Favorites were preserved. Earlier locked-session notes above are
+historical and are superseded for the qualified checks by this unlocked report.

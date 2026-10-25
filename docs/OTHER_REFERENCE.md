@@ -76,7 +76,7 @@ gate was added. A tray still needs its live download integration and reference.
 
 Capture observations and qualified local behavior are in [Capture](CAPTURE.md).
 
-## Process metrics expansion (code/test only; native validation pending)
+## Process metrics expansion and unlocked native validation
 
 CEF 154.5.0's bound `cef_task_info_t` contains task ID/type/title/killability,
 process CPU, processor count, memory and GPU memory. There is no OS PID, network
@@ -85,20 +85,21 @@ rows for a shared process but supplies no boundaries; neither task IDs nor equal
 memory/CPU values establish process identity. The generated local bindings were
 checked directly; no screen or Arc interaction occurred while macOS was locked.
 
-The engine facade now distinguishes GPU and utility/zygote/sandbox-helper tasks,
-exports optional OS PID and bytes/second fields, and exposes a thread-affine
-`TaskSampler` used by both CEF and fake samplers. The browser's own PID is known
-from `std::process::id`. The renderer helper also reports its own PID over a
-CEF process message when its main-frame V8 context is created. The browser accepts
-only renderer-origin messages from its valid current main frame, associates them
-with the document epoch, and uses CEF's browser-ID-to-task-ID mapping. Identities
-expire on navigation, renderer termination and browser closure; nothing is exposed
-to page JavaScript, and termination still uses CEF task IDs, never OS PIDs. This path
-needs native acceptance after unlock. Unreported renderers, GPU/utility/worker PIDs
-and all network rates remain unavailable with the prebuilt backend. CPU and memory
-remain real retained-CEF measurements.
-Unavailable values display a dash, while measured zero remains zero. A task ID
-is never displayed as a PID.
+The engine facade now distinguishes GPU and utility/zygote/sandbox-helper tasks, exports
+optional OS PID and bytes/second fields, and exposes a thread-affine `TaskSampler` used
+by both CEF and fake samplers. The browser's own PID is known from `std::process::id`.
+The renderer helper also reports its own PID over a CEF process message when its
+main-frame V8 context is created. The browser accepts only renderer-origin messages from
+its valid current main frame, associates them with the document epoch, and uses CEF's
+browser-ID-to-task-ID mapping. Identities expire on navigation, renderer termination and
+browser closure; nothing is exposed to page JavaScript, and termination still uses CEF
+task IDs, never OS PIDs. The unlocked native run now verifies browser/renderer PIDs
+against the owned process inventory, together with real CPU/memory, filtering and
+own-renderer termination; see [native validation](NATIVE_UNLOCKED_VALIDATION.md).
+Unreported renderers, GPU/utility/worker PIDs and all network rates remain unavailable
+with the prebuilt backend. CPU and memory remain real retained-CEF measurements.
+Unavailable values display a dash, while measured zero remains zero. A task ID is never
+displayed as a PID.
 
 Rows with a known shared PID remain adjacent through sorting; unknown PIDs remain
 separate. The saved Arc AX evidence (`other-task2/task-ax.txt`) identifies shared
@@ -106,8 +107,9 @@ process rows using “Another task in the same task group” and leaves follower
 empty. Echo displays process metrics on the first row only, without adding shared
 process metrics together; a measured network zero displays `0`, as in that evidence.
 Network and Process ID columns sort when supplied. No unobserved group headers or other
-new chrome are introduced. Native sorting/group presentation still needs Arc/Echo
-acceptance after unlock; this does not close the parity row.
+new chrome are introduced. The unlocked Arc/Echo task captures were reviewed. Native shared-process grouping,
+full sorting and presentation still need broader acceptance; this does not close
+the parity row.
 
 Tests inject a fake sampler into the actual polling loop, covering CPU over 100%,
 network zero/unavailable, changing samples, shared tab/extension process ordering,
