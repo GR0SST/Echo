@@ -266,6 +266,8 @@ impl BrowserWindow {
                 let id = *id;
                 let key = id.get() as usize;
                 let active = self.browser.space().active_tab == Some(id);
+                let document_color = self.pages.as_ref().map(|pages| pages.borrow().state(id).document_color).flatten();
+                let (header_fill, header_ink) = pane_header_colors(document_color, self.theme_is_dark(), active);
                 let header_group = gpui::SharedString::from(format!("pane-header-{key}"));
                 let mut pane = div().id(("pane", key)).debug_selector(|| self.sidebar_debug_name((move || format!("split-pane-{key}"))()))
                     .min_w_0().min_h_0().flex_basis(px(0.)).flex().flex_col()
@@ -280,7 +282,7 @@ impl BrowserWindow {
                         .mx(px(crate::split_layout::BORDER as f32)).mt(px(crate::split_layout::BORDER as f32))
                         .rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
                         .h(px((crate::split_layout::HEADER_HEIGHT - crate::split_layout::BORDER) as f32)).flex_none().flex().items_center().gap_1().px_2().text_xs().relative().group(header_group.clone())
-                        .bg(hsla(0., 0., 1., if active { 0.65 } else { 0.35 }))
+                        .bg(header_fill).text_color(header_ink)
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); this.open_pane_menu(id, event.position, window, cx); }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if this.page_content_visible() {
@@ -365,5 +367,27 @@ impl BrowserWindow {
                 this.edit_browser(|browser| browser.set_split_weights(anchor, &weights));
                 cx.notify();
             })).into_any_element()
+    }
+}
+
+/// Pane chrome follows its own document, including a light document in dark chrome.
+fn pane_header_colors(document: Option<[u8; 3]>, dark: bool, active: bool) -> (gpui::Hsla, gpui::Hsla) {
+    let (_, ink) = crate::window::toolbar_colors(document, dark);
+    let fill = match document {
+        Some([r, g, b]) => gpui::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)).into(),
+        None if !dark => gpui::rgb(0xf5f5f5).into(),
+        None => hsla(0., 0., 1., if active { 0.65 } else { 0.35 }),
+    };
+    (fill, hsla(0., 0., ink, 0.7))
+}
+
+#[test]
+fn split_header_keeps_light_document_fill_and_dark_controls_in_both_appearances() {
+    for dark in [false, true] {
+        for active in [false, true] {
+            let (fill, ink) = pane_header_colors(Some([245, 245, 245]), dark, active);
+            assert_eq!(fill, gpui::rgb(0xf5f5f5).into());
+            assert_eq!(ink.l, 0.);
+        }
     }
 }
