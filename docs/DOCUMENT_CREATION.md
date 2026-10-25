@@ -1,0 +1,9 @@
+# Profile document creation (2026-10-26)
+
+Read-only Arc 1.170 Settings → Profiles inspection confirms New documents choices: —, Confluence Page, Google Doc, Notion Page and Word Doc. With — selected, “new doc” in the Command Bar offers **New Google Doc**. The action has a document outline tile and uses the existing command-result layout, rather than a separate Echo chooser.
+
+The installed Arc executable bundles these creation destinations: `https://confluence.new`, `https://doc.new`, `https://app.notion.com/new`, `https://word.new`. Echo maps the same four profile choices to those exact URLs. The existing New documents preference persists per local profile; — falls back to Google. Unknown preference values do not become arbitrary navigation URLs. The Command Bar exposes the selected app by name and the observed document/note synonyms. Confirming opens a new foreground Today tab in the current profile, retaining existing pages. A captured action cannot run after switching to another profile or changing the preference. No browser account or Echo server is involved; the destination website handles its own login.
+
+The inspected source destinations are not a claim of signed-in document creation: no document was created in an owner's Arc account. Incognito, Blank and transient windows omit this unqualified action. Other creation-entry surfaces and private-window parity remain unverified.
+
+Local reference: `target/parity/reaudit2/sessions/functional-profiles-document-read/arc-query-new-doc.png` and `target/parity/reaudit2/sessions/functional-profile-menus/arc-document-choices.png`. Echo native evidence is stored under `target/parity/functional20-24/`. Core/GPUI regressions cover persisted profile isolation, all four destinations, retaining source pages and rejecting stale preferences.

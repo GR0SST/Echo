@@ -464,6 +464,7 @@ pub enum Command {
     ManageSpaces,
     PrintPage,
     SavePage,
+    NewDocument(browser_core::UserProfileId, browser_core::documents::DocumentApp),
     SharePage,
     AutomaticAppearance,
     LightAppearance,
@@ -2091,6 +2092,11 @@ impl BrowserWindow {
             ];
             let mut commands = commands.to_vec();
             commands.extend(self.split_commands());
+            if !self.browser.is_private() && !self.browser.is_blank() && self.transient.is_none() {
+                if let Some(app) = browser_core::documents::DocumentApp::from_preference(&self.browser.active_user_profile().settings.document_app) {
+                    commands.push((Command::NewDocument(self.browser.active_user_profile_id(), app), app.label(), "new document|create document|new doc|new note", true));
+                }
+            }
             for (relative, label, names) in [
                 (browser_core::bulk_archive::Relative::Other, "Archive Other Tabs", "archive other tabs|close other tabs"),
                 (browser_core::bulk_archive::Relative::Above, "Archive Tabs Above", "archive tabs above|close tabs above"),
@@ -2521,6 +2527,13 @@ impl BrowserWindow {
             }
             Command::PrintPage => self.print_page(cx),
             Command::SavePage => self.save_page(cx),
+            Command::NewDocument(profile, app) => {
+                self.refresh_profile_projection();
+                if self.browser.is_private() || self.browser.is_blank() || self.transient.is_some()
+                    || self.browser.active_user_profile_id() != profile
+                    || browser_core::documents::DocumentApp::from_preference(&self.browser.active_user_profile().settings.document_app) != Some(app) { return; }
+                self.new_command_tab(app.url(), false, cx);
+            }
             Command::SharePage => self.share_page(cx),
             Command::AutomaticAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx),
             Command::LightAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx),
@@ -4496,6 +4509,7 @@ impl BrowserWindow {
             Some(Suggestion::Action { command: Command::KeyboardShortcuts, .. }) => Some("settings-outline"),
             Some(Suggestion::Action { command: Command::DuplicateTab, .. }) => Some("duplicate-outline"),
             Some(Suggestion::Action { command: Command::RenameTab, .. }) => Some("pencil-outline"),
+            Some(Suggestion::Action { command: Command::NewDocument(..), .. }) => Some("document-outline"),
             _ => None,
         };
         let atc_selected = matches!(suggestions.get(bar.selected), Some(Suggestion::Action { command: Command::AirTrafficControl, .. }));
@@ -4534,6 +4548,7 @@ impl BrowserWindow {
                     Suggestion::Action { command: Command::KeyboardShortcuts, .. } => Some("settings-outline"),
                     Suggestion::Action { command: Command::DuplicateTab, .. } => Some("duplicate-outline"),
                     Suggestion::Action { command: Command::RenameTab, .. } => Some("pencil-outline"),
+                    Suggestion::Action { command: Command::NewDocument(..), .. } => Some("document-outline"),
                     _ => None,
                 };
                 let page = match &suggestion {

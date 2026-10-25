@@ -78,3 +78,29 @@ fn import_unavailable(cx: &mut TestAppContext, browser: browser_core::Browser) {
 fn import_command_is_unavailable_in_private_windows(cx: &mut TestAppContext) { import_unavailable(cx,browser_core::Browser::new_private()); }
 #[gpui::test]
 fn import_command_is_unavailable_in_blank_windows(cx: &mut TestAppContext) { import_unavailable(cx,browser_core::Browser::new_blank()); }
+
+#[gpui::test]
+fn new_document_command_uses_the_profile_app_and_preserves_existing_pages(cx: &mut TestAppContext) {
+    use browser_core::documents::DocumentApp;
+    let (view, cx, fake) = open_pages(cx);
+    let old = active_url(&view, cx).unwrap();
+    for (preference, app) in [("—", DocumentApp::Google), ("Confluence Page", DocumentApp::Confluence), ("Notion Page", DocumentApp::Notion), ("Word Doc", DocumentApp::Word)] {
+        view.update(cx, |view, _| view.edit_browser(|browser| browser.active_user_profile_mut().settings.document_app = preference.into()));
+        cx.run_until_parked();fake.take_calls();
+        run_named_command(&view, cx, app.label());
+        assert_eq!(active_url(&view, cx).as_deref(), Some(app.url()));
+        assert!(view.read_with(cx, |view, _| view.browser.all_tabs().any(|tab| tab.url == old)));
+        assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Close(..) | Call::Navigate(..))));
+    }
+}
+#[gpui::test]
+fn stale_document_command_cannot_use_a_changed_preference(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let profile = view.read_with(cx, |view, _| view.browser.active_user_profile_id());
+    let old = active_url(&view, cx);
+    view.update(cx, |view, _| view.edit_browser(|browser| browser.active_user_profile_mut().settings.document_app = "Notion Page".into()));
+    fake.take_calls();
+    view.update(cx, |view, cx| view.run_command(Command::NewDocument(profile, browser_core::documents::DocumentApp::Google), cx));
+    assert_eq!(active_url(&view, cx), old);
+    assert!(fake.take_calls().is_empty());
+}

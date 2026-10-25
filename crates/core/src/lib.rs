@@ -34,6 +34,7 @@ pub mod window_restore;
 pub mod extension_tabs;
 pub mod recent_items;
 pub mod save_page;
+pub mod documents;
 pub mod profiles;
 pub mod boosts;
 pub mod downloads;
