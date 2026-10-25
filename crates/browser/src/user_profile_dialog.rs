@@ -1368,7 +1368,7 @@ impl Render for UserProfileDialog {
         div()
             .debug_selector(|| "profile-modal-backdrop".into())
             .size_full()
-            .bg(hsla(0., 0., 0., if dark { 0.55 } else { 0.20 }))
+            .bg(hsla(0., 0., 0., if dark { 0.55 } else { 0.18 }))
             .flex()
             .items_center()
             .justify_center()
