@@ -18,11 +18,30 @@ pub(crate) fn prepare(
     name: &str,
     cx: &mut App,
 ) -> Prepared {
+    prepare_named(parent, directory, name, false, cx)
+}
+/// Exports retain their fixed suggested name; the native sheet owns replacement
+/// confirmation. Ordinary downloads continue proposing the next free filename.
+pub(crate) fn prepare_exact(
+    parent: Option<*mut std::ffi::c_void>,
+    directory: &Path,
+    name: &str,
+    cx: &mut App,
+) -> Prepared {
+    prepare_named(parent, directory, name, true, cx)
+}
+fn prepare_named(
+    parent: Option<*mut std::ffi::c_void>,
+    directory: &Path,
+    name: &str,
+    exact: bool,
+    cx: &mut App,
+) -> Prepared {
     #[cfg(target_os = "macos")]
-    if let Some(prepared) = mac::prepare(parent, directory, name) {
+    if let Some(prepared) = mac::prepare(parent, directory, name, exact) {
         return Prepared::Native(prepared);
     }
-    let _ = parent;
+    let _ = (parent, exact);
     let reply = cx.prompt_for_new_path(directory, Some(name));
     Prepared::Toolkit(Box::pin(async move {
         reply
@@ -43,6 +62,9 @@ fn available_name(directory: &Path, suggested: &str) -> String {
         }
     }
     suggested.into()
+}
+fn suggested_name(directory: &Path, name: &str, exact: bool) -> String {
+    if exact { name.into() } else { available_name(directory, name) }
 }
 impl Prepared {
     pub(crate) async fn choose(self, cx: &mut AsyncApp) -> Result<Option<PathBuf>, String> {
@@ -87,6 +109,7 @@ mod mac {
         parent: Retained<AnyObject>,
         directory: PathBuf,
         name: String,
+        exact: bool,
     }
     pub(super) struct Dialog {
         panel: Retained<AnyObject>,
@@ -98,6 +121,7 @@ mod mac {
         view: Option<*mut c_void>,
         directory: &Path,
         name: &str,
+        exact: bool,
     ) -> Option<Prepared> {
         if cfg!(test) {
             return None;
@@ -108,6 +132,7 @@ mod mac {
                 parent: Retained::retain(msg_send![view, window])?,
                 directory: directory.to_owned(),
                 name: name.into(),
+                exact,
             })
         }
     }
@@ -116,6 +141,9 @@ mod mac {
             unsafe {
                 let visible: Bool = msg_send![&*self.parent, isVisible];
                 let key: Bool = msg_send![&*self.parent, isKeyWindow];
+                if std::env::var_os("BROWSER_SCRIPT").is_some() {
+                    eprintln!("[save-dialog] parent visible={} key={}", visible.as_bool(), key.as_bool());
+                }
                 if !visible.as_bool() || !key.as_bool() {
                     return Ok(None);
                 }
@@ -125,7 +153,7 @@ mod mac {
                 let _: () = msg_send![&*panel,setCanCreateDirectories:Bool::YES];
                 let _: () = msg_send![&*panel,setExtensionHidden:Bool::NO];
                 let _: () = msg_send![&*panel,setCanSelectHiddenExtension:Bool::YES];
-                let _: () = msg_send![&*panel,setNameFieldStringValue:&*NSString::from_str(&available_name(&self.directory, &self.name))];
+                let _: () = msg_send![&*panel,setNameFieldStringValue:&*NSString::from_str(&suggested_name(&self.directory, &self.name, self.exact))];
                 let directory = NSString::from_str(&self.directory.to_string_lossy());
                 let url: *mut AnyObject = msg_send![objc2::class!(NSURL),fileURLWithPath:&*directory,isDirectory:Bool::YES];
                 if !url.is_null() {
@@ -194,5 +222,15 @@ mod tests {
             b"first"
         );
         assert!(!folder.path().join("file.tar (2).gz").exists());
+    }
+
+    #[test]
+    fn export_keeps_the_exact_name_and_leaves_replacement_to_the_native_sheet() {
+        let folder = tempfile::tempdir().unwrap();
+        let name = "Echo Data Export.md";
+        std::fs::write(folder.path().join(name), b"existing export").unwrap();
+        assert_eq!(suggested_name(folder.path(), name, true), name);
+        assert_eq!(suggested_name(folder.path(), name, false), "Echo Data Export (1).md");
+        assert_eq!(std::fs::read(folder.path().join(name)).unwrap(), b"existing export");
     }
 }

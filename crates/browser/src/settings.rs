@@ -914,7 +914,7 @@ impl SettingsWindow {
                     .child(self.settings_button("More Settings…").id("settings-more").debug_selector(||"settings-more".into()).cursor_pointer().on_click(cx.listener(|this,_,window,cx|this.open_more_settings(window,cx))))
                     .child(self.settings_button("Reset Translated-site Prompts").id("settings-reset-translation").debug_selector(||"settings-reset-translation".into()).cursor_pointer().on_click(cx.listener(|this,_,_,cx|this.reset_translation_prompts(cx))))
                     .child(div().flex_1())
-                    .child(self.settings_button("Export Data").id("settings-export-data").debug_selector(||"settings-export-data".into()).cursor_pointer().on_click(cx.listener(|this,_,_,cx|this.export_data(cx)))),
+                    .child(self.settings_button("Export Data").id("settings-export-data").debug_selector(||"settings-export-data".into()).cursor_pointer().on_click(cx.listener(|this,_,window,cx|this.export_data(window,cx)))),
             )
             .into_any_element()
     }
@@ -951,12 +951,13 @@ impl SettingsWindow {
         }
     }
 
-    fn export_data(&self, cx: &mut Context<Self>) {
+    fn export_data(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
         let markdown=self.profile.read_settings(|browser| browser.export_sidebar_markdown());
         let directory=dirs::download_dir().unwrap_or_else(crate::profile_dir);
-        let choice=cx.prompt_for_new_path(&directory,Some("Echo Data Export.md"));
+        let choice=crate::download_dialog::prepare_exact(crate::native::view_of(window),&directory,"Echo Data Export.md",cx);
         cx.spawn(async move |_,cx| {
-            if let Ok(Ok(Some(path)))=choice.await {
+            if let Ok(Some(path))=choice.choose(cx).await {
                 let result=cx.background_executor().spawn(async move { std::fs::write(path,markdown) }).await;
                 if let Err(error)=result { eprintln!("Sidebar export failed: {error}"); }
             }
