@@ -2,7 +2,16 @@
 
 This recipe builds the exact CEF used by Echo with H.264/AAC enabled. Sources,
 toolchain downloads, intermediate objects and distributions live outside Echo.
-The default Cargo configuration continues downloading the original prebuilt.
+`cargo run -p bundle` automatically prefers
+`~/Documents/Bot/cef-src/echo-extensions-dist` on macOS arm64 when present.
+`scripts/with-cef.sh cargo test` uses the same automatic selection. Missing local
+distributions fall back to the original prebuilt via Cargo; CI and other hosts
+retain that behavior. An existing invalid local distribution fails with a clear
+error rather than silently losing its features. `ECHO_CEF_DIST=/path` overrides
+the selection, and an explicit `CEF_PATH` overrides automatic detection.
+`scripts/drive.sh` uses the previously assembled bundle; run `cargo run -p bundle`
+after changing or removing a distribution. Direct `cargo test` keeps Cargo's
+portable prebuilt default unless wrapped or given an explicit `CEF_PATH`.
 
 ## Pins and machine
 
@@ -138,8 +147,9 @@ scripts/with-cef.sh cargo run -p bundle
 
 The wrapper validates the exact CEF version, metadata and required paths, then
 exports an absolute `CEF_PATH` for Cargo and its child bundle commands.
-Selection errors stop the command. Without `ECHO_CEF_DIST`, the wrapper simply
-executes the command and Cargo retains its existing prebuilt fallback. Direct
+Selection errors stop the command. Without `ECHO_CEF_DIST`, the wrapper and
+bundle utility prefer `~/Documents/Bot/cef-src/echo-extensions-dist` when present
+on macOS arm64, then fall back to Cargo’s prebuilt configuration. Direct
 `CEF_PATH=/absolute/path` remains supported by cef-rs.
 
 Expected minimal artifact:
@@ -416,3 +426,13 @@ network-helper exits and all twelve cookie persistence checks. Maximum observed
 numbers and exact evidence paths are in [CEF_SHUTDOWN.md](CEF_SHUTDOWN.md).
 The original prebuilt fallback and preserved codec-only `echo-dist` do not contain
 this correction; select/rebuild the patched distribution to use it.
+
+## Automatic local selection qualification
+
+Plain `cargo run -p bundle` selected `echo-extensions-dist` without additional
+environment variables. The resulting framework matched SHA-256
+`5bddc3b2ea8c251ee8325be37768a775f5e05619082b8db86efe19eaba1c6f6e`.
+The locked native codec check rendered 100 frames and decoded AAC successfully;
+its screenshot was inspected. Evidence:
+`/Users/grosstgrosst/Documents/Bot/cef-src/qualification/2026-10-25T11-31-51.636Z/`.
+`scripts/with-cef.sh cargo test` passed all 1,610 tests (one existing ignored).

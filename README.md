@@ -36,6 +36,14 @@ cargo run -p bundle
 open target/bundle/Echo.app
 ```
 
+On macOS arm64, bundling automatically prefers
+`~/Documents/Bot/cef-src/echo-extensions-dist` when present. This local build
+provides H.264/AAC, the extension bridge and the shutdown patch. If absent,
+Cargo uses the downloaded prebuilt, so CI and other machines need no local CEF.
+`scripts/drive.sh` runs the assembled bundle with the same selected framework.
+`ECHO_CEF_DIST` selects another local distribution; an explicit `CEF_PATH`
+also overrides automatic selection. See [CEF_BUILD.md](docs/CEF_BUILD.md).
+
 The first build downloads CEF binaries into `third_party/cef` and may take a
 while. Building Echo with these prebuilt binaries does not require a Chromium
 source checkout.

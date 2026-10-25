@@ -9,6 +9,16 @@ use crate::acknowledgements;
 use cef::build_util::mac::{build_bundle, BundleInfo};
 
 pub(super) fn run() {
+    // Cargo's configured CEF_PATH remains the CDN fallback. The bundle utility
+    // selects before its nested Cargo builds and runtime framework resolution.
+    match crate::cef_dist::select() {
+        Ok(Some(path)) => {
+            eprintln!("Using local Echo CEF: {}", path.display());
+            std::env::set_var("CEF_PATH", path);
+        }
+        Ok(None) => {}
+        Err(error) => { eprintln!("{error}"); std::process::exit(1); }
+    }
     let info = BundleInfo::new(
         "Echo",
         "dev.echo.browser",

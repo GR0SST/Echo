@@ -3,6 +3,8 @@
 mod acknowledgements;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod cef_dist;
 
 fn main() {
     #[cfg(target_os = "macos")]

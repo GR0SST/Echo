@@ -1,5 +1,6 @@
 [env]
 # Prebuilt CEF binaries; cef-dll-sys downloads them here when missing.
-# Opt into a local codec build with ECHO_CEF_DIST=/path scripts/with-cef.sh cargo ...
+# The bundle utility and scripts/with-cef.sh prefer the optional machine-local
+# echo-extensions-dist; this remains the portable fallback.
 # An explicit CEF_PATH in the environment also overrides this default.
 CEF_PATH = { value = "third_party/cef", relative = true }
