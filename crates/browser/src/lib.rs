@@ -42,6 +42,7 @@ mod favicon_style;
 mod window_snapshots;
 mod new_menu;
 mod new_window;
+mod window_restore;
 mod setup;
 mod browser_registration;
 mod import_credentials;
@@ -401,7 +402,10 @@ pub fn run() {
         }).detach();
         #[cfg(target_os = "macos")]
         if let Ok(script) = std::env::var("BROWSER_SCRIPT") {
-            if let Some(handle) = cx.windows().into_iter().find_map(|handle| handle.downcast::<BrowserWindow>()) {
+            // The driver makes its source key. Do not accidentally wake an
+            // arbitrary restored background window before startup assertions.
+            let roots: Vec<_> = cx.windows().into_iter().filter_map(|handle| handle.downcast::<BrowserWindow>()).collect();
+            if let Some(handle) = roots.iter().find(|handle| handle.read(cx).is_ok_and(|view| !view.restore_dormant)).or_else(|| roots.first()).copied() {
                 let _ = handle.update(cx, |_, window, cx| {
                     if let Some(ns_view) = native::view_of(window) {
                         automation::start(script, cx.weak_entity(), ns_view, cx);

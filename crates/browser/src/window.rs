@@ -723,7 +723,9 @@ pub struct BrowserWindow {
     pub(crate) transient: Option<crate::transient::Transient>,
     pub(crate) peek_child: Option<WindowHandle<BrowserWindow>>,
     pub(crate) peek_owner: Option<crate::peek::PeekOwner>,
-    sidebar_width: f32,
+    pub(crate) sidebar_width: f32,
+    pub(crate) restore_window: Option<browser_core::window_restore::RestoredWindow>,
+    pub(crate) restore_dormant: bool,
     sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
     sidebar_resize_generation: u64,
     sidebar_resize_focus_on_activation: Option<(crate::pages::ResizePageFocus, u64)>,
@@ -921,6 +923,7 @@ impl BrowserWindow {
         crate::password_flow::observe_changes(cx).detach();
         cx.observe_window_bounds(window, |this, window, cx| {
             if let Some(parent) = crate::native::view_of(window) { crate::native::sync_overlays(parent); }
+            this.checkpoint_bounds(window, cx);
             this.resize_peek(window, cx);
             this.resize_setup(window,cx);
             this.resize_password_prompt(window,cx);
@@ -930,7 +933,7 @@ impl BrowserWindow {
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() { this.restore_site_settings_peek_focus(cx); this.maybe_password_prompt(cx); }
+            if window.is_window_active() { this.restore_dormant=false; this.checkpoint_window(true); this.restore_site_settings_peek_focus(cx); this.maybe_password_prompt(cx); }
             this.set_little_archive_active(window.is_window_active(),cx);
             this.max_preview_activation(window.is_window_active(),cx);
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
@@ -1032,6 +1035,7 @@ impl BrowserWindow {
             sidebar_visible: true,
             transient: None, peek_child: None, peek_owner: None,
             sidebar_width: SIDEBAR_WIDTH,
+            restore_window: None, restore_dormant: false,
             sidebar_resize: None,
             sidebar_resize_generation: 0,
             sidebar_resize_focus_on_activation: None,
@@ -1127,6 +1131,7 @@ impl BrowserWindow {
 
     pub(crate) fn prepare_quit(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         self.commit_theme_editor();
+        self.checkpoint_window(false);
         self.profile.handle.flush_for_quit(cx)
     }
 
@@ -4775,7 +4780,7 @@ impl Render for BrowserWindow {
                     pages.overlay_escape=self.max.preview.open.is_some() || cx.has_active_drag();
                     pages.set_top_toolbar(self.page_toolbar_shown() && self.browser.active_split().is_none());
                     pages.set_top_toolbar_height(self.page_toolbar_height());
-                    pages.sync(&self.browser, self.page_content_visible());
+                    if !self.restore_dormant { pages.sync(&self.browser, self.page_content_visible()); }
                     pages.sync_color_schemes(self.theme_appearance());
                 },
                 // Re-entered from engine work; sync on the next frame.

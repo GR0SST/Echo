@@ -30,6 +30,7 @@ pub mod live_folders;
 pub mod undo;
 pub mod themes;
 pub mod windows;
+pub mod window_restore;
 pub mod recent_items;
 pub mod save_page;
 pub mod profiles;
@@ -200,6 +201,9 @@ pub enum Closed {
 pub struct Browser {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onboarding: Option<onboarding::SetupStep>,
+    /// Back-to-front normal windows. Private and transient windows never enter this list.
+    #[serde(default)]
+    pub windows: Vec<window_restore::RestoredWindow>,
     #[serde(default)]
     pub settings: settings::Settings,
     pub spaces: Vec<Space>,
@@ -242,6 +246,7 @@ impl Browser {
     fn with_initial_space(name: &str, show_header: bool, blank: bool) -> Self {
         let mut browser = Self {
             onboarding: None,
+            windows: Vec::new(),
             settings: settings::Settings::default(),
             spaces: Vec::new(),
             active_space: 0,

@@ -27,6 +27,8 @@ impl Global for NormalProfile {}
 struct NewWindow {
     normal: NormalProfile,
     selection: WindowSelection,
+    restore: Option<browser_core::window_restore::RestoredWindow>,
+    dormant: bool,
 }
 
 impl BrowserWindow {
@@ -98,7 +100,18 @@ impl BrowserWindow {
         let Some(selection) = selection else {
             return;
         };
-        cx.defer(move |cx| open_with(NewWindow { normal, selection }, false, cx));
+        cx.defer(move |cx| {
+            open_with(
+                NewWindow {
+                    normal,
+                    selection,
+                    restore: None,
+                    dormant: false,
+                },
+                false,
+                cx,
+            )
+        });
     }
 
     pub(crate) fn new_window(&mut self, cx: &mut Context<Self>) {
@@ -118,6 +131,8 @@ impl BrowserWindow {
                 pages: self.pages.clone(),
             },
             selection: self.browser.new_window_selection(),
+            restore: None,
+            dormant: false,
         };
         cx.defer(move |cx| open_with(request, true, cx));
     }
@@ -128,6 +143,7 @@ pub(crate) fn open(command_bar: bool, cx: &mut App) {
     if crate::quit::is_quitting() {
         return;
     }
+    let initial = !cx.has_global::<NormalProfile>();
     let normal = match normal_source(cx) {
         Ok(normal) => normal,
         Err(error) => {
@@ -135,23 +151,75 @@ pub(crate) fn open(command_bar: bool, cx: &mut App) {
             return;
         }
     };
+    if initial && !command_bar {
+        let saved = normal.profile.read_settings(|b| {
+            if b.settings
+                .enabled(browser_core::settings::Toggle::RestoreWindows)
+            {
+                b.windows.clone()
+            } else {
+                Vec::new()
+            }
+        });
+        if !saved.is_empty() {
+            let last = saved.len() - 1;
+            for (index, restore) in saved.into_iter().enumerate() {
+                open_with(
+                    NewWindow {
+                        normal: cx
+                            .try_global::<NormalProfile>()
+                            .cloned()
+                            .unwrap_or_else(|| normal.clone()),
+                        selection: restore.selection.clone(),
+                        restore: Some(restore),
+                        dormant: index != last,
+                    },
+                    false,
+                    cx,
+                );
+            }
+            return;
+        }
+        normal.profile.edit_settings(|b| b.windows.clear());
+    }
     let selection = if command_bar {
         normal.profile.new_window_selection()
     } else {
         normal.profile.selection()
     };
-    open_with(NewWindow { normal, selection }, command_bar, cx);
+    open_with(
+        NewWindow {
+            normal,
+            selection,
+            restore: None,
+            dormant: false,
+        },
+        command_bar,
+        cx,
+    );
 }
 
 fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
     if crate::quit::is_quitting() {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+    let (bounds, display_id) = request
+        .restore
+        .as_ref()
+        .map(|saved| crate::window_restore::placement(saved, cx))
+        .unwrap_or_else(|| {
+            (
+                WindowBounds::Windowed(Bounds::centered(None, size(px(1200.), px(800.)), cx)),
+                None,
+            )
+        });
+    let focused = !request.dormant;
     let handle = cx
         .open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(bounds),
+                display_id,
+                focus: focused,
                 titlebar: Some(TitlebarOptions {
                     title: Some(crate::APP_NAME.into()),
                     appears_transparent: true,
@@ -166,6 +234,8 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
                 let NewWindow {
                     mut normal,
                     selection,
+                    restore,
+                    dormant,
                 } = request;
                 let pages = match &normal.pages {
                     Some(pages) => Some(
@@ -186,6 +256,7 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
                         window,
                         cx,
                     );
+                    view.attach_restoration(restore, dormant, window, cx);
                     view.save_session_to(crate::profile_dir().join("session.json"), cx);
                     view
                 });
@@ -196,7 +267,9 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
             },
         )
         .unwrap();
-    cx.activate(true);
+    if focused {
+        cx.activate(true);
+    }
     let onboarding = handle
         .read(cx)
         .is_ok_and(|view| view.browser.onboarding.is_some());

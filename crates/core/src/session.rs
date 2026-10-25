@@ -41,6 +41,9 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
         }
     }
     let mut browser: Browser = serde_json::from_value(value)?;
+    // Invalid presentation must not discard otherwise valid browsing data.
+    let mut ids = std::collections::HashSet::new();
+    browser.windows.retain(|window| window.valid() && ids.insert(window.id));
     if browser.default_user_profile_id != crate::UserProfileId::DEFAULT
         || !browser.profiles.contains_key(&browser.default_user_profile_id)
         || browser.profiles.iter().any(|(id, profile)| id.0 == 0 || *id != profile.id || profile.name.trim().is_empty())

@@ -1,0 +1,15 @@
+# Window restoration
+
+Normal windows keep presentation records in the canonical `session.json`, alongside the shared Space/tab/profile inventory. Each record contains a stable checkpoint ID, the window's Space and selected tabs, focused Split panes, folder/Pinned expansion, sidebar visibility/width, frame, display UUID and window mode. Records are ordered back to front. Private, Blank, Peek and Little windows do not register normal-window records.
+
+The existing atomic profile writer publishes the checkpoint every second and synchronously during coordinated quit. Explicit window closure removes its record only after engine retirement preparation succeeds, immediately before the root is removed. Quit retains all open records. Unexpected process termination resumes from the same last published checkpoint. This does not persist renderer memory or navigation history.
+
+Startup opens the saved normal roots, shares one page pool and restores the last focused normal window. Background roots defer page synchronization until activation; other unselected tabs retain the existing lazy loading policy. The restore preference disables the saved inventory without discarding tabs or Spaces. Missing displays fall back to an intersecting display or the primary display, with the frame brought on-screen. Malformed numeric presentation and duplicate window IDs are discarded without discarding valid tab inventory; older sessions without window records remain readable.
+
+Arc reference: the guarded owned `Echo Test` window's `StorableWindows.json` entry has independent `focusedSpaceID`, `sidebarWidth`, `sidebarMode`, `expandedItems`, `spacesWithCollapsedPinnedSections`, and content/pane selection. No owner Arc quit/relaunch was performed. Evidence is under `target/parity/window-restoration/` and `target/parity/reaudit2/sessions/window-restoration-reference/`.
+
+Native acceptance uses two windows in different Spaces, different sidebar visibility/width and frames, and a two-pane Split with a selected secondary pane. It changes a frame/sidebar, opens Incognito, quits through native AppKit termination, relaunches, forces only the disposable Echo process to stop, and relaunches again from the periodic checkpoint. Disabling restoration opens one window. The startup HTTP request log contains both foreground Split pages and no inactive-window page request until activation. Evidence: `native/{lazy-startup,result}.json`, the per-phase `*-session.json`, `*-engine.log`, and the inspected `relaunch-{split,first}.png` captures.
+
+The separately owned Little Arc window adds no record to Arc's `StorableWindows.json`; it is excluded from Echo's normal restoration inventory. Its reference capture, empty manifest delta and verified cleanup are under `arc-little/`. This is a persistence-model reference, not an owner Arc restart test.
+
+Qualification: native acceptance covers macOS normal-window relaunch/crash behavior. Windows/Linux display/fullscreen acceptance remains unqualified. The owner's running Arc installation is never quit for this check.

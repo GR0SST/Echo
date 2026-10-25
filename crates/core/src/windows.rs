@@ -4,15 +4,19 @@ use crate::{splits::SplitId, Browser, Space, SpaceId, TabId};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowSelection {
     active_space: SpaceId,
     space_index: usize,
     tabs: HashMap<SpaceId, TabSelection>,
     panes: HashMap<SplitId, TabId>,
+    #[serde(default)]
+    collapsed_folders: HashMap<crate::folders::FolderId, bool>,
+    #[serde(default)]
+    collapsed_pinned: HashMap<SpaceId, bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TabSelection {
     active: Option<TabId>,
     /// Neighbors from this window, used if another window closes its tab.
@@ -40,6 +44,8 @@ impl Deref for WindowProjection {
 impl Browser {
     pub fn window_selection(&self) -> WindowSelection {
         WindowSelection {
+            collapsed_folders: self.spaces.iter().flat_map(|space| &space.folders).map(|folder| (folder.id, folder.collapsed)).collect(),
+            collapsed_pinned: self.spaces.iter().map(|space| (space.id, space.pinned_collapsed)).collect(),
             active_space: self.space().id,
             space_index: self.active_space,
             tabs: self.spaces.iter().map(|space| {
@@ -91,6 +97,10 @@ impl Browser {
         self.active_space = self.spaces.iter().position(|space| space.id == selection.active_space)
             .unwrap_or_else(|| selection.space_index.min(self.spaces.len() - 1));
         for space in &mut self.spaces {
+            if let Some(collapsed) = selection.collapsed_pinned.get(&space.id) { space.pinned_collapsed = *collapsed; }
+            for folder in &mut space.folders {
+                if let Some(collapsed) = selection.collapsed_folders.get(&folder.id) { folder.collapsed = *collapsed; }
+            }
             let favorites: Vec<_> = self.profiles[&space.user_profile_id].favorites.iter().map(|tab| tab.id).collect();
             let valid = |id| favorites.contains(&id) || space.tabs().any(|tab| tab.id == id);
             let active = selection.tabs.get(&space.id).and_then(|saved| {

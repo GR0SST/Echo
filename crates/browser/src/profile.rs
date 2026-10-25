@@ -239,6 +239,16 @@ impl ProfileHandle {
 
     pub(crate) fn default_user_profile_id(&self) -> UserProfileId { self.data.borrow().default_user_profile_id() }
 
+    /// Presentation changes do not notify every profile projection or mutate tab selections.
+    pub(crate) fn checkpoint_window(&self, window: browser_core::window_restore::RestoredWindow, focused: bool) {
+        let mut data=self.data.borrow_mut();
+        if data.is_private() || data.is_blank() { return; }
+        if let Some(index)=data.windows.iter().position(|w|w.id==window.id) {
+            if focused {data.windows.remove(index);data.windows.push(window);} else {data.windows[index]=window;}
+        } else {data.windows.push(window);}
+    }
+    pub(crate) fn forget_window(&self,id:u64) {self.data.borrow_mut().windows.retain(|w|w.id!=id);}
+
     pub(crate) fn selection(&self) -> WindowSelection { self.data.borrow().window_selection() }
     pub(crate) fn new_window_selection(&self) -> WindowSelection { self.data.borrow().new_window_selection() }
     pub(crate) fn projection(&self, selection: &WindowSelection) -> WindowProjection {
@@ -289,7 +299,7 @@ impl ProfileBinding {
             window.validate_user_profile_dialog(cx);
             cx.notify();
         });
-        let observe_window = cx.observe_self(|window, cx| { window.profile.remember_draft(&window.split_draft); window.validate_user_profile_dialog(cx); });
+        let observe_window = cx.observe_self(|window, cx| { window.profile.remember_draft(&window.split_draft); window.checkpoint_window(false); window.validate_user_profile_dialog(cx); });
         Self { revision: handle.revision.get(), handle, selection, draft, protected, seen_auto_archive,
             _observe_profile: observe_profile, _observe_window: observe_window }
     }

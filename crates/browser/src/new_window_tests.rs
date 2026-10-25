@@ -206,3 +206,31 @@ fn file_new_window_menu_routes_to_the_source_window(cx: &mut TestAppContext) {
     assert_eq!(roots(visual).len(), 2);
     assert!(source.read_with(visual, |view, _| view.command_bar.is_none()));
 }
+
+#[gpui::test]
+fn window_checkpoint_tracks_sidebar_selection_and_explicit_close(cx: &mut TestAppContext) {
+    let (source, visual) = open(cx);
+    source.update_in(visual, |view, window, cx| {
+        view.attach_restoration(None, false, window, cx)
+    });
+    visual.simulate_keystrokes("cmd-s");
+    visual.simulate_keystrokes("ctrl-2");
+    visual.run_until_parked();
+    let handle = source.read_with(visual, |v, _| v.profile.handle.clone());
+    let saved = handle.read_settings(|b| b.windows.clone());
+    assert_eq!(saved.len(), 1);
+    assert!(!saved[0].sidebar_visible);
+    source.read_with(visual, |v, _| {
+        assert_eq!(
+            v.browser.space().id,
+            v.browser.window_projection(&saved[0].selection).space().id
+        )
+    });
+    visual.simulate_keystrokes("cmd-n");
+    visual.run_until_parked();
+    assert_eq!(handle.read_settings(|b| b.windows.len()), 2);
+    let other = roots(visual).into_iter().find(|v| v != &source).unwrap();
+    other.update(visual, |v, cx| v.close_window(cx));
+    visual.run_until_parked();
+    assert_eq!(handle.read_settings(|b| b.windows.len()), 1);
+}

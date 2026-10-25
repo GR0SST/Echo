@@ -107,6 +107,9 @@ fn prepare_with(
                     if crate::quit::is_quitting() {
                         return;
                     }
+                    if let Some(handle)=root.downcast::<crate::window::BrowserWindow>() {
+                        let _=handle.update(cx, |view,_,_|view.forget_restoration());
+                    }
                     let _ = root.update(cx, |_, window, _| window.remove_window());
                 });
                 break;

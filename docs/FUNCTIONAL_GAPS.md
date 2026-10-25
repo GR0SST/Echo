@@ -12,7 +12,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 
 | Rank | Baseline row / feature | Effort | Concrete fix / acceptance |
 |---:|---|:---:|---|
-| 1 | L571: "When opening Arc, restore windows from previous session" | L | Persist and restore the normal window inventory, bounds and window-local selected Spaces/tabs across relaunch. |
+| 1 | L571: "When opening Arc, restore windows from previous session" | L | **Completed:** atomic per-window checkpoint, Space/tab/Split/folder/sidebar/frame/display restoration, lazy background pages, private exclusion and shared crash recovery. Native macOS relaunch/forced-stop/disabled-preference acceptance; see [window restoration](WINDOW_RESTORATION.md). Windows/Linux runtime qualification remains B. |
 | 2 | L416: Profile: separate history, cookies, passwords, extensions | L | Extend saved-login fill to iframe/cross-origin forms and provide safe multiple-account selection. |
 | 3 | L192: Add Extension… / Manage Extensions… | L | Connect the qualified extension catalog/install/action engine bridge to Add/Manage Extensions. |
 | 4 | L499: Built-in ad and tracker blocker | L | Implement local request filtering with maintained ad/tracker rules and per-site exceptions. |
