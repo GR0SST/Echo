@@ -85,7 +85,7 @@ impl BrowserWindow {
         let bounds = Bounds::new(
             point(
                 main.origin.x + main.size.width - width - px(40.0),
-                main.origin.y,
+                main.origin.y + px(if self.page_toolbar_shown() { self.page_toolbar_height() } else { 0. }),
             ),
             size(width + px(40.0), px(72.0)),
         );

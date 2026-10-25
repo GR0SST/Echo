@@ -588,3 +588,18 @@ fn profile_management_never_edits_private_or_blank_projections() {
         assert_eq!(session::to_json(&browser),before);
     }
 }
+
+#[test]
+fn localhost_developer_choices_are_profile_owned_and_survive_sessions() {
+    let mut browser = Browser::new();
+    let first = browser.active_user_profile_id();
+    let other = browser.create_user_profile("Other").unwrap();
+    browser.user_profile_mut(first).unwrap()
+        .set_developer_mode_for_host("fixture.localhost".into(), false);
+    let restored = session::from_json(&session::to_json(&browser)).unwrap();
+    assert!(!restored.user_profile(first).unwrap().developer_mode_for_host("fixture.localhost"));
+    assert!(restored.user_profile(other).unwrap().developer_mode_for_host("fixture.localhost"));
+    assert!(restored.user_profile(first).unwrap().developer_mode_for_host("localhost"));
+    assert!(!restored.user_profile(first).unwrap().developer_mode_for_host("localhost.example"));
+    assert!(!restored.user_profile(first).unwrap().developer_mode_for_host("notlocalhost"));
+}

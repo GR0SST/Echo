@@ -74,14 +74,15 @@ impl BrowserWindow {
         matches!(url.scheme(), "http" | "https").then(|| url.host_str().map(str::to_owned)).flatten()
     }
     pub(crate) fn developer_mode_enabled(&self) -> bool {
-        self.developer_site().is_some_and(|host| self.browser.active_user_profile().developer_sites.contains(&host))
+        self.developer_site().is_some_and(|host| self.browser.active_user_profile().developer_mode_for_host(&host))
     }
     pub(crate) fn toggle_developer_mode(&mut self, cx: &mut Context<Self>) {
         let Some(host) = self.developer_site() else { return; };
         let profile = self.browser.active_user_profile_id();
+        let enabled = !self.developer_mode_enabled();
         self.edit_profile(|model| {
             if let Some(profile) = model.user_profile_mut(profile) {
-                if !profile.developer_sites.remove(&host) { profile.developer_sites.insert(host); }
+                profile.set_developer_mode_for_host(host, enabled);
             }
         });
         cx.notify();

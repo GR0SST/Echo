@@ -104,19 +104,22 @@ impl BrowserWindow {
         let Some(status) = &self.link_status else { return div().into_any_element(); };
         let Some(frame) = self.pages.as_ref().and_then(|pages| pages.borrow().surface_layout().into_iter()
             .find_map(|(tab, frame)| (tab == status.tab).then_some(frame))) else { return div().into_any_element(); };
-        let available = (frame.width - 16.).max(0.) as f32;
+        let available = (frame.width - 20.).max(0.) as f32;
         let width = if status.expanded { available } else { available.min(360.) };
-        let text = crate::status_url::elide(&status.text, (width - 16.).max(0.), |text| {
+        let text = crate::status_url::elide(&status.text, (width - 20.).max(0.), |text| {
             f32::from(window.text_system().shape_line(text.to_owned().into(), px(12.), &[gpui::TextRun {
-                len: text.len(), font: gpui::font(".SystemUIFont"), color: gpui::black(),
+                len: text.len(), font: { let mut font = gpui::font(".SystemUIFont"); font.weight = gpui::FontWeight::MEDIUM; font }, color: gpui::black(),
                 background_color: None, underline: None, strikethrough: None,
             }], None).width)
         });
         div().size_full().child(div().id("link-status").debug_selector(|| "link-status".into())
-            .absolute().left(px(frame.x as f32 + 8.)).top(px((frame.y + frame.height - 32.).max(frame.y) as f32))
-            .max_w(px(width)).h(px(24.)).px_2().flex().items_center().rounded(px(6.))
+            .absolute().left(px(frame.x as f32 + 10.)).top(px((frame.y + frame.height - 34.).max(frame.y) as f32))
+            .max_w(px(width)).h(px(24.)).px(px(10.)).flex().items_center().rounded(px(12.))
             .bg(hsla(self.browser.space().hue / 360., 0.28, 0.84, 0.98))
-            .text_color(hsla(0., 0., 0.1, 0.75)).font_family(".SystemUIFont").text_size(px(12.))
+            .text_color(hsla(0., 0., 0.1, 0.75))
+            .when(matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark), |pill|
+                pill.bg(gpui::rgb(0x0a0d4b)).text_color(gpui::rgb(0xb6b7c9)))
+            .font_family(".SystemUIFont").font_weight(gpui::FontWeight::MEDIUM).text_size(px(12.))
             .child(div().min_w_0().truncate().child(text))).into_any_element()
     }
 }

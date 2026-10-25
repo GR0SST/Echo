@@ -1119,6 +1119,9 @@ fn link_status_expands_after_a_dwell_and_restarts_the_timer_for_a_new_target(cx:
     let mut status_window = VisualTestContext::from_window(overlay.into(), cx);
     let preview = status_window.debug_bounds("link-status").unwrap();
     assert!(preview.size.width <= gpui::px(360.));
+    assert_eq!(preview.origin.x, gpui::px(frame.x as f32 + 10.));
+    assert_eq!(preview.origin.y, gpui::px((frame.y + frame.height) as f32 - 34.));
+    assert_eq!(preview.size.height, gpui::px(24.));
     assert!(preview.origin.x >= gpui::px(frame.x as f32) && preview.bottom_right().y <= gpui::px((frame.y + frame.height) as f32), "{preview:?}, page {frame:?}");
     cx.executor().advance_clock(Duration::from_millis(1000));
     cx.run_until_parked();

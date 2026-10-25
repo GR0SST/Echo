@@ -53,8 +53,26 @@ pub struct UserProfile {
     pub browsing_data: crate::browsing_data::BrowsingDataPreferences,
     #[serde(default)]
     pub developer_sites: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    developer_disabled_sites: std::collections::BTreeSet<String>,
 }
 impl UserProfile {
+    /// Arc enables the developer toolbar for localhost, including its subdomains.
+    /// An explicit per-profile choice survives reloads and takes precedence.
+    pub fn developer_mode_for_host(&self, host: &str) -> bool {
+        !self.developer_disabled_sites.contains(host)
+            && (self.developer_sites.contains(host)
+                || host == "localhost" || host.ends_with(".localhost"))
+    }
+    pub fn set_developer_mode_for_host(&mut self, host: String, enabled: bool) {
+        if enabled {
+            self.developer_disabled_sites.remove(&host);
+            self.developer_sites.insert(host);
+        } else {
+            self.developer_sites.remove(&host);
+            self.developer_disabled_sites.insert(host);
+        }
+    }
     pub fn id(&self) -> UserProfileId {
         self.id
     }
@@ -87,6 +105,7 @@ impl UserProfile {
             site_settings: crate::site_settings::SiteSettings::default(),
             browsing_data: Default::default(),
             developer_sites: Default::default(),
+            developer_disabled_sites: Default::default(),
         }
     }
 }
