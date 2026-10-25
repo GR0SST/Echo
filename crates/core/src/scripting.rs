@@ -482,7 +482,16 @@ impl Snapshot {
         let count = if let Some(class) = class {
             objects
                 .iter()
-                .map(|o| self.elements(o, class).map(|v| v.len()))
+                .map(|o| {
+                    if class == code(b"pALL") {
+                        match self.property(o, class)? {
+                            Value::Record(_, properties) => Ok(properties.len()),
+                            _ => Err(Error::invalid("Expected a properties record.")),
+                        }
+                    } else {
+                        self.elements(o, class).map(|v| v.len())
+                    }
+                })
                 .sum::<Result<usize>>()?
         } else {
             objects.len()
@@ -934,6 +943,31 @@ mod tests {
             assert_eq!(
                 Command::decode(code(class), code(id), &params),
                 Ok(expected)
+            );
+        }
+    }
+    #[test]
+    fn count_properties_counts_the_dictionary_record_instead_of_child_objects() {
+        let state = fixture();
+        for object in [
+            Object::Application,
+            Object::Window("a".into()),
+            Object::Space {
+                window: "a".into(),
+                id: "s1".into(),
+            },
+            Object::Tab {
+                window: "a".into(),
+                id: "1".into(),
+            },
+        ] {
+            let Value::Record(_, properties) = state.property(&object, code(b"pALL")).unwrap()
+            else {
+                panic!("properties must be a record")
+            };
+            assert_eq!(
+                state.count(&object.query(), Some(code(b"pALL"))),
+                Ok(Value::Int(properties.len() as i64))
             );
         }
     }

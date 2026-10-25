@@ -43,9 +43,14 @@ before mutation), plural select/close/navigation/location operations using stabl
 references, lossless signed 64-bit AppleEvent integers and browser-only window-index
 writes. Core tests cover raw index/name/ID selectors, all dictionary window properties,
 command codes, invalid creation values and ordering anchors; GPUI tests cover creation
-location and plural closure. Execute results remain text for every JavaScript value,
-as declared by Arc.sdef; the engine uses JavaScript String conversion and preserves
-exceptions as errors. These additions require native validation after macOS unlocks.
+location and plural closure. Execute results remain text for every JavaScript value, as
+declared by Arc.sdef; the engine uses JavaScript String conversion and preserves
+exceptions as errors. The unlocked native probe now passes these
+selector/creation/window-order and JavaScript text-result categories; it also exposed
+and fixed `count properties` (record counting rather than child enumeration). See
+[native validation](NATIVE_UNLOCKED_VALIDATION.md). Bulk mutations and signed 64-bit
+transport retain their GPUI/unit coverage; their broader native edge cases remain
+partial.
 
 Compatibility limits: range/predicate/relative object selectors and beginning/relative
 insertion locations are not implemented (rejected explicitly). Window mode is fixed at creation. An
