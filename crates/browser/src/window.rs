@@ -135,6 +135,7 @@ actions!(
         SelectPrevious,
         Confirm,
         ConfirmBackground,
+        ConfirmInstant,
         Dismiss,
     ]
 );
@@ -287,6 +288,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-p", SelectPrevious, bar),
         KeyBinding::new("enter", Confirm, bar),
         KeyBinding::new("cmd-enter", ConfirmBackground, bar),
+        KeyBinding::new("shift-enter", ConfirmInstant, bar),
         KeyBinding::new("escape", Dismiss, bar),
     ]);
 }
@@ -4218,6 +4220,12 @@ impl BrowserWindow {
                     .on_action(cx.listener(|this, _: &ConfirmBackground, _, cx| {
                         let index = this.command_bar.as_ref().map_or(0, |bar| bar.selected);
                         this.confirm_with_background(index, true, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &ConfirmInstant, _, cx| {
+                        if !this.start_instant_links(cx) {
+                            let index = this.command_bar.as_ref().map_or(0, |bar| bar.selected);
+                            this.confirm(index, cx);
+                        }
                     }))
                     .on_action(cx.listener(|this, _: &Confirm, _, cx| {
                         let index = this.command_bar.as_ref().map_or(0, |bar| bar.selected);

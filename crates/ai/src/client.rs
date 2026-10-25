@@ -87,13 +87,13 @@ pub enum StreamEvent {
     Complete,
 }
 
-fn sensitive(value: &str) -> Result<ureq::http::HeaderValue, AiError> {
+pub(crate) fn sensitive(value: &str) -> Result<ureq::http::HeaderValue, AiError> {
     let mut value =
         ureq::http::HeaderValue::from_bytes(value.as_bytes()).map_err(|_| AiError::Credentials)?;
     value.set_sensitive(true);
     Ok(value)
 }
-fn workspace_header(config: &ProviderConfig) -> Result<Option<ureq::http::HeaderValue>, AiError> {
+pub(crate) fn workspace_header(config: &ProviderConfig) -> Result<Option<ureq::http::HeaderValue>, AiError> {
     let workspace = config.anthropic_workspace_id.trim();
     if config.provider != Provider::Anthropic || workspace.is_empty() {
         return Ok(None);

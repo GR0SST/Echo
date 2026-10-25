@@ -1711,3 +1711,44 @@ pair `target/parity/sweep-r2/pair-capture-indicator-zoom.png` was inspected.
 Native virtual-device transitions and clean CEF shutdown were rechecked; the
 GPUI regression verifies background source states without activation and the
 restored title position after stopping.
+
+
+
+### Instant Links, installed Arc 1.170 (2026-10-25)
+
+The owner's temporary-toggle exception was used only for public pages in the
+shared Echo Test Space. Instant Links was **0 → 1 → 0**; 5-Second Previews
+remained 0 and Tidy Downloads remained 0. The seven original checkbox values
+were restored exactly in the same locked capture session. Evidence is under
+`target/parity/arc-max/instant-existing-toggles-{before,after}.json`. All eleven
+owned source/result tabs were archived; four late-loading result titles required
+identity-checked cleanup. `instant-existing-cleanup-verified.json` records that
+none of those remaining identities survives in Echo Test. No Spaces were deleted.
+
+Pairs at 1000×760: `arc_instant_existing_query.png` / `echo_instant_query.png`,
+`arc_instant_existing_loading.png` / `echo_instant_loading.png`,
+`arc_instant_existing_result.png` / `echo_instant_result.png` in that directory.
+Shift-Return closes the Command Bar. The original page stays selected and live
+while a non-selected Today row says “Searching the web for you” (bundle string
+38078/230095). Arc returned ten tabs at the top of Today and selected the first,
+with the original source below the entire result block. Result titles may change
+after navigation. Echo's transient row is never a persisted or archived tab.
+
+Echo uses the user's exact selected model and provider; only the query is sent.
+OpenAI and compatible Responses endpoints use the documented hosted web_search
+tool and `web_search_call.action.sources`; Anthropic uses basic
+`web_search_20250305` results. There is no guessed-URL/model-prose fallback or
+Echo server. Compatible servers and models without hosted search fail normally.
+Sources: https://developers.openai.com/api/docs/guides/tools-web-search and
+https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool .
+The native fixture is a local authenticated Responses server with ten supplied
+public URLs, not a paid/live provider validation. The synthetic key is saved
+through Echo's Max settings and deleted from Keychain after the capture.
+Arc's result ranking, proprietary AI glyph and exact loading motion remain
+partial. Fixtures differ in Favorites/existing tabs and remote page revisions.
+
+Ask on Page still exposes no Ask control in the installed desktop Command-F
+flow, including the available permitted Max flags. There is no separate Ask
+toggle in this build. Browse for Me captions exist in the bundle (52626–52635)
+and an `about:blank?type=ask-arc` identifier, but no desktop invocation/result
+layout was found. Those flows remain reference-blocked; no invented controls.

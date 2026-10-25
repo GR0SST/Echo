@@ -18,6 +18,8 @@ mod max_chatgpt_tests;
 mod max_downloads_tests;
 #[path = "max_preview_tests.rs"]
 mod max_preview_tests;
+#[path = "max_instant_tests.rs"]
+mod max_instant_tests;
 #[path = "toolbar_tests.rs"]
 mod toolbar_tests;
 #[path = "page_context_tests.rs"]

@@ -2,6 +2,10 @@
 //! The model/configuration API builds without HTTP or native credential stores.
 mod config;
 pub use config::*;
+mod links;
+pub use links::WebLink;
+#[cfg(feature = "http")]
+pub mod search;
 #[cfg(feature = "http")]
 pub mod client;
 #[cfg(feature = "http")]

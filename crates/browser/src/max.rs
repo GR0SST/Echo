@@ -69,7 +69,8 @@ pub(crate) fn request(
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) preview: crate::max_previews::State,
-    generation: u64,
+    pub(crate) instant: Option<crate::max_instant::Job>,
+    pub(crate) generation: u64,
     tidy: Option<TidyJob>,
     pending_titles: std::collections::HashSet<TabId>,
     title_jobs: std::collections::HashMap<TabId, TitleJob>,
@@ -215,6 +216,7 @@ impl BrowserWindow {
             0.
         };
         let mut rows = Vec::new();
+        if let Some(row) = self.render_instant_loading(space, cx) { rows.push(row); }
         for row in self.browser.today_rows(space) {
             match row {
                 browser_core::max::TodayRow::Group(group) => {

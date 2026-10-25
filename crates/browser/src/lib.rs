@@ -7,6 +7,7 @@ mod task_manager;
 mod find;
 mod max;
 mod max_previews;
+mod max_instant;
 mod max_downloads;
 mod max_downloads_files;
 mod toast;
