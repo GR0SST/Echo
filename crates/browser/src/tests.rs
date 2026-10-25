@@ -14,6 +14,8 @@ mod little_archive_tests;
 mod page_swipe_tests;
 
 use std::cell::RefCell;
+#[path = "split_drag_motion_tests.rs"]
+mod split_drag_motion_tests;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -8952,7 +8954,7 @@ fn edge_drag_previews_without_reflow_and_commits_the_existing_tab(cx: &mut TestA
 }
 
 #[gpui::test]
-fn leaving_the_page_edge_cancels_the_split_preview(cx: &mut TestAppContext) {
+fn leaving_the_page_cancels_the_split_preview(cx: &mut TestAppContext) {
     let (view,cx,_) = open_split_pages(cx,1);
     let anchor=view.read_with(cx,|w,_|w.browser.space().active_tab.unwrap());
     let other=view.update(cx,|w,cx| {
@@ -8969,7 +8971,7 @@ fn leaving_the_page_edge_cancels_the_split_preview(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(gpui::point(frame.right()-gpui::px(12.),frame.center().y),gpui::MouseButton::Left,Modifiers::none());
     cx.run_until_parked();
     assert!(view.read_with(cx,|w,_|w.split_drop.is_some()));
-    finish_sidebar_drag(cx,frame.center());
+    finish_sidebar_drag(cx,gpui::point(gpui::px(100.),frame.center().y));
     assert!(view.read_with(cx,|w,_|w.split_drop.is_none() && w.browser.active_split().is_none() && w.browser.space().active_tab==Some(anchor)));
 }
 

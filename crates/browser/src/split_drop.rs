@@ -1,4 +1,8 @@
 //! A passive themed cover clips the live document while a tab is held at an edge.
+#[path = "split_drag_title.rs"]
+mod title;
+#[path = "split_drag_shadow.rs"]
+mod shadow;
 use crate::{tab_drag::TabDrag, window::{BrowserWindow, Overlay, OverlayKind}};
 use browser_core::{omnibox, splits::{Axis, Placement}, TabId};
 use gpui::{div, prelude::*, px, AnyElement, Bounds, Context, Pixels, Point, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions};
@@ -9,7 +13,7 @@ const OVERLAY_MARGIN: f32 = 200.;
 pub(crate) struct SplitDropPreview {
     pub source: TabId,
     pub anchor: TabId,
-    pub placement: Placement,
+    pub placement: Option<Placement>,
     pub cover: Bounds<Pixels>,
     pub outline: Bounds<Pixels>,
     retained: Bounds<Pixels>,
@@ -44,11 +48,24 @@ impl BrowserWindow {
         let frame = panes[index].frame;
         let x = (f64::from(f32::from(position.x)) - frame.x) / frame.width;
         let y = (f64::from(f32::from(position.y)) - frame.y) / frame.height;
-        let (placement, horizontal) = if split.is_some() && axis == Axis::Vertical {
-            if y < 0.25 { (Placement::Above, false) } else if y > 0.75 { (Placement::Below, false) } else { return None; }
-        } else if x < 0.25 { (Placement::Left, true) } else if x > 0.75 { (Placement::Right, true) }
-        else if split.is_none() && y < 0.25 { (Placement::Above, false) }
-        else if split.is_none() && y > 0.75 { (Placement::Below, false) } else { return None; };
+        let convert = |r: engine::Bounds| Bounds::new(gpui::point(px(r.x as f32),px(r.y as f32)),gpui::size(px(r.width as f32),px(r.height as f32)));
+        let anchor = split.map_or(anchor, |s| s.panes[index]);
+        let preview = |placement, cover, outline, retained| SplitDropPreview {
+            source: drag.id, anchor, placement, cover: convert(cover), outline: convert(outline),
+            retained: convert(retained), pointer: position, hotspot: drag.card_hotspot.get(), overlay: None, bounds: window.bounds(),
+        };
+        let direct = if split.is_some() && axis == Axis::Vertical {
+            if y < 0.25 { Some((Placement::Above, false)) } else if y > 0.75 { Some((Placement::Below, false)) } else { None }
+        } else if x < 0.25 { Some((Placement::Left, true)) } else if x > 0.75 { Some((Placement::Right, true)) }
+        else if split.is_none() && y < 0.25 { Some((Placement::Above, false)) }
+        else if split.is_none() && y > 0.75 { Some((Placement::Below, false)) } else { None };
+        // Arc retains an armed edge target when the pointer returns to the middle.
+        // Scope it to this source, pane and window geometry; leaving the page clears it.
+        let armed = self.split_drop.as_ref().filter(|old| old.source == drag.id && old.anchor == anchor && old.bounds == window.bounds())
+            .and_then(|old| old.placement).map(|placement| (placement, matches!(placement, Placement::Left | Placement::Right)));
+        let Some((placement, horizontal)) = direct.or(armed) else {
+            return Some(preview(None, frame, frame, frame));
+        };
         let before = matches!(placement, Placement::Left | Placement::Above);
         let half = if horizontal { frame.width / 2. } else { frame.height / 2. };
         let gap = crate::split_layout::GAP / 2.;
@@ -70,9 +87,7 @@ impl BrowserWindow {
             width: if horizontal { half-gap } else { frame.width },
             height: if horizontal { frame.height } else { half-gap },
         };
-        let convert = |r: engine::Bounds| Bounds::new(gpui::point(px(r.x as f32),px(r.y as f32)),gpui::size(px(r.width as f32),px(r.height as f32)));
-        Some(SplitDropPreview { source: drag.id, anchor: split.map_or(anchor, |s| s.panes[index]), placement,
-            cover: convert(cover), outline: convert(outline), retained: convert(retained), pointer: position, hotspot: drag.card_hotspot.get(), overlay: None, bounds: window.bounds() })
+        Some(preview(Some(placement), cover, outline, retained))
     }
 
     pub(crate) fn update_split_drop(&mut self, drag: &TabDrag, position: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
@@ -126,11 +141,12 @@ impl BrowserWindow {
         let target = self.split_drop_target(drag, position, window);
         self.close_split_drop(cx);
         let Some(target) = target else { return; };
+        let Some(placement) = target.placement else { return; };
         let now = SystemTime::now();
         let protected = |this: &Self, id| this.browser.is_favorite(id) || this.browser.spaces.iter().any(|s| s.pinned.iter().any(|t| t.id == id));
         let anchor = if protected(self, target.anchor) { self.edit_browser(|b| b.copy_item_to_today(target.anchor, now)).unwrap() } else { target.anchor };
         let other = if protected(self, drag.id) { self.edit_browser(|b| b.copy_item_to_today(drag.id, now)).unwrap() } else { drag.id };
-        self.edit_browser(|b| b.add_split(anchor, other, target.placement, now)).expect("validated drag split");
+        self.edit_browser(|b| b.add_split(anchor, other, placement, now)).expect("validated drag split");
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
     }
@@ -139,27 +155,30 @@ impl BrowserWindow {
         let Some(preview) = &self.split_drop else { return div().into_any_element(); };
         let margin = gpui::point(px(OVERLAY_MARGIN),px(OVERLAY_MARGIN));
         let viewport = preview.bounds.size;
-        let masks = corner_tiles(preview.retained,preview.placement,window.scale_factor());
+        let masks = preview.placement.map(|placement| corner_tiles(preview.retained,placement,window.scale_factor())).unwrap_or_default();
         let tab = self.browser.all_tabs().find(|tab| tab.id == preview.source);
         div().size_full()
-            .child(div().absolute().left(preview.cover.origin.x + margin.x).top(preview.cover.origin.y + margin.y)
+            .when(preview.placement.is_some(), |overlay| overlay.child(div().absolute().left(preview.cover.origin.x + margin.x).top(preview.cover.origin.y + margin.y)
                 .w(preview.cover.size.width).h(preview.cover.size.height)
-                .child(self.theme_region(preview.cover,viewport)))
+                .child(self.theme_region(preview.cover,viewport))))
             .children(masks.into_iter().map(|(bounds,alpha)| div().absolute()
                 .left(bounds.origin.x + margin.x).top(bounds.origin.y + margin.y)
                 .w(bounds.size.width).h(bounds.size.height).opacity(alpha)
                 .child(self.theme_region(bounds,viewport))))
             .child(div().debug_selector(|| "split-drop-outline".into()).absolute()
                 .left(preview.outline.origin.x + margin.x).top(preview.outline.origin.y + margin.y).w(preview.outline.size.width).h(preview.outline.size.height)
-                .rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).border_2().border_color(gpui::hsla(0.,0.,1.,0.55)))
+                .rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).border_2().border_color(if preview.placement.is_some() { gpui::hsla(0.,0.,1.,0.55).into() } else { gpui::rgb(0x2f39ff) }))
+            .children(tab.map(|_| gpui::img(shadow::image()).absolute()
+                .left(preview.pointer.x - preview.hotspot.x + margin.x - px(shadow::PAD))
+                .top(preview.pointer.y - preview.hotspot.y + margin.y - px(shadow::PAD))
+                .w(px(shadow::WIDTH)).h(px(shadow::HEIGHT))))
             .children(tab.map(|tab| div().debug_selector(|| "split-drag-card".into()).absolute()
                 .left(preview.pointer.x - preview.hotspot.x + margin.x).top(preview.pointer.y - preview.hotspot.y + margin.y)
-                .w(px(128.)).h(px(250.)).rounded(px(20.)).bg(gpui::rgba(0x050909f2))
-                .shadow(vec![gpui::BoxShadow {color:gpui::hsla(0.,0.,0.,0.3),offset:gpui::point(px(0.),px(6.)),blur_radius:px(16.),spread_radius:px(0.)}])
+                .w(px(128.)).h(px(250.)).rounded(px(20.)).bg(gpui::rgba(0x000000e6))
                 .flex().flex_col().items_center().justify_center().gap(px(24.))
-                .text_color(gpui::white()).text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).line_height(px(15.))
+                .font_family(".SystemUIFont").text_color(gpui::white()).text_size(px(13.)).font_weight(gpui::FontWeight::BOLD).line_height(px(16.))
                 .child(self.render_favicon_on(tab,self.browser.space().hue,true))
-                .child(div().w(px(96.)).max_h(px(30.)).overflow_hidden().text_center().child(self.browser.item_title(tab.id)))))
+                .child(div().w(px(104.)).max_h(px(48.)).whitespace_nowrap().overflow_hidden().text_center().child(title::render(&self.browser.item_title(tab.id),window)))))
             .into_any_element()
     }
 }

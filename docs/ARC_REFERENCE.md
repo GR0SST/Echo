@@ -1934,3 +1934,49 @@ Little/private normal-owner preferences; engine tests cover waveform bounds
 and multichannel buffer completion. Arc's exact acoustic trigger/timing was
 not recorded; the event cue remains blocked with deferred calendar/meeting
 commands. This work does not claim renewed media A/V measurements.
+
+
+Round 2 dragged-tab/Split reference (2026-10-25):
+`target/parity/sweep-r2/arc-drag-final/arc-motion.mov` is an 11.78-second,
+bounded recording from one owned window in Echo Test. Two unique local test
+URLs were opened with Enter, avoiding existing-tab suggestions. Every mouse
+input passed the shared window guard; the Space header was verified before
+the drag and only the owned root/known drag tracking surfaces were admitted
+while held. Test tabs were archived and the owned window closed afterwards.
+No synthetic trackpad gesture was sent to Arc.
+
+The complete `arc-center-left.png` and `arc-edge-right.png` establish a
+128 × 250 px card, 20 px corners, 90% black fill (sRGB #191919 over white,
+about #040305 over the themed edge), 13 px bold three-line title and retained
+grab position. Initial center hover outlines the full document in sRGB
+#2f39ff. After entering the right edge, returning near the center retains
+the right-half preview; release commits the two-pane Split
+(`arc-center-right.png`, `arc-after-center-drop.png`). Echo now preserves
+that armed state and renders the card in the initial center hover. Leaving
+the page clears it; a new unarmed center drag cannot reuse the old target.
+The recording has variable frame timing (197 frames, average 16.73 fps),
+so exact animation curves/settling are not claimed. Initial-center release,
+other thresholds and reorder motion remain unverified.
+
+
+Echo's passive overlay suppresses GPUI's generic row drag view in both the
+root and the Split child, preventing a second row ghost at the document edge.
+Its title is measured at 13 px bold, wrapped by grapheme into three lines and
+truncated with an ellipsis; Unicode sequences stay intact. GPUI's additive
+shadow alpha previously made a 90%-black card opaque. An original procedural
+2× hollow shadow now has zero alpha under the rounded card interior and keeps
+its exterior 16 px blur/6 px offset; no Arc bitmap is bundled. Focused tests
+cover the rendered hidden view, grapheme bounds and the hollow alpha mask.
+
+Final native comparison is under `target/parity/media-pip/sweep-r2/`:
+`pair-drag-card-zoom.png`, `pair-drag-center-return.png`, and
+`pair-drag-commit.png`. Both outer cards measure 128 × 250 px and their body
+samples over white are sRGB (25,25,25); the Arc opaque core is narrower by
+its antialiased edge. `native-card-measurements.json` retains both definitions.
+`native-drag-assertions.json` identifies the tested bundle hash and saved panes
+[3,2] with dragged pane 2 active; the process exited 0 with CEF Complete.
+Own full tests passed (1111 browser tests plus the other workspace crates).
+Fine glyph/corner raster, truncation-boundary and shadow-falloff differences,
+initial-center release and exact motion curves remain partial. The full-window
+pair also retains existing sidebar/header/theme differences outside this drag
+change; it is not a claim that those entire surfaces match.

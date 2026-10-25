@@ -22,6 +22,7 @@ pub(crate) struct TabDrag {
 }
 
 impl TabDrag {
+
     pub(crate) fn start_at(&self, owner: gpui::WeakEntity<BrowserWindow>, offset: gpui::Point<gpui::Pixels>, width: f32, height: f32, cx: &mut gpui::App) -> gpui::Entity<Self> {
         self.card_hotspot.set(gpui::point(px((f32::from(offset.x) / width).clamp(0.,1.) * 128.), px((f32::from(offset.y) / height).clamp(0.,1.) * 250. - 5.)));
         self.start(owner,cx)
@@ -267,7 +268,13 @@ impl BrowserWindow {
 }
 
 impl Render for TabDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // GPUI paints the active drag in every window. The passive page overlay
+        // already owns the tall card, so it must not paint a second row ghost.
+        let page_card = window.root::<BrowserWindow>().flatten().is_some_and(|view| view.read(cx).split_drop.is_some());
+        if page_card || window.root::<crate::window::Overlay>().flatten().is_some_and(|overlay| overlay.read(cx).draws_split_drag_card()) {
+            return div().debug_selector(|| "tab-drag-hidden".into()).into_any_element();
+        }
         let icon = if let Some(icon) = &self.icon {
             crate::icons::glyph(icon)
         } else if self.split {
@@ -284,6 +291,7 @@ impl Render for TabDrag {
             crate::icons::control(crate::icons::Icon::External)
         };
         div()
+            .debug_selector(|| "tab-drag-row".into())
             .flex()
             .items_center()
             .gap_2()
@@ -297,5 +305,6 @@ impl Render for TabDrag {
             .text_sm()
             .child(icon)
             .child(div().min_w_0().truncate().child(self.title.clone()))
+            .into_any_element()
     }
 }

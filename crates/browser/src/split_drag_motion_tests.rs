@@ -1,0 +1,146 @@
+use super::*;
+
+#[gpui::test]
+fn page_center_keeps_the_drag_card_and_an_armed_edge_survives_return_to_center(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, fake) = open_split_pages(cx, 1);
+    let anchor = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    let source = view.update(cx, |w, cx| {
+        let source =
+            w.edit_browser(|b| b.new_tab("https://dragged.example", std::time::SystemTime::now()));
+        w.edit_browser(|b| b.activate_tab(anchor, std::time::SystemTime::now()));
+        cx.notify();
+        source
+    });
+    cx.run_until_parked();
+    let start = cx
+        .debug_bounds(test_selector(format!("tab-{}", source.get())))
+        .unwrap()
+        .center();
+    let frame = cx.debug_bounds("page-surface").unwrap();
+    let before = view.read_with(cx, |w, _| {
+        w.pages.as_ref().unwrap().borrow().surface_layout()
+    });
+    fake.take_calls();
+    for armed in [false, true] {
+        cx.simulate_mouse_move(start, None, Modifiers::none());
+        cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(
+            start + gpui::point(gpui::px(8.), gpui::px(0.)),
+            gpui::MouseButton::Left,
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        if armed {
+            cx.simulate_mouse_move(
+                gpui::point(frame.right() - gpui::px(12.), frame.center().y),
+                gpui::MouseButton::Left,
+                Modifiers::none(),
+            );
+            cx.run_until_parked();
+        }
+        cx.simulate_mouse_move(frame.center(), gpui::MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        let handle = view.read_with(cx, |w, _| {
+            let preview = w.split_drop.as_ref().unwrap();
+            assert_eq!(
+                preview.placement,
+                armed.then_some(browser_core::splits::Placement::Right)
+            );
+            assert_eq!(w.pages.as_ref().unwrap().borrow().surface_layout(), before);
+            assert!(w.browser.active_split().is_none());
+            assert_eq!(w.browser.space().active_tab, Some(anchor));
+            preview.overlay.unwrap()
+        });
+        assert!(
+            cx.debug_bounds("tab-drag-hidden").is_some(),
+            "the root must render the explicit hidden drag view over the document"
+        );
+        let mut popup = VisualTestContext::from_window(handle.into(), &cx.cx);
+        popup.run_until_parked();
+        assert!(
+            popup.debug_bounds("tab-drag-row").is_none(),
+            "the passive card must not have a second row ghost"
+        );
+        let card = popup.debug_bounds("split-drag-card").unwrap();
+        assert_eq!(card.size, gpui::size(gpui::px(128.), gpui::px(250.)));
+        assert_eq!(
+            card.origin,
+            frame.center() + gpui::point(gpui::px(136.), gpui::px(80.))
+        );
+        finish_sidebar_drag(cx, frame.center());
+        view.read_with(cx, |w, _| {
+            assert!(w.split_drop.is_none());
+            if armed {
+                let split = w.browser.active_split().unwrap();
+                assert_eq!(split.panes, vec![anchor, source]);
+                assert_eq!(split.active, source);
+            } else {
+                assert!(w.browser.active_split().is_none());
+                assert_eq!(w.browser.space().active_tab, Some(anchor));
+            }
+        });
+    }
+    assert!(!fake.take_calls().iter().any(|call| matches!(
+        call,
+        Call::Close(..) | Call::Navigate(..) | Call::Reload(..)
+    )));
+}
+
+#[gpui::test]
+fn leaving_the_page_disarms_the_split_target_before_reentering_its_center(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_split_pages(cx, 1);
+    let anchor = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    let source = view.update(cx, |w, cx| {
+        let source =
+            w.edit_browser(|b| b.new_tab("https://dragged.example", std::time::SystemTime::now()));
+        w.edit_browser(|b| b.activate_tab(anchor, std::time::SystemTime::now()));
+        cx.notify();
+        source
+    });
+    cx.run_until_parked();
+    let start = cx
+        .debug_bounds(test_selector(format!("tab-{}", source.get())))
+        .unwrap()
+        .center();
+    let frame = cx.debug_bounds("page-surface").unwrap();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        start + gpui::point(gpui::px(8.), gpui::px(0.)),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.simulate_mouse_move(
+        gpui::point(frame.right() - gpui::px(12.), frame.center().y),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w
+        .split_drop
+        .as_ref()
+        .unwrap()
+        .placement
+        .is_some()));
+    cx.simulate_mouse_move(
+        gpui::point(gpui::px(100.), frame.center().y),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.split_drop.is_none()));
+    cx.simulate_mouse_move(frame.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w
+        .split_drop
+        .as_ref()
+        .unwrap()
+        .placement
+        .is_none()));
+    finish_sidebar_drag(cx, frame.center());
+    assert!(view.read_with(cx, |w, _| w.split_drop.is_none()
+        && w.browser.active_split().is_none()));
+}

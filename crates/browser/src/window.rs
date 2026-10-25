@@ -573,6 +573,8 @@ pub struct Overlay {
 }
 
 impl Overlay {
+    pub(crate) fn draws_split_drag_card(&self)->bool {matches!(self.kind,OverlayKind::SplitDrop)}
+
     pub(crate) fn belongs_to(&self,owner:gpui::EntityId)->bool {self.browser.entity_id()==owner}
 
     pub(crate) fn new(browser: WeakEntity<BrowserWindow>, kind: OverlayKind, cx: &mut Context<Self>) -> Self {
