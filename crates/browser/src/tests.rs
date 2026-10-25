@@ -10360,6 +10360,30 @@ fn air_traffic_opening_and_editing_existing_routes_preserves_rule_identity(cx: &
 }
 
 #[gpui::test]
+fn max_settings_open_at_the_top_after_scrolling_another_tab(cx: &mut TestAppContext) {
+    use echo_ai::MaxFeature;
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    scroll(&mut settings, "settings-scroll", gpui::TouchPhase::Moved, 0., -2000.);
+    click(&mut settings, "settings-tab-Max");
+    settings.run_until_parked();
+    let banner = settings.debug_bounds("max-banner").unwrap();
+    let viewport = settings.debug_bounds("settings-scroll").unwrap();
+    assert_eq!(banner.origin.y, viewport.origin.y);
+    assert_eq!(banner.size.height, gpui::px(126.));
+    click(&mut settings, "max-enable-all");
+    view.read_with(cx, |w, _| {
+        for feature in [MaxFeature::TidyTabs, MaxFeature::InstantLinks,
+            MaxFeature::FiveSecondPreviews, MaxFeature::TidyTabTitles,
+            MaxFeature::TidyDownloads, MaxFeature::ChatGptCommandBar] {
+            assert!(w.browser.settings.max.enabled(feature));
+        }
+        assert!(!w.browser.settings.max.automatically_enable_future);
+    });
+}
+
+#[gpui::test]
 fn max_settings_preserve_feature_switches_and_store_only_credential_references(cx: &mut TestAppContext) {
     use echo_ai::{credentials::{CredentialStore, CredentialError, Secret}, MaxFeature, Provider};
     use std::sync::{Arc,Mutex};

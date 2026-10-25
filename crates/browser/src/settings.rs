@@ -1288,7 +1288,7 @@ impl Render for SettingsWindow {
             )
             .child(
                 div()
-                    .id("settings-scroll").debug_selector(|| "settings-scroll".into())
+                    .id(("settings-scroll", self.tab as usize)).debug_selector(|| "settings-scroll".into())
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()

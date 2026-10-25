@@ -75,7 +75,6 @@ pub(super) struct State {
     status: String,
     busy: Option<Cancellation>,
     models: Vec<Model>,
-    banner: Arc<gpui::RenderImage>,
     _changed: Vec<Subscription>,
 }
 impl Drop for State {
@@ -125,7 +124,6 @@ impl State {
             status: String::new(),
             busy: None,
             models: Vec::new(),
-            banner: banner_image(),
             _changed: vec![changed, workspace_changed],
         }
     }
@@ -202,24 +200,29 @@ fn field(
         .bg(rgb(0x242628))
         .child(entity.clone())
 }
-fn banner_image() -> Arc<gpui::RenderImage> {
-    // Original fine-grain blue field and the reference's scalloped silhouette.
-    let image = image::RgbaImage::from_fn(684, 126, |x, y| {
-        let mut n = x
-            .wrapping_mul(374761393)
-            .wrapping_add(y.wrapping_mul(668265263));
-        n = (n ^ (n >> 13)).wrapping_mul(1274126177);
-        let noise = ((n ^ (n >> 16)) & 255) as f32 / 255. - 0.5;
-        let edge = 122.5 + 2.5 * (x as f32 * std::f32::consts::TAU / 22.).sin();
-        let alpha = ((edge - y as f32 + 0.5).clamp(0., 1.) * 255.) as u8;
-        image::Rgba([
-            255,
-            (48. + noise * 18.) as u8,
-            (45. + noise * 18.) as u8,
-            alpha,
-        ])
-    });
-    Arc::new(gpui::RenderImage::new(vec![image::Frame::new(image)]))
+// Original Echo artwork: folded ribbons, rather than the reference's brand marks.
+fn banner_art() -> impl IntoElement {
+    gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
+        let origin = bounds.origin;
+        let w = f32::from(bounds.size.width);
+        let mut field = gpui::PathBuilder::fill();
+        field.move_to(origin);
+        field.line_to(origin + point(px(w), px(0.)));
+        for x in (0..=684).rev() {
+            let y = 122.5 + 2.5 * (x as f32 * std::f32::consts::TAU / 22.).sin();
+            field.line_to(origin + point(px(x as f32 * w / 684.), px(y)));
+        }
+        field.close();
+        if let Ok(path) = field.build() { window.paint_path(path, rgb(0x5148dd)); }
+        for (x,y,size) in [(18.,18.,22.), (94.,70.,28.), (208.,24.,12.), (452.,20.,25.), (570.,73.,17.), (663.,91.,29.)] {
+            let mut ribbon = gpui::PathBuilder::stroke(px(2.5));
+            for (i,(dx,dy)) in [(0.,0.),(size,0.),(0.,size),(size,size)].into_iter().enumerate() {
+                let p = origin + point(px(x+dx),px(y+dy));
+                if i==0 { ribbon.move_to(p); } else { ribbon.line_to(p); }
+            }
+            if let Ok(path) = ribbon.build() { window.paint_path(path, rgb(0xffbaa8)); }
+        }
+    }).absolute().inset_0()
 }
 fn preview(index: usize, icon: &'static str) -> gpui::Div {
     let colors = [0xd8d1ef, 0x72bed4, 0xb9c9ef, 0xd2c5ef, 0x9cd3cf, 0x71a0d5];
@@ -502,8 +505,9 @@ impl SettingsWindow {
         let settings = self.profile.read_settings(|b| b.settings.max.clone());
         let all = FEATURES.iter().all(|(f, _, _, _)| settings.enabled(*f));
         let provider = settings.provider.provider;
-        let artwork = self.max.banner.clone();
         let banner = div()
+            .id("max-banner")
+            .debug_selector(|| "max-banner".into())
             .w_full()
             .h(px(126.))
             .relative()
@@ -514,33 +518,8 @@ impl SettingsWindow {
             .text_size(px(44.))
             .font_weight(gpui::FontWeight::BOLD)
             .text_color(rgb(0xffffff))
-            .child(
-                gpui::canvas(
-                    |_, _, _| (),
-                    move |bounds, _, window, _| {
-                        let _ = window.paint_image(bounds, Default::default(), artwork, 0, false);
-                    },
-                )
-                .absolute()
-                .inset_0(),
-            )
-            .child("Max")
-            .child(
-                div()
-                    .absolute()
-                    .left(px(82.))
-                    .top(px(52.))
-                    .text_color(rgb(0xffa1a9))
-                    .child(icons::ionicon("color-wand-outline", 36., 1.)),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .right(px(170.))
-                    .top(px(40.))
-                    .text_color(rgb(0xffa1a9))
-                    .child(icons::ionicon("color-wand-outline", 24., 1.)),
-            );
+            .child(banner_art())
+            .child("Max");
         let enable = group()
             .px(px(12.))
             .child(
@@ -772,7 +751,7 @@ impl SettingsWindow {
                 .text_color(rgb(0xaaaeb0))
                 .child(self.max.status.clone()),
         );
-        div().w(px(684.)).flex().flex_col().child(banner)
+        div().w(px(684.)).flex_none().flex().flex_col().child(banner)
             .child(div().px(px(64.)).pt(px(24.)).pb(px(20.)).flex().flex_col().gap(px(24.))
                 .child(div().h(px(34.)).px(px(5.)).child("Let Echo do more for you with Max, so you can do less. Power up your browsing with AI and spend time on the things that matter — on or off screen."))
                 .child(enable).child(features)

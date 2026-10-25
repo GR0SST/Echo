@@ -1844,6 +1844,19 @@ background thread before automation; a fresh private-profile retry completed
 normally. The exact startup cause remains unresolved, with a stripped summary
 in `max-colors-startup-crash.json`.
 
+Round 2 Max top-section recheck (2026-10-25):
+`target/parity/arc-max/arc_max_round2.png` is a fresh, guarded, read-only
+684 × 650 capture. Header ends at y=88; banner occupies 126 px; introduction
+starts around y=242; Enable Max group spans x=64…620, y=296…380; first
+feature group begins around y=404. All seven Max checkbox values were identical
+before and after (`max-round2-settings-readonly.json`). The earlier
+`echo_max_features.png` was scrolled; `echo_max.png` already showed the top
+controls. Echo now isolates Settings scroll state by tab and replaces its
+banner decoration with original indigo/peach folded-ribbon vector artwork.
+The artwork intentionally differs from Arc's protected flower and wordmark.
+Native comparison: `echo_max_round2_top.png` against `arc_max_round2.png`,
+both 684 × 650; reviewed directly. CEF exited cleanly (status 0).
+
 Ask on Page still exposes no Ask control in the installed desktop Command-F
 flow, including the available permitted Max flags. There is no separate Ask
 toggle in this build. Browse for Me captions exist in the bundle (52626–52635)
