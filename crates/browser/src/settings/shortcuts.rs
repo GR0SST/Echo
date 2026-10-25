@@ -6,6 +6,7 @@ pub(super) struct State {
     pub armed: bool,
     extension: Option<(String,String,browser_core::UserProfileId)>,
     extension_error: Option<String>,
+    pub priority_subject: Option<(String, Option<String>)>,
     pub focus: FocusHandle,
     _interceptor: Subscription,
 }
@@ -29,6 +30,7 @@ impl State {
             armed: false,
             extension: None,
             extension_error: None,
+            priority_subject: None,
             focus: cx.focus_handle(),
             _interceptor: interceptor,
         }
@@ -110,6 +112,94 @@ impl SettingsWindow {
         self.shortcuts.armed = false;
         cx.notify();
         true
+    }
+    pub(super) fn shortcut_priority_options(&self) -> Vec<(String, bool)> {
+        let Some((id, _)) = self.shortcuts.priority_subject.as_ref() else {
+            return Vec::new();
+        };
+        let priority = self
+            .profile
+            .settings_snapshot()
+            .settings
+            .shortcuts
+            .priority(id, runtime::default_priority(id));
+        priority_choices()
+            .into_iter()
+            .map(|(value, label, _)| (label.into(), value == priority))
+            .collect()
+    }
+    pub(super) fn choose_shortcut_priority(&mut self, index: usize, cx: &mut Context<Self>) {
+        let subject = self.shortcuts.priority_subject.take();
+        let Some((priority, _, _)) = priority_choices().get(index).copied() else {
+            return;
+        };
+        let Some(subject) = subject.filter(|subject| {
+            self.shortcut_menu_subject().as_ref() == Some(subject)
+                && subject.1.is_some()
+                && self.shortcut_supported(&subject.0, cx)
+        }) else {
+            return;
+        };
+        self.profile
+            .edit_settings(|browser| browser.settings.shortcuts.set_priority(subject.0, priority));
+        runtime::apply(&self.profile.settings_snapshot().settings.shortcuts, cx);
+        cx.notify();
+    }
+    fn shortcut_priority_panel(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let priority = self
+            .profile
+            .settings_snapshot()
+            .settings
+            .shortcuts
+            .priority(id, runtime::default_priority(id));
+        let (_, label, description) = priority_choices()
+            .into_iter()
+            .find(|(value, _, _)| *value == priority)
+            .unwrap();
+        div()
+            .absolute()
+            .top(px(168.))
+            .left_0()
+            .w(px(200.))
+            .border_t_1()
+            .border_color(self.colors.rgb(0x3e3f41))
+            .pt(px(16.))
+            .child(
+                self.settings_button(label)
+                    .id("shortcut-priority")
+                    .debug_selector(|| "shortcut-priority".into())
+                    .w(px(144.))
+                    .px(px(12.))
+                    .justify_between()
+                    .child(popup_chevrons())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.close_shortcuts_menu(cx);
+                        this.shortcuts.armed = false;
+                        if this.popup == Some(Popup::ShortcutPriority) {
+                            this.popup = None;
+                        } else {
+                            this.shortcuts.priority_subject = this.shortcut_menu_subject();
+                            this.popup = Some(Popup::ShortcutPriority);
+                            this.popup_selection = this
+                                .shortcut_priority_options()
+                                .iter()
+                                .position(|(_, selected)| *selected)
+                                .unwrap_or(0);
+                            this.popup_keyboard = false;
+                        }
+                        this.focus.focus(window);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .mt(px(8.))
+                    .text_size(px(11.))
+                    .line_height(px(14.))
+                    .text_color(self.colors.rgb(0x929494))
+                    .child(description),
+            )
+            .into_any_element()
     }
     pub(super) fn edit_shortcut(&mut self, id: &str, value: Option<String>, cx: &mut Context<Self>) {
         self.profile
@@ -249,6 +339,7 @@ impl SettingsWindow {
             let supported = runtime::supported(&id, runtime::default_key(&default).as_deref(), cx);
             let reset_id = id.clone();
             div()
+                .relative()
                 .flex()
                 .flex_col()
                 .w(px(200.))
@@ -303,6 +394,7 @@ impl SettingsWindow {
                             .child("Adds a new page to your current Split View."),
                     )
                 })
+                .when(supported && value.is_some(), |panel| panel.child(self.shortcut_priority_panel(&id, cx)))
                 .child(div().flex_1())
                 .child(div().h(px(24.)).w(px(200.)).flex().gap(px(4.))
                     .child(self.settings_button("Reset Shortcut to Default")
@@ -631,4 +723,13 @@ fn conflict_marker() -> AnyElement {
     )
     .size(px(12.))
     .into_any_element()
+}
+
+fn priority_choices() -> [(browser_core::shortcuts::ShortcutPriority, &'static str, &'static str);3] {
+    use browser_core::shortcuts::ShortcutPriority::*;
+    [
+        (PreferWebsites,"Prefer Websites","When shortcuts conflict, the website wins."),
+        (UseBoth,"Use Both","Press this shortcut once to use the website’s shortcut. Press it twice to use Echo’s shortcut."),
+        (PreferBrowser,"Prefer Echo","When shortcuts conflict, Echo wins."),
+    ]
 }

@@ -279,3 +279,23 @@ pair is `pair-quit-settings-owner-2x.png`, all beneath
 `target/parity/partial-closeout/`. OS/no-browser and other auxiliary-host entry
 conditions remain unqualified. The remaining card/font/Light/motion differences
 are cosmetic and deferred. No row is promoted to done on that evidence.
+
+## Round 3 — website/browser shortcut priority
+
+Supported action rows now expose Arc's three priority choices. Policies persist
+independently of bindings, follow the winning assignment after conflict removal,
+and reach each retained native page. The macOS key-equivalent adapter prevents
+GPUI/application menus from preempting website-first keys, including the current
+Ukrainian-PC command layout. Chromium supplies unhandled fallback; Use Both
+preserves website delivery for both presses and queues the browser once for the
+second press. Native Arc observations bracket its six-second window.
+
+All six disposable Echo native cases passed, including cold policy load,
+handled/unhandled fallback, fast and 5.4-second pairs, 6.1-second expiry and clean
+CEF exit. Native picker keyboard selection persisted to disk and Settings closed
+in the same session. Full tests passed: 1,264 browser, 267 core, 185 engine, and
+the remaining workspace suites. Reviewed pairs and receipts are recorded in
+[the priority reference](PROFILES_SETTINGS_REFERENCE.md#round-3-shortcut-priority).
+The row remains partial for extension/Space/Favorites-ordering routes, Reset All
+priority scope and additional native layouts/platforms. Visual differences are
+cosmetic; no other parity section was changed.

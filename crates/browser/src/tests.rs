@@ -304,6 +304,8 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    shortcut_keys: Vec<engine::Shortcut>,
+    shortcut_priorities: Vec<(engine::Shortcut, engine::ShortcutPriority)>,
     data_clear_reply: Option<Rc<RefCell<Option<Result<(),String>>>>>,
     preview_tokens: std::collections::HashMap<u64,u64>,
     archive_data: Option<Vec<u8>>,
@@ -391,6 +393,9 @@ impl WebEngine for FakeEngine {
     fn complete_extension_model_request(&self, request: &engine::ExtensionModelRequest, result:serde_json::Value)->Result<(),String> {
         self.0.borrow_mut().extension_model_results.push((request.token,result)); Ok(())
     }
+    fn set_shortcuts(&mut self, keys: Vec<engine::Shortcut>) { self.0.borrow_mut().shortcut_keys=keys; }
+    fn set_shortcut_priorities(&mut self, priorities: Vec<(engine::Shortcut,engine::ShortcutPriority)>) { self.0.borrow_mut().shortcut_priorities=priorities; }
+
     fn clear_browsing_data(&mut self,storage:&crate::pages::StorageSelection,mask:u32,since:i64)->Result<crate::pages::NativeDataClear,String>{self.call(Call::ClearBrowsingData(storage.clone(),mask,since));let reply=self.0.borrow().data_clear_reply.clone().unwrap_or_else(||Rc::new(RefCell::new(Some(Ok(())))));Ok(Box::new(move||reply.borrow_mut().take()))}
 
     fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.call(Call::PasswordFill(raw(view),token,origin.into(),credential.clone()));true}

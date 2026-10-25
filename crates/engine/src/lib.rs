@@ -48,6 +48,10 @@ mod capture;
 pub use capture::MediaCaptureState;
 mod editing;
 mod extension_store;
+mod keyboard_priority;
+pub use keyboard_priority::ShortcutPriority;
+#[cfg(target_os = "macos")]
+mod mac_shortcuts;
 mod document_color;
 mod boosts;
 mod site_info;
@@ -208,7 +212,7 @@ enum RawEvent {
 pub mod page_context;
 mod routed_events;
 type EventQueue = routed_events::RoutedEvents<RawEvent>;
-type Shortcuts = Arc<Mutex<Vec<Shortcut>>>;
+type Shortcuts = Arc<Mutex<keyboard_priority::Configuration>>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PeekPolicy {
@@ -381,7 +385,7 @@ impl Engine {
     pub fn start(data_dir: &Path, shortcuts: Vec<Shortcut>) -> Result<Self, String> {
         let runtime = Self::start_runtime(data_dir)?;
         let context = runtime.default_context()?;
-        Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(shortcuts))))
+        Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(keyboard_priority::Configuration::new(shortcuts)))))
     }
 
     fn start_runtime(data_dir: &Path) -> Result<std::rc::Rc<Runtime>, String> {
@@ -510,7 +514,7 @@ impl Engine {
             runtime.readiness.track(&context, ready);
             context
         };
-        Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(shortcuts))))
+        Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(keyboard_priority::Configuration::new(shortcuts)))))
     }
 
     /// Creates an empty, independent page pool using this engine's actual
@@ -842,12 +846,12 @@ impl Engine {
             extra = Some(dictionary);
         }
         let policy = Arc::new(Mutex::new(PeekPolicy::default()));
-        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture), focusable);
+        let mut client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None, self._runtime.lifecycle.queue.clone(), None, None, policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture), focusable, Arc::default());
         if let ViewRole::Inspector(id) = role {
             let dictionary = dictionary_value_create()?;
             dictionary.set_string(Some(&CefString::from(devtools_renderer::ROLE_KEY)), Some(&CefString::from(id.0.to_string().as_str())));
             extra = Some(dictionary);
-            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default(), None, focusable);
+            client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), Some((id, self.inspectors.queue.clone())), self._runtime.lifecycle.queue.clone(), None, None, Arc::default(), Arc::default(), None, focusable, Arc::default());
         }
         if role == ViewRole::Page {
             if extra.is_none() { extra = dictionary_value_create(); }
@@ -870,7 +874,7 @@ impl Engine {
         if let Some(prepared) = &prepared_downloads {
             client = EngineClient::new(self.events.clone(), self.shortcuts.clone(), None,
                 runtime.lifecycle.queue.clone(), Some(prepared.registration.handler()),
-                Some(prepared.registration.gate()), policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture), focusable);
+                Some(prepared.registration.gate()), policy.clone(), boost_state.clone(), self._runtime.audio.as_ref().map(audio::Output::capture), focusable, Arc::default());
         }
         let mut native_context = context.as_ref().clone();
         let browser = browser_host_create_browser_sync(
@@ -925,6 +929,7 @@ impl Engine {
         if role == ViewRole::Page {
             page_swipe::register(browser.clone(),self.events.clone(),self.message_ids.clone());
             #[cfg(target_os="macos")] mac::register_page_scroll(browser.identifier(),page_view);
+            #[cfg(target_os="macos")] mac_shortcuts::register(browser.identifier(), page_view, self.shortcuts.clone());
         }
         self.views.insert(
             id,
@@ -1042,7 +1047,11 @@ impl Engine {
     /// Updates keyboard capture for existing pages and shared-storage forks.
     /// This changes only the shared callback data; it never calls CEF.
     pub fn set_shortcuts(&mut self, shortcuts: Vec<Shortcut>) {
-        *self.shortcuts.lock().unwrap() = shortcuts;
+        self.shortcuts.lock().unwrap().set_keys(shortcuts);
+    }
+
+    pub fn set_shortcut_priorities(&mut self, priorities: Vec<(Shortcut, ShortcutPriority)>) {
+        self.shortcuts.lock().unwrap().set_priorities(priorities);
     }
 
     pub fn set_peek_policy(&mut self, id: ViewId, policy: PeekPolicy) {
@@ -1445,6 +1454,7 @@ impl Engine {
             page_context::forget(view.browser.identifier());
             page_swipe::forget(view.browser.identifier());
             #[cfg(target_os="macos")] mac::forget_page_scroll(view.browser.identifier());
+            #[cfg(target_os="macos")] mac_shortcuts::forget(view.browser.identifier());
             self.by_browser_id.remove(&view.browser.identifier());
             if let Some(audio) = &self._runtime.audio { audio.close(view.browser.identifier()); }
             // Runtime owns the exact context and child host until OnBeforeClose.
@@ -1562,6 +1572,7 @@ wrap_client! {
         boosts: Arc<Mutex<Vec<SiteBoost>>>,
         audio: Option<audio::Capture>,
         focusable: bool,
+        keyboard_state: Arc<Mutex<keyboard_priority::State>>,
     }
 
     impl Client {
@@ -1642,7 +1653,7 @@ wrap_client! {
             Some(self.downloads.clone().unwrap_or_else(downloads::denied_handler))
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
-            Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone(), self.policy.clone()))
+            Some(EngineKeyboardHandler::new(self.events.clone(), self.shortcuts.clone(), self.policy.clone(), self.keyboard_state.clone()))
         }
 
         fn display_handler(&self) -> Option<DisplayHandler> {
@@ -1657,7 +1668,7 @@ wrap_client! {
         }
 
         fn load_handler(&self) -> Option<LoadHandler> {
-            Some(EngineLoadHandler::new(self.events.clone(), self.download_gate.clone()))
+            Some(EngineLoadHandler::new(self.events.clone(), self.download_gate.clone(), self.keyboard_state.clone()))
         }
 
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
@@ -1818,6 +1829,7 @@ wrap_load_handler! {
     struct EngineLoadHandler {
         events: EventQueue,
         download_gate: Option<downloads::DownloadGate>,
+        keyboard_state: Arc<Mutex<keyboard_priority::State>>,
     }
 
     impl LoadHandler {
@@ -1847,6 +1859,7 @@ wrap_load_handler! {
             can_go_back: ::std::os::raw::c_int,
             can_go_forward: ::std::os::raw::c_int,
         ) {
+            if is_loading != 0 { self.keyboard_state.lock().unwrap().reset(); }
             let event = RawEvent::Loading(is_loading != 0, can_go_back != 0, can_go_forward != 0);
             push(&self.events, browser, event);
         }
@@ -1914,6 +1927,7 @@ wrap_life_span_handler! {
                 capture::destroyed(browser.identifier());
                 page_swipe::forget(browser.identifier());
                 #[cfg(target_os="macos")] mac::forget_page_scroll(browser.identifier());
+                #[cfg(target_os="macos")] mac_shortcuts::forget(browser.identifier());
             }
         }
 
@@ -1942,7 +1956,6 @@ const VKEY_LEFT: i32 = 0x25;
 const VKEY_UP: i32 = 0x26;
 const VKEY_RIGHT: i32 = 0x27;
 const VKEY_DOWN: i32 = 0x28;
-const VKEY_F12: i32 = 0x7b;
 
 fn shortcut_for(event: &KeyEvent) -> Shortcut {
     shortcut_for_platform(event, cfg!(target_os = "macos"))
@@ -1955,13 +1968,21 @@ fn shortcut_for_platform(event: &KeyEvent, macos: bool) -> Shortcut {
         || (!macos && has(sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN));
     let key = match event.windows_key_code {
         0x1b => "escape".to_string(),
+        0x08 => "backspace".to_string(),
         0x0d => "enter".to_string(),
+        0x20 => "space".to_string(),
+        0x21 => "pageup".to_string(),
+        0x22 => "pagedown".to_string(),
+        0x23 => "end".to_string(),
+        0x24 => "home".to_string(),
+        0x2d => "insert".to_string(),
+        0x2e => "delete".to_string(),
         VKEY_TAB => "tab".to_string(),
         VKEY_LEFT => "left".to_string(),
         VKEY_UP => "up".to_string(),
         VKEY_RIGHT => "right".to_string(),
         VKEY_DOWN => "down".to_string(),
-        VKEY_F12 => "f12".to_string(),
+        code @ 0x70..=0x87 => format!("f{}", code - 0x70 + 1),
         // CEF's unmodified character still follows the active layout and
         // Shift. Command chords use its logical virtual key so Cyrillic (and
         // shifted digit punctuation) cannot hide registered browser bindings.
@@ -2001,6 +2022,7 @@ wrap_keyboard_handler! {
         events: EventQueue,
         shortcuts: Shortcuts,
         policy: Arc<Mutex<PeekPolicy>>,
+        state: Arc<Mutex<keyboard_priority::State>>,
     }
 
     impl KeyboardHandler {
@@ -2008,9 +2030,10 @@ wrap_keyboard_handler! {
             &self,
             browser: Option<&mut Browser>,
             event: Option<&KeyEvent>,
-            _os_event: host::KeyEvent<'_>,
-            _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
+            os_event: host::KeyEvent<'_>,
+            is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
+            let mut browser = browser;
             let Some(event) = event else {
                 return 0;
             };
@@ -2030,10 +2053,41 @@ wrap_keyboard_handler! {
                 return i32::from(shortcut_key_down(event.type_) && browser.as_ref().is_some_and(|browser|
                     extensions::dispatch_key(browser.identifier(), event.windows_key_code, event.modifiers)));
             };
-            if shortcut.key == "z" {
-                if let Some(browser) = browser.as_ref() { self.events.push((browser.identifier(), RawEvent::EditFocus(false))); }
+            let stamp = host::key_event_stamp(&os_event);
+            let decision = if peek_escape { keyboard_priority::Before::Browser } else {
+                let configuration = self.shortcuts.lock().unwrap();
+                let priority = configuration.priority(&shortcut);
+                self.state.lock().unwrap().before(configuration.revision, shortcut.clone(), priority, stamp,
+                    event.modifiers & sys::cef_event_flags_t::EVENTFLAG_IS_REPEAT.0 != 0,
+                    std::time::Instant::now())
+            };
+
+            if decision != keyboard_priority::Before::Website {
+                if shortcut.key == "z" { push(&self.events, browser.as_deref_mut(), RawEvent::EditFocus(false)); }
+                push(&self.events, browser.as_deref_mut(), RawEvent::Shortcut(shortcut));
             }
-            push(&self.events, browser, RawEvent::Shortcut(shortcut));
+            if decision == keyboard_priority::Before::Browser { return 1; }
+            if let Some(flag) = is_keyboard_shortcut { *flag = 1; }
+            // Use Both's second press also reaches the website. Its pending
+            // native identity prevents a second dispatch if it goes unhandled.
+            0
+        }
+        fn on_key_event(
+            &self, browser: Option<&mut Browser>, event: Option<&KeyEvent>, os_event: host::KeyEvent<'_>,
+        ) -> ::std::os::raw::c_int {
+            let mut browser = browser;
+            let Some(event) = event else { return 0; };
+            let stamp = host::key_event_stamp(&os_event);
+            let configuration = self.shortcuts.lock().unwrap();
+            let Some(shortcut) = intercepted_shortcut(event, &configuration) else { return 0; };
+            if configuration.priority(&shortcut) == ShortcutPriority::PreferBrowser { return 0; }
+            let dispatch = self.state.lock().unwrap().unhandled(configuration.revision, &shortcut, stamp);
+
+            drop(configuration);
+            if dispatch {
+                if shortcut.key == "z" { push(&self.events, browser.as_deref_mut(), RawEvent::EditFocus(false)); }
+                push(&self.events, browser, RawEvent::Shortcut(shortcut));
+            }
             1
         }
     }
@@ -2163,12 +2217,12 @@ mod tests {
 
     #[test]
     fn shortcut_callbacks_observe_replacement_and_removal_through_a_shared_fork() {
-        let live: Shortcuts=Arc::new(Mutex::new(Vec::new()));
+        let live: Shortcuts=Arc::new(Mutex::new(keyboard_priority::Configuration::new(Vec::new())));
         let fork=live.clone();
         let event=KeyEvent {type_:KeyEventType::RAWKEYDOWN,windows_key_code:b'1'.into(),unmodified_character:b'1'.into(),modifiers:sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 | sys::cef_event_flags_t::EVENTFLAG_ALT_DOWN.0,..Default::default()};
         let custom=Shortcut {ctrl:true,alt:true,key:"1".into(),..Default::default()};
         assert_eq!(intercepted_shortcut(&event,&fork.lock().unwrap()),None);
-        *live.lock().unwrap()=vec![custom.clone()];
+        live.lock().unwrap().set_keys(vec![custom.clone()]);
         assert_eq!(intercepted_shortcut(&event,&fork.lock().unwrap()),Some(custom));
         live.lock().unwrap().clear();
         assert_eq!(intercepted_shortcut(&event,&fork.lock().unwrap()),None);
@@ -2218,6 +2272,15 @@ mod tests {
                 let event = KeyEvent { windows_key_code: 0x0d, unmodified_character: character, ..Default::default() };
                 assert_eq!(shortcut_for_platform(&event, macos).key, "enter");
             }
+        }
+    }
+
+    #[test]
+    fn recorded_named_shortcuts_keep_their_names_in_chromium_callbacks() {
+        for (code, name) in [(0x20, "space"), (0x24, "home"), (0x22, "pagedown"), (0x70, "f1"), (0x78, "f9"), (0x87, "f24")] {
+            let event = KeyEvent { type_: KeyEventType::RAWKEYDOWN, windows_key_code: code, unmodified_character: 0, ..Default::default() };
+            let shortcut = Shortcut { key: name.into(), ..Default::default() };
+            assert_eq!(intercepted_shortcut(&event, &[shortcut.clone()]), Some(shortcut));
         }
     }
 

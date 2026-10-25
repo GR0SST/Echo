@@ -277,3 +277,157 @@ fn stale_shortcut_conflict_menu_does_not_delete_a_new_assignment(cx: &mut TestAp
         );
     });
 }
+
+#[gpui::test]
+fn observed_default_shortcut_priorities_reach_pages_without_a_custom_binding(
+    cx: &mut TestAppContext,
+) {
+    let (_, _, fake) = open_pages(cx);
+    let state = fake.0.borrow();
+    for notation in [
+        "cmd-r",
+        "cmd-shift-r",
+        "cmd-f",
+        "cmd-g",
+        "cmd-shift-g",
+        "cmd-1",
+        "cmd-8",
+        "cmd-9",
+    ] {
+        let key = crate::shortcuts::to_engine(&gpui::Keystroke::parse(notation).unwrap());
+        assert!(
+            state
+                .shortcut_priorities
+                .contains(&(key, engine::ShortcutPriority::PreferWebsites)),
+            "missing website priority for {notation}"
+        );
+    }
+}
+
+#[gpui::test]
+fn shortcut_priority_picker_updates_live_page_rules_and_key_reset_keeps_the_policy(
+    cx: &mut TestAppContext,
+) {
+    use browser_core::shortcuts::ShortcutPriority as Model;
+    let (view, cx, fake) = open_pages(cx);
+    let key = crate::shortcuts::to_engine(&gpui::Keystroke::parse("cmd-shift-c").unwrap());
+    assert!(fake
+        .0
+        .borrow()
+        .shortcut_priorities
+        .contains(&(key.clone(), engine::ShortcutPriority::PreferBrowser)));
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    search_shortcuts(&settings, &mut visual, "Copy URL");
+    click(&mut visual, "shortcut-select-Copy URL");
+    click(&mut visual, "shortcut-priority");
+    assert!(visual.debug_bounds("settings-choice-0").is_some());
+    visual.simulate_keystrokes("up enter");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |v, _| v
+            .profile
+            .handle
+            .settings_snapshot()
+            .settings
+            .shortcuts
+            .priority("Copy URL", Model::PreferBrowser)),
+        Model::UseBoth
+    );
+    assert!(fake
+        .0
+        .borrow()
+        .shortcut_priorities
+        .contains(&(key.clone(), engine::ShortcutPriority::UseBoth)));
+    click(&mut visual, "reset-one-shortcut");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |v, _| v
+            .profile
+            .handle
+            .settings_snapshot()
+            .settings
+            .shortcuts
+            .priority("Copy URL", Model::PreferBrowser)),
+        Model::UseBoth
+    );
+    click(&mut visual, "shortcut-priority");
+    click(&mut visual, "settings-choice-0");
+    cx.run_until_parked();
+    assert!(fake
+        .0
+        .borrow()
+        .shortcut_priorities
+        .contains(&(key, engine::ShortcutPriority::PreferWebsites)));
+}
+
+#[gpui::test]
+fn shortcut_priority_follows_the_winning_browser_assignment_after_conflict_removal(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, fake) = open_pages(cx);
+    let key = crate::shortcuts::to_engine(&gpui::Keystroke::parse("cmd-r").unwrap());
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    search_shortcuts(&settings, &mut visual, "Copy URL");
+    click(&mut visual, "shortcut-record-Copy URL");
+    visual.simulate_keystrokes("cmd-r");
+    click(&mut visual, "shortcut-priority");
+    click(&mut visual, "settings-choice-2");
+    cx.run_until_parked();
+    // Refresh still owns this conflicting binding until explicitly removed.
+    assert!(fake
+        .0
+        .borrow()
+        .shortcut_priorities
+        .contains(&(key.clone(), engine::ShortcutPriority::PreferWebsites)));
+    click(&mut visual, "shortcut-footer-more");
+    let menu = settings.read_with(&mut visual, |settings, _| {
+        settings.shortcut_footer_window().unwrap()
+    });
+    let mut menu = VisualTestContext::from_window(menu, &visual.cx);
+    menu.run_until_parked();
+    click(&mut menu, "shortcut-menu-remove-conflicts");
+    cx.run_until_parked();
+    assert!(fake
+        .0
+        .borrow()
+        .shortcut_priorities
+        .contains(&(key, engine::ShortcutPriority::PreferBrowser)));
+    assert_eq!(
+        view.read_with(cx, |v, _| v
+            .profile
+            .handle
+            .settings_snapshot()
+            .settings
+            .shortcuts
+            .bindings
+            .get("Refresh the Page")
+            .cloned()),
+        Some(None)
+    );
+}
+
+#[gpui::test]
+fn stale_shortcut_priority_menu_cannot_change_a_removed_assignment(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (settings, mut visual) = settings_window(cx);
+    search_shortcuts(&settings, &mut visual, "Copy URL");
+    click(&mut visual, "shortcut-select-Copy URL");
+    click(&mut visual, "shortcut-priority");
+    view.update(cx, |v, _| {
+        v.profile
+            .handle
+            .edit_settings(|browser| browser.settings.shortcuts.set("Copy URL", None))
+    });
+    click(&mut visual, "settings-choice-0");
+    assert!(!view.read_with(cx, |v, _| v
+        .profile
+        .handle
+        .settings_snapshot()
+        .settings
+        .shortcuts
+        .priorities
+        .contains_key("Copy URL")));
+}

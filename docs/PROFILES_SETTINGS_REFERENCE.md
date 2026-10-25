@@ -373,3 +373,63 @@ bounds, Escape returning to that host, preservation of the first root and exit
 for the native receipt and the reused-layout Arc/Echo card pair. OS/no-browser
 and other auxiliary-host policy remain partial; remaining Light/raster/motion
 work is cosmetic.
+
+## Round 3 shortcut priority
+
+Guarded disposable-page probes in Echo Test establish the three priority
+choices and descriptions. Prefer Arc consumes Copy URL before the website;
+Prefer Websites lets a prevented event stay with the website and falls back to
+Copy URL when the website leaves it unhandled. Use Both delivers both shortcut
+presses to the website and also performs Copy URL on the second press. The
+browser action must therefore not consume that second website event. Reset
+Shortcut to Default restores the binding while retaining its independent Use
+Both policy. Every temporary Copy URL policy was restored to Prefer Arc, its
+original binding was preserved, and the sessions closed Settings and their own
+browser without changing baseline windows.
+
+Source receipts under `target/parity/partial-closeout/`:
+`arc-shortcut-copy-policies-r3.log`, `arc-shortcut-use-both-r3.log`,
+`arc-shortcut-use-both-results.json`, and
+`arc-shortcut-defaults-r3.json`. The latter records the currently installed
+policies, including owner-customized actions; it does not establish that a
+customized binding is Arc's factory default. Reference images include
+`arc-policy-prefer-browser.png` and `arc-policy-prefer-website.png`.
+
+The isolated source boundary probes are
+`arc-shortcut-boundary-isolated-r3.log` and
+`arc-shortcut-boundary-fine-r3.log`. A prevented second press activates Copy URL
+at a measured 5,633 ms gap and does not activate at 6,038 ms. The implementation
+uses a six-second window. An ordinary X key and a Command Bar focus cycle do not
+clear the pending first press (`arc-shortcut-consecutive-fresh-r3.log`). The
+read-only expanded policy scan is `arc-shortcut-defaults-remaining-r3.json`.
+
+The first native Echo probe exposed GPUI handling command-key equivalents
+before CEF. A macOS adapter now forwards website-priority keys to the registered
+focused Chromium responder before menu/toolkit equivalents; the shared engine
+handler still controls website delivery and unhandled fallback. No CEF patch or
+Chromium build is involved. Native `echo-priority-matrix-r3.log` qualifies all
+three policies, handled/unhandled fallback, fast pairs, a delayed 5.4-second
+pair and expiry after 6.1 seconds, with both keys reaching the prevented site.
+Every case cold-loads its saved policy and exits with CEF Complete / status 0.
+The current Ukrainian-PC input layout requires ASCII command-key normalization;
+ASCII-capable layouts retain their own logical characters. Other platform/layout
+variants remain unqualified. `echo-priority-picker-persist-r3.log` verifies native
+keyboard selection, disk persistence and same-session Settings closure. The
+native Settings picker has enlarged reviewed pairs
+`pair-shortcut-priority-2x.png` and
+`pair-shortcut-priority-menu-2x.png`. Menu material, typography and hover-state
+differences remain cosmetic.
+
+The tested private bundle contains the unchanged canonical framework
+`20261025T192350Z-5008`, SHA-256
+`55a60b71fd32579a392ee53f337a908cecb7b0f012971d6ad3317b4a32ec82aa`.
+The executable was rebuilt in a frozen copy of that complete bundle; helper
+protocols and the framework were unchanged. Full Rust validation passed
+1,264 browser, 267 core and 185 engine tests, plus the remaining workspace
+suites (`priority-production-full.log`). Individual reset/priority independence,
+stale selection/conflict ownership, default live rules, renderer fallback, late
+acknowledgements, native input timing, function-key names and layout
+normalization have regression coverage. The Shortcuts row remains partial for
+extension/Space/Favorites-ordering routes, the unobserved Reset All priority
+scope and additional native layouts/platforms. Its remaining visual differences
+are cosmetic.

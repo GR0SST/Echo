@@ -103,6 +103,8 @@ impl SettingsWindow {
         if crate::quit::is_quitting() {
             return;
         }
+        self.popup = None;
+        self.shortcuts.priority_subject = None;
         let subject = self.shortcut_menu_subject();
         let conflicts = subject
             .as_ref()

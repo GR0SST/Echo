@@ -166,6 +166,7 @@ pub trait WebEngine {
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
     fn set_link_preview(&mut self, _view: ViewId, _token: u64) {}
     fn set_shortcuts(&mut self, _shortcuts: Vec<engine::Shortcut>) {}
+    fn set_shortcut_priorities(&mut self, _priorities: Vec<(engine::Shortcut, engine::ShortcutPriority)>) {}
     fn set_peek_policy(&mut self, _view: ViewId, _policy: engine::PeekPolicy) {}
     fn set_corner_radius(&mut self, _view: ViewId, _radius: f64) {}
     fn set_visible(&mut self, view: ViewId, visible: bool);
@@ -303,6 +304,7 @@ impl WebEngine for Chromium {
     fn set_page_context_policy(&mut self, view: ViewId, policy: engine::page_context::Policy) { self.engine.set_page_context_policy(view, policy); }
     fn set_link_preview(&mut self, view: ViewId, token: u64) { self.engine.set_link_preview(view, token); }
     fn set_shortcuts(&mut self, shortcuts: Vec<engine::Shortcut>) { self.engine.set_shortcuts(shortcuts); }
+    fn set_shortcut_priorities(&mut self, priorities: Vec<(engine::Shortcut, engine::ShortcutPriority)>) { self.engine.set_shortcut_priorities(priorities); }
     fn set_peek_policy(&mut self, view: ViewId, policy: engine::PeekPolicy) { self.engine.set_peek_policy(view, policy); }
     fn set_site_boosts(&mut self, storage: &StorageSelection, boosts: Vec<engine::SiteBoost>) {
         if let Ok(context) = self.resolve_storage(storage) {
@@ -811,10 +813,11 @@ impl Pages {
     }
     // Covered hosts may miss an intermediate change through their shared engine.
     // Compare revisions so returning to an earlier key vector still refreshes it.
-    pub(crate) fn sync_shortcuts(&mut self, shortcuts: Option<(u64, Vec<engine::Shortcut>)>) {
-        let Some((revision,shortcuts))=shortcuts else{return;};
+    pub(crate) fn sync_shortcuts(&mut self, shortcuts: Option<crate::shortcuts::PageConfiguration>) {
+        let Some((revision,shortcuts,priorities))=shortcuts else{return;};
         if self.applied_shortcuts==Some(revision) {return;}
-        self.store.borrow_mut().engine.set_shortcuts(shortcuts.clone());
+        self.store.borrow_mut().engine.set_shortcuts(shortcuts);
+        self.store.borrow_mut().engine.set_shortcut_priorities(priorities);
         self.applied_shortcuts=Some(revision);
     }
 

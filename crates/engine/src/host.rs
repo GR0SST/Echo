@@ -25,6 +25,41 @@ pub(crate) type KeyEvent<'a> = Option<&'a mut cef::sys::MSG>;
 #[cfg(target_os = "linux")]
 pub(crate) type KeyEvent<'a> = Option<&'a mut cef::sys::XEvent>;
 
+/// CEF retains the native event through the renderer acknowledgement. Keep
+/// only its identity/time here, never a borrowed event or native object.
+pub(crate) fn key_event_stamp(event: &KeyEvent<'_>) -> crate::keyboard_priority::EventStamp {
+    use crate::keyboard_priority::{EventIdentity, EventStamp};
+    #[cfg(target_os = "macos")]
+    {
+        if event.is_null() { return EventStamp::default(); }
+        let seconds: f64 = unsafe {
+            objc2::msg_send![&*(*event).cast::<objc2::runtime::AnyObject>(), timestamp]
+        };
+        EventStamp {
+            identity: Some(EventIdentity(*event as usize as u64, seconds.to_bits())),
+            milliseconds: (seconds.is_finite() && seconds > 0.)
+                .then_some((seconds * 1000.) as u64 as u32),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        event.as_ref().map_or_else(EventStamp::default, |event| EventStamp {
+            identity: (event.time != 0).then_some(EventIdentity(event.time as u64, event.lParam as u64)),
+            milliseconds: (event.time != 0).then_some(event.time),
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        event.as_ref().map_or_else(EventStamp::default, |event| {
+            let key = unsafe { event.xkey };
+            EventStamp {
+                identity: (key.time != 0).then_some(EventIdentity(key.time as u64, key.serial as u64)),
+                milliseconds: (key.time != 0).then_some(key.time as u32),
+            }
+        })
+    }
+}
+
 pub(crate) fn parent_of(ui_view: *mut c_void) -> *mut c_void {
     #[cfg(target_os = "macos")]
     { crate::mac::content_view_of(ui_view) }

@@ -69,6 +69,7 @@ enum Popup {
     Documents,
     Downloads,
     LittleArchive,
+    ShortcutPriority,
 }
 
 mod archive;
@@ -584,6 +585,7 @@ impl SettingsWindow {
                 Popup::Archive | Popup::Downloads => 43.,
                 Popup::Documents => 44.,
                 Popup::LittleArchive => 39.,
+                Popup::ShortcutPriority => 24.,
             }))
             .child(div().flex_1().min_w_0().child(label))
             .child(
@@ -1025,6 +1027,7 @@ impl SettingsWindow {
             .user_profile(self.selected_profile)
             .unwrap_or(browser.active_user_profile());
         match popup {
+            Popup::ShortcutPriority => self.shortcut_priority_options(),
             Popup::Search => self.search_popup_providers.iter()
                 .map(|p| (p.name.clone(), profile.settings.search.default_provider().is_some_and(|selected|selected.id==p.id)))
                 .collect(),
@@ -1089,6 +1092,7 @@ impl SettingsWindow {
             Popup::Documents => 361.,
             Popup::Downloads => 406.,
             Popup::LittleArchive => 436.,
+            Popup::ShortcutPriority => 370.,
         };
         let top = center - selected_index as f32 * 24. - 16.;
         let width = match popup {
@@ -1097,6 +1101,7 @@ impl SettingsWindow {
             Popup::Documents => 150.,
             Popup::Downloads => 284.,
             Popup::LittleArchive => 150.,
+            Popup::ShortcutPriority => 144.,
         };
         let left = match popup {
             Popup::Search => 439.,
@@ -1104,6 +1109,7 @@ impl SettingsWindow {
             Popup::Documents => 432.,
             Popup::Downloads => 438.,
             Popup::LittleArchive => 423.,
+            Popup::ShortcutPriority => 420.,
         };
         div()
             .id("settings-popup-menu")
@@ -1149,6 +1155,10 @@ impl SettingsWindow {
             .into_any_element()
     }
     fn choose(&mut self, popup: Popup, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if popup == Popup::ShortcutPriority {
+            self.choose_shortcut_priority(index,cx);
+            self.popup=None;self.focus.focus(window);cx.notify();return;
+        }
         if popup == Popup::Archive {
             self.choose_archive(index, cx);
             self.popup = None;
@@ -1188,7 +1198,7 @@ impl SettingsWindow {
                     }
                     _ => {}
                 },
-                Popup::LittleArchive => unreachable!(),
+                Popup::LittleArchive | Popup::ShortcutPriority => unreachable!(),
             }
         });
         self.popup = None;

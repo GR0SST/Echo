@@ -9,18 +9,20 @@ struct Installed {
     baseline: Vec<KeyBinding>,
     settings: Shortcuts,
     page: Vec<engine::Shortcut>,
-    edited: bool,
+    priorities: Vec<(engine::Shortcut, engine::ShortcutPriority)>,
     revision: u64,
 }
 impl gpui::Global for Installed {}
 
 pub(crate) fn init(cx: &mut App) {
-    let baseline = cx.key_bindings().borrow().bindings().cloned().collect();
+    let baseline: Vec<_> = cx.key_bindings().borrow().bindings().cloned().collect();
+    let page = crate::window::page_shortcuts();
+    let priorities = page_priorities(&Shortcuts::default(), &baseline, &baseline, &page);
     cx.set_global(Installed {
         baseline,
         settings: Shortcuts::default(),
-        page: crate::window::page_shortcuts(),
-        edited: false,
+        page,
+        priorities,
         revision: 0,
     });
 }
@@ -214,21 +216,93 @@ pub(crate) fn apply(settings: &Shortcuts, cx: &mut App) {
         }
         page.push(to_engine(&key));
     }
+    let priorities = page_priorities(settings, &baseline, &bindings, &page);
     cx.clear_key_bindings();
     cx.bind_keys(bindings);
     cx.set_global(Installed {
         baseline,
         settings: settings.clone(),
         page,
-        edited: true,
+        priorities,
         revision,
     });
     crate::menus::refresh_shortcuts(cx);
 }
-pub(crate) fn page(cx: &App) -> Option<(u64, Vec<engine::Shortcut>)> {
+pub(crate) type PageConfiguration = (
+    u64,
+    Vec<engine::Shortcut>,
+    Vec<(engine::Shortcut, engine::ShortcutPriority)>,
+);
+pub(crate) fn page(cx: &App) -> Option<PageConfiguration> {
     cx.try_global::<Installed>()
-        .filter(|s| s.edited)
-        .map(|s| (s.revision, s.page.clone()))
+        .map(|s| (s.revision, s.page.clone(), s.priorities.clone()))
+}
+
+pub(crate) fn default_priority(id: &str) -> browser_core::shortcuts::ShortcutPriority {
+    use browser_core::shortcuts::ShortcutPriority::*;
+    match id {
+        "Refresh the Page"
+        | "Force Refresh the Page"
+        | "Find…"
+        | "Find Next"
+        | "Find Previous"
+        | "Previous Tab"
+        | "Go to Sidebar Item 1"
+        | "Go to Sidebar Item 2"
+        | "Go to Sidebar Item 3"
+        | "Go to Sidebar Item 4"
+        | "Go to Sidebar Item 5"
+        | "Go to Sidebar Item 6"
+        | "Go to Sidebar Item 7"
+        | "Go to Sidebar Item 8"
+        | "Go to last Sidebar Item" => PreferWebsites,
+        "Show/Hide Sidebar" | "Print" | "Add Split View" | "Pin/Unpin Tab" => UseBoth,
+        _ => PreferBrowser,
+    }
+}
+fn page_priorities(
+    settings: &Shortcuts,
+    baseline: &[KeyBinding],
+    bindings: &[KeyBinding],
+    keys: &[engine::Shortcut],
+) -> Vec<(engine::Shortcut, engine::ShortcutPriority)> {
+    keys.iter()
+        .map(|key| {
+            let physical = to_keystroke(key);
+            let priority = CATALOG
+                .iter()
+                .filter_map(|(id, notation)| {
+                    let default = default_key(notation);
+                    let effective = settings.effective(id, default.as_deref())?;
+                    if Keystroke::parse(effective).ok()? != physical {
+                        return None;
+                    }
+                    let action = anchor(baseline, default.as_deref())
+                        .map(|binding| binding.action().boxed_clone())
+                        .or_else(|| unbound_action(id))?;
+                    if !bindings.iter().any(|binding| {
+                        binding.keystrokes().len() == 1
+                            && binding.keystrokes()[0].as_keystroke() == &physical
+                            && binding.action().partial_eq(action.as_ref())
+                    }) {
+                        return None;
+                    }
+                    let rank = u8::from(settings.bindings.contains_key(id)) * 2
+                        + u8::from(settings.priorities.contains_key(id));
+                    Some((rank, settings.priority(id, default_priority(id))))
+                })
+                .max_by_key(|(rank, _)| *rank)
+                .map(|(_, priority)| priority)
+                .unwrap_or_default();
+            use browser_core::shortcuts::ShortcutPriority as Model;
+            let priority = match priority {
+                Model::PreferBrowser => engine::ShortcutPriority::PreferBrowser,
+                Model::PreferWebsites => engine::ShortcutPriority::PreferWebsites,
+                Model::UseBoth => engine::ShortcutPriority::UseBoth,
+            };
+            (key.clone(), priority)
+        })
+        .collect()
 }
 pub(crate) fn to_engine(key: &Keystroke) -> engine::Shortcut {
     engine::Shortcut {
