@@ -70,7 +70,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
+pub(crate) enum Command { LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
@@ -79,6 +79,7 @@ pub(crate) enum Command { Transfer(crate::download_transfer_actions::Action), Ca
 impl Command {
     fn selector(self) -> &'static str {
         match self {
+            Self::LiveCreate => "live-create", Self::LiveRefresh => "live-refresh", Self::LiveConnect => "live-connect", Self::LiveMove(_) => "live-move", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::CreatedByMe) => "live-created", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::ReviewRequests) => "live-review", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::TeamReviewRequests) => "live-team-review", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::Assigned) => "live-assigned", Self::LiveRepository => "live-repository",
             Self::Share => "share", Self::SelectionSplit => "selection-split", Self::SelectionMove(_) => "selection-move", Self::SelectionNewSpace => "selection-new-space", Self::SelectionArchiveBelow => "selection-archive-below", Self::SelectionArchiveAbove => "selection-archive-above", Self::SelectionArchiveOthers => "selection-archive-others",
             Self::ToggleToolbar => "toggle-toolbar",
             Self::Capture => "capture",
@@ -124,11 +125,12 @@ pub(crate) struct Item {
     pub pane: Option<TabId>,
     pub submenu: Vec<Entry>,
     native_share:bool,
+    live_icon:bool,
     submenu_width: Option<f32>,
 }
 
 pub(crate) fn item(label: impl Into<SharedString>, command: Command) -> Item {
-    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, space_destination: false, pane: None, submenu: Vec::new(), native_share:false, submenu_width: None }
+    Item { label: label.into(), command: Some(command), shortcut: None, checked: false, enabled: true, icon: None, space_icon: None, space_destination: false, pane: None, submenu: Vec::new(), native_share:false, live_icon:false, submenu_width: None }
 }
 
 /// A row the reference has whose action is not built yet.
@@ -146,7 +148,8 @@ impl Item {
     pub(crate) fn pane(mut self, tab: TabId) -> Self { self.pane = Some(tab); self }
     fn native_share(mut self)->Self{self.native_share=true;self}
     pub(crate) fn submenu(mut self, entries: Vec<Entry>) -> Self { self.submenu = entries; self }
-    fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
+    pub(crate) fn live_icon(mut self)->Self{self.live_icon=true;self}
+    pub(crate) fn submenu_width(mut self, width: f32) -> Self { self.submenu_width = Some(width); self }
     fn selector(&self) -> String {
         match (self.command, self.submenu.is_empty()) {
             (Some(Command::SpaceSetProfile(id)), true) => format!("tab-menu-space-profile-{id:?}"),
@@ -546,7 +549,7 @@ impl BrowserWindow {
             MenuTarget::Selection(_) => { self.confirm_selection_menu(command, window, cx); return; }
             MenuTarget::SpaceDelete(_) => return,
             MenuTarget::Space(id) => { self.confirm_space_menu(id, command, window, cx); return; }
-            MenuTarget::Folder(id) => { self.confirm_folder_menu(id, command, window, cx); return; }
+            MenuTarget::Folder(id) => { if matches!(command,Command::LiveRepository){self.toggle_live_repository(id,item.label.to_string(),cx);}else{self.confirm_folder_menu(id, command, window, cx);}return; }
             MenuTarget::Address => {
                 match command { Command::Capture => self.capture_page(cx), Command::ToggleToolbar => self.toggle_toolbar(cx), Command::Copy => self.copy_url(false, cx), Command::CopyMarkdown => self.copy_url(true, cx), _ => {} }
                 return;
@@ -657,6 +660,7 @@ impl BrowserWindow {
     }
 
     fn menu_level_width(&self, entries: &[Entry], nested: bool, window: &Window) -> Pixels {
+        if !nested && self.tab_menu.as_ref().is_some_and(|menu|match menu.target{MenuTarget::Folder(id)=>self.browser.folder(id).is_some_and(|f|f.live.is_some()),_=>false}){return px(173.);}
         if let Some(width) = nested.then(|| self.tab_menu.as_ref()?.submenu
             .and_then(|index| match self.menu_entries().get(index) {
                 Some(Entry::Item(item)) => item.submenu_width,
@@ -667,7 +671,7 @@ impl BrowserWindow {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_some() => Some(256.),
-                MenuTarget::Folder(_) => Some(308.),
+                MenuTarget::Folder(id) => Some(if self.browser.folder(id).is_some_and(|f|f.live.is_some()){173.}else{308.}),
                 MenuTarget::Selection(_) => Some(224.),
                 MenuTarget::Space(_) => Some(246.),
                 MenuTarget::Download(..) | MenuTarget::Transfer(..) => Some(120.),
@@ -684,7 +688,7 @@ impl BrowserWindow {
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
         let measured=px(entries.iter().filter_map(|entry| match entry {
             Entry::Item(item) => Some(inset + 17. + text_width(&item.label)
-                + if item.space_destination { 19. } else if item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
+                + if item.space_destination { 19. } else if item.live_icon || item.icon.is_some() || item.space_icon.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).is_some_and(|space| space.custom_icon.is_some()) { 22. } else { 0. }
                 + if pane_controls { 22. } else { 0. }
                 + item.shortcut.map_or(0., |shortcut| 30. + text_width(shortcut))
                 + if item.submenu.is_empty() && !item.native_share { 0. } else if space_menu { 31. } else { 38. }),
@@ -696,6 +700,8 @@ impl BrowserWindow {
 
     /// One menu panel: rows, separators and headers; `nested` is a submenu.
     fn render_menu_level(&self, entries: &[Entry], selected: Option<usize>, open: Option<usize>, nested: bool, window: &Window, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let live=self.tab_menu.as_ref().is_some_and(|menu|match menu.target{MenuTarget::Folder(id)=>self.browser.folder(id).is_some_and(|f|f.live.is_some()),_=>false});
+        let ink=if live && !self.theme_is_dark(){0.}else{1.};
         let space_menu = !nested && self.tab_menu.as_ref().is_some_and(|menu| matches!(menu.target, MenuTarget::Space(_)));
         let pane_controls = !nested && self.tab_menu.as_ref().is_some_and(|menu| menu.pane);
         let horizontal = self.browser.active_split().is_some_and(|split| split.axis == Axis::Horizontal);
@@ -703,9 +709,9 @@ impl BrowserWindow {
         let inset = if checks { CHECK_INSET } else { TEXT_INSET };
         let rows = entries.iter().enumerate().map(|(index, entry)| match entry {
             Entry::Separator => div().h(px(SEPARATOR_HEIGHT)).flex().items_center().pl(px(inset)).pr(px(17.))
-                .child(div().w_full().h(px(1.)).bg(hsla(0., 0., 1., 0.14))).into_any_element(),
+                .child(div().w_full().h(px(1.)).bg(hsla(0., 0., ink, 0.14))).into_any_element(),
             Entry::Header(label) => div().h(px(ROW_HEIGHT)).flex().items_center().pl(px(inset)).pr(px(17.))
-                .text_color(hsla(0., 0., 1., 0.35)).child(*label).into_any_element(),
+                .text_color(hsla(0., 0., ink, 0.35)).child(*label).into_any_element(),
             Entry::Item(item) => {
                 let highlighted = selected == Some(index) || open == Some(index);
                 let enabled = item.enabled;
@@ -717,7 +723,7 @@ impl BrowserWindow {
                 div().id(id).h(px(ROW_HEIGHT)).mx(px(PADDING)).rounded(px(6.)).flex().items_center()
                     .pl(px(inset - PADDING)).pr(px(12.)).gap(px(6.))
                     .when(highlighted && enabled, |row| row.bg(hsla(211. / 360., 1., 0.5, 1.)).text_color(gpui::white()))
-                    .when(!enabled, |row| row.text_color(hsla(0., 0., 1., 0.3)))
+                    .when(!enabled, |row| row.text_color(hsla(0., 0., ink, 0.3)))
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         let Some(menu) = &mut this.tab_menu else { return; };
                         if nested {
@@ -743,6 +749,7 @@ impl BrowserWindow {
                     }))
                     .when(checks, |row| row.child(div().absolute().left(px(PADDING + 4.)).top(px(3.))
                         .when(item.checked, |slot| slot.child(crate::icons::check(0., 0.8)))))
+                    .when(item.live_icon, |row|row.child(div().size(px(16.)).flex_none().child(crate::live_folders::request_icon())))
                     .when(pane_controls, |row| row.child(pane_control_icon(item.command, horizontal)))
                     .when_some(item.icon.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id)), |row, tab| row.child(div().size(px(16.)).flex_none().flex().items_center().justify_center()
                         .child(self.render_favicon(tab, self.accent()))))
@@ -771,8 +778,10 @@ impl BrowserWindow {
         let download=self.tab_menu.as_ref().is_some_and(|menu|matches!(menu.target,MenuTarget::Transfer(..)|MenuTarget::Download(..)));
         let neutral=download&&backdrop.get();
         let shell = if folder {
-            crate::panel::menu_shell_at(id, if nested { "folder-submenu" } else { "folder-menu" }, self.accent(), backdrop,
-                self.native_view.map(|v|v as usize), self.tab_menu.as_ref().unwrap().material_alive.clone())
+            if live {crate::panel::menu_shell_at_appearance(id, if nested { "folder-submenu" } else { "folder-menu" }, self.accent(), backdrop,
+                self.native_view.map(|v|v as usize), self.tab_menu.as_ref().unwrap().material_alive.clone(), self.theme_is_dark())}
+            else{crate::panel::menu_shell_at(id, if nested { "folder-submenu" } else { "folder-menu" }, self.accent(), backdrop,
+                self.native_view.map(|v|v as usize), self.tab_menu.as_ref().unwrap().material_alive.clone())}
         } else { crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop) };
         shell.when(neutral,|shell|shell.bg(hsla(0.,0.,0.45,0.38))).debug_selector(move || id.into())
             .w(width).py(px(PADDING)).flex().flex_col().children(rows)

@@ -61,7 +61,7 @@ impl BrowserWindow {
             Entry::Separator,
             item("New Folder", Command::SpaceNewFolder).into(),
             pending("Live Folders")
-                .submenu(vec![pending("GitHub").into()])
+                .submenu(vec![item("GitHub", Command::LiveCreate).enabled(!self.browser.is_private()).into()])
                 .into(),
             Entry::Separator,
             pending(format!("Export “{}” into Folder", space.name))
@@ -90,6 +90,7 @@ impl BrowserWindow {
             return;
         };
         match command {
+            Command::LiveCreate => self.create_live_folder(id, cx),
             Command::SpaceSetProfile(to) => {
                 if to != space.user_profile_id {
                     self.open_user_profile_switch_to(id, to, cx);

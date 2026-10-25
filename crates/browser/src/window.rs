@@ -570,6 +570,7 @@ pub enum OverlayKind {
     PasswordPrompt,
     Setup,
     ThemeEditor,
+    GitHubConnection,
     TransientPicker,
 }
 
@@ -648,6 +649,7 @@ impl Render for Overlay {
                     OverlayKind::Capture => browser.render_capture(window, cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
+                    OverlayKind::GitHubConnection => browser.render_live_connection(cx),
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
                     OverlayKind::PasswordPrompt => browser.render_password_prompt(),
                     OverlayKind::Setup => browser.render_setup(),
@@ -686,6 +688,7 @@ pub struct BrowserWindow {
     pub(crate) sidebar_navigation: crate::sidebar_navigation::SidebarNavigation,
     pub(crate) mini_player: crate::mini_player::MiniPlayer,
     pub(crate) max: crate::max::State,
+    pub(crate) live_folders: crate::live_folders::State,
     pub(crate) sidebar_debug_namespace: Option<String>,
     pub(crate) sidebar_page_interactive: bool,
     pub sidebar_visible: bool,
@@ -993,6 +996,7 @@ impl BrowserWindow {
             sidebar_navigation,
             mini_player: Default::default(),
             max: Default::default(),
+            live_folders: Default::default(),
             sidebar_debug_namespace: None,
             sidebar_page_interactive: true,
             sidebar_visible: true,
@@ -1224,6 +1228,9 @@ impl BrowserWindow {
         self.clear_site_controls_backdrop();
         let transient_child = self.transient.as_mut().and_then(|state| state.picker.take()).and_then(|picker| picker.overlay);
         let password_child = self.take_password_child(cx);
+        if let Some(cancel)=self.live_folders.cancel.take(){cancel.store(true,std::sync::atomic::Ordering::Release);}
+        self.live_folders.poll.take();
+        let github_child = self.live_folders.sheet.take().and_then(|sheet| { sheet.key.update(cx, |key,cx|key.set_text("",cx)); sheet.overlay });
         let profile_child = self.take_user_profile_child(cx);
         let setup_child = self.take_setup_child(cx);
         let theme_child = self.take_theme_editor();
@@ -1236,6 +1243,7 @@ impl BrowserWindow {
             self.boost_editor.take().map(|handle|handle.into()),
             transient_child.map(|handle| handle.into()),
             profile_child.map(|handle| handle.into()),
+            github_child.map(|handle| handle.into()),
             password_child.map(|handle|handle.into()),
             setup_child.map(|handle| handle.into()),
             theme_child.map(|handle| handle.into()),
@@ -1297,7 +1305,7 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             pages.borrow_mut().record(&event);
             match event {
                 Event::Password { event, .. } => { if let Some(identity)=identity {self.password_event(identity,event,cx);} },
@@ -1561,6 +1569,7 @@ impl BrowserWindow {
         if crate::quit::is_quitting() { return; }
         self.remember_library_popup_focus(window, cx);
         self.close_transient_picker(cx);
+        self.close_live_connection(cx);
         self.close_user_profile_dialog(cx);
         self.close_setup(cx);
         self.finish_tab_rename(true, cx);
@@ -1723,7 +1732,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.save_prompt_active || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.save_prompt_active || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1738,7 +1747,7 @@ impl BrowserWindow {
             // A root with no popup already owns its responder intent (for
             // example History search or docked DevTools). Only replace it when
             // this operation actually takes over a popup's restoration.
-            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
+            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
                 || self.find_bar.is_some() || self.tab_menu.is_some()
                 || self.popup_focus_pending > 0;
             self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
@@ -1752,6 +1761,7 @@ impl BrowserWindow {
         self.close_theme_editor_with_focus(focus, cx);
         self.close_transient_picker_with_focus(focus, cx);
         self.close_password_prompt(focus,cx);
+        self.close_live_connection_with_focus(focus,cx);
         self.close_user_profile_dialog_with_focus(focus, cx);
         self.close_setup_with_focus(focus,cx);
         self.close_site_controls_with_focus(focus, cx);
@@ -1996,7 +2006,7 @@ impl BrowserWindow {
                     ] {
                         if let Some(score) = command_match_score(&query, &names) { matches.push((score, Suggestion::Action { command, label })); }
                     }
-                    if active.is_some_and(|tab| self.browser.folder_ancestors(tab.id).last() != Some(&folder.id)) {
+                    if folder.live.is_none() && active.is_some_and(|tab| self.browser.folder_ancestors(tab.id).last() != Some(&folder.id)) {
                         let names = format!("pin to {path}|pin to folder {path}|move to folder {path}|pin to {}|pin to {} {path}", folder.name, space.name);
                         if let Some(score) = command_match_score(&query, &names) {
                             matches.push((score, Suggestion::Action { command: Command::PinToFolder(folder.id), label: format!("Pin to {path} · {}", space.name) }));
@@ -2087,7 +2097,7 @@ impl BrowserWindow {
         }
     }
 
-    fn new_command_tab(&mut self, url: &str, background: bool, cx: &mut Context<Self>) -> TabId {
+    pub(crate) fn new_command_tab(&mut self, url: &str, background: bool, cx: &mut Context<Self>) -> TabId {
         let id = self.edit_browser(|browser| {
             let mut selection = browser.window_selection();
             let id = browser.new_tab(url, SystemTime::now());
@@ -2451,6 +2461,7 @@ impl BrowserWindow {
                 if this.peek_owner.is_some() { this.retain_closed_peek(cx); this.close_window(cx); }
                 else if this.theme_editor.is_some() { this.close_theme_editor(cx); }
                 else if this.setup.is_some() { this.close_setup(cx); }
+                else if this.live_folders.sheet.is_some() { this.close_live_connection(cx); }
                 else if this.user_profile_dialog.is_some() { this.close_user_profile_dialog(cx); }
                 else if this.command_bar.is_some() { this.close_command_bar(cx); }
                 else { this.close_focused_tab(cx); }
@@ -2542,6 +2553,7 @@ impl BrowserWindow {
     fn on_close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.transient.is_some() { self.close_window(cx); return; }
         if self.setup.is_some() { self.close_setup(cx); return; }
+        if self.live_folders.sheet.is_some() { self.close_live_connection(cx); return; }
         if self.user_profile_dialog.is_some() { self.close_user_profile_dialog(cx); return; }
         let editing_name = self.tab_rename.is_some();
         self.close_focused_tab(cx);
@@ -3720,7 +3732,11 @@ impl BrowserWindow {
         let reveal = self.pinned_reveals.get(&space.id)
             .filter(|reveal| reveal.collapsed == space.pinned_collapsed)
             .map_or(if space.pinned_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
-        let pinned_height = pinned.len() as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
+        let live_rows: usize = self.browser.pinned_rows(space.id, false).iter().filter_map(|row| match row.item {
+            PinnedItem::Folder(id) => self.browser.folder(id).filter(|f| !f.collapsed).and_then(|f|f.live.as_ref()).map(|live|live.visible_items().count()),
+            _ => None,
+        }).sum();
+        let pinned_height = (pinned.len() + live_rows) as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
         let header_group = SharedString::from(format!("space-header-{index}"));
         let has_today = !space.today.is_empty();
         let can_tidy = self.browser.can_tidy_tabs(space.id);
@@ -4627,7 +4643,7 @@ impl Render for BrowserWindow {
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
-        if self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() { self.sync_history_focus(window, cx); }
+        if self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() && self.live_folders.sheet.is_none() { self.sync_history_focus(window, cx); }
         if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_is_current(menu)) {
             self.close_tab_menu(cx);
         }
@@ -4649,6 +4665,7 @@ impl Render for BrowserWindow {
             }
         }
         if self.split_drop.is_some() && !cx.has_active_drag() { self.close_split_drop(cx); }
+        self.sync_live_folders(cx);
         self.sync_max_previews(window,cx);
         self.sync_link_status(window, cx);
         self.sync_page_zoom(window, cx);

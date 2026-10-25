@@ -7,6 +7,7 @@ mod capture;
 mod task_manager;
 mod find;
 mod max;
+mod live_folders;
 mod max_previews;
 mod max_instant;
 mod max_downloads;
@@ -159,6 +160,7 @@ pub fn init(cx: &mut App) {
     capture::bind_keys(cx);
     new_menu::bind_keys(cx);
     theme_editor::bind_keys(cx);
+    live_folders::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);
     password_prompt::bind_keys(cx);
     password_manager::bind_keys(cx);

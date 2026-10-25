@@ -3,6 +3,8 @@
 
 #[path = "audit_chrome_tests.rs"]
 mod audit_chrome_tests;
+#[path = "live_folders_tests.rs"]
+mod live_folders_tests;
 
 #[path = "feedback_owner_tests.rs"]
 mod feedback_owner_tests;

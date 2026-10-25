@@ -38,11 +38,20 @@ pub(crate) fn menu_shell(id: impl Into<gpui::ElementId>, key: &'static str, hue:
 }
 
 pub(crate) fn menu_shell_at(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>, parent: Option<usize>, alive: std::rc::Rc<std::cell::Cell<bool>>) -> gpui::Stateful<Div> {
+    menu_shell_impl(id,key,hue,installed,parent,alive,None)
+}
+
+pub(crate) fn menu_shell_at_appearance(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>, parent: Option<usize>, alive: std::rc::Rc<std::cell::Cell<bool>>, dark: bool) -> gpui::Stateful<Div> {
+    menu_shell_impl(id,key,hue,installed,parent,alive,Some(dark))
+}
+
+fn menu_shell_impl(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>, parent: Option<usize>, alive: std::rc::Rc<std::cell::Cell<bool>>, appearance: Option<bool>) -> gpui::Stateful<Div> {
+    let calibrated=appearance.is_some();let dark=appearance.unwrap_or(true);
     div().id(id)
-        .relative().rounded(px(MENU_RADIUS)).bg(if parent.is_some() && installed.get() { hsla(0.,0.,0.45,0.38) } else { menu_fill(hue, installed.get()) })
+        .relative().rounded(px(MENU_RADIUS)).bg(if parent.is_some() && installed.get() { if !calibrated{hsla(0.,0.,0.45,0.38)}else if dark {hsla(250./360.,0.18,0.28,0.38)}else{gpui::Hsla::from(gpui::rgb(0xfbf8ff)).opacity(0.99)} } else if dark { menu_fill(hue, installed.get()) } else {gpui::Hsla::from(gpui::rgb(0xfbf8ff))})
         .shadow_lg()
-        .text_color(hsla(0., 0., 1., 0.85)).font_family(".SystemUIFont").text_size(px(13.))
-        .child(div().absolute().inset_0().rounded(px(MENU_RADIUS - 1.)).border_1().border_color(hsla(0., 0., 1., 0.10)))
+        .text_color(hsla(0., 0., if dark {1.}else{0.}, 0.85)).font_family(".SystemUIFont").when(calibrated,|r|r.font_weight(gpui::FontWeight::NORMAL)).text_size(px(13.))
+        .child(div().absolute().inset_0().rounded(px(MENU_RADIUS - 1.)).border_1().border_color(hsla(0., 0., if dark {1.}else{0.}, 0.10)))
         .child(canvas(|_, _, _| (), move |bounds, _, window, cx| {
             use crate::material::*;
             if !alive.get() { return; }
@@ -51,7 +60,7 @@ pub(crate) fn menu_shell_at(id: impl Into<gpui::ElementId>, key: &'static str, h
                     Some([f32::from(bounds.origin.x) as f64, f32::from(bounds.origin.y) as f64,
                         f32::from(bounds.size.width) as f64, f32::from(bounds.size.height) as f64]),
                     MENU_RADIUS as f64, BackdropConfig {
-                        appearance: EffectAppearance::Dark, state: EffectState::Active,
+                        appearance: if dark {EffectAppearance::Dark}else{EffectAppearance::Light}, state: EffectState::Active,
                         blending: if parent.is_some() { EffectBlending::WithinWindow } else { EffectBlending::BehindWindow }, emphasized: false,
                         effect_alpha: 1., material: EffectMaterial::Menu,
                     }) == BackdropInstallation::Installed
