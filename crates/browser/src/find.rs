@@ -171,6 +171,8 @@ impl BrowserWindow {
         let Some(bar) = &self.find_bar else {
             return div().into_any_element();
         };
+        let palette = crate::material::DialogPalette::new(self.theme_is_dark());
+        let ink = if palette.dark { 1. } else { 0. };
         let has_query = !bar.input.read(cx).text().is_empty();
         let not_found = has_query && bar.count == Some(0) && !bar.searching;
         let status = match (bar.count, bar.active) {
@@ -179,26 +181,26 @@ impl BrowserWindow {
         };
         let control = |id: &'static str| div().id(id).debug_selector(move || id.into())
             .flex_none().w(px(26.)).h(px(30.)).flex().items_center().justify_center()
-            .rounded(px(4.)).hover(|s| s.bg(hsla(0., 0., 1., 0.08)));
+            .rounded(px(4.)).hover(|s| s.bg(hsla(0., 0., ink, 0.08)));
         div().size_full().p(px(20.)).child(div()
             .id("find-bar")
             .debug_selector(|| "find-bar".into())
             .key_context(CONTEXT)
             .size_full()
             .rounded(px(6.))
-            .bg(gpui::rgb(0x131c32))
+            .bg(if palette.dark { gpui::rgb(0x131c32).into() } else { palette.surface })
             .shadow(vec![gpui::BoxShadow {
-                color: gpui::rgba(0x131c32c9).into(), offset: point(px(0.), px(3.)),
+                color: if palette.dark { gpui::rgba(0x131c32c9).into() } else { hsla(0., 0., 0., 0.22) }, offset: point(px(0.), px(3.)),
                 blur_radius: px(4.8), spread_radius: px(0.),
             }])
-            .text_color(hsla(0., 0., 1., 0.8))
+            .text_color(hsla(0., 0., ink, 0.8))
             .text_size(px(13.)).line_height(px(16.)).font_weight(gpui::FontWeight(550.))
             .flex().items_center().pl(px(10.)).pr(px(3.))
             .on_action(cx.listener(|this, _: &NextMatch, _, cx| this.find_next(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousMatch, _, cx| this.find_next(false, cx)))
             .on_action(cx.listener(|this, _: &CloseFind, _, cx| this.close_find(cx)))
             .on_action(cx.listener(|this, _: &FindPage, window, cx| this.open_find(window, cx)))
-            .child(div().flex_none().mr(px(7.)).text_color(hsla(0., 0., 1., 0.55))
+            .child(div().flex_none().mr(px(7.)).text_color(hsla(0., 0., ink, 0.55))
                 .child(find_glyph(crate::icons::Icon::Search)))
             .child(div().flex_1().min_w_0().child(bar.input.clone()))
             .when(has_query && !not_found, |row| row

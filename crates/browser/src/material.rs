@@ -361,3 +361,33 @@ mod tests {
         assert_eq!(worst_contrast(text, fill, None), 1.);
     }
 }
+
+/// Reference sheet colors, separate from the translucent Space field.
+#[derive(Clone, Copy)]
+pub(crate) struct DialogPalette {
+    pub dark: bool,
+    pub surface: Hsla,
+    pub text: Hsla,
+    pub muted: Hsla,
+    pub control: Hsla,
+    pub border: Hsla,
+    pub input: Hsla,
+}
+impl DialogPalette {
+    pub(crate) fn new(dark: bool) -> Self {
+        let color = |light, dark_color| gpui::rgb(if dark { dark_color } else { light }).into();
+        Self { dark, surface: color(0xfafbff, 0x141c31), text: color(0x202124, 0xdedfe2),
+            muted: color(0x77777c, 0x8f95a5), control: color(0xf0f0f5, 0x272d41),
+            border: color(0xdedee5, 0x30364a), input: color(0xffffff, 0x16171a) }
+    }
+}
+
+#[test]
+fn light_sheet_palette_preserves_the_reference_field_and_readable_controls() {
+    let light = DialogPalette::new(false);
+    let dark = DialogPalette::new(true);
+    assert_eq!(light.surface, gpui::rgb(0xfafbff).into());
+    assert!(light.text.l < 0.2 && light.muted.l < 0.6);
+    assert_eq!(dark.surface, gpui::rgb(0x141c31).into());
+    assert!(dark.text.l > 0.8);
+}

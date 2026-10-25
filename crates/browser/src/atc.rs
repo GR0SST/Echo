@@ -26,6 +26,7 @@ enum Menu {
 }
 pub(crate) struct AtcPanel {
     profile: ProfileHandle,
+    palette: crate::material::DialogPalette,
     rows: Vec<RouteRow>,
     next_key: u64,
     popup: Option<(Menu, usize)>,
@@ -79,7 +80,7 @@ impl AtcPanel {
         let mut panel = Self {
             _observe: profile.observe_settings(cx),
             profile,
-            rows: vec![],
+            palette: crate::material::DialogPalette::new(true),            rows: vec![],
             next_key: 0,
             popup: None,
             keyboard_menu: false,
@@ -290,7 +291,7 @@ impl AtcPanel {
             .w(px(width))
             .h(px(24.))
             .rounded(px(5.))
-            .bg(rgb(0x272d41))
+            .bg(self.palette.control)
             .flex()
             .items_center()
             .justify_between()
@@ -330,7 +331,7 @@ impl AtcPanel {
                             .justify_end()
                             .items_center()
                             .gap(px(5.))
-                            .text_color(rgb(0x8f95a5))
+                            .text_color(self.palette.muted)
                             .text_size(px(14.))
                             .child(icons::control(Icon::Link))
                             .child("URL"),
@@ -358,8 +359,8 @@ impl AtcPanel {
                             .h(px(24.))
                             .rounded(px(6.))
                             .border_1()
-                            .border_color(rgb(0x272a38))
-                            .bg(rgb(0x16171a))
+                            .border_color(self.palette.border)
+                            .bg(self.palette.input)
                             .px(px(7.))
                             .flex()
                             .items_center()
@@ -378,7 +379,7 @@ impl AtcPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_color(rgb(0x8f95a5))
+                            .text_color(self.palette.muted)
                             .text_size(px(14.))
                             .child(icons::ionicon("remove-circle", 18., 1.))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -412,7 +413,7 @@ impl AtcPanel {
                             .flex()
                             .items_center()
                             .gap(px(5.))
-                            .text_color(rgb(0x8f95a5))
+                            .text_color(self.palette.muted)
                             .text_size(px(14.))
                             .child(icons::ionicon("return-down-forward-outline", 18., 1.))
                             .child("Open in"),
@@ -521,8 +522,8 @@ impl AtcPanel {
                     .py(px(6.))
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(0x141822))
-                    .bg(rgb(0x343944))
+                    .border_color(if self.palette.dark { rgb(0x141822).into() } else { self.palette.border })
+                    .bg(if self.palette.dark { rgb(0x343944).into() } else { self.palette.surface })
                     .shadow_lg()
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .children(labels.into_iter().enumerate().map(|(index, label)| {
@@ -534,7 +535,7 @@ impl AtcPanel {
                                     && index == self.destinations().len() - 2,
                                 |s| {
                                     s.child(
-                                        div().h(px(1.)).mx(px(10.)).my(px(4.)).bg(rgb(0x535763)),
+                                        div().h(px(1.)).mx(px(10.)).my(px(4.)).bg(self.palette.border),
                                     )
                                 },
                             )
@@ -550,9 +551,9 @@ impl AtcPanel {
                                     .items_center()
                                     .gap(px(4.))
                                     .when(index == selected && self.keyboard_menu, |s| {
-                                        s.bg(rgb(0x007aff)).text_color(rgb(0xffffff))
+                                        s.bg(rgb(0x007aff)).text_color(gpui::white())
                                     })
-                                    .hover(|s| s.bg(rgb(0x007aff)).text_color(rgb(0xffffff)))
+                                    .hover(|s| s.bg(rgb(0x007aff)).text_color(gpui::white()))
                                     .child(div().w(px(14.)).when(index == current, |s| {
                                         s.child(icons::control(Icon::Check))
                                     }))
@@ -576,7 +577,7 @@ fn chooser_arrow() -> AnyElement {
                 path.line_to(bounds.origin + gpui::point(px(5.), px(y + sign * 3.)));
                 path.line_to(bounds.origin + gpui::point(px(8.), px(y)));
                 if let Ok(path) = path.build() {
-                    window.paint_path(path, rgb(0xc6c9d1));
+                    window.paint_path(path, window.text_style().color);
                 }
             }
         },
@@ -588,6 +589,8 @@ fn chooser_arrow() -> AnyElement {
 }
 impl Render for AtcPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette = crate::material::DialogPalette::new(matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark));
+        let palette = self.palette;
         let destination_width = self.destination_width(window);
         let destination = self
             .profile
@@ -600,8 +603,8 @@ impl Render for AtcPanel {
             .h(px(500.))
             .rounded(px(18.))
             .border_1()
-            .border_color(rgb(0x020202))
-            .bg(rgb(0x141c31))
+            .border_color(self.palette.border)
+            .bg(self.palette.surface)
             .shadow_lg()
             .flex()
             .flex_col()
@@ -609,7 +612,7 @@ impl Render for AtcPanel {
             .line_height(px(16.))
             .font_family(".SystemUIFont")
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(rgb(0xdedfe2))
+            .text_color(self.palette.text)
             .track_focus(&self.focus)
             .key_context("AirTrafficControl")
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
@@ -657,11 +660,11 @@ impl Render for AtcPanel {
             .child(
                 gpui::canvas(
                     |_, _, _| (),
-                    |bounds, _, window, _| {
+                    move |bounds, _, window, _| {
                         // Two native frame strokes, without changing content layout.
-                        window.paint_quad(gpui::fill(bounds, rgb(0x2c3345)).corner_radii(px(17.)));
+                        window.paint_quad(gpui::fill(bounds, palette.border).corner_radii(px(17.)));
                         window.paint_quad(
-                            gpui::fill(bounds.inset(px(1.)), rgb(0x141c31)).corner_radii(px(16.)),
+                            gpui::fill(bounds.inset(px(1.)), palette.surface).corner_radii(px(16.)),
                         );
                     },
                 )
@@ -676,7 +679,7 @@ impl Render for AtcPanel {
                     .pt(px(32.))
                     .pb(px(24.))
                     .border_b_1()
-                    .border_color(rgb(0x30364a))
+                    .border_color(self.palette.border)
                     .flex()
                     .items_center()
                     .justify_between()
@@ -684,7 +687,7 @@ impl Render for AtcPanel {
                         div()
                             .text_size(px(14.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xffffff))
+                            .text_color(self.palette.text)
                             .relative()
                             .top(px(-1.))
                             .child("Air Traffic Control"),
@@ -702,7 +705,7 @@ impl Render for AtcPanel {
                                     .w(px(122.))
                                     .h(px(28.))
                                     .rounded(px(6.))
-                                    .bg(rgb(0x272d41))
+                                    .bg(self.palette.control)
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -729,7 +732,7 @@ impl Render for AtcPanel {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_color(rgb(0xb4bac9))
+                                    .text_color(self.palette.muted)
                                     .child(icons::ionicon("close-outline", 20., 1.))
                                     .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                             ),
@@ -756,7 +759,7 @@ impl Render for AtcPanel {
                     .mx(px(24.))
                     .pt(px(24.))
                     .border_t_1()
-                    .border_color(rgb(0x30364a))
+                    .border_color(self.palette.border)
                     .child(
                         div()
                             .flex()

@@ -135,6 +135,8 @@ pub(crate) struct SetupHost {
 pub(crate) struct SetupDialog {
     pub(crate) step: Step,
     onboarding: bool,
+    appearance: browser_core::themes::ThemeAppearance,
+    palette: crate::material::DialogPalette,
     sources: Vec<SourceProfile>,
     pub(crate) source: Option<usize>,
     profiles: Vec<(UserProfileId, String)>,
@@ -216,6 +218,8 @@ impl SetupDialog {
         Self {
             step,
             onboarding,
+            appearance: browser.settings.theme_appearance,
+            palette: crate::material::DialogPalette::new(true),
             sources,
             source: None,
             profiles: browser
@@ -618,6 +622,7 @@ impl SetupDialog {
     }
     }
     fn button(
+        &self,
         label: &str,
         id: &'static str,
         primary: bool,
@@ -636,10 +641,10 @@ impl SetupDialog {
             .justify_center()
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(if primary { 0x5955fe } else { 0x5c5998 }))
-            .bg(rgb(if primary { 0x3029ff } else { 0x302e61 }))
+            .border_color(if primary { rgb(0x5955fe).into() } else { self.palette.border })
+            .bg(if primary { rgb(0x3029ff).into() } else { self.palette.input })
             .text_size(px(13.))
-            .text_color(gpui::white())
+            .text_color(if primary { gpui::white() } else { self.palette.text })
             .opacity(if enabled { 1. } else { 0.3 })
             .when(enabled, |s| s.cursor_pointer())
             .child(label.to_owned())
@@ -658,20 +663,20 @@ impl SetupDialog {
             .border_color(if selected {
                 rgb(0x5047ff).into()
             } else {
-                hsla(0., 0., 1., 0.07)
+                hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.07)
             })
-            .bg(rgb(0x2b3142))
+            .bg(self.palette.control)
             .text_size(px(13.))
-            .text_color(hsla(0., 0., 1., 0.7))
+            .text_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.7))
             .child(
                 div()
                     .size(px(16.))
                     .rounded_full()
                     .border_2()
                     .border_color(if selected {
-                        rgb(0x635aff)
+                        rgb(0x635aff).into()
                     } else {
-                        rgb(0xaeb0b7)
+                        self.palette.muted
                     })
                     .bg(gpui::white())
                     .when(selected, |c| {
@@ -704,11 +709,11 @@ impl SetupDialog {
             .overflow_hidden()
             .border_2()
             .border_color(if selected {
-                rgb(0x5047ff)
+                rgb(0x5047ff).into()
             } else {
-                rgb(0x383e4e)
+                self.palette.border
             })
-            .bg(rgb(0x2b3142))
+            .bg(self.palette.control)
             .flex()
             .items_center()
             .child(
@@ -721,7 +726,7 @@ impl SetupDialog {
                     .gap(px(25.))
                     .text_size(px(13.))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(rgb(0xb9bac4))
+                    .text_color(self.palette.muted)
                     .child(
                         div()
                             .flex_none()
@@ -729,9 +734,9 @@ impl SetupDialog {
                             .rounded_full()
                             .border_2()
                             .border_color(if selected {
-                                rgb(0x635aff)
+                                rgb(0x635aff).into()
                             } else {
-                                rgb(0xaeb0b7)
+                                self.palette.muted
                             })
                             .bg(gpui::white())
                             .when(selected, |c| {
@@ -832,6 +837,12 @@ fn action_key(prefix: &str, index: usize) -> String {
 }
 impl gpui::Render for SetupDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dark = match self.appearance {
+            browser_core::themes::ThemeAppearance::Dark => true,
+            browser_core::themes::ThemeAppearance::Light => false,
+            browser_core::themes::ThemeAppearance::Automatic => matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark),
+        };
+        self.palette = crate::material::DialogPalette::new(dark);
         let elapsed = cx
             .background_executor()
             .now()
@@ -922,7 +933,7 @@ impl gpui::Render for SetupDialog {
                             .h(px(34.))
                             .text_size(px(13.))
                             .child(label)
-                            .child(div().text_color(hsla(0., 0., 1., 0.6)).child(key)),
+                            .child(div().text_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.6)).child(key)),
                     );
                 }
             }
@@ -1034,7 +1045,7 @@ impl gpui::Render for SetupDialog {
                             .size(px(48.))
                             .rounded_full()
                             .border_2()
-                            .border_color(hsla(0., 0., 1., 0.3))
+                            .border_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.3))
                             .bg(gpui::Rgba {
                                 r: c.red,
                                 g: c.green,
@@ -1075,11 +1086,11 @@ impl gpui::Render for SetupDialog {
                             .min_h(px(40.))
                             .text_size(px(13.))
                             .child(label)
-                            .child(div().text_color(hsla(0., 0., 1., 0.6)).child(key)),
+                            .child(div().text_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.6)).child(key)),
                     );
                 }
                 right = right.child(
-                    Self::button("Learn Essential Shortcuts", "setup-shortcuts", false, true)
+                    self.button("Learn Essential Shortcuts", "setup-shortcuts", false, true)
                         .on_click(cx.listener(|this, _, _, cx| this.change(Step::Shortcuts, cx))),
                 );
             }
@@ -1126,7 +1137,7 @@ impl gpui::Render for SetupDialog {
             .items_center()
             .justify_center()
             .font_family(".SystemUIFont")
-            .text_color(gpui::white())
+            .text_color(self.palette.text)
             .bg(if self.onboarding {
                 rgb(0x3139fb).into()
             } else {
@@ -1149,7 +1160,7 @@ impl gpui::Render for SetupDialog {
                     .w(px(if access { 790. } else { 580. }))
                     .h(px(if access { 632. } else { 454. }))
                     .rounded(px(20.))
-                    .bg(rgb(0x151c30))
+                    .bg(if dark { rgb(0x151c30).into() } else { self.palette.surface })
                     .child(
                         div()
                             .absolute()
@@ -1187,7 +1198,7 @@ impl gpui::Render for SetupDialog {
                                     .mt(px(12.))
                                     .text_size(px(16.))
                                     .line_height(px(23.))
-                                    .text_color(hsla(0., 0., 1., 0.5))
+                                    .text_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.5))
                                     .flex()
                                     .flex_col()
                                     .gap(px(12.))
@@ -1217,7 +1228,7 @@ impl gpui::Render for SetupDialog {
                         ) && self.published.is_none(),
                         |card| {
                             card.child(
-                                Self::button("Back", "setup-back", false, !self.busy)
+                                self.button("Back", "setup-back", false, !self.busy)
                                     .absolute()
                                     .left(px(28.))
                                     .bottom(px(28.))
@@ -1236,7 +1247,7 @@ impl gpui::Render for SetupDialog {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_color(hsla(0., 0., 1., 0.7))
+                            .text_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.7))
                             .child(icons::control_sized(Icon::Close, 24.))
                             .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
                     )
@@ -1248,7 +1259,7 @@ impl gpui::Render for SetupDialog {
                             .flex()
                             .gap(px(8.))
                             .child(
-                                Self::button(
+                                self.button(
                                     if access {
                                         "Continue without restarting"
                                     } else if self.busy {
@@ -1271,7 +1282,7 @@ impl gpui::Render for SetupDialog {
                                 )),
                             )
                             .child(
-                                Self::button(label, "setup-next", true, enabled)
+                                self.button(label, "setup-next", true, enabled)
                                     .on_click(cx.listener(|this, _, _, cx| this.next(cx))),
                             ),
                     ),
