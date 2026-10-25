@@ -73,6 +73,8 @@ pub trait WebEngine {
     fn clear_browsing_data(&mut self, _storage:&StorageSelection, _categories:u32, _since:i64)->Result<NativeDataClear,String> {Err("Browsing-data removal is unavailable".into())}
     fn set_password_forms_enabled(&mut self, _enabled: bool) {}
     fn fill_password(&mut self,_view:ViewId,_token:engine::PasswordToken,_origin:&str,_credential:&engine::LoginCredential)->bool {false}
+    fn set_password_selection_active(&mut self,_view:ViewId,_active:bool) {}
+    fn select_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential,_field:u32)->bool { self.fill_password(view,token,origin,credential) }
     fn evaluate_script(&mut self, _view: ViewId, _url: &str, _source: &str) -> Result<engine::ScriptTicket,String> { Err("Script evaluation is unsupported".into()) }
     fn permission_pending(&self, _view: ViewId, _request: engine::PermissionRequestId) -> bool { false }
     fn respond_permission(&mut self, _view: ViewId, _request: engine::PermissionRequestId, _decision: engine::PermissionDecision) -> bool { false }
@@ -267,6 +269,8 @@ impl WebEngine for Chromium {
     fn respond_permission(&mut self, view: ViewId, request: engine::PermissionRequestId, decision: engine::PermissionDecision) -> bool { self.engine.respond_permission(view, request, decision) }
     fn set_password_forms_enabled(&mut self,enabled:bool) {self.engine.set_password_forms_enabled(enabled);}
     fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.engine.fill_password(view,token,origin,credential)}
+    fn set_password_selection_active(&mut self,view:ViewId,active:bool) {self.engine.set_password_selection_active(view,active)}
+    fn select_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential,field:u32)->bool {self.engine.select_password(view,token,origin,credential,field)}
     fn evaluate_script(&mut self, view: ViewId, url: &str, source: &str) -> Result<engine::ScriptTicket,String> { self.engine.evaluate_script(view,url,source) }
     fn request_quote(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_quote(view, request) }
     fn site_info(&self, view: ViewId) -> Option<engine::SiteInfo> { self.engine.site_info(view) }
@@ -997,6 +1001,25 @@ impl Pages {
         let Some(page)=store.pages.get(&identity.tab).filter(|p|p.identity==identity && p.owner==self.host) else{return false;};
         let view=page.view;
         store.engine.fill_password(view,token,origin,credential)
+    }
+
+    pub(crate) fn password_selection_active(&mut self, identity:PageIdentity, active:bool) {
+        let mut store=self.store.borrow_mut();
+        if let Some(view)=store.pages.get(&identity.tab).filter(|p|p.identity==identity && p.owner==self.host).map(|p|p.view) {store.engine.set_password_selection_active(view,active);}
+    }
+    pub(crate) fn select_password(&mut self, identity:PageIdentity, token:engine::PasswordToken, origin:&str, credential:&engine::LoginCredential,field:u32)->bool {
+        let mut store=self.store.borrow_mut();
+        let Some(page)=store.pages.get(&identity.tab).filter(|p|p.identity==identity && p.owner==self.host && p.visible) else{return false;};
+        let view=page.view;
+        store.engine.select_password(view,token,origin,credential,field)
+    }
+    pub(crate) fn password_anchor(&self, identity:PageIdentity, rect:[f64;4])->Option<Bounds> {
+        let store=self.store.borrow();
+        let page=store.pages.get(&identity.tab).filter(|p|p.identity==identity && p.owner==self.host && p.visible)?;
+        let scale=f64::from(store.engine.zoom_percent(page.view))/100.;
+        let [x,y,width,height]=rect.map(|v|v*scale);
+        if ![x,y,width,height].iter().all(|v|v.is_finite()) || width<=0. || height<=0. || x+width<=0. || y+height<=0. || x>=page.frame.width || y>=page.frame.height { return None; }
+        Some(Bounds {x:page.frame.x+x.max(0.),y:page.frame.y+y.max(0.),width:width.min(page.frame.width-x.max(0.)),height:height.min(page.frame.height-y.max(0.))})
     }
 
     pub(crate) fn accepts_identity(&self, identity: PageIdentity) -> bool {

@@ -13,7 +13,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | Rank | Baseline row / feature | Effort | Concrete fix / acceptance |
 |---:|---|:---:|---|
 | 1 | L571: "When opening Arc, restore windows from previous session" | L | **Completed:** atomic per-window checkpoint, Space/tab/Split/folder/sidebar/frame/display restoration, lazy background pages, private exclusion and shared crash recovery. Native macOS relaunch/forced-stop/disabled-preference acceptance; see [window restoration](WINDOW_RESTORATION.md). Windows/Linux runtime qualification remains B. |
-| 2 | L416: Profile: separate history, cookies, passwords, extensions | L | Extend saved-login fill to iframe/cross-origin forms and provide safe multiple-account selection. |
+| 2 | L416: Profile: separate history, cookies, passwords, extensions | L | **Fixed sub-gap:** iframe autofill and profile-bound username account selection now pass native synthetic checks; parent profile row remains partial. See delivery evidence. |
 | 3 | L192: Add Extension… / Manage Extensions… | L | Connect the qualified extension catalog/install/action engine bridge to Add/Manage Extensions. |
 | 4 | L499: Built-in ad and tracker blocker | L | Implement local request filtering with maintained ad/tracker rules and per-site exceptions. |
 | 5 | L293: History and bookmarks in suggestions (Chromium: History / Bookmark / Search History) | M | Persist visit frequency and rank typed local results by pinned/open/history tiers plus frequency and recency. |
@@ -256,3 +256,35 @@ About Echo, Import from Another Browser… and Set as Default Browser now call t
 - No new Arc session, pixel calibration, owner Space or system default modification. Existing action-row/dialog presentation is reused; no new visual parity claim. The broader Type Travel row stays partial for the remaining action catalogue. Baseline classification counts remain unchanged; only Reveal is promoted to done in this batch.
 
 The pre-strategy rename-dialog polish is preserved in the local stash `WIP rename dialog before functional release triage`; it is intentionally excluded from release-gap implementation.
+
+### Saved-login iframe fill and account selection — functional sub-gap completed
+
+Same-origin iframe forms autofill from the retained page's profile vault. As in
+the captured Arc reference, cross-origin forms remain empty until explicit
+selection. The GPUI username dropdown supports mouse, Up/Down, Return and Escape.
+CEF validates the current frame/document/origin; selected fills additionally bind
+the exact username/form/password elements. Native focus loss preserves this field
+capability; a DOM focus move revokes it. Navigation, other-profile credentials,
+stale vault replies and stale picker callbacks cannot retarget a choice.
+
+- Native current canonical CEF: `target/parity/functional-logins/echo-final-v2.log`
+  and `echo-final-v2-session.log`, three successful renderer fill acknowledgments,
+  CEF Complete and exit zero. `echo-frame-unique-final.png` verifies the unique
+  same-origin account; `echo-frame-cross-empty-final.png` verifies no cross-origin
+  automatic fill; `echo-frame-keyboard-final-v2.png` verifies beta;
+  `echo-frame-mouse-final-v2.png` verifies switching to alpha by mouse. All use
+  only the bundled local synthetic fixture and disposable profile.
+- Arc/Echo pair: `target/parity/functional-logins/{arc-iframe-accounts.png,
+  echo-iframe-accounts-pair.png}` and corresponding `*-crop.png`; inspected at
+  zoom. Owned Arc tabs/windows were closed in the shared Echo Test Space.
+- GPUI/engine regressions cover profile/frame/document isolation, explicit
+  cross-origin choice, stale navigation/dismissal, keyboard/mouse account choice,
+  geometry and CEF Return normalization. See [reference](SAVED_LOGIN_FRAMES.md).
+- Broader profile parity stays partial. Arc's safe suggested-value preview on
+  hover, exact glyph/font raster, closed-shadow forms and native other-platform
+  acceptance remain qualified. Existing unsigned-build vault Keychain access
+  blocked one cold-restart probe; a fresh disposable profile was used for the
+  accepted native run. No Keychain permissions were changed.
+- Final full workspace gate passed: 1,269 browser, 266 core, 179 engine tests
+  and all other enabled suites; one pre-existing AI test ignored. Log:
+  `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/login-full-tests-delivery.log`.

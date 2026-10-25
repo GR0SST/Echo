@@ -990,6 +990,7 @@ impl Engine {
             #[cfg(not(target_os = "macos"))]
             if let Some(browser) = view.browser.host() { browser.notify_move_or_resize_started(); }
             if !host::move_to(view.host, parent) { return false; }
+            passwords::set_selection(view.browser.identifier(),false);
             view.parent = parent;
             view.needs_layout = true;
         }
@@ -1007,6 +1008,7 @@ impl Engine {
             || self.inspectors.sessions.values().any(|session| session.status.inspected == id) { return None; }
         let next = target.next_id.checked_add(1)?;
         if !self.move_view(id, parent, frame) { return None; }
+        if let Some(view)=self.views.get(&id) { passwords::set_selection(view.browser.identifier(),false); }
         if let Some(view)=self.views.get(&id) {page_context::cancel(view.browser.identifier());}
         self.snapshots.close(id);
         self.archives.close(id);
@@ -1069,7 +1071,7 @@ impl Engine {
     }
 
     pub fn set_visible(&mut self, id: ViewId, visible: bool) {
-        if !visible { if let Some(view)=self.views.get(&id) { page_swipe::cancel(view.browser.identifier()); } }
+        if !visible { if let Some(view)=self.views.get(&id) { page_swipe::cancel(view.browser.identifier()); passwords::set_selection(view.browser.identifier(),false); } }
         if let Some(view) = self.views.get_mut(&id) {
             view.focus_state.set_visible(visible);
             if !visible && !cfg!(target_os = "macos") {
@@ -1208,8 +1210,15 @@ impl Engine {
         self.password_forms = enabled; true
     }
     pub fn fill_password(&mut self, id: ViewId, token: PasswordToken, origin: &str, credential: &LoginCredential) -> bool {
-        self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view|passwords::fill(&view.browser,token,origin,credential))
+        self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view|passwords::fill(&view.browser,token,origin,credential,false,0))
     }
+    pub fn set_password_selection_active(&mut self, id: ViewId, active: bool) {
+        if let Some(view) = self.views.get(&id).filter(|v|v.role==ViewRole::Page) { passwords::set_selection(view.browser.identifier(),active); }
+    }
+    pub fn select_password(&mut self, id: ViewId, token: PasswordToken, origin: &str, credential: &LoginCredential, field: u32) -> bool {
+        self.views.get(&id).filter(|view|view.role==ViewRole::Page).is_some_and(|view|passwords::fill(&view.browser,token,origin,credential,true,field))
+    }
+
     pub fn evaluate_script(&mut self, id: ViewId, expected_url: &str, source: &str) -> Result<ScriptTicket, String> {
         let page = self.views.get(&id).filter(|p|p.role==ViewRole::Page).ok_or("Unknown page")?;
         self.script_evaluations.request(id,&page.browser,&self.message_ids,expected_url,source)
@@ -1946,6 +1955,7 @@ fn shortcut_for_platform(event: &KeyEvent, macos: bool) -> Shortcut {
         || (!macos && has(sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN));
     let key = match event.windows_key_code {
         0x1b => "escape".to_string(),
+        0x0d => "enter".to_string(),
         VKEY_TAB => "tab".to_string(),
         VKEY_LEFT => "left".to_string(),
         VKEY_UP => "up".to_string(),
@@ -2010,8 +2020,13 @@ wrap_keyboard_handler! {
                 if let Some(browser)=browser.as_ref(){self.events.push((browser.identifier(),RawEvent::PreviewModifiers(shift)));}
             }
             let escape = shortcut_for(event);
+            // Field-local popup navigation; ordinary page keys and every other
+            // browser keep their existing routing while the picker is absent.
+            let password_key = browser.as_ref().is_some_and(|b| passwords::selection_active(b.identifier()))
+                && shortcut_key_down(event.type_) && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift
+                && matches!(escape.key.as_str(), "up"|"down"|"enter"|"escape");
             let peek_escape = policy.capture_escape && shortcut_key_down(event.type_) && escape.key == "escape" && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift;
-            let Some(shortcut) = peek_escape.then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts.lock().unwrap())) else {
+            let Some(shortcut) = (peek_escape || password_key).then_some(escape).or_else(|| intercepted_shortcut(event, &self.shortcuts.lock().unwrap())) else {
                 return i32::from(shortcut_key_down(event.type_) && browser.as_ref().is_some_and(|browser|
                     extensions::dispatch_key(browser.identifier(), event.windows_key_code, event.modifiers)));
             };
@@ -2194,6 +2209,16 @@ mod tests {
         assert!(!shortcut_key_down_for(KeyEventType::CHAR, false));
         assert!(!shortcut_key_down_for(KeyEventType::KEYDOWN, true));
         assert_eq!(shortcut_for_platform(&event, true).key, "\u{14}");
+    }
+
+    #[test]
+    fn cef_return_maps_to_popup_enter_on_every_platform() {
+        for macos in [false, true] {
+            for character in [0, 13] {
+                let event = KeyEvent { windows_key_code: 0x0d, unmodified_character: character, ..Default::default() };
+                assert_eq!(shortcut_for_platform(&event, macos).key, "enter");
+            }
+        }
     }
 
     #[test]

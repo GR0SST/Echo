@@ -241,6 +241,8 @@ fn password_manager_credentials_are_available_to_the_login_autofill_service(
                 token,
                 origin: ORIGIN.into(),
                 username_hint: zeroize::Zeroizing::new(String::new()),
+                anchor: None,
+            field:1,
             },
         },
     );

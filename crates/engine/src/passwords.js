@@ -5,7 +5,9 @@
   const value = Object.getOwnPropertyDescriptor(Input.prototype, 'value');
   const fields = Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, 'elements').get;
   const serialize = JSON.stringify.bind(JSON), URLType = URL, InputEventType = Event;
-  const origin = location.origin;
+  const origin = window.origin;
+  // A sandboxed opaque frame has a URL but no authority for that URL's logins.
+  if (origin === 'null' || origin !== location.origin) return () => false;
   const edited = new WeakSet(), filled = new WeakSet(), lastPassword = new WeakMap();
   const filledUser = new WeakMap();
   let reporting = false, filling = false, previous = null;
@@ -31,12 +33,57 @@
       before.find(e => usable(e) && e.type === 'email') || before.filter(usable).at(-1) || null;
   };
   const loginPasswords = form => action(form) === origin ? passwords(form).filter(e => !e.autocomplete.split(/\s+/).includes('new-password')) : [];
-  const requestFill = only => {
+  // Geometry only crosses frame boundaries. No capability, origin, account or
+  // secret is sent through postMessage; native CEF authenticates those separately.
+  const geometryRequests = new Map();
+  const anchorTag = 'echo-password-field-geometry-v1';
+  const sendParent = window.postMessage.bind(parent);
+  let focusedInput = null, focusedForm = null, focusedPassword = null, focusedField = 0;
+  const fieldAnchor = input => new Promise(resolve => {
+    const r = input.getBoundingClientRect(), rect = [r.x,r.y,r.width,r.height];
+    if (parent === window) { resolve(rect);return; }
+    const nonce = crypto.getRandomValues(new Uint32Array(4)).join('-');
+    geometryRequests.set(nonce, {resolve});
+    setTimeout(() => { const p=geometryRequests.get(nonce);geometryRequests.delete(nonce);p?.resolve?.(null); }, 300);
+    sendParent({tag:anchorTag,nonce,rect}, '*');
+  });
+  window.addEventListener('message', event => {
+    const m = event.data;
+    if (!m || m.tag !== anchorTag || typeof m.nonce !== 'string' || m.nonce.length > 64) return;
+    if (!Array.isArray(m.rect) || m.rect.length !== 4 || !m.rect.every(Number.isFinite)) return;
+    if (m.reply) {
+      if (event.source !== parent) return;
+      const p = geometryRequests.get(m.nonce);geometryRequests.delete(m.nonce);
+      if (p?.resolve) p.resolve(m.rect);
+      else if (p?.child) p.child.postMessage({...m,reply:true}, '*');
+      return;
+    }
+    const frame = [...document.querySelectorAll('iframe,frame')].find(f => f.contentWindow === event.source);
+    if (!frame) return;
+    const r = frame.getBoundingClientRect();
+    const sx = frame.offsetWidth ? r.width/frame.offsetWidth : 1, sy = frame.offsetHeight ? r.height/frame.offsetHeight : 1;
+    const rect = [r.x+(frame.clientLeft+m.rect[0])*sx,r.y+(frame.clientTop+m.rect[1])*sy,m.rect[2]*sx,m.rect[3]*sy];
+    if (parent === window) event.source.postMessage({tag:anchorTag,nonce:m.nonce,rect,reply:true}, '*');
+    else if (geometryRequests.size < 256) {
+      geometryRequests.set(m.nonce,{child:event.source});
+      setTimeout(() => geometryRequests.delete(m.nonce),300);
+      sendParent({tag:anchorTag,nonce:m.nonce,rect}, '*');
+    }
+  });
+  const requestFill = async (only, focus = null) => {
     for (const form of (only ? [only] : [...document.forms])) {
-      const password = loginPasswords(form).find(e => !read(e));
+      const password = loginPasswords(form).find(e => !read(e) || filled.has(e));
       if (!password) continue;
-      const user = username(form, password), hint = user ? read(user) : '';
-      if (hint.length <= 65536) report(serialize({kind:'fill',username_hint:hint}));
+      const user = username(form, password);
+      const hint = user && !(focus && filledUser.get(form) === read(user)) ? read(user) : '';
+      if (hint.length > 65536) return;
+      const anchor = focus && user === focus ? await fieldAnchor(user) : null;
+      if (focus && (document.activeElement !== focus || !visible(focus))) return;
+      if (anchor && (focusedInput !== focus || focusedForm !== form || focusedPassword !== password)) {
+        focusedField = (focusedField + 1) >>> 0;
+        focusedInput = focus;focusedForm = form;focusedPassword = password;
+      }
+      report(serialize({kind:'fill',username_hint:hint,anchor,field:anchor ? focusedField : 0}));
       return;
     }
   };
@@ -63,10 +110,31 @@
         }
         filledUser.delete(input.form);
       }
+      if (event.isTrusted && ['text','email'].includes(input.type)) requestFill(input.form,input);
     } catch {}
   }, true);
+  const dismissField = () => {
+    focusedInput = null;focusedForm = null;focusedPassword = null;
+    focusedField = (focusedField+1) >>> 0;report(serialize({kind:'dismiss'}));
+  };
+  document.addEventListener('focusout', event => {
+    // A native account window may temporarily take platform focus. Preserve the
+    // exact field capability across that blur; a DOM focus move still revokes it.
+    if (event.target === focusedInput && (event.relatedTarget || document.hasFocus())) dismissField();
+  }, true);
+  window.addEventListener('scroll', () => report(serialize({kind:'dismiss'})), true);
+  document.addEventListener('keydown', event => {
+    if (event.isTrusted && event.key === 'ArrowDown' && !event.ctrlKey && !event.metaKey && !event.altKey && event.target instanceof Input && event.target.form)
+      requestFill(event.target.form,event.target);
+  },true);
+  document.addEventListener('mousedown', event => {
+    const input=event.target;
+    if (event.isTrusted && input instanceof Input && input.form)
+      setTimeout(() => { if (document.activeElement === input) requestFill(input.form,input); },0);
+  },true);
   document.addEventListener('focusin', event => {
-    try { if (event.target instanceof Input && event.target.form) requestFill(event.target.form); } catch {}
+    if (focusedInput && event.target !== focusedInput) dismissField();
+    try { if (event.isTrusted && navigator.userActivation.isActive && event.target instanceof Input && event.target.form) requestFill(event.target.form,event.target); } catch {}
   }, true);
   document.addEventListener('submit', event => {
     try {
@@ -90,17 +158,19 @@
     }).observe(document.documentElement, {subtree:true,childList:true,attributes:true,attributeFilter:['type','style','class','hidden','disabled','readonly']});
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true}); else start();
-  return (user, password) => {
-    if (location.origin !== origin) return false;
+  return (user, password, selected, field) => {
+    if (location.origin !== origin || (selected && field !== focusedField)) return false;
     filling = true;
     let applied = false;
     try {
       for (const form of document.forms) {
-        const candidates = loginPasswords(form), target = candidates.find(e => !read(e));
-        if (!target) continue;
+        if (selected && (!focusedInput || focusedInput.form !== form || focusedForm !== form || !visible(focusedInput))) continue;
+        const candidates = loginPasswords(form), target = candidates.find(e => !read(e) || (selected && filled.has(e)));
+        if (!target || (selected && target !== focusedPassword)) continue;
         const input = username(form,target);
-        if (input && read(input) && read(input) !== user) continue;
-        if (input && !read(input)) write(input,user);
+        if (selected && input !== focusedInput) continue;
+        if (input && read(input) && read(input) !== user && !selected) continue;
+        if (input && (!read(input) || selected)) write(input,user);
         filledUser.set(form,user);
         write(target,password);filled.add(target);applied = true;
       }

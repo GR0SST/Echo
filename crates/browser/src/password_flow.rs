@@ -6,14 +6,14 @@ use crate::{
 };
 use engine::{LoginCredential, PasswordEvent, PasswordToken};
 use gpui::{
-    div, prelude::*, AnyElement, App, Context, Entity, Focusable, Global, Subscription,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    AnyElement, App, Context, Entity, Focusable, Global, Subscription, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, prelude::*,
 };
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -21,9 +21,12 @@ use std::{
 #[derive(Default)]
 pub(crate) struct PasswordFlow {
     documents: HashMap<PageIdentity, (PasswordToken, String, bool)>,
+    pub(crate) accounts: Option<crate::password_accounts::Accounts>,
+    frames: HashMap<(PageIdentity, String), (PasswordToken, String)>,
     pending: Option<Candidate>,
     pub(crate) prompt: Option<PromptHost>,
-    serial: u64,
+    pub(crate) serial: u64,
+    pub(crate) lookup_generation: u64,
 }
 struct Candidate {
     identity: PageIdentity,
@@ -84,7 +87,7 @@ pub(crate) fn lease(cx: &mut App) -> WriteLease {
     n.fetch_add(1, Ordering::SeqCst);
     WriteLease(n)
 }
-fn profile_key(identity: PageIdentity) -> String {
+pub(crate) fn profile_key(identity: PageIdentity) -> String {
     identity
         .profile
         .storage_key()
@@ -109,7 +112,7 @@ impl Record {
 pub(crate) trait Store: Send + Sync {
     fn lookup(&self, profile: &str, origin: &str) -> Result<(bool, Vec<LoginCredential>), String>;
     fn save(&self, profile: &str, origin: &str, credential: &LoginCredential)
-        -> Result<(), String>;
+    -> Result<(), String>;
     fn block(&self, profile: &str, origin: &str) -> Result<(), String>;
     fn list(&self, profile: &str) -> Result<Vec<Record>, String>;
     fn insert(&self, profile: &str, record: &Record) -> Result<(), String>;
@@ -290,8 +293,30 @@ impl BrowserWindow {
                 .as_ref()
                 .is_some_and(|p| p.borrow().accepts_identity(id))
     }
-    fn password_owner(&self, id: PageIdentity) -> bool {
+    pub(crate) fn password_owner(&self, id: PageIdentity) -> bool {
         self.password_source(id) && self.browser.space().active_tab == Some(id.tab)
+    }
+    pub(crate) fn password_cross_origin(&self, identity: PageIdentity, origin: &str) -> bool {
+        self.passwords
+            .documents
+            .get(&identity)
+            .is_some_and(|d| d.1 != origin)
+    }
+    pub(crate) fn password_document(
+        &self,
+        identity: PageIdentity,
+        token: PasswordToken,
+        origin: &str,
+    ) -> bool {
+        self.passwords
+            .documents
+            .get(&identity)
+            .is_some_and(|d| d.0 == token && d.1 == origin)
+            || self
+                .passwords
+                .frames
+                .iter()
+                .any(|((id, _), (t, o))| *id == identity && *t == token && o == origin)
     }
     pub(crate) fn password_event(
         &mut self,
@@ -303,11 +328,45 @@ impl BrowserWindow {
             return;
         }
         match event {
+            PasswordEvent::Dismissed { token, origin } => {
+                if self.password_owner(identity)
+                    && self.passwords.accounts.as_ref().is_some_and(|a|
+                        a.identity == identity && a.token == token && a.origin == origin)
+                {
+                    self.close_password_accounts(cx);
+                }
+            }
+            PasswordEvent::FrameDocument {
+                token,
+                origin,
+                frame,
+                ..
+            } => {
+                self.passwords
+                    .frames
+                    .insert((identity, frame), (token, origin));
+                if self
+                    .passwords
+                    .accounts
+                    .as_ref()
+                    .is_some_and(|a| !self.password_document(a.identity, a.token, &a.origin))
+                {
+                    self.close_password_accounts(cx);
+                }
+            }
             PasswordEvent::Document {
                 token,
                 origin,
                 has_password_form,
             } => {
+                if self
+                    .passwords
+                    .documents
+                    .get(&identity)
+                    .is_none_or(|d| d.0 != token)
+                {
+                    self.passwords.frames.retain(|(id, _), _| *id != identity);
+                }
                 if let Some(pages) = &self.pages {
                     self.passwords
                         .documents
@@ -324,53 +383,72 @@ impl BrowserWindow {
                 {
                     self.close_password_prompt(PopupFocus::Restore, cx);
                 }
+                if self
+                    .passwords
+                    .accounts
+                    .as_ref()
+                    .is_some_and(|a| !self.password_document(a.identity, a.token, &a.origin))
+                {
+                    self.close_password_accounts(cx);
+                }
                 self.maybe_password_prompt(cx);
             }
             PasswordEvent::FillRequested {
                 token,
                 origin,
                 username_hint,
+                anchor,
+                field,
             } => {
                 if !self.password_owner(identity) {
                     return;
                 }
-                if !self
-                    .passwords
-                    .documents
-                    .get(&identity)
-                    .is_some_and(|d| d.0 == token && d.1 == origin)
-                {
+                if !self.password_document(identity, token, &origin) {
                     return;
                 }
+                self.passwords.lookup_generation = self.passwords.lookup_generation.wrapping_add(1);
+                let generation = self.passwords.lookup_generation;
                 let backend = storage(cx);
                 let key = profile_key(identity);
+                let store_revision = revision(&key, cx);
                 let task = cx.background_executor().spawn(async move {
-                    let (_, rows) = backend.lookup(&key, &origin)?;
-                    let mut matches = rows.into_iter().filter(|r| {
-                        username_hint.is_empty() || r.username() == username_hint.as_str()
+                    let (_, mut rows) = backend.lookup(&key, &origin)?;
+                    rows.retain(|r| {
+                        username_hint.is_empty()
+                            || if anchor.is_some() {
+                                r.username()
+                                    .to_lowercase()
+                                    .starts_with(&username_hint.to_lowercase())
+                            } else {
+                                r.username() == username_hint.as_str()
+                            }
                     });
-                    let first = matches.next();
-                    let unique = matches.next().is_none();
-                    drop(matches);
-                    Ok::<_, String>((origin, if unique { first } else { None }))
+                    rows.sort_by(|a, b| a.username().cmp(b.username()));
+                    Ok::<_, String>((origin, rows))
                 });
                 cx.spawn(async move |this, cx| {
-                    if let Ok((origin, Some(credential))) = task.await {
-                        let _ = this.update(cx, |this, _| {
-                            if this.password_owner(identity)
-                                && this
-                                    .passwords
-                                    .documents
-                                    .get(&identity)
-                                    .is_some_and(|d| d.0 == token && d.1 == origin)
+                    if let Ok((origin, rows)) = task.await {
+                        let _ = this.update(cx, |this, cx| {
+                            if revision(&profile_key(identity), cx) != store_revision
+                                || this.passwords.lookup_generation != generation
+                                || !this.password_owner(identity)
+                                || !this.password_document(identity, token, &origin)
                             {
-                                if let Some(p) = &this.pages {
-                                    p.borrow_mut().fill_password(
-                                        identity,
-                                        token,
-                                        &origin,
-                                        &credential,
-                                    );
+                                return;
+                            }
+                            if let Some(anchor) = anchor {
+                                this.show_password_accounts(
+                                    identity, token, origin, rows, anchor, field, cx,
+                                );
+                            } else if this
+                                .passwords
+                                .documents
+                                .get(&identity)
+                                .is_some_and(|d| d.1 == origin)
+                            {
+                                if let (Some(p), Some(credential)) = (&this.pages, rows.first()) {
+                                    p.borrow_mut()
+                                        .fill_password(identity, token, &origin, credential);
                                 }
                             }
                         });
@@ -457,6 +535,7 @@ impl BrowserWindow {
         }
         let token = self.passwords.documents[&candidate.identity].0;
         let candidate = self.passwords.pending.take().unwrap();
+        self.close_password_accounts(cx);
         let host = url::Url::parse(&candidate.origin)
             .ok()
             .and_then(|u| u.host_str().map(str::to_owned))
@@ -602,7 +681,8 @@ impl BrowserWindow {
             }
         });
     }
-    pub(crate) fn resize_password_prompt(&self, window: &gpui::Window, cx: &mut Context<Self>) {
+    pub(crate) fn resize_password_prompt(&mut self, window: &gpui::Window, cx: &mut Context<Self>) {
+        self.close_password_accounts(cx);
         let Some(child) = self.passwords.prompt.as_ref().and_then(|h| h.overlay) else {
             return;
         };
@@ -617,6 +697,13 @@ impl BrowserWindow {
         });
     }
     pub(crate) fn validate_password_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.passwords.accounts.as_ref().is_some_and(|a| {
+            !self.password_owner(a.identity)
+                || !self.password_document(a.identity, a.token, &a.origin)
+                || revision(&profile_key(a.identity), cx) != a.revision
+        }) {
+            self.close_password_accounts(cx);
+        }
         if self
             .passwords
             .prompt
@@ -627,6 +714,7 @@ impl BrowserWindow {
         }
     }
     pub(crate) fn close_password_prompt(&mut self, focus: PopupFocus, cx: &mut Context<Self>) {
+        self.close_password_accounts(cx);
         self.passwords.pending = None;
         if let Some(h) = self.passwords.prompt.take() {
             h.dialog.update(cx, |d, cx| d.close(cx));
@@ -636,6 +724,12 @@ impl BrowserWindow {
     }
     pub(crate) fn take_password_child(&mut self, cx: &mut App) -> Option<WindowHandle<Overlay>> {
         self.passwords.pending = None;
+        if let Some(a) = self.passwords.accounts.take() {
+            if let Some(p) = &self.pages {
+                p.borrow_mut().password_selection_active(a.identity, false);
+            }
+            return a.overlay;
+        }
         let h = self.passwords.prompt.take()?;
         h.dialog.update(cx, |d, cx| d.close(cx));
         h.overlay

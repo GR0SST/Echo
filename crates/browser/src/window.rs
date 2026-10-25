@@ -600,6 +600,7 @@ pub enum OverlayKind {
     NewMenu,
     UserProfileDialog,
     PasswordPrompt,
+    PasswordAccounts,
     Setup,
     ThemeEditor,
     GitHubConnection,
@@ -685,6 +686,7 @@ impl Render for Overlay {
                     OverlayKind::GitHubConnection => browser.render_live_connection(cx),
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
                     OverlayKind::PasswordPrompt => browser.render_password_prompt(),
+                    OverlayKind::PasswordAccounts => browser.render_password_accounts(cx),
                     OverlayKind::Setup => browser.render_setup(),
                     OverlayKind::TransientPicker => browser.render_transient_picker(window, cx),
                 };
@@ -941,6 +943,7 @@ impl BrowserWindow {
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() { this.restore_dormant=false; this.checkpoint_window(true); this.restore_site_settings_peek_focus(cx); this.maybe_password_prompt(cx); }
+            this.password_accounts_activation(window.is_window_active(),cx);
             this.set_little_archive_active(window.is_window_active(),cx);
             this.max_preview_activation(window.is_window_active(),cx);
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
@@ -1518,6 +1521,9 @@ impl BrowserWindow {
     }
 
     fn defer_engine_shortcut(&mut self, shortcut: engine::Shortcut, source: Option<crate::pages::InputOrigin>, window: &mut Window, cx: &mut Context<Self>) {
+        if !shortcut.cmd && !shortcut.ctrl && !shortcut.alt && !shortcut.shift
+            && source.is_some_and(|s| self.passwords.accounts.as_ref().is_some_and(|a|a.identity==s.identity) && self.pages.as_ref().is_some_and(|p|p.borrow().accepts_input_origin(s)))
+            && self.password_accounts_key(&shortcut.key,window,cx) { return; }
         if shortcut.key=="escape" && self.max.preview.open.is_some() { self.dismiss_max_preview(cx); return; }
         self.engine_shortcut_pending = true;
         let browser = cx.entity().downgrade();

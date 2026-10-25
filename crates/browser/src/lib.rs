@@ -50,6 +50,7 @@ mod import_credentials;
 mod password_store;
 mod password_prompt;
 mod password_flow;
+mod password_accounts;
 mod password_manager;
 mod blank_window;
 mod transient;

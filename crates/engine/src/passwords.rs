@@ -5,7 +5,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::Deserialize;
 use std::{
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{LazyLock, Mutex},
 };
 use zeroize::Zeroizing;
@@ -66,12 +66,22 @@ impl std::fmt::Debug for LoginCredential {
         f.write_str("LoginCredential([redacted])")
     }
 }
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub enum PasswordEvent {
     Document {
         token: PasswordToken,
         origin: String,
         has_password_form: bool,
+    },
+    Dismissed {
+        token: PasswordToken,
+        origin: String,
+    },
+    FrameDocument {
+        token: PasswordToken,
+        origin: String,
+        has_password_form: bool,
+        frame: String,
     },
     Submitted {
         token: PasswordToken,
@@ -82,12 +92,16 @@ pub enum PasswordEvent {
         token: PasswordToken,
         origin: String,
         username_hint: Zeroizing<String>,
+        anchor: Option<[f64; 4]>,
+        field: u32,
     },
 }
 impl std::fmt::Debug for PasswordEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Document { .. } => "PasswordDocument",
+            Self::Dismissed { .. } | Self::Document { .. } | Self::FrameDocument { .. } => {
+                "PasswordDocument"
+            }
             Self::Submitted { .. } => "PasswordSubmitted([redacted])",
             Self::FillRequested { .. } => "PasswordFillRequested([redacted])",
         })
@@ -104,8 +118,16 @@ enum Wire {
         password: Zeroizing<String>,
         action_origin: String,
     },
+    #[serde(rename = "dismiss")]
+    Dismiss,
     #[serde(rename = "fill")]
-    Fill { username_hint: Zeroizing<String> },
+    Fill {
+        username_hint: Zeroizing<String>,
+        #[serde(default)]
+        anchor: Option<[f64; 4]>,
+        #[serde(default)]
+        field: u32,
+    },
 }
 pub(crate) fn web_origin(url: &str) -> Option<String> {
     let url = url::Url::parse(url).ok()?;
@@ -117,16 +139,30 @@ fn decode(token: PasswordToken, origin: &str, json: &str) -> Option<PasswordEven
         return None;
     }
     match serde_json::from_str::<Wire>(json).ok()? {
+        Wire::Dismiss => Some(PasswordEvent::Dismissed {
+            token,
+            origin: origin.into(),
+        }),
         Wire::Document { has_password_form } => Some(PasswordEvent::Document {
             token,
             origin: origin.into(),
             has_password_form,
         }),
-        Wire::Fill { username_hint } if username_hint.len() <= MAX_FIELD => {
+        Wire::Fill {
+            username_hint,
+            anchor,
+            field,
+        } if username_hint.len() <= MAX_FIELD
+            && anchor.is_none_or(|r| {
+                r.iter().all(|v| v.is_finite() && v.abs() < 1e7) && r[2] > 0. && r[3] > 0.
+            }) =>
+        {
             Some(PasswordEvent::FillRequested {
                 token,
                 origin: origin.into(),
                 username_hint,
+                anchor,
+                field,
             })
         }
         Wire::Submitted {
@@ -143,11 +179,22 @@ fn decode(token: PasswordToken, origin: &str, json: &str) -> Option<PasswordEven
 }
 #[derive(Default)]
 struct Known {
-    browsers: HashMap<i32, VecDeque<(PasswordToken, String)>>,
+    browsers: HashMap<(i32, String), VecDeque<(PasswordToken, String)>>,
+    selections: HashSet<i32>,
 }
 impl Known {
-    fn register(&mut self, browser: i32, token: PasswordToken, origin: String) {
-        let entries = self.browsers.entry(browser).or_default();
+    fn register(&mut self, browser: i32, frame: &str, token: PasswordToken, origin: String) {
+        if !self.browsers.contains_key(&(browser, frame.into()))
+            && self
+                .browsers
+                .keys()
+                .filter(|(id, _)| *id == browser)
+                .count()
+                >= 256
+        {
+            return;
+        }
+        let entries = self.browsers.entry((browser, frame.into())).or_default();
         if entries.iter().any(|(old, _)| *old == token) {
             return;
         }
@@ -156,16 +203,16 @@ impl Known {
             entries.pop_front();
         }
     }
-    fn origin(&self, browser: i32, token: PasswordToken) -> Option<&str> {
+    fn origin(&self, browser: i32, frame: &str, token: PasswordToken) -> Option<&str> {
         self.browsers
-            .get(&browser)?
+            .get(&(browser, frame.into()))?
             .iter()
             .find(|(old, _)| *old == token)
             .map(|(_, o)| o.as_str())
     }
-    fn current(&self, browser: i32, token: PasswordToken) -> bool {
+    fn current(&self, browser: i32, frame: &str, token: PasswordToken) -> bool {
         self.browsers
-            .get(&browser)
+            .get(&(browser, frame.into()))
             .and_then(|v| v.back())
             .is_some_and(|(t, _)| *t == token)
     }
@@ -173,8 +220,25 @@ impl Known {
 static KNOWN: LazyLock<Mutex<Known>> = LazyLock::new(|| Mutex::new(Known::default()));
 pub(crate) fn closed(browser: i32) {
     if let Ok(mut known) = KNOWN.lock() {
-        known.browsers.remove(&browser);
+        known.browsers.retain(|(id, _), _| *id != browser);
+        known.selections.remove(&browser);
     }
+}
+
+pub(crate) fn set_selection(browser: i32, active: bool) {
+    if let Ok(mut known) = KNOWN.lock() {
+        if active {
+            known.selections.insert(browser);
+        } else {
+            known.selections.remove(&browser);
+        }
+    }
+}
+pub(crate) fn selection_active(browser: i32) -> bool {
+    KNOWN
+        .lock()
+        .ok()
+        .is_some_and(|k| k.selections.contains(&browser))
 }
 
 // Browser-process endpoint: CEF supplies the sender browser/frame; the document
@@ -196,7 +260,7 @@ pub(crate) fn receive(
     let (Some(browser), Some(frame)) = (browser, frame) else {
         return true;
     };
-    if source != ProcessId::RENDERER || frame.is_main() == 0 {
+    if source != ProcessId::RENDERER {
         return true;
     }
     if !browser
@@ -218,18 +282,58 @@ pub(crate) fn receive(
     let Ok(mut known) = KNOWN.lock() else {
         return true;
     };
+    let frame_id = CefString::from(&frame.identifier()).to_string();
     if name == REGISTER {
         if text.len() <= 8192
             && web_origin(&CefString::from(&frame.url()).to_string()).as_deref()
                 == Some(text.as_str())
         {
-            known.register(browser.identifier(), token, text.to_string());
+            if frame.is_main() != 0 {
+                known
+                    .browsers
+                    .retain(|(id, f), _| *id != browser.identifier() || *f == frame_id);
+            }
+            known.register(browser.identifier(), &frame_id, token, text.to_string());
+            if !known.current(browser.identifier(), &frame_id, token) {
+                return true;
+            }
+            // Until DOM discovery finishes, conservatively suppress save prompts.
+            let event = if frame.is_main() != 0 {
+                PasswordEvent::Document {
+                    token,
+                    origin: text.to_string(),
+                    has_password_form: true,
+                }
+            } else {
+                PasswordEvent::FrameDocument {
+                    token,
+                    origin: text.to_string(),
+                    has_password_form: true,
+                    frame: frame_id.clone(),
+                }
+            };
+            events.push((browser.identifier(), crate::RawEvent::Password(event)));
         }
-    } else if let Some(origin) = known.origin(browser.identifier(), token) {
-        if let Some(event) = decode(token, origin, &text) {
+    } else if let Some(origin) = known.origin(browser.identifier(), &frame_id, token) {
+        if let Some(mut event) = decode(token, origin, &text) {
+            if frame.is_main() == 0 {
+                if let PasswordEvent::Document {
+                    token,
+                    origin,
+                    has_password_form,
+                } = event
+                {
+                    event = PasswordEvent::FrameDocument {
+                        token,
+                        origin,
+                        has_password_form,
+                        frame: frame_id.clone(),
+                    };
+                }
+            }
             let submitted = matches!(event, PasswordEvent::Submitted { .. });
             if submitted
-                || (known.current(browser.identifier(), token)
+                || (known.current(browser.identifier(), &frame_id, token)
                     && web_origin(&CefString::from(&frame.url()).to_string()).as_deref()
                         == Some(origin))
             {
@@ -267,7 +371,7 @@ wrap_v8_handler! {
             let Some(value)=arguments.filter(|a|a.len()==1).and_then(|a|a[0].as_ref()).filter(|v|v.is_string()!=0) else{return 0;};
             let Some(context)=v8_context_get_current_context() else{return 0;};
             let (Some(browser),Some(frame))=(context.browser(),context.frame()) else{return 0;};
-            if browser.identifier()!=self.browser || frame.is_main()==0 || CefString::from(&frame.identifier()).to_string()!=self.frame {return 0;}
+            if browser.identifier()!=self.browser || CefString::from(&frame.identifier()).to_string()!=self.frame {return 0;}
             let valid=CONTEXTS.with_borrow(|c|c.get(&(self.browser,self.frame.clone())).is_some_and(|e|e.token==self.token&&e.context.is_same(Some(&mut context.clone()))!=0));
             if !valid{return 0;}
             let json=Zeroizing::new(CefString::from(&value.string_value()).to_string());
@@ -291,8 +395,7 @@ pub(crate) fn destroyed(browser: Option<&Browser>) {
     }
 }
 pub(crate) fn created(browser: &Browser, frame: &Frame, context: &V8Context) {
-    if frame.is_main() == 0 || !ENABLE.with_borrow(|e| e.get(&browser.identifier()) == Some(&true))
-    {
+    if !ENABLE.with_borrow(|e| e.get(&browser.identifier()) == Some(&true)) {
         return;
     }
     let Some(origin) = web_origin(&CefString::from(&frame.url()).to_string()) else {
@@ -368,7 +471,7 @@ pub(crate) fn renderer_receive(
     }
     let Some(args) = message
         .argument_list()
-        .filter(|a| a.size() == 4 && (0..4).all(|i| a.get_type(i) == ValueType::STRING))
+        .filter(|a| a.size() == 6 && (0..6).all(|i| a.get_type(i) == ValueType::STRING))
     else {
         return true;
     };
@@ -405,13 +508,33 @@ pub(crate) fn renderer_receive(
         }
         if let Some(fill) = &entry.fill {
             if entry.context.enter() != 0 {
-                fill.execute_function(
+                let result = fill.execute_function(
                     None,
                     Some(&[
                         v8_value_create_string(Some(&CefString::from(user.as_str()))),
                         v8_value_create_string(Some(&CefString::from(password.as_str()))),
+                        v8_value_create_bool(i32::from(
+                            CefString::from(&args.string(4)).to_string() == "1",
+                        )),
+                        v8_value_create_uint(
+                            CefString::from(&args.string(5))
+                                .to_string()
+                                .parse::<u32>()
+                                .unwrap_or(0),
+                        ),
                     ]),
                 );
+                // Disposable native acceptance reports only success, never a
+                // credential, origin, field value or document capability.
+                #[cfg(debug_assertions)]
+                if std::env::var("BROWSER_PASSWORD_STORE_FIXTURE").as_deref() == Ok("1")
+                    && std::env::var_os("BROWSER_DATA_DIR").as_deref().map(std::path::Path::new)
+                        .and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("browser-drive-profile"))
+                {
+                    eprintln!("[password-fill-probe] applied={}", result.as_ref().is_some_and(|v| v.is_bool() != 0 && v.bool_value() != 0));
+                }
+                #[cfg(not(debug_assertions))]
+                let _ = result;
                 entry.context.exit();
             }
         }
@@ -423,17 +546,26 @@ pub(crate) fn fill(
     token: PasswordToken,
     origin: &str,
     credential: &LoginCredential,
+    selected: bool,
+    field: u32,
 ) -> bool {
-    let Some(frame) = browser.main_frame() else {
+    let frame_id = {
+        let Ok(known) = KNOWN.lock() else {
+            return false;
+        };
+        let Some(((_, frame), _)) = known.browsers.iter().find(|((id, frame), _)| {
+            *id == browser.identifier()
+                && known.current(*id, frame, token)
+                && known.origin(*id, frame, token) == Some(origin)
+        }) else {
+            return false;
+        };
+        frame.clone()
+    };
+    let Some(frame) = browser.frame_by_identifier(Some(&CefString::from(frame_id.as_str()))) else {
         return false;
     };
     if web_origin(&CefString::from(&frame.url()).to_string()).as_deref() != Some(origin) {
-        return false;
-    }
-    if !KNOWN.lock().ok().is_some_and(|known| {
-        known.current(browser.identifier(), token)
-            && known.origin(browser.identifier(), token) == Some(origin)
-    }) {
         return false;
     }
     let Some(mut message) = process_message_create(Some(&FILL.into())) else {
@@ -443,11 +575,14 @@ pub(crate) fn fill(
         return false;
     };
     let wire_token = token.0.to_string();
+    let wire_field = field.to_string();
     for (i, value) in [
         wire_token.as_str(),
         origin,
         credential.username(),
         credential.password(),
+        if selected { "1" } else { "0" },
+        wire_field.as_str(),
     ]
     .into_iter()
     .enumerate()
@@ -487,12 +622,31 @@ mod tests {
         ));
         assert!(decode(token, "https://other.test", json).is_none());
         assert!(decode(token,"https://example.test",r#"{"kind":"submitted","username":"u","password":"","action_origin":"https://example.test"}"#).is_none());
-        assert!(decode(
-            token,
-            "https://example.test",
-            r#"{"kind":"fill","username_hint":"u","unexpected":"field"}"#
-        )
-        .is_none());
+        assert!(
+            decode(
+                token,
+                "https://example.test",
+                r#"{"kind":"fill","username_hint":"u","unexpected":"field"}"#
+            )
+            .is_none()
+        );
+    }
+    #[test]
+    fn iframe_documents_cannot_fill_sibling_frames_or_reuse_navigated_tokens() {
+        let mut known = Known::default();
+        let a = PasswordToken::from_raw(1).unwrap();
+        let b = PasswordToken::from_raw(2).unwrap();
+        let c = PasswordToken::from_raw(3).unwrap();
+        known.register(10, "main", a, "https://outer.test".into());
+        known.register(10, "child", b, "https://login.test".into());
+        assert!(known.current(10, "main", a));
+        assert!(known.current(10, "child", b));
+        assert!(known.origin(10, "main", b).is_none());
+        assert!(known.origin(20, "child", b).is_none());
+        known.register(10, "child", c, "https://other.test".into());
+        assert!(!known.current(10, "child", b));
+        assert!(known.current(10, "child", c));
+        assert!(known.current(10, "main", a));
     }
     #[test]
     fn password_debug_and_event_debug_never_include_credentials() {
@@ -523,21 +677,21 @@ mod tests {
         let a = PasswordToken::from_raw(1).unwrap();
         let b = PasswordToken::from_raw(2).unwrap();
         let c = PasswordToken::from_raw(3).unwrap();
-        known.register(10, a, "https://a.test".into());
-        known.register(20, b, "https://b.test".into());
-        assert_eq!(known.origin(10, a), Some("https://a.test"));
-        assert!(known.origin(20, a).is_none());
-        known.register(10, b, "https://a.test".into());
-        assert!(!known.current(10, a));
-        assert!(known.current(10, b));
+        known.register(10, "main", a, "https://a.test".into());
+        known.register(20, "main", b, "https://b.test".into());
+        assert_eq!(known.origin(10, "main", a), Some("https://a.test"));
+        assert!(known.origin(20, "main", a).is_none());
+        known.register(10, "main", b, "https://a.test".into());
+        assert!(!known.current(10, "main", a));
+        assert!(known.current(10, "main", b));
         assert_eq!(
-            known.origin(10, a),
+            known.origin(10, "main", a),
             Some("https://a.test"),
             "A submitted old document may finish navigation"
         );
-        known.register(10, c, "https://other.test".into());
-        assert!(known.origin(10, a).is_none());
-        assert!(known.current(10, c));
+        known.register(10, "main", c, "https://other.test".into());
+        assert!(known.origin(10, "main", a).is_none());
+        assert!(known.current(10, "main", c));
         assert!(PasswordToken::from_raw(0).is_none());
         assert!(PasswordToken::parse("0").is_none());
         assert!(PasswordToken::parse(&"1".repeat(40)).is_none());

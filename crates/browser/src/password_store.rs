@@ -832,6 +832,20 @@ pub(crate) fn native_fixture(phase: &str) -> Result<()> {
             "Password fixture requires an explicitly enabled disposable drive profile.".into(),
         );
     }
+    if phase == "frames-seed" {
+        for (origin, user, password) in [
+            ("http://127.0.0.1:53861", "echo-test-alpha", "test-only-alpha-53861"),
+            ("http://127.0.0.1:53861", "echo-test-beta", "test-only-beta-53861"),
+            ("http://127.0.0.1:53862", "echo-frame-test", "synthetic-frame-only"),
+            ("http://127.0.0.1:53863", "echo-test-alpha", "test-only-alpha-53861"),
+            ("http://127.0.0.1:53863", "echo-test-beta", "test-only-beta-53861"),
+        ] {
+            crate::import_credentials::SystemCredentialStore.store("default", &importer::Credential {
+                origin: origin.into(), username: user.into(), password: password.into(),
+            })?;
+        }
+        return Ok(());
+    }
     if phase == "manager-seed" {
         let imported=importer::parse_password_csv(b"url,username,password\nhttp://127.0.0.1:53849/login,echo-password-test-69cec731,echo-native-manager-seed-only\n")?;
         crate::import_credentials::SystemCredentialStore.store("default", &imported[0])?;

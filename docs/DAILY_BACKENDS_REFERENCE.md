@@ -27,7 +27,7 @@ Storage tests cover disk persistence, random nonces, ciphertext-only files,
 profile substitution, lost keys, damaged ciphertext, CSV origin normalization,
 update/delete/time filtering and one-time legacy migration. Native acceptance
 uses only `echo-password-test-69cec731.invalid` and synthetic credentials in an
-explicitly enabled disposable drive profile. Main-frame login save/autofill now share this vault; the GPUI manager now shares this vault. Storage implementation alone does not close password parity.
+explicitly enabled disposable drive profile. Website login save/autofill now share this vault; the GPUI manager now shares this vault. Storage implementation alone does not close password parity.
 
 ## Arc entry points and packed UI source
 
@@ -150,7 +150,7 @@ not the still-pending GPUI save sheet, autofill or password manager.
 
 ## Website login bridge
 
-The CEF renderer reports only its main-frame HTTP(S) document. A native private
+The CEF renderer reports its HTTP(S) documents, including iframes. A native private
 V8 callback is captured by an isolated closure, never installed on `window`.
 Registration binds a random document token to CEF's browser/frame/origin; the
 browser process supplies the immutable tab/profile ownership. Fill replies must
@@ -163,8 +163,11 @@ GPUI sheet waits until the form disappears, suppresses unchanged saved passwords
 and never-save origins, and expires pending requests after 30 seconds. Failed
 forms that remain on screen do not trigger a prompt. Accepted Save/Never writes
 run off the UI thread and hold application quit until their atomic vault update
-finishes. Autofill chooses a sole account or the exact typed username; typed
-passwords are never overwritten. Notes survive subsequent login updates.
+finishes. Same-origin automatic fill chooses the first matching account; typed
+passwords are never overwritten. Cross-origin frames require explicit account
+selection in the username dropdown. Notes survive subsequent login updates.
+See [frame/account reference](SAVED_LOGIN_FRAMES.md) for current ownership,
+field-binding, native keyboard/mouse evidence and visual qualifications.
 
 The sheet uses the isolated `arc-password-isolated-save-prompt.png` reference:
 450 × 273 px, 18 px corners, 62 px key tile, and Arc's Save / No / Never on this
@@ -178,8 +181,9 @@ Arc (left) and Echo (right), inspected locally; minor font/icon/pixel-rounding
 differences remain. `autofill.png` shows only the synthetic username and a masked
 password. Fifteen focused tests cover origin/token authority, save/no/never,
 expired documents, foreground-only presentation, per-profile policy, ciphertext
-and quit leases. Cross-origin/iframe/closed-shadow forms, account-choice UI,
-light sheets and native non-macOS behavior remain unverified. A vanished form is
+and quit leases. Iframe fill and account selection have since passed the native
+synthetic check documented above. Closed-shadow forms, light save sheets and
+native non-macOS behavior remain unverified. A vanished form is
 a conservative success heuristic, not Chromium's internal login-success signal.
 
 The first native attempt used the optional local source-built CEF and failed
