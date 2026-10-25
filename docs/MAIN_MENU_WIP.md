@@ -332,3 +332,32 @@ opening on Windows/Linux remains unverified.
 The corrected full local suite passes 1,095 browser, 241 core, 151 engine and
 18 AI tests plus importer/bundle checks (one existing native-credential
 integration test ignored). No handoff waiver is used.
+
+
+## File → Capture… entry
+
+The nib/runtime File order places Capture… after Share… and before full-page,
+portrait, Save and Print. The menu now enters the existing scoped area-capture
+implementation (upstream 9898165), including through the overlay action root
+when a Command Bar draft owns focus. No new renderer or page navigation is
+created. Full-page and portrait entry points remain missing.
+
+Two new GPUI tests select the File item from the retained page and a typed
+Command Bar draft, verify capture focus and cancellation, and reject renderer
+creation/navigation/reload or late native focus. The full local suite passes
+1,097 browser, 241 core, 151 engine and 18 AI tests plus importer/bundle checks;
+one existing native-credential integration test is ignored. Native File entry,
+draft dismissal, Escape and zero-status CEF shutdown pass in
+`echo-file-capture/`.
+
+The fresh guarded Arc File reference is
+`arc-file-capture-reference/capture.png`, compared with
+`echo-file-capture/capture.png`; both prompt bodies are 355 × 67 px and 35 px
+above the page bottom. Inspected prompt crops are in `pairs/`. This is entry
+integration, not complete capture visual parity: Arc initially says “Drag to
+capture a portion of this page” with a gray page, while Echo initially queries
+an invented center pointer, outlines an element and says “Click or drag…”.
+Arc's instruction changes after interaction (`arc-capture-drag-reference/`).
+Initial pointer/hover and instruction state, backdrop treatment and remaining
+cursor/glyph/motion details need a follow-up. Arc cleanup inventories are empty;
+no capture was saved to its Library.

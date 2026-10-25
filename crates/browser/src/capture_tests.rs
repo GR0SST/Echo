@@ -203,3 +203,40 @@ fn capture_cannot_adopt_a_screenshot_pending_before_its_document_epoch(cx: &mut 
         .iter()
         .any(|call| matches!(call, Call::Snapshot(..))));
 }
+
+
+#[gpui::test]
+fn file_capture_menu_opens_over_the_retained_page_and_escape_cancels(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    fake.0.borrow_mut().capture_supported = true;
+    let original = active_url(&view, visual);
+    fake.take_calls();
+    dispatch_menu(visual, "File", "Capture…");
+    let mut overlay = current(&view, visual);
+    assert!(overlay.debug_bounds("page-capture").is_some());
+    overlay.simulate_keystrokes("escape");
+    overlay.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.capture.is_none()));
+    assert_eq!(active_url(&view, visual), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..))));
+}
+
+#[gpui::test]
+fn file_capture_menu_from_command_bar_closes_the_draft_and_keeps_capture_focus(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    fake.0.borrow_mut().capture_supported = true;
+    visual.simulate_keystrokes("cmd-t");
+    let mut command = bar(&view, visual);
+    command.simulate_input("unfinished capture query");
+    fake.take_calls();
+    dispatch_menu(&mut command, "File", "Capture…");
+    visual.executor().advance_clock(Duration::from_millis(700));
+    visual.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+    let mut overlay = current(&view, visual);
+    assert!(overlay.debug_bounds("page-capture").is_some());
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_) | Call::Navigate(..) | Call::Create(..))));
+    overlay.simulate_keystrokes("escape");
+    overlay.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.capture.is_none()));
+}
