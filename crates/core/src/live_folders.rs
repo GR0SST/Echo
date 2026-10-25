@@ -329,3 +329,21 @@ mod connection_tests {
         assert!(restored.user_profile(other).unwrap().github.is_none());
     }
 }
+#[cfg(test)]
+mod dynamic_contents_tests {
+    #[test]
+    fn live_folders_reject_static_children_without_moving_or_allocating_items() {
+        let mut browser = crate::Browser::new();
+        let space = browser.space().id;
+        let live = browser.create_github_live_folder(space).unwrap();
+        let normal = browser.create_folder(space, None, "Normal").unwrap();
+        let tab = browser.new_tab("https://example.com/", std::time::SystemTime::UNIX_EPOCH);
+        let before = crate::session::to_json(&browser);
+        assert!(browser.create_folder(space, Some(live), "Nested").is_none());
+        assert!(!browser.move_item_to_folder(tab, live));
+        assert!(!browser.can_move_folder(normal, space, Some(live)));
+        assert_eq!(crate::session::to_json(&browser), before);
+        assert!(browser.folder(live).unwrap().items.is_empty());
+        assert!(browser.space().today.iter().any(|t| t.id == tab));
+    }
+}

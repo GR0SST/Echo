@@ -683,11 +683,14 @@ impl BrowserWindow {
                 let item_id = *item_id;
                 let url = url.clone();
                 let unread = item.unread();
-                let selector = self.sidebar_debug_name(format!("live-item-{item_id}"));
+                let selector = self.sidebar_debug_name(format!("live-item-{}-{item_id}", id.get()));
                 let title = title.clone();
                 let page_title = title.clone();
                 div()
-                    .id(("live-item", item_id))
+                    .id(gpui::SharedString::from(format!(
+                        "live-item-{}-{item_id}",
+                        id.get()
+                    )))
                     .debug_selector(move || selector.clone())
                     .h(px(crate::window::SIDEBAR_ROW_HEIGHT))
                     .flex_none()
@@ -889,9 +892,10 @@ impl BrowserWindow {
             .child(div().id("live-folder-delete").debug_selector(||"live-folder-delete".into()).relative().w(px(450.)).h(px(292.)).rounded(px(18.)).border_1()
                 .border_color(gpui::rgb(if p.dark{0x020202}else{0xbcbcc4})).bg(p.surface).shadow_lg().text_color(p.text)
                 .child(gpui::img(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png,include_bytes!("../assets/echo-icon.png").to_vec()))).absolute().left(px(38.)).top(px(42.)).size(px(52.)))
-                .child(div().absolute().left(px(38.)).right(px(28.)).top(px(116.)).text_size(px(18.)).line_height(px(22.)).font_weight(gpui::FontWeight::BOLD).child(format!("Delete your {} Live Folder?",folder.name)))
-                .child(div().absolute().left(px(38.)).right(px(38.)).top(px(152.)).text_size(px(14.)).line_height(px(18.)).text_color(gpui::rgb(if p.dark{0xb8b8c0}else{0x44455d})).child("You can restore this folder at any time by right-clicking the sidebar."))
-                .child(div().absolute().right(px(28.)).bottom(px(28.)).flex().gap(px(8.))
+                // Match the native title ink width with GPUI's system-font metrics.
+                .child(div().absolute().left(px(37.)).right(px(28.)).top(px(115.)).text_size(px(17.2)).line_height(px(22.)).font_weight(gpui::FontWeight::BOLD).text_color(if p.dark{gpui::white().into()}else{p.text}).child(format!("Delete your {} Live Folder?",folder.name)))
+                .child(div().absolute().left(px(37.)).right(px(38.)).top(px(152.)).text_size(px(14.)).line_height(px(18.)).text_color(gpui::rgb(if p.dark{0xb8b8c0}else{0x44455d})).child("You can restore this folder at any time by right-clicking the sidebar."))
+                .child(div().absolute().right(px(27.)).bottom(px(28.)).flex().gap(px(8.))
                     .child(button("live-delete-cancel","Cancel",false).on_click(cx.listener(|b,_,_,cx|b.close_live_connection(cx))))
                     .child(button("live-delete-confirm","Delete Folder",true).on_click(cx.listener(|b,_,_,cx|b.submit_live_connection(cx))))))
             .into_any_element()

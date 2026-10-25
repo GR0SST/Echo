@@ -121,7 +121,7 @@ fn live_folder_connect_refresh_filters_and_repository_visibility_preserve_read_s
         .unwrap()
         .iter()
         .any(|p| p.contains("review-requested%3Atester")));
-    click(cx, "live-item-42");
+    click(cx, test_selector(format!("live-item-{}-42", id.get())));
     view.read_with(cx, |b, _| {
         assert_eq!(
             b.browser.active_tab().unwrap().url,
@@ -220,4 +220,53 @@ fn live_folder_sheet_rejects_profile_reassignment_without_connecting(cx: &mut Te
     assert!(view.read_with(cx, |b, _| b.live_folders.sheet.is_none()));
     assert!(store.0.lock().unwrap().is_empty());
     assert!(api.0.lock().unwrap().is_empty());
+}
+#[gpui::test]
+fn repeated_pull_request_ids_keep_independent_live_folder_controls(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    services(cx);
+    let (first, second) = view.update(cx, |b, cx| {
+        let source = b.browser.space().id;
+        let other = b.browser.spaces.iter().find(|s| s.id != source).unwrap().id;
+        let pair = b.edit_browser(|model| {
+            let first = model.create_github_live_folder(source).unwrap();
+            let second = model.create_github_live_folder(other).unwrap();
+            for id in [first, second] {
+                model.live_folder_mut(id).unwrap().items =
+                    vec![browser_core::live_folders::LiveItem {
+                        id: 42,
+                        title: "Shared PR fixture".into(),
+                        url: "https://github.com/echo/test/pull/7".into(),
+                        repository: "echo/test".into(),
+                        updated_at: "2026-10-25T00:00:00Z".into(),
+                        read_revision: None,
+                    }];
+            }
+            assert!(model.move_folder(second, source, None));
+            (first, second)
+        });
+        cx.notify();
+        pair
+    });
+    cx.run_until_parked();
+    let a = test_selector(format!("live-item-{}-42", first.get()));
+    let b = test_selector(format!("live-item-{}-42", second.get()));
+    assert_ne!(cx.debug_bounds(a).unwrap(), cx.debug_bounds(b).unwrap());
+    click(cx, b);
+    view.read_with(cx, |b, _| {
+        assert_eq!(
+            b.browser.active_tab().unwrap().url,
+            "https://github.com/echo/test/pull/7"
+        );
+        assert_eq!(
+            b.browser
+                .folder(second)
+                .unwrap()
+                .live
+                .as_ref()
+                .unwrap()
+                .unread_count(),
+            0
+        );
+    });
 }

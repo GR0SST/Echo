@@ -24,7 +24,9 @@ guard cleanup records report no owned windows left. No Space was deleted.
 - Delete confirmation: centered 450×292 panel, radius18, app icon52,
   **Delete your Pull Requests Live Folder?**,
   **You can restore this folder at any time by right-clicking the sidebar.**
-  Cancel / ESC and Delete Folder / Return controls.
+  Cancel / ESC and Delete Folder / Return controls. The title is calibrated
+  to the native 311px ink span; GPUI requires 17.2px with its system-font shaping
+  and a 1px baseline/inset correction.
 - Arc's executable strings additionally define **Repositories** and
   **This list is generated based on your currently active pull requests.**
   Repository options are therefore derived from PR results, not an invented
@@ -49,7 +51,7 @@ folder moves are rejected. A canceled/stale form cannot attach a connection to
 another profile; an unaccepted successful connection is retired on a worker.
 
 Rows, badges and unread dots work against mocked REST data. Actual authenticated
-Arc item layout, sorting/status treatment, exact unread semantics, repository
+Arc item layout, sorting/status treatment, long-list/show-more presentation, exact unread semantics, repository
 submenu geometry and website-cookie SSO remain **visually unverified**. Do not
 claim complete authenticated parity. Fine-grained token access is limited to its
 selected resource owner/repositories; Team Review Requests requires an
@@ -57,7 +59,7 @@ organization-owned token. API details: [GitHub client](../crates/github/README.m
 
 ## Evidence and validation
 
-Full-frame pairs (all1000×760) are saved locally under
+Full-frame pairs (all 1000×760) are saved locally under
 `target/parity/live-folders/`:
 
 | Surface | Arc | Echo |
@@ -72,15 +74,16 @@ Full-frame pairs (all1000×760) are saved locally under
 `echo_github_connection_{Light,Dark}.png` records the PAT adaptation. Echo uses
 an isolated profile with inert/public tab fixtures; its placeholder Favorites
 favicons and surrounding tab contents are not parity claims. Initial captures
-are retained in `before/`. Both native appearances exited cleanly with status0.
+are retained in `before/`. Both native appearances exited cleanly with status 0.
 
 Added browser tests:
 - `live_folder_creation_masks_token_and_cancel_never_connects`
 - `live_folder_connect_refresh_filters_and_repository_visibility_preserve_read_state`
 - `live_folder_delete_requires_confirmation_and_preserves_space`
 - `live_folder_sheet_rejects_profile_reassignment_without_connecting`
+- `repeated_pull_request_ids_keep_independent_live_folder_controls`
 
-Four core tests cover unread revisions, session persistence, connection reuse and
-profile isolation. Nine mocked client tests cover ETag/304, pagination, query
+Five core tests cover unread revisions, session persistence, connection reuse,
+profile isolation and rejection of static children without moving/allocating data. Nine mocked client tests cover ETag/304, pagination, query
 filters/team membership, rate limits, cancellation, invalid/incomplete responses,
 credential validation and disconnect. Full `cargo test` is required before push.
