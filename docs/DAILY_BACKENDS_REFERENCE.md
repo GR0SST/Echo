@@ -27,8 +27,7 @@ Storage tests cover disk persistence, random nonces, ciphertext-only files,
 profile substitution, lost keys, damaged ciphertext, CSV origin normalization,
 update/delete/time filtering and one-time legacy migration. Native acceptance
 uses only `echo-password-test-69cec731.invalid` and synthetic credentials in an
-explicitly enabled disposable drive profile. Main-frame login save/autofill now share this vault; the manager UI remains
-pending. Storage implementation alone does not close password parity.
+explicitly enabled disposable drive profile. Main-frame login save/autofill now share this vault; the GPUI manager now shares this vault. Storage implementation alone does not close password parity.
 
 ## Arc entry points and packed UI source
 
@@ -189,3 +188,64 @@ run explicitly used the portable CEF distribution. No shared native source or
 CEF distribution was changed. Two further guarded manager-reference attempts
 stopped at the header/sidebar checks, before profile reassignment; their owned
 windows were closed and every baseline window preserved.
+
+
+## GPUI password manager
+
+Settings → Profiles → Passwords and the Manage Passwords Command Bar action open
+`browser://password-manager/passwords`. A Settings selection is carried as an
+explicit profile ID, including profiles without a Space. Invalid/deleted owners
+never fall back to the default vault. Search uses the observed `q` route parameter.
+Add/Edit, multiline encrypted notes, copy/reveal, immediate Delete and five-second
+Undo share the login/import store. Atomic insert refuses duplicate replacement;
+identity edits reject stale/colliding rows. Accepted writes retain the existing
+quit lease, and per-profile revisions refresh other manager windows. Filter,
+editor and asynchronous results are tied to the original tab/profile/route.
+Site/help links retain the manager's profile, creating a profile window if needed.
+No Chromium WebUI is used, and no account/sync/cloud controls are included.
+
+The live list reference `arc-password-manager-fixture-list.png` contains only the
+synthetic `echo-password-test-69cec731` credential in our isolated Arc profile
+`Echo Password Fixture 69cec731`; the URL contains the synthetic filter before
+first paint. `arc-password-add.png` supplies the 512 × 521 Add card. Labels,
+1,000 UTF-16-unit notes, detail/edit structure and deletion/Undo strings come from
+Arc's packed resource 20047 and English locale entries 8390–8518. The exact help
+URL `https://support.google.com/chrome?p=settings_password` is present as UTF-16
+in ArcCore at offset 231591584 (`arc-password-help-source.txt`). Echo draws its
+own key, globe, eye and row-arrow geometry; no Arc assets ship.
+
+Inspected Arc-left/Echo-right comparisons: `password-manager-list-pairs.png`,
+`password-manager-add-pairs.png` and both `-2x.png` crops. Small typography/icon
+and focus-state differences remain. The detail-entry reference attempt remained
+on Arc's list, so the source-derived detail/edit layouts, device-presence auth,
+light appearance, affiliated-domain grouping and advanced error states remain
+partial, not visually verified. Reveal/copy re-read the OS-backed vault, but do
+not implement an additional Touch ID/device-presence challenge.
+
+Native `password-manager-native-run.lPRXJr/{add,reopen}.log` verifies imported CSV
+and GPUI Add use the canonical encrypted profile vault, cold restart, row opening,
+Delete and Undo with actual clicks. Both native processes reach CEF Complete and
+exit 0; ciphertext and session JSON contain neither synthetic passwords nor note.
+Seven GPUI tests exercise editing, multiline input, cancellation, duplicates,
+unused/deleted owners, late filter events, cross-window refresh and login-store
+integration, plus atomic duplicate coverage in the vault tests.
+
+Several manager-reference sessions stopped on newly appearing owned Arc popups;
+separate guarded recovery scripts restored Echo Test to Grosst and closed all
+recorded owned windows while preserving baseline windows. No owner profile or
+password was inspected or changed. The isolated fixture profile retains only its
+synthetic password; no Space was created or deleted. Final sidebar verification
+is recorded in `arc-password-final-cleanup.log`.
+
+Clear Browsing Data remains blocked at native-build qualification: the final
+read-only preflight reports `Digest mismatch: cef/BUILD.gn`
+(`data-preflight-final.log`). The direct browser-process BrowsingDataRemover C ABI
+patch under `data-native-source/` is prepared but unapplied and uncompiled.
+Shared native sources/distributions were not modified. No dialog is shipped that
+silently substitutes cookie-only deletion or ignores the selected time range.
+
+Final manager full-suite run (`password-manager-full-tests-final.log`) passed:
+1,196 browser, 252 core, 169 engine, 18 AI (one existing ignored), two bundle,
+four importer and one bootstrap test. The integration rerun
+`password-flow-native-run.fKLwUW/{form,autofill}.log` also passed save → immediate
+native quit → cold-restart autofill, with both processes exiting 0.

@@ -13,12 +13,15 @@ pub(crate) fn open(cx: &mut App) {
     open_for_source(source, cx);
 }
 
-fn open_for_source(source: UserProfileId, cx: &mut App) {
+fn open_for_source(source:UserProfileId,cx:&mut App){open_for_source_with_url(source,None,cx);}
+pub(crate) fn open_url_for_profile(source:UserProfileId,url:String,cx:&mut App){open_for_source_with_url(source,Some(url),cx);}
+fn open_for_source_with_url(source: UserProfileId, url:Option<String>, cx: &mut App) {
     if crate::quit::is_quitting() { return; }
     let normal = match new_window::normal_source(cx) {
         Ok(normal) => normal,
         Err(error) => { crate::show_session_error(error, cx); return; }
     };
+    if !normal.profile.read_settings(|b|b.user_profile(source).is_some()){return;}
     let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
     let handle = cx.open_window(WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -43,7 +46,8 @@ fn open_for_source(source: UserProfileId, cx: &mut App) {
     cx.spawn(async move |cx| {
         let _ = handle.update(cx, |view, window, cx| {
             window.activate_window();
-            view.open_command_bar(Target::NewTab, "", window, cx);
+            if let Some(url)=url {view.edit_browser(|b|b.new_tab(url,std::time::SystemTime::now()));view.focus(window);cx.notify();}
+            else {view.open_command_bar(Target::NewTab, "", window, cx);}
         });
     }).detach();
 }

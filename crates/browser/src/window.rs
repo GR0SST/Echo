@@ -468,6 +468,7 @@ pub enum Command {
     OpenTaskManager,
     AirTrafficControl,
     SearchSettings,
+    ManagePasswords,
     ToggleSpaceHeader,
     ToggleFavoritesOrdering,
     RevealTab,
@@ -724,6 +725,7 @@ pub struct BrowserWindow {
     pub(crate) theme_system_dark: bool,
     theme_background_blurred: Option<bool>,
     pub(crate) passwords: crate::password_flow::PasswordFlow,
+    pub(crate) password_manager: crate::password_manager::State,
     pub(crate) user_profile_dialog: Option<crate::user_profiles::ProfileDialogHost>,
     pub(crate) setup: Option<crate::setup::SetupHost>,
     pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
@@ -883,6 +885,7 @@ impl BrowserWindow {
             let _ = closing_root.update(cx, |this, cx| this.close_window(cx));
             false
         });
+        crate::password_flow::observe_changes(cx).detach();
         cx.observe_window_bounds(window, |this, window, cx| {
             if let Some(parent) = crate::native::view_of(window) { crate::native::sync_overlays(parent); }
             this.resize_peek(window, cx);
@@ -1025,6 +1028,7 @@ impl BrowserWindow {
             theme_background_blurred: None,
             theme_system_dark: matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark),
             passwords: Default::default(),
+            password_manager: crate::password_manager::State::new(cx),
             user_profile_dialog: None,
             setup: None,
             tab_rename: None,
@@ -1913,6 +1917,7 @@ impl BrowserWindow {
                 (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
                 (Command::Settings, "Settings…", "settings|preferences", true),
+                (Command::ManagePasswords, "Manage Passwords", "manage passwords|password manager|passwords", true),
                 (Command::SearchSettings, "Search Settings", "search settings|manage search engines|site search", true),
                 (Command::AirTrafficControl, "Air Traffic Control", "air traffic control|link routing|routes", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
@@ -2311,6 +2316,7 @@ impl BrowserWindow {
             Command::Settings => self.open_settings(cx),
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
             Command::SearchSettings => self.search_settings_from_command(cx),
+            Command::ManagePasswords => self.passwords_from_command(cx),
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.begin_space_creation(self.browser.space().id, cx),
             Command::NewProfile(space) => self.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx),
@@ -3329,6 +3335,7 @@ impl BrowserWindow {
                 .size(px(18.)).flex_none().flex().items_center().justify_center()
                 .text_color(gpui::rgb(0x1c73e8)).child(crate::icons::ionicon("settings-sharp", 14., 1.)).into_any_element();
         }
+        if tab.url.starts_with(crate::password_manager::URL) {return div().size(px(18.)).flex_none().flex().items_center().justify_center().child(crate::password_manager::favicon()).into_any_element();}
         let icon = match self.browser.favicon(profile, &tab.url) {
             Some(png) => {
                 let style = self.favicon_styles.borrow_mut().get(png);
@@ -4078,11 +4085,12 @@ impl BrowserWindow {
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
         let history_open = !virtual_page && self.history_is_open();
         let search_settings_open = !virtual_page && self.search_settings_owner().is_some();
+        let password_manager_open = !virtual_page && self.password_manager_is_open();
         let more_settings_open = !virtual_page && self.more_settings_is_open();
         let site_settings_open = !virtual_page && (self.site_settings_is_open() || more_settings_open);
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if virtual_page || split_open || history_open || search_settings_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if virtual_page || split_open || history_open || search_settings_open || password_manager_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -4130,6 +4138,7 @@ impl BrowserWindow {
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
                     .when(search_settings_open, |this| this.child(self.render_search_settings(window,cx)))
+                    .when(password_manager_open, |this| this.child(self.render_password_manager(window,cx)))
                     .when(site_settings_open, |this| this.child(if more_settings_open { self.render_more_settings_root() } else { self.render_site_settings_page(cx) }))
                     .children(placeholder.map(|(title, url)| {
                         div().debug_selector(|| "page-placeholder".into())
@@ -4594,6 +4603,7 @@ impl Render for BrowserWindow {
         self.refresh_profile_projection();
         self.reconcile_managed_search(cx);
         self.sync_search_settings();
+        self.sync_password_manager(cx);
         self.start_max_title_jobs(cx);
         self.sync_site_settings(window,cx);
         if self.peek_owner.is_some() { return self.render_peek(window, cx); }

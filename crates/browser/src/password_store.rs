@@ -256,6 +256,25 @@ impl<K: Keys> Vault<K> {
         });
         self.save(&data)
     }
+    pub(crate) fn insert(&self, credential: &Credential, note: &str, modified: i64) -> Result<()> {
+        validate(credential)?;
+        validate_note(note)?;
+        let _lock = ACCESS.lock().map_err(|_| ERROR)?;
+        let mut data = self.load()?;
+        if data
+            .passwords
+            .iter()
+            .any(|row| same_identity(&row.credential, credential))
+        {
+            return Err(ERROR.into());
+        }
+        data.passwords.push(SavedPassword {
+            credential: copy_credential(credential),
+            note: Zeroizing::new(note.into()),
+            modified,
+        });
+        self.save(&data)
+    }
     /// Editing an identity is one authenticated write. A stale selection or a
     /// conflicting identity never deletes or overwrites another credential.
     pub(crate) fn replace(
@@ -598,6 +617,21 @@ mod tests {
         assert_eq!(vault.list().unwrap().len(), 1);
     }
     #[test]
+    fn password_manager_insert_rejects_duplicates_without_replacing_password_or_note() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = Vault::with_keys(root.path(), "default", MemoryKeys::default()).unwrap();
+        vault
+            .insert(&credential("first-password"), "first-note", 1)
+            .unwrap();
+        assert!(vault
+            .insert(&credential("replacement-password"), "replacement-note", 2)
+            .is_err());
+        let rows = vault.list().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].credential.password == "first-password");
+        assert!(rows[0].note.as_str() == "first-note");
+    }
+    #[test]
     fn password_vault_empty_lookups_do_not_create_a_key_or_persist_a_vault() {
         let root = tempfile::tempdir().unwrap();
         let vault = Vault::with_keys(root.path(), "default", MemoryKeys::default()).unwrap();
@@ -797,6 +831,30 @@ pub(crate) fn native_fixture(phase: &str) -> Result<()> {
         return Err(
             "Password fixture requires an explicitly enabled disposable drive profile.".into(),
         );
+    }
+    if phase == "manager-seed" {
+        let imported=importer::parse_password_csv(b"url,username,password\nhttp://127.0.0.1:53849/login,echo-password-test-69cec731,echo-native-manager-seed-only\n")?;
+        crate::import_credentials::SystemCredentialStore.store("default", &imported[0])?;
+        return Ok(());
+    }
+    if phase == "manager-verify" || phase == "manager-after-delete" {
+        let rows = crate::import_credentials::vault("default")?.list()?;
+        let seed = rows.iter().any(|r| {
+            r.credential.origin == "http://127.0.0.1:53849"
+                && r.credential.username == "echo-password-test-69cec731"
+                && r.credential.password == "echo-native-manager-seed-only"
+        });
+        let added = rows.iter().any(|r| {
+            r.credential.origin == "https://echo-password-manager-added.invalid"
+                && r.credential.username == "manager-added-user"
+                && r.credential.password == "echo-native-manager-added-only"
+                && r.note.as_str() == "native manager note"
+        });
+        let expected = if phase == "manager-verify" { 2 } else { 1 };
+        if !seed || rows.len() != expected || added != (phase == "manager-verify") {
+            return Err("Manager native fixture state differs from its synthetic records.".into());
+        }
+        return Ok(());
     }
     let profile = "password-native-check";
     let rows = importer::parse_password_csv(b"url,username,password\nhttps://echo-password-test-69cec731.invalid/login,echo-test-user,echo-native-test-only-password\n")?;

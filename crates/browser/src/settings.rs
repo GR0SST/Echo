@@ -560,6 +560,7 @@ impl SettingsWindow {
             .into_any_element()
     }
     fn profiles(&self, cx: &mut Context<Self>) -> AnyElement {
+        let password_owner=self.selected_profile;
         let colors = self.colors;
         let browser = self.profile.settings_snapshot();
         let profile = browser
@@ -728,7 +729,10 @@ impl SettingsWindow {
                     ]
                     .into_iter()
                     .map(|(label, icon, color)| {
-                        row()
+                        row().id(label)
+                            .when(label=="Passwords",|row|row.debug_selector(||"settings-passwords".into()).cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{
+                                if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::password_manager::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,cx);}
+                            })))
                             .min_h(px(34.))
                             .justify_start()
                             .gap(px(8.))

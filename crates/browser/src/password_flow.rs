@@ -41,9 +41,32 @@ pub(crate) struct PromptHost {
     candidate: Candidate,
 }
 #[derive(Default)]
+struct Changes(HashMap<String, u64>);
+impl Global for Changes {}
+pub(crate) fn revision(profile: &str, cx: &App) -> u64 {
+    cx.try_global::<Changes>()
+        .and_then(|c| c.0.get(profile).copied())
+        .unwrap_or(0)
+}
+pub(crate) fn publish_change(profile: String, cx: &mut App) {
+    if !cx.has_global::<Changes>() {
+        cx.set_global(Changes::default());
+    }
+    cx.update_global::<Changes, _>(|changes, _| {
+        let n = changes.0.entry(profile).or_default();
+        *n = n.wrapping_add(1);
+    });
+}
+pub(crate) fn observe_changes(cx: &mut Context<BrowserWindow>) -> Subscription {
+    if !cx.has_global::<Changes>() {
+        cx.set_global(Changes::default());
+    }
+    cx.observe_global::<Changes>(|this, cx| this.password_store_changed(cx))
+}
+#[derive(Default)]
 struct Writes(Arc<AtomicUsize>);
 impl Global for Writes {}
-struct WriteLease(Arc<AtomicUsize>);
+pub(crate) struct WriteLease(Arc<AtomicUsize>);
 impl Drop for WriteLease {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
@@ -53,7 +76,7 @@ pub(crate) fn writes_pending(cx: &App) -> bool {
     cx.try_global::<Writes>()
         .is_some_and(|w| w.0.load(Ordering::SeqCst) > 0)
 }
-fn lease(cx: &mut App) -> WriteLease {
+pub(crate) fn lease(cx: &mut App) -> WriteLease {
     if !cx.has_global::<Writes>() {
         cx.set_global(Writes::default());
     }
@@ -68,11 +91,36 @@ fn profile_key(identity: PageIdentity) -> String {
         .unwrap_or_else(|| "default".into())
 }
 
-trait Store: Send + Sync {
+#[derive(Clone)]
+pub(crate) struct Record {
+    pub origin: String,
+    pub credential: LoginCredential,
+    pub note: zeroize::Zeroizing<String>,
+}
+impl Record {
+    fn imported(&self) -> importer::Credential {
+        importer::Credential {
+            origin: self.origin.clone(),
+            username: self.credential.username().into(),
+            password: self.credential.password().into(),
+        }
+    }
+}
+pub(crate) trait Store: Send + Sync {
     fn lookup(&self, profile: &str, origin: &str) -> Result<(bool, Vec<LoginCredential>), String>;
     fn save(&self, profile: &str, origin: &str, credential: &LoginCredential)
         -> Result<(), String>;
     fn block(&self, profile: &str, origin: &str) -> Result<(), String>;
+    fn list(&self, profile: &str) -> Result<Vec<Record>, String>;
+    fn insert(&self, profile: &str, record: &Record) -> Result<(), String>;
+    fn replace(
+        &self,
+        profile: &str,
+        old_origin: &str,
+        old_user: &str,
+        record: &Record,
+    ) -> Result<(), String>;
+    fn remove(&self, profile: &str, origin: &str, user: &str) -> Result<(), String>;
 }
 struct NativeStore;
 impl Store for NativeStore {
@@ -106,10 +154,45 @@ impl Store for NativeStore {
     fn block(&self, profile: &str, origin: &str) -> Result<(), String> {
         crate::import_credentials::vault(profile)?.block(origin)
     }
+    fn list(&self, profile: &str) -> Result<Vec<Record>, String> {
+        Ok(crate::import_credentials::vault(profile)?
+            .list()?
+            .into_iter()
+            .filter_map(|r| {
+                Some(Record {
+                    origin: r.credential.origin.clone(),
+                    credential: LoginCredential::new(
+                        &r.credential.username,
+                        &r.credential.password,
+                    )?,
+                    note: r.note,
+                })
+            })
+            .collect())
+    }
+    fn insert(&self, profile: &str, r: &Record) -> Result<(), String> {
+        crate::import_credentials::vault(profile)?.insert(
+            &r.imported(),
+            &r.note,
+            chrono::Utc::now().timestamp(),
+        )
+    }
+    fn replace(&self, profile: &str, o: &str, u: &str, r: &Record) -> Result<(), String> {
+        crate::import_credentials::vault(profile)?.replace(
+            o,
+            u,
+            &r.imported(),
+            &r.note,
+            chrono::Utc::now().timestamp(),
+        )
+    }
+    fn remove(&self, profile: &str, o: &str, u: &str) -> Result<(), String> {
+        crate::import_credentials::vault(profile)?.remove(o, u)
+    }
 }
 struct Storage(Arc<dyn Store>);
 impl Global for Storage {}
-fn storage(cx: &mut App) -> Arc<dyn Store> {
+pub(crate) fn storage(cx: &mut App) -> Arc<dyn Store> {
     if !cx.has_global::<Storage>() {
         #[cfg(not(test))]
         let backend: Arc<dyn Store> = Arc::new(NativeStore);
@@ -123,7 +206,7 @@ fn storage(cx: &mut App) -> Arc<dyn Store> {
 #[derive(Default)]
 struct MemoryStore(
     std::sync::Mutex<(
-        HashMap<(String, String, String), LoginCredential>,
+        HashMap<(String, String, String), Record>,
         std::collections::HashSet<(String, String)>,
     )>,
 );
@@ -135,20 +218,65 @@ impl Store for MemoryStore {
             s.1.contains(&(p.into(), o.into())),
             s.0.iter()
                 .filter(|((profile, origin, _), _)| profile == p && origin == o)
-                .map(|(_, c)| c.clone())
+                .map(|(_, c)| c.credential.clone())
                 .collect(),
         ))
     }
     fn save(&self, p: &str, o: &str, c: &LoginCredential) -> Result<(), String> {
-        self.0
-            .lock()
-            .unwrap()
-            .0
-            .insert((p.into(), o.into(), c.username().into()), c.clone());
+        let mut s = self.0.lock().unwrap();
+        let key = (p.into(), o.into(), c.username().into());
+        let note = s.0.get(&key).map(|r| r.note.clone()).unwrap_or_default();
+        s.0.insert(
+            key,
+            Record {
+                origin: o.into(),
+                credential: c.clone(),
+                note,
+            },
+        );
         Ok(())
     }
     fn block(&self, p: &str, o: &str) -> Result<(), String> {
         self.0.lock().unwrap().1.insert((p.into(), o.into()));
+        Ok(())
+    }
+    fn list(&self, p: &str) -> Result<Vec<Record>, String> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .0
+            .iter()
+            .filter(|((profile, _, _), _)| profile == p)
+            .map(|(_, r)| r.clone())
+            .collect())
+    }
+    fn insert(&self, p: &str, r: &Record) -> Result<(), String> {
+        let mut s = self.0.lock().unwrap();
+        let key = (p.into(), r.origin.clone(), r.credential.username().into());
+        if s.0.contains_key(&key) {
+            return Err("Existing password".into());
+        }
+        s.0.insert(key, r.clone());
+        Ok(())
+    }
+    fn replace(&self, p: &str, o: &str, u: &str, r: &Record) -> Result<(), String> {
+        let mut s = self.0.lock().unwrap();
+        let old = (p.into(), o.into(), u.into());
+        let new = (p.into(), r.origin.clone(), r.credential.username().into());
+        if !s.0.contains_key(&old) || (old != new && s.0.contains_key(&new)) {
+            return Err("Changed password".into());
+        }
+        s.0.remove(&old);
+        s.0.insert(new, r.clone());
+        Ok(())
+    }
+    fn remove(&self, p: &str, o: &str, u: &str) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .0
+            .remove(&(p.into(), o.into(), u.into()));
         Ok(())
     }
 }
@@ -363,23 +491,23 @@ impl BrowserWindow {
                     let backend = storage(cx);
                     let key = profile_key(host.candidate.identity);
                     let accepted = lease(cx);
-                    cx.background_executor()
-                        .spawn(async move {
-                            let _accepted = accepted;
-                            let result = if decision == Decision::Never {
-                                backend.block(&key, &host.candidate.origin)
-                            } else {
-                                backend.save(
-                                    &key,
-                                    &host.candidate.origin,
-                                    &host.candidate.credential,
-                                )
-                            };
-                            if result.is_err() {
-                                eprintln!("The local password store could not be updated.");
-                            }
-                        })
-                        .detach();
+                    let changed_key = key.clone();
+                    let worker = cx.background_executor().spawn(async move {
+                        let _accepted = accepted;
+                        if decision == Decision::Never {
+                            backend.block(&key, &host.candidate.origin)
+                        } else {
+                            backend.save(&key, &host.candidate.origin, &host.candidate.credential)
+                        }
+                    });
+                    cx.spawn(async move |_, cx| {
+                        if worker.await.is_ok() {
+                            let _ = cx.update(|cx| publish_change(changed_key, cx));
+                        } else {
+                            eprintln!("The local password store could not be updated.");
+                        }
+                    })
+                    .detach();
                 }
                 cx.notify();
             },

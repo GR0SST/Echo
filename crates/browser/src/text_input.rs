@@ -54,6 +54,9 @@ fn single_line_text(text: &str) -> Cow<'_, str> {
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("enter", Newline, Some("CodeInput")),
+        KeyBinding::new("enter", Newline, Some("FormTextArea")),
+        KeyBinding::new("up", LineUp, Some("FormTextArea")),
+        KeyBinding::new("down", LineDown, Some("FormTextArea")),
         KeyBinding::new("tab", Indent, Some("CodeInput")),
         KeyBinding::new("up", LineUp, Some("CodeInput")),
         KeyBinding::new("down", LineDown, Some("CodeInput")),
@@ -93,6 +96,7 @@ struct EditState {
 pub struct TextInput {
     secure: bool,
     multiline: bool,
+    form_multiline: bool,
     lines: Vec<(usize, ShapedLine, Bounds<Pixels>)>,
     focus_handle: FocusHandle,
     content: SharedString,
@@ -128,7 +132,7 @@ impl TextInput {
         let placeholder = placeholder.into();
         Self {
             secure: false,
-            multiline: false, lines: Vec::new(),
+            multiline: false, form_multiline: false, lines: Vec::new(),
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
             placeholder: single_line_text(&placeholder).into_owned().into(),
@@ -151,6 +155,12 @@ impl TextInput {
     /// One ASCII mask glyph per UTF-8 byte preserves editing/layout offsets.
     pub(crate) fn secret(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(placeholder, cx); input.secure = true; input
+    }
+    pub(crate) fn form_textarea(cx: &mut Context<Self>) -> Self {
+        let mut input=Self::new("",cx);input.multiline=true;input.form_multiline=true;input
+    }
+    pub(crate) fn set_secure(&mut self,secure:bool,cx:&mut Context<Self>) {
+        self.secure=secure;self.last_layout=None;cx.notify();
     }
     pub(crate) fn code(cx: &mut Context<Self>) -> Self {
         let mut input = Self::new("", cx); input.multiline = true; input
@@ -832,7 +842,7 @@ impl Render for TextInput {
         div()
             .flex()
             .w_full()
-            .key_context(if self.multiline { "TextInput CodeInput" } else { CONTEXT })
+            .key_context(if self.multiline {if self.form_multiline {"TextInput FormTextArea"} else {"TextInput CodeInput"}} else { CONTEXT })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::newline))

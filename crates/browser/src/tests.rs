@@ -67,6 +67,8 @@ mod main_menu_tests;
 mod managed_search_tests;
 #[path = "password_flow_tests.rs"]
 mod password_flow_tests;
+#[path = "password_manager_tests.rs"]
+mod password_manager_tests;
 #[path = "tab_switcher_tests.rs"]
 mod tab_switcher_tests;
 
