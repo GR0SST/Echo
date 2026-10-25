@@ -11077,3 +11077,27 @@ fn toolbar_canvas_color_tracks_its_document_and_rejects_stale_navigation_reports
 
 #[path = "mini_player_audit_tests.rs"]
 mod mini_player_audit_tests;
+
+#[gpui::test]
+fn library_footer_handle_reorders_cards_without_navigating_or_reloading(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    let ids = view.read_with(cx, |view, _| view.browser.spaces.iter().map(|space| space.id).collect::<Vec<_>>());
+    view.update(cx, |view, cx| view.open_library_media(cx));
+    cx.run_until_parked();
+    click(cx, "library-nav-spaces");
+    assert_eq!(cx.debug_bounds("library-space-handle-0").unwrap().size, gpui::size(gpui::px(28.), gpui::px(28.)));
+    let card = cx.debug_bounds("library-space-0").unwrap();
+    let handle = cx.debug_bounds("library-space-handle-0").unwrap();
+    assert_eq!(card.bottom() - handle.center().y, gpui::px(22.));
+    fake.take_calls();
+    drag_between(cx, "library-space-handle-0", "library-space-handle-1");
+    view.read_with(cx, |view, _| {
+        let order = view.browser.spaces.iter().map(|space| space.id).collect::<Vec<_>>();
+        assert_eq!(order, vec![ids[1], ids[0], ids[2]]);
+        assert_eq!(view.browser.space().id, ids[0]);
+        assert_eq!(view.sidebar_navigation.controller.selected(), crate::sidebar_pages::SidebarPage::Library);
+    });
+    assert_eq!(active_url(&view, cx), original);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}

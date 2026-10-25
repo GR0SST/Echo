@@ -68,11 +68,12 @@ pub(crate) enum LibraryIntent {
     },
     EditTheme(SpaceId),
     Overflow(SpaceId),
+    ReorderSpace { source: SpaceId, target: SpaceId },
 }
 
 pub(crate) type LibraryEvents = Rc<dyn Fn(LibraryIntent, &mut Window, &mut App)>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct LibrarySpace {
     pub id: SpaceId,
     pub profile: UserProfileId,
@@ -82,11 +83,12 @@ pub(crate) struct LibrarySpace {
     pub hue: f32,
     pub theme_image: Option<std::sync::Arc<gpui::RenderImage>>,
     pub foreground: Option<Hsla>,
+    pub drag: Option<crate::space_drag::SpaceDrag>,
 }
 
 /// Snapshot metadata only. Favorites, tabs, folders and their interactions are
 /// rendered by the host's existing sidebar renderer, never copied here.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct LibraryProjection {
     pub origin: SpaceId,
     pub spaces: Vec<LibrarySpace>,
@@ -112,6 +114,7 @@ impl LibraryProjection {
                     hue: space.hue,
                     theme_image: None,
                     foreground: None,
+                    drag: None,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -480,6 +483,9 @@ fn render_card(
     events: LibraryEvents,
     sidebar: AnyElement,
 ) -> AnyElement {
+    let target = space.id;
+    let drops = events.clone();
+    let handle_drag = space.drag.clone();
     let foreground = space.foreground.unwrap_or(colors.text);
     let ink = if foreground.l > 0.5 { 1. } else { 0. };
     let colors = LibraryColors { text: foreground, muted: foreground.opacity(0.6), selected: gpui::hsla(0., 0., ink, 0.10), ..colors };
@@ -548,6 +554,12 @@ fn render_card(
     div()
         .id(("library-space", index))
         .debug_selector(move || format!("library-space-{index}"))
+        .when_some(space.drag.clone(), |card, scope| card.on_drop(move |drag: &crate::space_drag::SpaceDrag, window, cx| {
+            if scope.workspace.same_workspace(&drag.workspace) {
+                cx.stop_propagation();
+                drops(LibraryIntent::ReorderSpace { source: drag.id, target }, window, cx);
+            }
+        }))
         .flex_none()
         .w(px(240.))
         .h_full()
@@ -563,7 +575,7 @@ fn render_card(
         .text_color(colors.text)
         .flex()
         .flex_col()
-        .px(px(8.)).py(px(12.))
+        .px(px(8.)).pt(px(12.)).pb(px(8.))
         .gap(px(8.))
         .child(div().relative().px(px(8.)).flex().items_center().gap(px(6.)).h(px(28.)).flex_none().child(header.flex_1()).child(profile).child(theme))
         .child(
@@ -582,15 +594,16 @@ fn render_card(
                 .justify_between()
                 .h(px(28.))
                 .flex_none()
-                // Handle appearance only: reorder is not implemented by this module.
                 .child(
                     div()
+                        .id(("library-space-handle", index))
                         .debug_selector(move || format!("library-space-handle-{index}"))
-                        .flex_none()
-                        .w(px(24.))
-                        .h(px(3.))
-                        .rounded_full()
-                        .bg(colors.muted),
+                        .flex_none().size(px(28.))
+                        .flex().items_center().justify_center().text_color(colors.muted)
+                        .when_some(handle_drag, |handle, drag| handle
+                            .cursor(gpui::CursorStyle::OpenHand)
+                            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())))
+                        .child(move_handle_icon()),
                 )
                 .child(
                     action(
@@ -616,3 +629,21 @@ mod tests;
 
 #[path = "library_media.rs"]
 pub(crate) mod media;
+
+/// Original four-way movement geometry measured in the Library card footer.
+fn move_handle_icon() -> AnyElement {
+    gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
+        let mut path = gpui::PathBuilder::stroke(px(1.3));
+        for points in [
+            &[(8., 1.), (8., 15.)][..], &[(1., 8.), (15., 8.)][..],
+            &[(5., 4.), (8., 1.), (11., 4.)][..],
+            &[(5., 12.), (8., 15.), (11., 12.)][..],
+            &[(4., 5.), (1., 8.), (4., 11.)][..],
+            &[(12., 5.), (15., 8.), (12., 11.)][..],
+        ] {
+            path.move_to(bounds.origin + gpui::point(px(points[0].0), px(points[0].1)));
+            for &(x, y) in &points[1..] { path.line_to(bounds.origin + gpui::point(px(x), px(y))); }
+        }
+        if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+    }).size(px(16.)).flex_none().into_any_element()
+}

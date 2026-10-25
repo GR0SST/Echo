@@ -672,6 +672,11 @@ impl BrowserWindow {
                 }
             }
             LibraryIntent::EditTheme(space) => self.open_theme_editor(space, window, cx),
+            LibraryIntent::ReorderSpace { source, target } => {
+                if let Some(index) = self.browser.spaces.iter().position(|space| space.id == target) {
+                    self.reorder_space(source, index, cx);
+                }
+            }
             LibraryIntent::Overflow(space) => {
                 if self.browser.spaces.iter().any(|entry| entry.id == space) {
                     self.open_space_menu(space, gpui::point(px(0.), px(48.)), window, cx);
@@ -703,6 +708,10 @@ impl BrowserWindow {
             return div().into_any_element();
         };
         for card in &mut projection.spaces {
+            card.drag = Some(crate::space_drag::SpaceDrag {
+                id: card.id, workspace: self.profile.handle.clone(), name: card.name.clone(),
+                icon: card.icon.clone(), hue: card.hue,
+            });
             if let Some(space) = self.browser.spaces.iter().find(|space| space.id == card.id) {
                 let surface = self.theme_surface_for(space);
                 let height = (f32::from(self.sidebar_navigation.normal_content_size.height) - 76.).max(2.) as u32;
@@ -894,34 +903,10 @@ impl BrowserWindow {
             })
             .collect::<Vec<_>>();
         let target = card.id;
-        let drag = crate::space_drag::SpaceDrag {
-            id: card.id,
-            workspace: self.profile.handle.clone(),
-            name: card.name.clone(),
-            icon: card.icon.clone(),
-            hue: card.hue,
-        };
         let content = div()
             .id(gpui::SharedString::from(format!(
                 "library-sidebar-{target:?}"
             )))
-            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
-            .on_drop(
-                cx.listener(move |this, drag: &crate::space_drag::SpaceDrag, _, cx| {
-                    this.refresh_profile_projection();
-                    if !this.profile.handle.same_workspace(&drag.workspace) {
-                        return;
-                    }
-                    if let Some(index) = this
-                        .browser
-                        .spaces
-                        .iter()
-                        .position(|space| space.id == target)
-                    {
-                        this.reorder_space(drag.id, index, cx);
-                    }
-                }),
-            )
             .min_w_0()
             .w_full()
             .flex_1()
