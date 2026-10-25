@@ -284,7 +284,7 @@ impl BrowserWindow {
             if let Ok(overlay) = cx.open_window(options, |window, cx| {
                 focus.focus(window);
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) { crate::native::attach_overlay(parent, child, false); }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::TabMenu, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::TabMenu, window, cx))
             }) {
                 let _ = browser.update(cx, |this, _| { if let Some(menu) = &mut this.tab_menu { menu.overlay = Some(overlay); } });
             }

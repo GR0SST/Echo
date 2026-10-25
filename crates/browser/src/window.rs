@@ -583,6 +583,7 @@ pub(crate) enum PopupFocus {
 /// native views that cover anything the browser window draws, so UI that
 /// lies over a page lives in one of these. Draws from the browser window.
 pub struct Overlay {
+    native_handle: Option<*mut c_void>,
     browser: WeakEntity<BrowserWindow>,
     kind: OverlayKind,
     _observe: Option<Subscription>,
@@ -594,16 +595,23 @@ impl Overlay {
 
     pub(crate) fn belongs_to(&self,owner:gpui::EntityId)->bool {self.browser.entity_id()==owner}
 
-    pub(crate) fn new(browser: WeakEntity<BrowserWindow>, kind: OverlayKind, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(browser: WeakEntity<BrowserWindow>, kind: OverlayKind, window: &Window, cx: &mut Context<Self>) -> Self {
         let observe = browser
             .upgrade()
             .map(|browser| cx.observe(&browser, |_, _, cx| cx.notify()));
         Self {
+            native_handle: crate::native::view_of(window),
             browser,
             kind,
             _observe: observe,
             preview_focus: matches!(kind,OverlayKind::MaxPreview|OverlayKind::MaxPreviewMenu).then(||cx.focus_handle()),
         }
+    }
+}
+
+impl Drop for Overlay {
+    fn drop(&mut self) {
+        if let Some(view) = self.native_handle { crate::native::forget_overlay(view); }
     }
 }
 
@@ -876,6 +884,7 @@ impl BrowserWindow {
             false
         });
         cx.observe_window_bounds(window, |this, window, cx| {
+            if let Some(parent) = crate::native::view_of(window) { crate::native::sync_overlays(parent); }
             this.resize_peek(window, cx);
             this.resize_setup(window,cx);
             this.resize_password_prompt(window,cx);
@@ -962,6 +971,7 @@ impl BrowserWindow {
         let sidebar_navigation = crate::sidebar_navigation::SidebarNavigation::new(&browser);
         let position = if browser.is_blank() || browser.is_private() { browser.active_space } else { browser.active_space + 1 } as f32;
         cx.on_release(|this, cx| {
+            if let Some(parent) = this.native_view { crate::native::forget_overlay(parent); }
             this.cancel_split_draft();
             if let Some(pages) = &this.pages { pages.borrow_mut().release_host(); }
             this.profile.flush(cx);
@@ -1649,7 +1659,7 @@ impl BrowserWindow {
                 if let (Some(parent), Some(overlay)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, overlay, false);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::CommandBar, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::CommandBar, window, cx))
             });
             if let Ok(overlay) = overlay {
                 let _ = browser.update(cx, |this, _| {
@@ -2799,7 +2809,7 @@ impl BrowserWindow {
                         let active = window.is_window_active();
                         let _ = overlay.browser.update(cx, |this, cx| this.on_sidebar_resize_activation(source, active, cx));
                     }).detach();
-                    Overlay::new(browser.clone(), OverlayKind::Sidebar, cx)
+                    Overlay::new(browser.clone(), OverlayKind::Sidebar, window, cx)
                 })
             });
             if let Ok(overlay) = overlay {
@@ -4564,6 +4574,7 @@ impl BrowserWindow {
 
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _ = crate::native::view_of(window);
         if let Some(pages)=&self.pages { pages.borrow_mut().sync_shortcuts(crate::shortcuts::page(cx)); }
         if window.is_window_active() {
             let sidebar = self.command_bar.is_none() && self.tab_rename.is_none()

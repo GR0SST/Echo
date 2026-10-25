@@ -94,7 +94,7 @@ impl BrowserWindow {
             };
             let Ok(overlay) = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) { crate::native::attach_overlay(parent, child, false); }
-                cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::UserProfileDialog, cx))
+                cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::UserProfileDialog, window, cx))
             }) else {
                 let _ = owner.update(cx, |this, cx| { if this.user_profile_dialog.as_ref().is_some_and(|host| host.dialog == dialog) { this.close_user_profile_dialog(cx); } });
                 return;

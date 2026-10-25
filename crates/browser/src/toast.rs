@@ -297,7 +297,7 @@ impl BrowserWindow {
                     if !(copied_link || undo_hint || message.contains("Click to") || message.starts_with("New Tab Created")) { crate::native::set_overlay_passthrough(child); }
                     crate::native::prepare_toast_window(child);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast(generation), cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast(generation), window, cx))
             }) {
                 let retained = browser.update(cx, |this, _| {
                     if this.toast_generation != generation { return false; }

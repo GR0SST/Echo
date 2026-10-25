@@ -146,7 +146,7 @@ impl BrowserWindow {
                         crate::native::attach_overlay(parent, child, false);
                         crate::native::set_overlay_passthrough(child);
                     }
-                    cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::PageSwipe, cx))
+                    cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::PageSwipe, window, cx))
                 },
             ) {
                 let _ = browser.update(cx, |this, cx| {

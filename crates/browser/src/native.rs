@@ -4,16 +4,24 @@ use std::ffi::c_void;
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-/// The window's root native view (`NSView*` on macOS). `None` on gpui's
+/// The root NSView, HWND or X11 XID. Wayland surfaces cannot parent a CEF
+/// windowed browser. `None` on GPUI's
 /// test platform, whose windows have no native counterpart.
 pub fn view_of(window: &gpui::Window) -> Option<*mut c_void> {
     if cfg!(test) {
         return None;
     }
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::AppKit(handle) => Some(handle.ns_view.as_ptr()),
-        _ => None,
-    }
+    let view = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr(),
+        RawWindowHandle::Win32(handle) => handle.hwnd.get() as *mut c_void,
+        RawWindowHandle::Xlib(handle) => handle.window as usize as *mut c_void,
+        RawWindowHandle::Xcb(handle) => handle.window.get() as usize as *mut c_void,
+        _ => return None,
+    };
+    let previous_scale = engine::native_parent_scale(view);
+    engine::configure_native_parent(view, f64::from(window.scale_factor()));
+    if previous_scale != engine::native_parent_scale(view) { sync_overlays(view); }
+    Some(view)
 }
 
 /// GPUI's macOS Floating kind currently uses the normal window level. Keep
@@ -489,8 +497,8 @@ pub fn prepare_toast_window(view: *mut c_void) {
 pub fn set_overlay_passthrough(view: *mut c_void) {
     #[cfg(target_os = "macos")]
     mac::set_overlay_passthrough(view);
-    #[cfg(not(target_os = "macos"))]
-    let _ = view;
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    desktop::passthrough(view);
 }
 
 /// Makes `overlay_view`'s window a borderless child of `parent_view`'s
@@ -499,8 +507,8 @@ pub fn set_overlay_passthrough(view: *mut c_void) {
 pub fn attach_overlay(parent_view: *mut c_void, overlay_view: *mut c_void, traffic_lights: bool) {
     #[cfg(target_os = "macos")]
     mac::attach_overlay(parent_view, overlay_view, traffic_lights);
-    #[cfg(not(target_os = "macos"))]
-    let _ = (parent_view, overlay_view, traffic_lights);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    { desktop::attach(parent_view, overlay_view); let _ = traffic_lights; }
 }
 
 /// Position native window controls along the sidebar's horizontal track.
@@ -899,3 +907,38 @@ pub(crate) fn perform_standard_edit(command: crate::standard_edit::Command, view
 #[cfg(all(target_os = "macos", not(test)))]
 #[path = "native/standard_edit.rs"]
 mod standard_edit;
+
+/// Run before GPUI/CEF creates threads. Windowed CEF uses an X11 parent XID;
+/// a Wayland wl_surface is not interchangeable with it. XWayland is supported.
+pub(crate) fn prepare_windowing() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    desktop::prepare_windowing()?;
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("DISPLAY").is_none_or(|value| value.is_empty()) {
+            return Err("Echo's windowed CEF embedding requires X11 or XWayland (DISPLAY); native Wayland embedding is unavailable".into());
+        }
+        // GPUI 0.2 chooses Wayland whenever WAYLAND_DISPLAY is present. Select
+        // its X11 backend before Application::new and before spawning workers.
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY"); }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+mod overlay_geometry;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod desktop;
+pub(crate) fn sync_overlays(parent: *mut c_void) {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    desktop::sync(parent);
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let _ = parent;
+}
+pub(crate) fn forget_overlay(child: *mut c_void) {
+    engine::forget_native_parent(child);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    desktop::forget(child);
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let _ = child;
+}

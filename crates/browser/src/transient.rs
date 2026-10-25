@@ -303,7 +303,7 @@ impl BrowserWindow {
             }, |window, cx| {
                 input.read(cx).focus_handle(cx).focus(window);
                 if let (Some(parent), Some(child)) = (parent, native::view_of(window)) { native::attach_overlay(parent, child, false); }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::TransientPicker, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::TransientPicker, window, cx))
             }) {
                 let _ = browser.update(cx, |this, _| {
                     if let Some(picker) = this.transient.as_mut().and_then(|state| state.picker.as_mut()) { picker.overlay = Some(overlay); }

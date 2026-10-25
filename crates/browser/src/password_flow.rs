@@ -442,7 +442,7 @@ impl BrowserWindow {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
                 }
-                cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::PasswordPrompt, cx))
+                cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::PasswordPrompt, window, cx))
             }) else {
                 let _ = owner.update(cx, |this, cx| {
                     this.close_password_prompt(PopupFocus::Restore, cx)

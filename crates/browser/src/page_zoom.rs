@@ -145,7 +145,7 @@ impl BrowserWindow {
                     crate::native::attach_overlay(parent, child, false);
                     crate::native::set_overlay_passthrough(child);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::PageZoom, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::PageZoom, window, cx))
             }) {
                 let _ = browser.update(cx, |this, _| {
                     if let Some(state) = &mut this.page_zoom {

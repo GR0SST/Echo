@@ -142,7 +142,7 @@ impl BrowserWindow {
                         native::attach_overlay(parent, child, false);
                     }
                     focus.focus(window);
-                    cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::RecentItems, cx))
+                    cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::RecentItems, window, cx))
                 },
             );
             if let Ok(handle) = handle {

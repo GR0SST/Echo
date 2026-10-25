@@ -118,7 +118,7 @@ impl BrowserWindow {
                     crate::native::attach_overlay(parent, child, false);
                 }
                 input.read(cx).focus_handle(cx).focus(window);
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Find, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Find, window, cx))
             }) {
                 let _ = browser.update(cx, |this, _| {
                     if let Some(bar) = &mut this.find_bar {

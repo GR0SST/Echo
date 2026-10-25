@@ -181,7 +181,7 @@ impl BrowserWindow {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::SiteControls, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::SiteControls, window, cx))
             }) {
                 let _ = browser.update(cx, |this, _| {
                     if let Some(panel) = &mut this.site_controls {

@@ -509,7 +509,7 @@ impl BrowserWindow {
                 }
                 cx.new(|cx| {
                     watch_activation(window, cx, browser.clone());
-                    Overlay::new(browser.clone(), OverlayKind::MaxPreview, cx)
+                    Overlay::new(browser.clone(), OverlayKind::MaxPreview, window, cx)
                 })
             }) {
                 let retained = browser
@@ -808,7 +808,7 @@ impl BrowserWindow {
                 }
                 cx.new(|cx| {
                     watch_activation(window, cx, browser.clone());
-                    Overlay::new(browser.clone(), OverlayKind::MaxPreviewMenu, cx)
+                    Overlay::new(browser.clone(), OverlayKind::MaxPreviewMenu, window, cx)
                 })
             }) {
                 let retained = browser

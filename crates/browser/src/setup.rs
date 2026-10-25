@@ -1359,7 +1359,7 @@ impl BrowserWindow {
                     if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                         crate::native::attach_overlay(parent, child, false);
                     }
-                    cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::Setup, cx))
+                    cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::Setup, window, cx))
                 },
             ) else {
                 let _ = owner.update(cx, |v, cx| v.close_setup(cx));

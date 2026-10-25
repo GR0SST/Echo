@@ -209,7 +209,7 @@ impl BrowserWindow {
                     if let Some(capture) = &browser.read(cx).capture {
                         capture.focus.focus(window);
                     }
-                    cx.new(|cx| Overlay::new(browser.downgrade(), OverlayKind::Capture, cx))
+                    cx.new(|cx| Overlay::new(browser.downgrade(), OverlayKind::Capture, window, cx))
                 },
             ) {
                 browser.update(cx, |view, _| {

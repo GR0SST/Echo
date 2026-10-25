@@ -336,6 +336,10 @@ fn reopen_with(cx: &mut App, open: impl FnOnce(&mut App)) {
 }
 
 pub fn run() {
+    if let Err(error) = native::prepare_windowing() {
+        eprintln!("[windowing] {error}");
+        std::process::exit(1);
+    }
     // CEF replaces the process allocator during dlopen. Do this before GPUI
     // creates AppKit/XPC workers that can free memory during zone registration.
     match engine::preload_framework() {

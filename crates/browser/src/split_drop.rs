@@ -120,7 +120,7 @@ impl BrowserWindow {
                     crate::native::attach_overlay(parent, child, false);
                     crate::native::set_overlay_passthrough(child);
                 }
-                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::SplitDrop, cx))
+                cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::SplitDrop, window, cx))
             }) {
                 let _ = browser.update(cx, |this, _| { if let Some(p) = &mut this.split_drop { p.overlay = Some(overlay); } });
             }
