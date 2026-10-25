@@ -27,6 +27,7 @@ impl LibrarySection {
         match self {
             Self::Media => crate::pages::PageViewport::LibraryMedia,
             Self::Downloads => crate::pages::PageViewport::LibraryDownloads,
+            Self::Boosts => crate::pages::PageViewport::LibraryBoosts,
             _ => crate::pages::PageViewport::Hidden,
         }
     }

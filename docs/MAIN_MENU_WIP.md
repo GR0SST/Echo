@@ -182,3 +182,52 @@ are `pairs/arc-appearance-menu-zoom.png` and
 `pairs/echo-appearance-menu-zoom.png`. The isolated profile is discarded on exit.
 Windows/Linux checked-state presentation and native acceptance remain partial;
 Incognito retains the pre-existing forced-dark material policy.
+
+
+## Library and site refresh routes
+
+Arc's runtime Window menu uses "View Media…" and "View Boosts…", while the
+compiled nib retains older base labels without ellipses. The inspected native
+references are `arc-library-menu-reference/media.png` and `boosts.png`. Both
+leave the selected page visible to the right, translated without reflow. Echo
+now routes both menu entries and Command Bar actions to the existing sections;
+Boosts also opts into the existing retained-page viewport contract.
+
+The View menu and Command Bar clear-site routes use the existing engine API:
+origin/profile-scoped storage clearing or context cache clearing, followed by a
+reload only if the same document epoch remains. Internal/hidden pages reject
+the actions. Three new GPUI tests cover menu/Command Bar routing, retained live
+Library pages, origin scoping and unavailable internal/hidden contexts.
+
+`arc-refresh-reference/requests.json` confirms the unique fixture cookie before
+clearing, its absence on the subsequent requests, and three main-document loads
+across the initial page and the two commands. The final inspected page shows
+"Echo Menu Refresh 3". The AX window-title polling exceeded eight seconds in one
+stage, so this session is not an animation/timing measurement. No confirmation
+dialog appeared in the all-layer inventory. Own fixture tabs and windows were
+closed; cleanup errors and remaining-owned-window inventories are empty.
+
+Native Echo acceptance in `echo-library-refresh/` passed both clear actions:
+its request log has the initial owned cookie, no cookie on the reloads and
+exactly three document loads. Media and Boosts then retain that third loaded
+page. The inspected equivalent-page pairs are
+`arc-library-refresh-pair/media.png` ↔ `echo-library-refresh/media.png` and
+`arc-library-refresh-pair/boosts.png` ↔ `echo-library-refresh/boosts.png`.
+Both preview left edges are at x=417 px (including the 1 px inset); the heading
+and input align without a reflow. Inspected 2× crops are
+`pairs/arc-boosts-live-preview-zoom.png` and
+`pairs/echo-boosts-live-preview-zoom.png`. Arc's existing Boost records were only
+read, and the isolated Echo profile has an empty list. No owner Boost was
+modified. Developer Mode's additional toolbar/site-row presentation and
+remaining platform acceptance are partial.
+
+
+Full local validation for the Library/refresh group passed 1,072 browser, 237
+core, 148 engine and 15 AI tests, plus importer/bundle tests. One existing
+native-credential integration test remains ignored. The earlier full run caught
+one stale Window-menu-order expectation, now updated from the captured runtime
+menu. No handoff test waiver was used. Native acceptance exits zero after CEF
+teardown. A refreshed fixture changed its title after timeout; its leftover tab
+was subsequently located by exact URL and archived in
+`arc-clean-refresh-reference/`, with an inspected clean Space and no owned
+windows remaining. No other tab or Space was archived/deleted.

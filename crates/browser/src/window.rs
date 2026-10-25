@@ -429,7 +429,10 @@ pub enum Command {
     ViewArchive,
     ViewHistory,
     OpenLibrary,
+    ViewMedia,
     ViewBoosts,
+    ClearCookiesAndRefresh,
+    ClearCacheAndRefresh,
     ManageSpaces,
     PrintPage,
     SavePage,
@@ -1815,6 +1818,9 @@ impl BrowserWindow {
                 (Command::ViewHistory, "View History", "view history|open history|browsing history", true),
                 (Command::OpenLibrary, "Open Library", "open library|view library|library", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ManageSpaces, "Manage Spaces", "manage spaces|space management|organize|toggle space manager|view spaces", !self.browser.is_private() && !self.browser.is_blank()),
+                (Command::ViewMedia, "View Media", "view media|screenshots|captures|videos|media", !self.browser.is_private() && !self.browser.is_blank()),
+                (Command::ClearCookiesAndRefresh, "Clear Cookies and Refresh", "clear cookies and refresh|clear cookies", self.can_clear_active_site()),
+                (Command::ClearCacheAndRefresh, "Clear Cache and Refresh", "clear cache and refresh|clear cache", self.can_clear_active_site()),
                 (Command::ViewBoosts, "View Boosts", "view boosts|boosts", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewDownloads, "View Downloads", "view downloads|downloads", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::ViewArchive, "View Archive", "view archive|open archive|search archived tabs|archive", true),
@@ -2191,6 +2197,9 @@ impl BrowserWindow {
             Command::ManageSpaces => self.open_library_spaces(cx),
             Command::ViewDownloads => self.open_library_downloads(cx),
             Command::ViewBoosts => self.open_library_boosts(cx),
+            Command::ViewMedia => self.open_library_media(cx),
+            Command::ClearCookiesAndRefresh => self.clear_active_site(engine::ClearSiteData::Cookies, cx),
+            Command::ClearCacheAndRefresh => self.clear_active_site(engine::ClearSiteData::Cache, cx),
             Command::ViewArchive => self.edit_archive_view(None, cx),
             Command::RequestClearArchive => self.confirm_clear_archive(cx),
             Command::CopyUrl => self.copy_url(false, cx),
@@ -2346,6 +2355,12 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::AutomaticAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::LightAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::DarkAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Dark, cx)))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
+                .on_action(cx.listener(|this, _: &crate::menus::ViewMedia, _, cx| this.open_library_media(cx)))
+                .on_action(cx.listener(|this, _: &crate::menus::ViewBoosts, _, cx| this.open_library_boosts(cx))))
+            .when(self.can_clear_active_site(), |this| this
+                .on_action(cx.listener(|this, _: &crate::menus::ClearCookiesAndRefresh, _, cx| this.clear_active_site(engine::ClearSiteData::Cookies, cx)))
+                .on_action(cx.listener(|this, _: &crate::menus::ClearCacheAndRefresh, _, cx| this.clear_active_site(engine::ClearSiteData::Cache, cx))))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
@@ -2538,6 +2553,22 @@ impl BrowserWindow {
             self.sidebar_scrolls.entry(self.browser.space().id).or_default().pending.set(Some((Section::Today, index)));
         }
         cx.notify();
+    }
+
+    fn can_clear_active_site(&self) -> bool {
+        self.native_page_content_visible() && self.pages.is_some() && self.browser.active_tab()
+            .is_some_and(|tab| browser_core::site_settings::SiteSettings::origin(&tab.url).is_some())
+    }
+    fn clear_active_site(&mut self, kind: engine::ClearSiteData, cx: &mut Context<Self>) {
+        self.refresh_profile_projection();
+        if !self.can_clear_active_site() { return; }
+        let Some(tab) = self.browser.active_tab() else { return; };
+        let Some(origin) = browser_core::site_settings::SiteSettings::origin(&tab.url) else { return; };
+        let accepted = self.pages.as_ref().is_some_and(|pages| pages.borrow_mut().clear_site_data(tab.id, &origin, kind));
+        if accepted {
+            self.close_command_bar(cx);
+            self.close_site_controls(cx);
+        }
     }
 
     fn set_website_appearance(&mut self, mode: browser_core::themes::ThemeAppearance, cx: &mut Context<Self>) {
@@ -4523,6 +4554,12 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &crate::menus::AutomaticAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::LightAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx)))
             .on_action(cx.listener(|this, _: &crate::menus::DarkAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Dark, cx)))
+            .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this
+                .on_action(cx.listener(|this, _: &crate::menus::ViewMedia, _, cx| this.open_library_media(cx)))
+                .on_action(cx.listener(|this, _: &crate::menus::ViewBoosts, _, cx| this.open_library_boosts(cx))))
+            .when(self.can_clear_active_site(), |this| this
+                .on_action(cx.listener(|this, _: &crate::menus::ClearCookiesAndRefresh, _, cx| this.clear_active_site(engine::ClearSiteData::Cookies, cx)))
+                .on_action(cx.listener(|this, _: &crate::menus::ClearCacheAndRefresh, _, cx| this.clear_active_site(engine::ClearSiteData::Cache, cx))))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(Self::on_toggle_pin)))
             .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| this.run_command(Command::ToggleFavorite, cx)))

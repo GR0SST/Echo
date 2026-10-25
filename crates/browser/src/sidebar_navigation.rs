@@ -677,11 +677,17 @@ impl BrowserWindow {
         }
     }
     pub(crate) fn open_library_boosts(&mut self,cx:&mut Context<Self>){
+        self.open_library_section(LibrarySection::Boosts, cx);
+    }
+    pub(crate) fn open_library_media(&mut self,cx:&mut Context<Self>){
+        self.open_library_section(LibrarySection::Media, cx);
+    }
+    fn open_library_section(&mut self, section: LibrarySection, cx:&mut Context<Self>){
         if crate::quit::is_quitting()||self.browser.is_private()||self.browser.is_blank(){return;}
         self.select_sidebar_page(SidebarPage::Library,cx);
         self.retire_library_downloads_route();
         self.invalidate_sidebar_focus();
-        self.sidebar_navigation.library_section=LibrarySection::Boosts;
+        self.sidebar_navigation.library_section=section;
         self.sync_navigation_visibility();
         self.defer_sidebar_focus(cx);
         cx.notify();

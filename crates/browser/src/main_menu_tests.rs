@@ -215,3 +215,67 @@ fn appearance_command_updates_other_window_and_survives_sidebar_undo(cx: &mut Te
     assert_eq!(view.read_with(visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Light);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ColorScheme(..))));
 }
+
+
+#[gpui::test]
+fn media_and_boosts_menu_routes_retain_the_original_page_and_dismiss_command_bar_drafts(cx: &mut TestAppContext) {
+    use crate::{library::LibrarySection, sidebar_pages::SidebarPage};
+    let (view, visual, fake) = open_pages(cx);
+    let before = active_url(&view, visual);
+    let count = view.read_with(visual, |view, _| view.browser.all_tabs().count());
+    for (label, section) in [("View Boosts…", LibrarySection::Boosts), ("View Media…", LibrarySection::Media)] {
+        visual.simulate_keystrokes("cmd-t");
+        bar(&view, visual).simulate_input("unfinished query");
+        fake.take_calls();
+        dispatch_menu(&mut bar(&view, visual), "Window", label);
+        assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+        assert_eq!(view.read_with(visual, |view, _| view.sidebar_navigation.controller.selected()), SidebarPage::Library);
+        assert_eq!(view.read_with(visual, |view, _| view.sidebar_navigation.library_section), section);
+        assert!(view.read_with(visual, |view, _| view.pages.as_ref().unwrap().borrow().is_visible(view.browser.active_tab().unwrap().id)));
+        assert_eq!(active_url(&view, visual), before);
+        assert_eq!(view.read_with(visual, |view, _| view.browser.all_tabs().count()), count);
+        assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..) | Call::Reload(..))));
+    }
+    run_named_command(&view, visual, "view media");
+    assert_eq!(view.read_with(visual, |view, _| view.sidebar_navigation.library_section), LibrarySection::Media);
+}
+
+#[gpui::test]
+fn clear_site_menu_and_commands_target_the_active_document_origin_without_replacing_it(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    let original = active_url(&view, visual);
+    let origin = browser_core::site_settings::SiteSettings::origin(original.as_ref().unwrap()).unwrap();
+    fake.0.borrow_mut().site_infos.insert(1, engine::SiteInfo {
+        origin: origin.clone(), host: crate::window::address_host(&origin), secure: true,
+        certificate: None, zoom_percent: 100, permissions: Vec::new(),
+    });
+    for (label, kind) in [("Clear Cookies and Refresh", engine::ClearSiteData::Cookies), ("Clear Cache and Refresh", engine::ClearSiteData::Cache)] {
+        fake.take_calls();
+        dispatch_menu(visual, "View", label);
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::ClearSiteData(1, origin.clone(), kind)), "{label}: {calls:?}");
+        assert_eq!(active_url(&view, visual), original);
+        fake.take_calls();
+        run_named_command(&view, visual, label);
+        assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::ClearSiteData(1, origin.clone(), kind)));
+        assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Close(..))));
+    }
+}
+
+#[gpui::test]
+fn clear_site_menu_actions_are_unavailable_on_internal_pages_and_hidden_library_sections(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    dispatch_menu(visual, "Window", "Open Library…");
+    click(visual, "library-nav-spaces");
+    assert!(!visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCookiesAndRefresh, cx)));
+    visual.simulate_keystrokes("cmd-t");
+    bar(&view, visual).simulate_input("browser://history");
+    bar(&view, visual).simulate_keystrokes("enter");
+    fake.take_calls();
+    assert!(!visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCacheAndRefresh, cx)));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ClearSiteData(..))));
+}

@@ -235,7 +235,10 @@ fn library_menu_uses_the_observed_window_menu_position() {
             "Minimize Window",
             "Zoom",
             "Open Library…",
-            "View Downloads…",            "Bring All to Front"
+            "View Downloads…",
+            "View Media…",
+            "View Boosts…",
+            "Bring All to Front"
         ]
     );
 }

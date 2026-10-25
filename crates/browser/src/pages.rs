@@ -533,10 +533,11 @@ pub(crate) enum PageViewport {
     Hidden,
     LibraryMedia,
     LibraryDownloads,
+    LibraryBoosts,
 }
 impl PageViewport {
     fn retains_library_page(self) -> bool {
-        matches!(self, Self::LibraryMedia | Self::LibraryDownloads)
+        matches!(self, Self::LibraryMedia | Self::LibraryDownloads | Self::LibraryBoosts)
     }
 }
 
