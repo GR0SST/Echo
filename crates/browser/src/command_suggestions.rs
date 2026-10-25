@@ -32,13 +32,36 @@ fn fetch(engine: SearchEngine, query: &str) -> Vec<String> {
 }
 
 impl BrowserWindow {
+    pub(crate) fn reconcile_managed_search(&mut self, cx: &mut Context<Self>) {
+        let profile=self.browser.active_user_profile_id();
+        let preferences=&self.browser.active_user_profile().settings.search;
+        let Some(bar)=self.command_bar.as_mut() else {return;};
+        let valid=match bar.site_search {
+            Some(SiteSearch::Configured(id)) => bar.site_search_profile==Some(profile)
+                && preferences.provider(id).is_some_and(|p|p.active),
+            _ => true,
+        };
+        if !valid {
+            bar.site_search=None;bar.site_search_profile=None;
+            bar.input.update(cx,|input,cx|input.set_placeholder("Search or Enter URL…",cx));
+        }
+        if !valid || preferences.suggestion_engine().is_none() {
+            bar.remote.clear();bar.remote_task.take();
+        }
+    }
     pub(crate) fn scope_site_search(&mut self, cx: &mut Context<Self>) -> bool {
         let chatgpt_enabled = self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar));
+        let preferences=&self.browser.active_user_profile().settings.search;
+        let profile=self.browser.active_user_profile_id();
         let Some(bar) = &mut self.command_bar else { return false; };
         if !matches!(bar.target, Target::NewTab | Target::Tab(_)) || bar.site_search.is_some() { return false; }
-        let Some(site) = SiteSearch::from_keyword(bar.input.read(cx).text()) else { return false; };
+        let keyword=bar.input.read(cx).text();
+        let site=if chatgpt_enabled && keyword.trim().eq_ignore_ascii_case("chatgpt") {Some(SiteSearch::ChatGpt)}
+            else {SiteSearch::for_profile(keyword,preferences)};
+        let Some(site) = site else { return false; };
         if site == SiteSearch::ChatGpt && !chatgpt_enabled { return false; }
         bar.site_search = Some(site);
+        bar.site_search_profile = Some(profile);
         bar.remote.clear();
         bar.remote_task.take();
         bar.remote_generation += 1;
@@ -55,12 +78,16 @@ impl BrowserWindow {
     pub(crate) fn update_command_suggestions(&mut self, cx: &mut Context<Self>) {
         let profile = self.browser.active_user_profile_id();
         let enabled = self.browser.active_user_profile().settings.search.suggestions && !self.browser.is_private();
-        let engine = self.browser.active_user_profile().settings.search.engine;
-        let enabled = enabled && engine.supports_suggestions();
+        let preferences=&self.browser.active_user_profile().settings.search;
+        let suggestion_engine=preferences.suggestion_engine();
+        let engine = suggestion_engine.unwrap_or(preferences.engine);
+        let enabled = enabled && suggestion_engine.is_some();
         let Some(bar) = &mut self.command_bar else { return; };
         if !matches!(bar.target, Target::NewTab | Target::Tab(_)) { return; }
         let text = bar.input.read(cx).text().to_string();
-        if bar.site_search.is_none() && text.ends_with(' ') && SiteSearch::from_keyword(&text) == Some(SiteSearch::Wikipedia) {
+        if bar.site_search.is_none() && text.ends_with(' ')
+            && preferences.shortcut_mode == omnibox::search_settings::ShortcutMode::SpaceOrTab
+            && SiteSearch::for_profile(&text,preferences).is_some_and(|site|site!=SiteSearch::ChatGpt) {
             self.scope_site_search(cx);
             return;
         }
@@ -84,7 +111,7 @@ impl BrowserWindow {
             let allowed = this.read_with(cx, |this, cx| {
                 !this.browser.is_private() && this.browser.active_user_profile_id() == profile
                     && this.browser.active_user_profile().settings.search.suggestions
-                    && this.browser.active_user_profile().settings.search.engine == engine
+                    && this.browser.active_user_profile().settings.search.suggestion_engine() == Some(engine)
                     && this.command_bar.as_ref().is_some_and(|bar| bar.input == input
                         && bar.remote_generation == generation && bar.query(cx) == query)
             }).unwrap_or(false);
@@ -94,7 +121,7 @@ impl BrowserWindow {
             let _ = this.update(cx, |this, cx| {
                 if this.browser.active_user_profile_id() != profile || this.browser.is_private()
                     || !this.browser.active_user_profile().settings.search.suggestions
-                    || this.browser.active_user_profile().settings.search.engine != engine { return; }
+                    || this.browser.active_user_profile().settings.search.suggestion_engine() != Some(engine) { return; }
                 let Some(bar) = &mut this.command_bar else { return; };
                 if bar.input != input || bar.remote_generation != generation || bar.query(cx) != query { return; }
                 bar.remote = rows;

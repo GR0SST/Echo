@@ -14,6 +14,7 @@ mod max_downloads_files;
 mod toast;
 mod archive;
 mod command_suggestions;
+mod search_settings;
 mod menus;
 mod tab_switcher;
 mod save_dialog;
@@ -146,6 +147,7 @@ pub fn init(cx: &mut App) {
     global_little::init(cx);
     peek::bind_keys(cx);
     history::bind_keys(cx);
+    search_settings::bind_keys(cx);
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);

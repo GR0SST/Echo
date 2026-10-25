@@ -466,6 +466,7 @@ pub enum Command {
     CapturePage,
     OpenTaskManager,
     AirTrafficControl,
+    SearchSettings,
     ToggleSpaceHeader,
     ToggleFavoritesOrdering,
     RevealTab,
@@ -519,6 +520,7 @@ pub struct CommandBar {
     pub target: Target,
     pub selected: usize,
     pub(crate) site_search: Option<omnibox::SiteSearch>,
+    pub(crate) site_search_profile: Option<browser_core::UserProfileId>,
     pub(crate) remote: Vec<String>,
     pub(crate) remote_generation: u64,
     pub(crate) remote_task: Option<Task<()>>,
@@ -733,6 +735,7 @@ pub struct BrowserWindow {
     pub(crate) page_zoom_refresh: bool,
     pub(crate) loading_indicators: crate::page_loading::LoadingIndicators,
     pub(crate) history_page: crate::history::HistoryPage,
+    pub(crate) search_settings: crate::search_settings::State,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
     pub(crate) site_settings_page: crate::site_settings_page::State,
@@ -1029,6 +1032,7 @@ impl BrowserWindow {
             page_zoom_refresh: false,
             loading_indicators: Default::default(),
             history_page: crate::history::HistoryPage::new(cx),
+            search_settings: crate::search_settings::State::new(cx),
             pages,
             pending_engine_events: Default::default(),
             engine_shortcut_pending: false,
@@ -1584,6 +1588,7 @@ impl BrowserWindow {
             target,
             selected: 0,
             site_search: None,
+            site_search_profile: None,
             remote: Vec::new(),
             remote_generation: 0,
             remote_task: None,
@@ -1829,11 +1834,12 @@ impl BrowserWindow {
         let chatgpt_enabled = self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar));
         let chatgpt_keyword = chatgpt_enabled && query == "chatgpt";
         if let Some(site) = bar.site_search {
+            if matches!(site, omnibox::SiteSearch::Configured(_)) && bar.site_search_profile != Some(self.browser.active_user_profile_id()) { return Vec::new(); }
             if site == omnibox::SiteSearch::ChatGpt && !chatgpt_enabled { return Vec::new(); }
-            if !query.is_empty() { return vec![Suggestion::Load(site.search(text.trim()))]; }
+            if !query.is_empty() { return site.search(text.trim(), &self.browser.active_user_profile().settings.search).map(Suggestion::Load).into_iter().collect(); }
             if site != omnibox::SiteSearch::ChatGpt { return Vec::new(); }
             let mut rows = vec![Suggestion::Load(Resolved::Url("https://chatgpt.com/".into())),
-                Suggestion::Load(self.browser.active_user_profile().settings.search.engine.search("ChatGPT"))];
+                Suggestion::Load(self.browser.active_user_profile().settings.search.search("ChatGPT"))];
             rows.extend(self.browser.active_user_profile().history.iter()
                 .filter(|entry| entry.title.to_lowercase().contains("chatgpt") || entry.url.contains("chatgpt.com") || entry.url.contains("chat.openai.com"))
                 .take(3).map(|entry| Suggestion::History {title:entry.title.clone(),url:entry.url.clone()}));
@@ -1885,7 +1891,8 @@ impl BrowserWindow {
                 (Command::CapturePage, "Capture", "capture|capture page|take screenshot", self.capture_available()),
                 (Command::CopyUrlAsQuote, "Copy Current URL as Quote", "copy current url as quote|copy url as quote|copy quote as url", active.is_some()),
                 (Command::CopyUrlAsMarkdown, "Copy URL as Markdown", "copy url as markdown|copy link as markdown", active.is_some()),
-                (Command::Settings, "Settings…", "settings|preferences|search settings", true),
+                (Command::Settings, "Settings…", "settings|preferences", true),
+                (Command::SearchSettings, "Search Settings", "search settings|manage search engines|site search", true),
                 (Command::AirTrafficControl, "Air Traffic Control", "air traffic control|link routing|routes", true),
                 (Command::FindPage, "Find in Page…", "find in page|search page", active.is_some()),
                 (Command::NewProfile(self.browser.space().id), "New Profile", "new profile|create profile|add profile", !self.browser.is_private() && !self.browser.is_blank()),
@@ -1990,8 +1997,8 @@ impl BrowserWindow {
             matches.sort_by_key(|(score, _)| *score);
             suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
-        let engine = self.browser.active_user_profile().settings.search.engine;
-        suggestions.extend(omnibox::resolve_with_engine(text, engine).map(Suggestion::Load));
+        let preferences = &self.browser.active_user_profile().settings.search;
+        suggestions.extend(preferences.resolve(text).map(Suggestion::Load));
         if bar.target == Target::NewTab {
             // Current Space first, then every other Space, keeping duplicate URLs distinct.
             let current = self.browser.active_space;
@@ -2019,12 +2026,12 @@ impl BrowserWindow {
                 .take(MAX_HISTORY_SUGGESTIONS)
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
         }
-        if self.browser.active_user_profile().settings.search.suggestions && !self.browser.is_private() {
-            suggestions.extend(bar.remote.iter().map(|query| Suggestion::Load(engine.search(query))));
+        if preferences.suggestions && preferences.suggestion_engine().is_some() && !self.browser.is_private() {
+            suggestions.extend(bar.remote.iter().map(|query| Suggestion::Load(preferences.search(query))));
         }
         let ask_chatgpt = chatgpt_enabled && !chatgpt_keyword
             && bar.target == Target::NewTab
-            && matches!(omnibox::resolve_with_engine(text, engine), Some(Resolved::Search { .. }))
+            && matches!(preferences.resolve(text), Some(Resolved::Search { .. }))
             && !suggestions.iter().any(|s| matches!(s, Suggestion::Action { .. } | Suggestion::Calculator { .. }));
         suggestions.truncate(MAX_COMMAND_SUGGESTIONS - usize::from(ask_chatgpt));
         if ask_chatgpt { suggestions.push(Suggestion::AskChatGpt { query: text.trim().to_owned() }); }
@@ -2077,7 +2084,7 @@ impl BrowserWindow {
         match suggestion {
             Suggestion::AskChatGpt { query } => {
                 if target != Target::NewTab || !self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar)) { return; }
-                let resolved = omnibox::SiteSearch::ChatGpt.search(&query);
+                let resolved = omnibox::SiteSearch::ChatGpt.search(&query, &self.browser.active_user_profile().settings.search).expect("ChatGPT has a fixed search endpoint");
                 if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 let id = self.new_command_tab(resolved.url(), background, cx);
                 self.edit_browser(|b| b.set_title(id, query));
@@ -2281,6 +2288,7 @@ impl BrowserWindow {
             Command::OpenTaskManager => self.open_menu_utility(crate::task_manager::open, cx),
             Command::Settings => self.open_settings(cx),
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
+            Command::SearchSettings => self.search_settings_from_command(cx),
             Command::FindPage => self.find_from_command(cx),
             Command::NewSpace => self.begin_space_creation(self.browser.space().id, cx),
             Command::NewProfile(space) => self.open_user_profile_creation(crate::user_profile_dialog::CreationSource::File(space), cx),
@@ -4034,11 +4042,12 @@ impl BrowserWindow {
             size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
         let history_open = !virtual_page && self.history_is_open();
+        let search_settings_open = !virtual_page && self.search_settings_owner().is_some();
         let more_settings_open = !virtual_page && self.more_settings_is_open();
         let site_settings_open = !virtual_page && (self.site_settings_is_open() || more_settings_open);
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if virtual_page || split_open || history_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if virtual_page || split_open || history_open || search_settings_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -4085,6 +4094,7 @@ impl BrowserWindow {
                         .when(!split_open, |this| this.px_8())
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .when(history_open, |this| this.child(self.render_history(cx)))
+                    .when(search_settings_open, |this| this.child(self.render_search_settings(window,cx)))
                     .when(site_settings_open, |this| this.child(if more_settings_open { self.render_more_settings_root() } else { self.render_site_settings_page(cx) }))
                     .children(placeholder.map(|(title, url)| {
                         div().debug_selector(|| "page-placeholder".into())
@@ -4461,7 +4471,7 @@ impl BrowserWindow {
                                 .debug_selector(|| "site-search-pill".into())
                                 .rounded_full().px(px(10.)).h(px(24.)).flex().items_center()
                                 .bg(gpui::rgb(scope_color)).text_color(gpui::white())
-                                .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(site.name())))
+                                .text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(site.name(&self.browser.active_user_profile().settings.search).unwrap_or_default().to_owned())))
                             .child(div()
                                 .when(bar.site_search == Some(omnibox::SiteSearch::ChatGpt), |this| this.ml(px(-3.)))
                                 .debug_selector(|| self.sidebar_debug_name((|| "command-bar-input".into())()))
@@ -4529,6 +4539,8 @@ impl Render for BrowserWindow {
                 .child(crate::quit::diagnostic(cx)).into_any_element();
         }
         self.refresh_profile_projection();
+        self.reconcile_managed_search(cx);
+        self.sync_search_settings();
         self.start_max_title_jobs(cx);
         self.sync_site_settings(window,cx);
         if self.peek_owner.is_some() { return self.render_peek(window, cx); }

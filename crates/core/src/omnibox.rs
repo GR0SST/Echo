@@ -1,6 +1,7 @@
 //! Turns what the user typed into the command bar into a URL to load.
 
 pub mod calculator;
+pub mod search_settings;
 
 use serde::{Deserialize, Serialize};
 
@@ -23,10 +24,18 @@ pub struct CommandBarSearchPreferences {
     pub engine: SearchEngine,
     pub suggestions: bool,
     pub notice_dismissed: bool,
+    #[serde(default = "search_settings::default_providers")]
+    pub providers: Vec<search_settings::SearchProvider>,
+    pub custom_default: Option<u64>,
+    #[serde(default = "search_settings::first_custom_id")]
+    pub next_provider_id: u64,
+    pub shortcut_mode: search_settings::ShortcutMode,
 }
 impl Default for CommandBarSearchPreferences {
     fn default() -> Self {
-        Self { engine: SearchEngine::Google, suggestions: true, notice_dismissed: false }
+        Self { engine: SearchEngine::Google, suggestions: true, notice_dismissed: false,
+            providers: search_settings::default_providers(), custom_default: None,
+            next_provider_id: search_settings::first_custom_id(), shortcut_mode: search_settings::ShortcutMode::default() }
     }
 }
 impl SearchEngine {
@@ -83,7 +92,7 @@ pub fn top_domain(prefix: &str) -> Option<(&'static str, &'static str)> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SiteSearch { Wikipedia, ChatGpt }
+pub enum SiteSearch { Wikipedia, ChatGpt, Configured(u64) }
 impl SiteSearch {
     pub fn from_keyword(keyword: &str) -> Option<Self> {
         match keyword.trim().to_ascii_lowercase().as_str() {
@@ -92,9 +101,22 @@ impl SiteSearch {
             _ => None,
         }
     }
-    pub fn name(self) -> &'static str { match self { Self::Wikipedia => "Wikipedia", Self::ChatGpt => "ChatGPT" } }
-    pub fn search(self, query: &str) -> Resolved {
+    pub fn for_profile(keyword: &str, preferences: &CommandBarSearchPreferences) -> Option<Self> {
+        preferences.provider_for_shortcut(keyword).map(|p| Self::Configured(p.id)).or_else(|| {
+            match Self::from_keyword(keyword) {
+                Some(Self::Wikipedia) => preferences.provider(7).filter(|p| p.active && p.shortcut == "wikipedia").map(|p|Self::Configured(p.id)),
+                Some(Self::ChatGpt) => Some(Self::ChatGpt),
+                _ => None,
+            }
+        })
+    }
+    pub fn name(self, preferences: &CommandBarSearchPreferences) -> Option<&str> {
+        match self { Self::Wikipedia => Some("Wikipedia"), Self::ChatGpt => Some("ChatGPT"),
+            Self::Configured(id) => preferences.provider(id).filter(|p|p.active).map(|p|p.name.as_str()) }
+    }
+    pub fn search(self, query: &str, preferences: &CommandBarSearchPreferences) -> Option<Resolved> {
         let url = match self {
+            Self::Configured(id) => return preferences.provider(id)?.search(query),
             Self::Wikipedia => format!("https://en.wikipedia.org/w/index.php?search={}", encode_query(query)),
             Self::ChatGpt => {
                 // Arc's native handoff opens this URL; the website prefills its
@@ -109,7 +131,7 @@ impl SiteSearch {
                 format!("https://chat.openai.com/?q={encoded}")
             }
         };
-        Resolved::Search { query: query.into(), url }
+        Some(Resolved::Search { query: query.into(), url })
     }
 }
 
@@ -273,8 +295,9 @@ mod chatgpt_tests {
     #[test]
     fn chatgpt_handoff_matches_arc_and_keeps_the_whole_question_in_one_parameter() {
         assert_eq!(SiteSearch::from_keyword("ChatGPT"), Some(SiteSearch::ChatGpt));
-        assert_eq!(SiteSearch::ChatGpt.search("What is the Rust programming language?").url(), "https://chat.openai.com/?q=What%20is%20the%20Rust%20programming%20language?");
-        let resolved = SiteSearch::ChatGpt.search("a&b=#c+%? 日本語");
+        let preferences=CommandBarSearchPreferences::default();
+        assert_eq!(SiteSearch::ChatGpt.search("What is the Rust programming language?",&preferences).unwrap().url(), "https://chat.openai.com/?q=What%20is%20the%20Rust%20programming%20language?");
+        let resolved = SiteSearch::ChatGpt.search("a&b=#c+%? 日本語",&preferences).unwrap();
         let url = url::Url::parse(resolved.url()).unwrap();
         assert_eq!(url.query_pairs().collect::<Vec<_>>(), vec![("q".into(), "a&b=#c+%? 日本語".into())]);
         assert!(url.fragment().is_none());

@@ -7,7 +7,7 @@ use crate::{
     window::BrowserWindow,
 };
 use browser_core::{
-    settings::{SearchEngine, Toggle},
+    settings::Toggle,
     UserProfileId,
 };
 use gpui::{
@@ -86,6 +86,8 @@ pub(crate) struct SettingsWindow {
     focus: FocusHandle,
     popup: Option<Popup>,
     popup_selection: usize,
+    search_popup_owner: Option<UserProfileId>,
+    search_popup_providers: Vec<browser_core::omnibox::search_settings::SearchProvider>,
     archive_scope: Option<archive::ArchiveScope>,
     archive_closing: Option<archive::ArchiveScope>,
     archive_generation: u64,
@@ -231,6 +233,8 @@ fn open(
                     focus,
                     popup: None,
                     popup_selection: 0,
+                    search_popup_owner: None,
+                    search_popup_providers: Vec::new(),
                     archive_scope: None,
                     archive_closing: None,
                     archive_generation: 0,
@@ -474,7 +478,7 @@ impl SettingsWindow {
             .child(div().flex_1().min_w_0().child(label))
             .child(
                 self.settings_button(action)
-                    .when(tab.is_none() && action != "Previews Settings…" && action != "Air Traffic Control…", |s| {
+                    .when(tab.is_none() && action != "Previews Settings…" && action != "Air Traffic Control…" && action != "Search Settings…", |s| {
                         s.opacity(0.5)
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -482,6 +486,8 @@ impl SettingsWindow {
                             this.change_tab(tab, window, cx);
                         } else if action == "Air Traffic Control…" {
                             this.present_atc(window, cx);
+                        } else if action == "Search Settings…" {
+                            crate::search_settings::open_from_settings(this.profile.clone(),this.owner.clone(),this.selected_profile,cx);
                         } else if action == "Previews Settings…" {
                             this.popup = None;
                             this.previews = true;
@@ -524,6 +530,11 @@ impl SettingsWindow {
                         .justify_between()
                         .child(popup_chevrons())
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            if popup == Popup::Search {
+                                this.search_popup_owner=Some(this.selected_profile);
+                                this.search_popup_providers=this.profile.read_settings(|b|b.user_profile(this.selected_profile)
+                                    .map(|p|p.settings.search.providers.iter().filter(|p|p.active&&p.show_in_engine_list).cloned().collect()).unwrap_or_default());
+                            }
                             this.popup = if this.popup == Some(popup) {
                                 None
                             } else {
@@ -637,7 +648,7 @@ impl SettingsWindow {
                 self.settings_group()
                     .child(self.popup_row(
                         "Search engine",
-                        profile.settings.search.engine.label(),
+                        profile.settings.search.default_name().to_owned(),
                         Popup::Search,
                         137.,
                         cx,
@@ -955,9 +966,8 @@ impl SettingsWindow {
             .user_profile(self.selected_profile)
             .unwrap_or(browser.active_user_profile());
         match popup {
-            Popup::Search => SearchEngine::ALL
-                .into_iter()
-                .map(|e| (e.label().into(), e == profile.settings.search.engine))
+            Popup::Search => self.search_popup_providers.iter()
+                .map(|p| (p.name.clone(), profile.settings.search.default_provider().is_some_and(|selected|selected.id==p.id)))
                 .collect(),
             Popup::Archive => [43200, 86400, 604800, 2592000]
                 .into_iter()
@@ -1087,6 +1097,7 @@ impl SettingsWindow {
             return;
         }
         let id = self.selected_profile;
+        let search_id=self.search_popup_providers.get(index).map(|p|p.id).filter(|_|self.search_popup_owner==Some(id));
         self.profile.edit_settings(|browser| {
             if popup == Popup::LittleArchive {
                 use browser_core::settings::LittleWindowArchive::*;
@@ -1097,7 +1108,7 @@ impl SettingsWindow {
                 return;
             };
             match popup {
-                Popup::Search => profile.settings.search.engine = SearchEngine::ALL[index],
+                Popup::Search => if let Some(id)=search_id {let _=profile.settings.search.make_default(id);},
                 Popup::Archive => unreachable!("archive changes include the profile-scope question"),
                 Popup::Documents => {
                     profile.settings.document_app = [

@@ -60,6 +60,8 @@ mod scripting_tests;
 mod save_page_tests;
 #[path = "main_menu_tests.rs"]
 mod main_menu_tests;
+#[path = "managed_search_tests.rs"]
+mod managed_search_tests;
 #[path = "tab_switcher_tests.rs"]
 mod tab_switcher_tests;
 

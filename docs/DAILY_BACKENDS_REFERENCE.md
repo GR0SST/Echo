@@ -72,3 +72,27 @@ exit status 0. The acceptance harness also checks the encrypted vault and sessio
 file directly for all synthetic plaintext markers. The two native test records
 and the legacy test Keychain item are deleted by verification. This is backend
 acceptance evidence, not an Arc/Echo visual-parity pair.
+
+Search management references: `arc-search.png`, `arc-search-sites.png`,
+`arc-search-engine-menu.png`, `arc-search-edit.png`, and `arc-search-add.png`.
+Arc's Search Settings button opens `arc://settings/searchEngines`; Add/Edit uses
+a 512 × 356 card, 20 px field insets, 36 px fields and pill-shaped footer buttons.
+The packed English resource 348 supplies `system-ui, sans-serif`; resource 20047
+supplies the shared 15 px dialog title. The captures were read-only: editors were
+cancelled and the test tab, Settings and owned browser window were closed.
+Echo uses `browser://settings/searchEngines?profile=<local profile id>` so a
+Settings selection owns its changes even without a Space assigned to that profile.
+Custom templates never inherit the previous engine's remote suggestion transport.
+Factory entries retain Echo's six existing engines and Wikipedia; Arc's owner
+site-search inventory is not imported. Generic engine icons, the wider Chromium
+settings navigation, light colors and detailed hover states remain partial.
+
+Search native acceptance: `search-native-run.jtZraf/drive.log` (CEF Complete,
+exit 0) and `search-native-v5.log` verify Add → Make default → Command Bar search
+and persisted custom-provider identity/URL, using a disposable Echo profile.
+Inspected pairs: `search-page-pairs.png`, `search-add-pairs.png`, and the zoomed
+`search-add-pairs-2x.png`. Dialog label tracking (Arc CSS: 0.4 px; GPUI lacks a
+letter-spacing style) remains a documented typography gap. Title/label line
+heights come from Arc's packed shared dialog/input styles (15 / 16 px).
+Five GPUI tests cover editor input, custom default, Tab/Space policy, keyboard
+scroll/focus, cancellation, deleted owners, and a profile switch before repaint.

@@ -969,6 +969,8 @@ fn parse_key(spec: &str) -> (usize, String, u16) {
         "right" => special("\u{f703}", 124),
         "down" => special("\u{f701}", 125),
         "up" => special("\u{f700}", 126),
+        "pageup" => special("\u{f72c}", 116),
+        "pagedown" => special("\u{f72d}", 121),
         "home" => special("\u{f729}", 115),
         "end" => special("\u{f72b}", 119),
         _ => {
@@ -1516,6 +1518,8 @@ mod key_parsing_tests {
     #[test]
     fn home_and_end_emit_native_function_characters_keycodes_and_modifiers() {
         for (spec, expected_flags, expected_chars, expected_code) in [
+            ("pageup", 0, "\u{f72c}", 116),
+            ("pagedown", 0, "\u{f72d}", 121),
             ("home", 0, "\u{f729}", 115),
             ("end", 0, "\u{f72b}", 119),
             ("cmd-shift-home", COMMAND | SHIFT, "\u{f729}", 115),
