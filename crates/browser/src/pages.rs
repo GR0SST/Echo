@@ -41,7 +41,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::OpenInNewTab { opener, .. } | Event::OpenInBackgroundTab { opener, .. } | Event::OpenPeek { opener, .. } => Some(*opener),
         Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
-        | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
+        | Event::PageSwipe { view,.. } | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
         Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
@@ -1796,6 +1796,7 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         let PageStore { pages, .. } = &mut *store;
         match event {
+            Event::PageSwipe { .. } => {}
             Event::LoadingProgress { view, progress } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) { page.state.loading_progress = (*progress).min(1000); }
             }

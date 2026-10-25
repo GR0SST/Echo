@@ -21,6 +21,8 @@ mod audio;
 mod audio_clock;
 mod media;
 pub use media::{MediaState, MediaAction};
+mod page_swipe;
+pub use page_swipe::PageSwipe;
 mod capture;
 pub use capture::MediaCaptureState;
 mod editing;
@@ -100,6 +102,7 @@ pub enum Event {
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     AudioStateChanged { view: ViewId, audible: bool },
+    PageSwipe { view: ViewId, state: Option<PageSwipe> },
     MediaCaptureChanged { view: ViewId, state: MediaCaptureState },
     MediaStateChanged { view: ViewId, state: MediaState },
     Favicon { view: ViewId, page_url: String, png: Vec<u8> },
@@ -141,6 +144,7 @@ enum RawEvent {
     Progress(u16),
     BoostZap(String),
     Audio(bool),
+    PageSwipe(Option<PageSwipe>),
     Capture(MediaCaptureState),
     Media(MediaState),
     Title(String),
@@ -563,6 +567,8 @@ impl Engine {
             }
             SKIPS.set(0);
         }
+        page_swipe::poll();
+        #[cfg(target_os="macos")] mac::poll_page_scroll();
         RUNTIME.with(|slot| {
             if let Some(runtime) = slot.borrow().as_ref() {
                 if let Some(audio) = &runtime.audio { audio.poll(); }
@@ -843,6 +849,10 @@ impl Engine {
         if role == ViewRole::Page {
             if let Some(audio) = &self._runtime.audio { audio.register(browser.identifier()); }
         }
+        if role == ViewRole::Page {
+            page_swipe::register(browser.clone(),self.events.clone(),self.message_ids.clone());
+            #[cfg(target_os="macos")] mac::register_page_scroll(browser.identifier(),page_view);
+        }
         self.views.insert(
             id,
             View {
@@ -869,6 +879,7 @@ impl Engine {
     }
 
     pub fn set_frame(&mut self, id: ViewId, frame: Bounds) {
+        if let Some(view)=self.views.get(&id).filter(|view|view.frame!=frame){page_swipe::cancel(view.browser.identifier());}
         let Some(view) = self.views.get_mut(&id) else {
             return;
         };
@@ -930,6 +941,7 @@ impl Engine {
             target.events.push((browser, RawEvent::Audio(audible)));
         }
         target.events.push((browser, RawEvent::Capture(capture::current(browser))));
+        page_swipe::retarget(browser,target.events.clone());
         Some(imported)
     }
 
@@ -967,6 +979,7 @@ impl Engine {
     }
 
     pub fn set_visible(&mut self, id: ViewId, visible: bool) {
+        if !visible { if let Some(view)=self.views.get(&id) { page_swipe::cancel(view.browser.identifier()); } }
         #[cfg(target_os = "macos")]
         if let Some(view) = self.views.get(&id) {
             mac::set_hidden(view.host, !visible);
@@ -1305,6 +1318,8 @@ impl Engine {
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
         if let Some(view) = self.views.remove(&id) {
             page_context::forget(view.browser.identifier());
+            page_swipe::forget(view.browser.identifier());
+            #[cfg(target_os="macos")] mac::forget_page_scroll(view.browser.identifier());
             self.by_browser_id.remove(&view.browser.identifier());
             if let Some(audio) = &self._runtime.audio { audio.close(view.browser.identifier()); }
             // Runtime owns the exact context and child host until OnBeforeClose.
@@ -1368,6 +1383,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::LoadError(_, _, _) => return None,
         RawEvent::Media(state) => Event::MediaStateChanged { view, state },
         RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
+        RawEvent::PageSwipe(state) => Event::PageSwipe { view, state },
         RawEvent::Capture(state) => Event::MediaCaptureChanged { view, state },
         RawEvent::Title(title) => Event::TitleChanged { view, title },
         RawEvent::Favicon(page_url, png) => Event::Favicon { view, page_url, png },
@@ -1520,7 +1536,7 @@ wrap_request_handler! {
     struct PeekRequestHandler { events: EventQueue, policy: Arc<Mutex<PeekPolicy>>, boosts: Arc<Mutex<Vec<SiteBoost>>> }
     impl RequestHandler {
         fn on_render_process_terminated(&self, browser: Option<&mut Browser>, _status: TerminationStatus, _error_code: i32, _error_string: Option<&CefString>) {
-            if let Some(browser) = browser { report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); }
+            if let Some(browser) = browser { page_swipe::cancel(browser.identifier()); report_media_capture(&self.events, browser.identifier(), MediaCaptureState::default()); }
         }
         fn on_render_view_ready(&self,browser:Option<&mut Browser>) {
             if let Some(browser)=browser { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
@@ -1609,6 +1625,7 @@ wrap_display_handler! {
             url: Option<&CefString>,
         ) {
             if frame.is_some_and(|frame| frame.is_main() == 1) {
+                if let Some(browser)=browser.as_deref(){page_swipe::cancel(browser.identifier());}
                 let url = url.map(CefString::to_string).unwrap_or_default();
                 // CEF reports the underlying document URL for source views.
                 // Its visible entry retains the source-mode prefix, including
@@ -1747,6 +1764,8 @@ wrap_life_span_handler! {
                 site_data::destroyed(browser.identifier());
                 permissions::destroyed(browser.identifier());
                 capture::destroyed(browser.identifier());
+                page_swipe::forget(browser.identifier());
+                #[cfg(target_os="macos")] mac::forget_page_scroll(browser.identifier());
             }
         }
 

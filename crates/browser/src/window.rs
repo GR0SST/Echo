@@ -74,7 +74,7 @@ pub const TRAFFIC_LIGHT_Y: f32 = 17.0;
 /// Evaluate in elapsed time so missed frames do not slow the animation down.
 const PAGER_SPRING_FREQUENCY: f32 = 24.7;
 /// The short-drag return in the same capture settles faster than key navigation.
-const PAGER_RETURN_FREQUENCY: f32 = 34.3;
+pub(crate) const PAGER_RETURN_FREQUENCY: f32 = 34.3;
 
 actions!(
     browser,
@@ -307,7 +307,7 @@ pub struct Pager {
 
 /// Analytic critically damped spring, in pages and pages/second. Keeping the
 /// release velocity makes a flick and an interrupted snap continuous.
-fn pager_spring(from: f32, target: f32, velocity: f32, frequency: f32, seconds: f32) -> (f32, f32) {
+pub(crate) fn pager_spring(from: f32, target: f32, velocity: f32, frequency: f32, seconds: f32) -> (f32, f32) {
     let displacement = from - target;
     let coefficient = velocity + frequency * displacement;
     let decay = (-frequency * seconds).exp();
@@ -536,6 +536,7 @@ pub enum OverlayKind {
     MaxPreview,
     MaxPreviewMenu,
     PageZoom,
+    PageSwipe,
     SplitDrop,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
@@ -602,6 +603,7 @@ impl Render for Overlay {
                     OverlayKind::MaxPreviewMenu => browser.render_max_preview_menu(cx),
                     OverlayKind::MaxPreview => browser.render_max_preview(window, cx),
                     OverlayKind::LinkStatus => browser.render_link_status(window),
+                    OverlayKind::PageSwipe => browser.render_page_swipe(cx),
                     OverlayKind::PageZoom => browser.render_page_zoom(),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
@@ -698,6 +700,7 @@ pub struct BrowserWindow {
     pub(crate) retiring_toasts: Vec<crate::toast::Toast>,
     pub(crate) share_picker: Option<crate::native::sharing::SharePicker>,
     pub(crate) page_share_generation: u64,
+    pub(crate) page_swipe: Option<crate::page_swipe::PageSwipeFeedback>,
     pub(crate) link_status: Option<crate::link_status::LinkStatus>,
     pub(crate) link_status_generation: u64,
     pub(crate) page_zoom: Option<crate::page_zoom::PageZoom>,
@@ -983,6 +986,7 @@ impl BrowserWindow {
             retiring_toasts: Vec::new(),
             share_picker: None,
             page_share_generation: 0,
+            page_swipe: None,
             link_status: None,
             link_status_generation: 0,
             page_zoom: None,
@@ -1180,6 +1184,7 @@ impl BrowserWindow {
             self.new_menu.take().and_then(|menu| menu.overlay).map(|handle| handle.into()),
             self.toast.take().and_then(|toast| toast.overlay).map(|handle| handle.into()),
             self.link_status.take().and_then(|status| status.overlay).map(|handle| handle.into()),
+            self.page_swipe.take().and_then(|state|state.overlay).map(|handle|handle.into()),
             self.page_zoom.take().and_then(|state| state.overlay).map(|handle| handle.into()),
             self.split_drop.take().and_then(|preview| preview.overlay).map(|handle| handle.into()),
             self.floating_sidebar.take().and_then(|sidebar| sidebar.overlay).map(|handle| handle.into()),
@@ -1269,6 +1274,7 @@ impl BrowserWindow {
                     if let Some(identity)=identity { self.mini_player.record(identity.tab,&state); }
                     cx.notify();
                 }
+                Event::PageSwipe { state,.. } => { if let Some(identity)=identity {self.update_page_swipe(identity.tab,state,window,cx);} }
                 Event::AudioStateChanged { .. } | Event::MediaCaptureChanged { .. } => { cx.notify(); }
                 Event::TitleChanged { view, title } => {
                     if let Some(tab) = identity.map(|identity| identity.tab) {
@@ -4448,6 +4454,7 @@ impl Render for BrowserWindow {
         self.sync_max_previews(window,cx);
         self.sync_link_status(window, cx);
         self.sync_page_zoom(window, cx);
+        self.sync_page_swipe(window,cx);
         self.sync_page_loading(window, cx);
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);

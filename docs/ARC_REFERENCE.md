@@ -1695,6 +1695,27 @@ system-share payload fidelity and non-macOS native controls are unverified.
 The local bundle check required an ignored `third_party/cef/CREDITS.html` link
 to the actual versioned SDK credits because the existing bundler expected that
 unversioned path; the upstream notice itself was preserved.
+## Precise page history swipes, sweep round 2 — 2026-10-25
+
+The installed Arc binary exposes WebContentOverscrollDelegate,
+useChromiumOverscroll and overscroll-behavior-x containment strings, retained in
+`target/parity/sweep-r2/arc-overscroll-strings.txt`. No synthetic gesture was sent
+to Arc. Echo's isolated native view shim decodes precise finger phases; the
+shared engine checks direction, distance/flick and the starting document's
+scroll policy through a read-only Runtime evaluation. Editors, frames, custom
+elements, media, horizontal scrollers, CSS containment and any non-passive wheel
+handlers retain input. Failed, stale or timed-out policy queries deny navigation;
+native events are buffered only until that decision. Hiding, navigating or terminating the source cancels an in-flight gesture.
+The passive GPUI arrow reuses the Space return spring; its exact Arc appearance
+is unverified, and non-macOS native input bridges remain unfinished.
+
+`native-swipe-assertions.json` verifies C → C for a short gesture, C → B → C for
+back/forward, and unchanged horizontal/contained/blocking-handler URLs. The actual CEF view was
+hit by precise scroll events; the screenshot `echo-page-swipe-arrow.png` was
+inspected, including `echo-page-swipe-arrow-zoom.png`. Native exit was 0 with
+CEF Complete. Four regressions cover policy decoding, gesture
+threshold/direction/velocity and feedback focus, teardown and background rejection.
+
 ## Capture indicator static fallback, sweep round 2 — 2026-10-25
 
 Fresh guarded normal 22461 reused Echo Test; its R2 fixture streams and tabs were

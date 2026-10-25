@@ -609,7 +609,8 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                         }
                     }
                 },
-                "swipe" => {
+                "swipe" | "page-swipe" => {
+                    let page_scroll = name == "page-swipe";
                     // swipe <x> <y> <dx> [hold]: two-finger horizontal trackpad swipe;
                     // with `hold` the fingers stay down until `release <x> <y>`.
                     let mut words = arg.split_whitespace();
@@ -617,22 +618,22 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     let hold = words.next() == Some("hold");
                     if let [x, y, dx] = v[..] {
                         const STEPS: usize = 12;
-                        source_native!(|native| unsafe { send_scroll(native, x, y, 0.0, SCROLL_BEGAN) });
+                        source_native!(|native| unsafe { send_scroll_target(native,page_scroll, x, y, 0.0, SCROLL_BEGAN) });
                         for _ in 0..STEPS {
                             cx.background_executor().timer(Duration::from_millis(16)).await;
-                            source_native!(|native| unsafe { send_scroll(native, x, y, dx / STEPS as f64, SCROLL_CHANGED) });
+                            source_native!(|native| unsafe { send_scroll_target(native,page_scroll, x, y, dx / STEPS as f64, SCROLL_CHANGED) });
                         }
                         if !hold {
                             cx.background_executor().timer(Duration::from_millis(16)).await;
-                            source_native!(|native| unsafe { send_scroll(native, x, y, 0.0, SCROLL_ENDED) });
+                            source_native!(|native| unsafe { send_scroll_target(native,page_scroll, x, y, 0.0, SCROLL_ENDED) });
                         }
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
-                "release" => {
+                "release" | "page-release" => {
                     let v: Vec<f64> = arg.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                     if let [x, y] = v[..] {
-                        source_native!(|native| unsafe { send_scroll(native, x, y, 0.0, SCROLL_ENDED) });
+                        source_native!(|native| unsafe { send_scroll_target(native, name == "page-release", x, y, 0.0, SCROLL_ENDED) });
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 }
@@ -1130,7 +1131,10 @@ unsafe fn send_right_click(view: *mut AnyObject, x: f64, y: f64) {
 /// Hands a trackpad scroll event at window point (x, y) (top-left origin)
 /// straight to the toolkit view: AppKit drops synthesized scroll events
 /// posted to the queue, since they belong to no window.
-unsafe fn send_scroll(view: *mut AnyObject, x: f64, y: f64, dx: f64, phase: i64) {
+#[path="automation_scroll.rs"]
+mod precise_scroll;
+unsafe fn send_scroll(view:*mut AnyObject,x:f64,y:f64,dx:f64,phase:i64){unsafe{send_scroll_bound(view,x,y,dx,phase,false);}}
+unsafe fn send_scroll_bound(view: *mut AnyObject, x: f64, y: f64, dx: f64, phase: i64, bind:bool) {
     #[cfg(test)]
     if liveness_tests::native_call("scroll") { return; }
     const UNIT_PIXEL: u32 = 0;
@@ -1145,7 +1149,8 @@ unsafe fn send_scroll(view: *mut AnyObject, x: f64, y: f64, dx: f64, phase: i64)
         // A window-less event's locationInWindow is its screen position,
         // so place it where screen coordinates equal the window point.
         let display_height = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
-        let global = NSPoint::new(x, display_height - (bounds.size.height - y));
+        let local=NSPoint::new(x,bounds.size.height-y);
+        let global = if bind {let screen:NSPoint=msg_send![window,convertPointToScreen:local];NSPoint::new(screen.x,display_height-screen.y)} else {NSPoint::new(x,display_height-local.y)};
         let event = CGEventCreateScrollWheelEvent2(std::ptr::null(), UNIT_PIXEL, 2, 0, dx as i32, 0);
         if event.is_null() {
             return;
@@ -1158,6 +1163,7 @@ unsafe fn send_scroll(view: *mut AnyObject, x: f64, y: f64, dx: f64, phase: i64)
         let ns_event: *mut AnyObject =
             msg_send![AnyClass::get(c"NSEvent").unwrap(), eventWithCGEvent: CGEventRef(event)];
         if !ns_event.is_null() {
+            if bind&&!precise_scroll::bind(ns_event,window,local){eprintln!("[automation] aborted: cannot bind precise page scroll event");CFRelease(event);return;}
             let _: () = msg_send![view, scrollWheel: ns_event];
         }
         CFRelease(event);
@@ -1484,3 +1490,8 @@ mod key_parsing_tests {
 #[cfg(test)]
 #[path = "automation_liveness_tests.rs"]
 mod liveness_tests;
+
+unsafe fn send_scroll_target(view:*mut AnyObject,page:bool,x:f64,y:f64,dx:f64,phase:i64){unsafe{
+ let target=if page{let window=window_of(view);let content:*mut AnyObject=msg_send![window,contentView];let bounds:NSRect=msg_send![content,bounds];let point=NSPoint::new(x,bounds.size.height-y);let hit:*mut AnyObject=msg_send![content,hitTest:point];if hit.is_null(){return;}hit}else{view};
+ send_scroll_bound(target,x,y,dx,phase,page);
+}}

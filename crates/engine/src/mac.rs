@@ -478,3 +478,95 @@ fn apply_video_pip_style(title: &str, label: &str, callback: &std::rc::Rc<dyn Fn
     }
     false
 }
+
+// Only native event decoding belongs here; gesture and history policy are shared.
+thread_local! {
+ static SCROLL_ROOTS: std::cell::RefCell<std::collections::HashMap<i32,usize>>=std::cell::RefCell::default();
+ static SCROLL_TARGETS: std::cell::RefCell<std::collections::HashMap<usize,i32>>=std::cell::RefCell::default();
+ static SCROLL_ORIGINALS: std::cell::RefCell<std::collections::HashMap<usize,Imp>>=std::cell::RefCell::default();
+}
+pub(crate) fn register_page_scroll(id:i32,root:*mut c_void){SCROLL_ROOTS.with_borrow_mut(|all|{all.insert(id,root as usize);});}
+pub(crate) fn forget_page_scroll(id:i32){cancel_pending_scroll(id);SCROLL_ROOTS.with_borrow_mut(|all|{all.remove(&id);});SCROLL_TARGETS.with_borrow_mut(|all|all.retain(|_,browser|*browser!=id));}
+pub(crate) fn poll_page_scroll(){
+ expire_pending_scroll();
+ let roots:Vec<_>=SCROLL_ROOTS.with_borrow(|all|all.iter().map(|(id,root)|(*id,*root)).collect());
+ for(id,root)in roots{if root!=0{unsafe{bind_scroll_descendants(root as *mut AnyObject,id);}}}
+}
+unsafe fn bind_scroll_descendants(view:*mut AnyObject,id:i32){unsafe{
+ let class=(*view).class();let name=class.name().to_string_lossy();
+ if name == "RenderWidgetHostViewCocoa"{
+  let key=class as *const AnyClass as usize;
+  if !SCROLL_ORIGINALS.with_borrow(|all|all.contains_key(&key)){
+   if let Some(method)=class.instance_method(sel!(scrollWheel:)){
+    SCROLL_ORIGINALS.with_borrow_mut(|all|{all.insert(key,method.implementation());});
+    add_method(class as *const AnyClass as *mut AnyClass,sel!(scrollWheel:),std::mem::transmute::<extern "C-unwind" fn(*mut AnyObject,Sel,*mut AnyObject),Imp>(page_scroll_event),"v@:@\0");
+   }
+  }
+  SCROLL_TARGETS.with_borrow_mut(|all|{all.insert(view as usize,id);});return;
+ }
+ let children:*mut AnyObject=msg_send![view,subviews];let count:usize=msg_send![children,count];
+ for index in 0..count{let child:*mut AnyObject=msg_send![children,objectAtIndex:index];bind_scroll_descendants(child,id);}
+}}
+extern "C-unwind" fn page_scroll_event(view:*mut AnyObject,sel:Sel,event:*mut AnyObject){unsafe{
+ let id=SCROLL_TARGETS.with_borrow(|all|all.get(&(view as usize)).copied());
+ if let Some(id)=id{
+  let precise:Bool=msg_send![event,hasPreciseScrollingDeltas];
+  let momentum:usize=msg_send![event,momentumPhase];let flags:usize=msg_send![event,modifierFlags];
+  let phase:usize=msg_send![event,phase];
+  // NSEventPhaseMayBegin has no movement; only explicit finger begin/end counts.
+  let phase=if phase&16!=0{8}else if phase&8!=0{4}else if phase&1!=0{1}else if phase&4!=0{2}else{0};
+  if precise.as_bool()&&momentum==0&&flags&((1<<17)|(1<<18)|(1<<19)|(1<<20))==0&&phase!=0{
+   let point:NSPoint=msg_send![event,locationInWindow];let nil:*mut AnyObject=std::ptr::null_mut();
+   let point:NSPoint=msg_send![view,convertPoint:point, fromView:nil];let flipped:Bool=msg_send![view,isFlipped];let bounds:NSRect=msg_send![view,bounds];
+   let y=if flipped.as_bool(){point.y}else{bounds.size.height-point.y};
+   let dx:f64=msg_send![event,scrollingDeltaX];let dy:f64=msg_send![event,scrollingDeltaY];
+   if phase==4||phase==8 {
+    if let Some(token)=crate::page_swipe::active_token(id){if queue_page_scroll(id,token,view,sel,event,phase,point.x,y,dx,dy){return;}}
+    original_page_scroll(view,sel,event);crate::page_swipe::scroll(id,point.x,y,dx,dy,phase);return;
+   }
+   let eligible=crate::page_swipe::scroll(id,point.x,y,dx,dy,phase);
+   if let Some(token)=crate::page_swipe::active_token(id){
+    if (phase!=1||crate::page_swipe::awaiting_policy(id))&&queue_page_scroll(id,token,view,sel,event,phase,point.x,y,dx,dy){return;}
+   }
+   if eligible{return;}
+  } else if phase!=0 {crate::page_swipe::cancel(id);}
+ }
+ original_page_scroll(view,sel,event);
+}}
+unsafe fn original_page_scroll(view:*mut AnyObject,sel:Sel,event:*mut AnyObject){unsafe{
+ let class=(*view).class() as *const AnyClass as usize;
+ if let Some(original)=SCROLL_ORIGINALS.with_borrow(|all|all.get(&class).copied().or_else(||all.values().next().copied())){
+  let original:unsafe extern "C-unwind" fn(*mut AnyObject,Sel,*mut AnyObject)=std::mem::transmute(original);original(view,sel,event);
+ }
+}}
+
+struct PendingScrollEvent {
+ view:objc2::rc::Retained<AnyObject>, event:objc2::rc::Retained<AnyObject>, selector:Sel,
+ phase:u8,x:f64,y:f64,dx:f64,dy:f64,
+}
+struct PendingScroll {token:i32,opened:std::time::Instant,events:Vec<PendingScrollEvent>}
+thread_local!{static SCROLL_PENDING:std::cell::RefCell<std::collections::HashMap<i32,PendingScroll>>=std::cell::RefCell::default();}
+pub(crate) fn cancel_pending_scroll(id:i32){let old=SCROLL_PENDING.with_borrow_mut(|all|all.remove(&id));drop(old);}
+pub(crate) fn flush_pending_scroll(id:i32,token:i32){
+ let pending=SCROLL_PENDING.with_borrow_mut(|all|if all.get(&id).is_some_and(|p|p.token==token){all.remove(&id)}else{None});
+ let Some(pending)=pending else{return;};
+ for packet in pending.events {
+  if crate::page_swipe::active_token(id)!=Some(token){break;}
+  if (packet.phase!=1&&packet.phase!=2)||!crate::page_swipe::eligible(id){unsafe{original_page_scroll(objc2::rc::Retained::as_ptr(&packet.view) as *mut AnyObject,packet.selector,objc2::rc::Retained::as_ptr(&packet.event) as *mut AnyObject);}}
+  if packet.phase==4||packet.phase==8{crate::page_swipe::scroll(id,packet.x,packet.y,packet.dx,packet.dy,packet.phase);}
+ }
+}
+unsafe fn queue_page_scroll(id:i32,token:i32,view:*mut AnyObject,selector:Sel,event:*mut AnyObject,phase:u8,x:f64,y:f64,dx:f64,dy:f64)->bool{unsafe{
+ if phase==1{
+  let old=SCROLL_PENDING.with_borrow_mut(|all|all.insert(id,PendingScroll{token,opened:std::time::Instant::now(),events:Vec::new()}));drop(old);
+ }
+ if !SCROLL_PENDING.with_borrow(|all|all.get(&id).is_some_and(|p|p.token==token)){return false;}
+ let(Some(view),Some(event))=(objc2::rc::Retained::retain(view),objc2::rc::Retained::retain(event))else{return false;};
+ let overflow=SCROLL_PENDING.with_borrow_mut(|all|{let pending=all.get_mut(&id).unwrap();pending.events.push(PendingScrollEvent{view,event,selector,phase,x,y,dx,dy});pending.events.len()>=512});
+ if overflow{crate::page_swipe::deny(id,token);flush_pending_scroll(id,token);}
+ true
+}}
+fn expire_pending_scroll(){
+ let expired:Vec<_>=SCROLL_PENDING.with_borrow(|all|all.iter().filter(|(_,p)|p.opened.elapsed()>=std::time::Duration::from_millis(500)).map(|(id,p)|(*id,p.token)).collect());
+ for(id,token)in expired{crate::page_swipe::deny(id,token);flush_pending_scroll(id,token);}
+}
