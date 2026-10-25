@@ -1,0 +1,232 @@
+diff --git a/cef/BUILD.gn b/cef/BUILD.gn
+--- a/cef/BUILD.gn
++++ b/cef/BUILD.gn
+@@ -554,6 +554,7 @@
+     "libcef/browser/browser_frame.cc",
+     "libcef/browser/browser_frame.h",
+     "libcef/browser/extensions_bridge.cc",
++    "libcef/browser/browsing_data_bridge.cc",
+     "libcef/browser/extensions_bridge.h",
+     "libcef/browser/browser_guest_util.cc",
+     "libcef/browser/browser_guest_util.h",
+diff --git a/cef/cef_paths2.gypi b/cef/cef_paths2.gypi
+--- a/cef/cef_paths2.gypi
++++ b/cef/cef_paths2.gypi
+@@ -7,6 +7,7 @@
+     'includes_common': [
+       'include/echo_cef_download_v1.h',
+       'include/echo_cef_extensions_v1.h',
++      'include/echo_cef_browsing_data_v1.h',
+       'include/base/cef_atomic_flag.h',
+       'include/base/cef_atomic_ref_count.h',
+       'include/base/cef_bind.h',
+diff --git a/cef/libcef/browser/browsing_data_bridge.cc b/cef/libcef/browser/browsing_data_bridge.cc
+new file mode 100644
+--- /dev/null
++++ b/cef/libcef/browser/browsing_data_bridge.cc
+@@ -0,0 +1,158 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.txt.
++#define ECHO_DATA_IMPLEMENTATION
++#include "cef/include/echo_cef_browsing_data_v1.h"
++
++#include "base/time/time.h"
++#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/browsing_data/counters/browsing_data_counter_factory.h"
++#include "chrome/browser/browsing_data/counters/browsing_data_counter_utils.h"
++#include "components/browsing_data/core/counters/browsing_data_counter.h"
++#include "components/browsing_data/core/pref_names.h"
++#include "cef/libcef/browser/browser_context.h"
++#include "cef/libcef/browser/request_context_impl.h"
++#include "cef/libcef_dll/cpptoc/request_context_cpptoc.h"
++#include "cef/libcef/browser/thread_util.h"
++#include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/browsing_data_remover.h"
++#include "content/public/browser/web_contents.h"
++
++namespace {
++using Remover = content::BrowsingDataRemover;
++// Retain the exact CEF context until the remover replies. The embedding caller
++// must also retain its runtime and keep pumping until the accepted reply.
++class Removal final : public Remover::Observer {
++ public:
++  Removal(CefRefPtr<CefRequestContext> context, Remover* remover,
++          echo_data_callback_v1 callback, void* userdata)
++      : context_(context), remover_(remover), callback_(callback), userdata_(userdata) {
++    remover_->AddObserver(this);
++  }
++  void Start(base::Time since, uint64_t mask, uint64_t origins) {
++    remover_->RemoveAndReply(since, base::Time::Max(), mask, origins, this);
++  }
++  void OnBrowsingDataRemoverDone(uint64_t failed) override {
++    remover_->RemoveObserver(this);
++    callback_(userdata_, failed);
++    delete this;
++  }
++ private:
++  const CefRefPtr<CefRequestContext> context_;
++  Remover* const remover_;
++  const echo_data_callback_v1 callback_;
++  void* const userdata_;
++};
++uint32_t Clear(void* raw_context, uint32_t categories, int64_t unix_microseconds,
++               echo_data_callback_v1 callback, void* userdata) {
++  if (!CEF_CURRENTLY_ON_UIT()) return 1;
++  if (!raw_context || !callback || !categories || (categories & ~uint32_t{127}) ||
++      unix_microseconds < -1) return 3;
++  auto context = CefRequestContextCppToC_Unwrap(
++      static_cast<cef_request_context_0_t*>(raw_context));
++  if (!context) return 2;  // Never substitute the global/default profile.
++  auto impl = CefRequestContextImpl::GetOrCreateForRequestContext(context);
++  if (!impl || !impl->VerifyBrowserContext()) return 2;
++  auto* browser_context = CefRequestContextImpl::GetBrowserContext(context);
++  auto* profile = CefRequestContextImpl::GetProfile(context);
++  if (!browser_context || !profile || profile->IsOffTheRecord()) return 2;
++  uint64_t mask = 0;
++  uint64_t origins = Remover::ORIGIN_TYPE_UNPROTECTED_WEB;
++  // Matches Chromium's clear-browsing-data handler, excluding passwords.
++  if (categories & 1) mask |= chrome_browsing_data_remover::DATA_TYPE_HISTORY;
++  if (categories & 2) mask |= chrome_browsing_data_remover::DATA_TYPE_SITE_DATA;
++  if (categories & 4) mask |= Remover::DATA_TYPE_CACHE;
++  if (categories & 8) mask |= Remover::DATA_TYPE_DOWNLOADS;
++  if (categories & 16) mask |= chrome_browsing_data_remover::DATA_TYPE_FORM_DATA;
++  if (categories & 32) mask |= chrome_browsing_data_remover::DATA_TYPE_CONTENT_SETTINGS;
++  if (categories & 64) {
++    mask |= chrome_browsing_data_remover::DATA_TYPE_SITE_DATA;
++    origins |= Remover::ORIGIN_TYPE_PROTECTED_WEB;
++    if (!(categories & 2)) origins &= ~Remover::ORIGIN_TYPE_UNPROTECTED_WEB;
++  }
++  auto since = unix_microseconds == -1 ? base::Time() :
++      base::Time::UnixEpoch() + base::Microseconds(unix_microseconds);
++  auto* remover = browser_context->GetBrowsingDataRemover();
++  if (!remover) return 2;
++  (new Removal(context, remover, callback, userdata))->Start(since, mask, origins);
++  return 0;
++}
++// Counters are independent of profile preference mutation. Finish on a later
++// UI task so neither the counter nor its callback target dies on its own stack.
++class Counter final {
++ public:
++  Counter(CefRefPtr<CefRequestContext> context, Profile* profile,
++          std::unique_ptr<browsing_data::BrowsingDataCounter> counter,
++          echo_data_count_callback_v1 callback, void* userdata)
++      : context_(context), profile_(profile), counter_(std::move(counter)),
++        callback_(callback), userdata_(userdata) {}
++  void Start(base::Time since) {
++    counter_->InitWithoutPref(since, base::BindRepeating(
++        &Counter::OnResult, base::Unretained(this)));
++    counter_->Restart();
++  }
++ private:
++  void OnResult(std::unique_ptr<browsing_data::BrowsingDataCounter::Result> result) {
++    if (finished_ || !result->Finished()) return;
++    finished_ = true;
++    text_ = base::UTF16ToUTF8(
++        browsing_data_counter_utils::GetChromeCounterTextFromResult(result.get(), profile_));
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&Counter::Finish, base::Unretained(this)));
++  }
++  void Finish() {
++    auto callback = callback_;
++    auto* userdata = userdata_;
++    auto text = std::move(text_);
++    // Destroy the counter and retained native context before releasing the
++    // embedding runtime lease in the callback.
++    delete this;
++    callback(userdata, text.c_str());
++  }
++  const CefRefPtr<CefRequestContext> context_;
++  raw_ptr<Profile> profile_;
++  std::unique_ptr<browsing_data::BrowsingDataCounter> counter_;
++  const echo_data_count_callback_v1 callback_;
++  void* const userdata_;
++  bool finished_ = false;
++  std::string text_;
++};
++uint32_t Count(void* raw_context, uint32_t category, int64_t unix_microseconds,
++               echo_data_count_callback_v1 callback, void* userdata) {
++  if (!CEF_CURRENTLY_ON_UIT()) return 1;
++  if (!raw_context || !callback || !category || (category & (category - 1)) ||
++      (category & ~uint32_t{127}) || unix_microseconds < -1) return 3;
++  auto context = CefRequestContextCppToC_Unwrap(
++      static_cast<cef_request_context_0_t*>(raw_context));
++  if (!context) return 2;
++  auto impl = CefRequestContextImpl::GetOrCreateForRequestContext(context);
++  if (!impl || !impl->VerifyBrowserContext()) return 2;
++  auto* profile = CefRequestContextImpl::GetProfile(context);
++  if (!profile || profile->IsOffTheRecord()) return 2;
++  const char* pref = nullptr;
++  switch(category) {
++    case 1: pref = browsing_data::prefs::kDeleteBrowsingHistory; break;
++    case 2: pref = browsing_data::prefs::kDeleteCookies; break;
++    case 4: pref = browsing_data::prefs::kDeleteCache; break;
++    case 8: pref = browsing_data::prefs::kDeleteDownloadHistory; break;
++    case 16: pref = browsing_data::prefs::kDeleteFormData; break;
++    case 32: pref = browsing_data::prefs::kDeleteSiteSettings; break;
++    case 64: pref = browsing_data::prefs::kDeleteHostedAppsData; break;
++  }
++  auto counter = BrowsingDataCounterFactory::GetForProfileAndPref(profile, pref);
++  if (!counter) return 4;
++  auto since = unix_microseconds == -1 ? base::Time() :
++      base::Time::UnixEpoch() + base::Microseconds(unix_microseconds);
++  (new Counter(context, profile, std::move(counter), callback, userdata))->Start(since);
++  return 0;
++}
++}  // namespace
++extern "C" ECHO_DATA_EXPORT uint32_t ECHO_DATA_CALL
++cef_echo_browsing_data_get_api_v1(uint32_t size, echo_data_api_v1* output) {
++  if (!output || size != sizeof(echo_data_api_v1)) return 3;
++  *output = {sizeof(echo_data_api_v1), 1, Clear, Count};
++  return 0;
++}
+diff --git a/cef/include/echo_cef_browsing_data_v1.h b/cef/include/echo_cef_browsing_data_v1.h
+new file mode 100644
+--- /dev/null
++++ b/cef/include/echo_cef_browsing_data_v1.h
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license in LICENSE.txt.
++#ifndef CEF_INCLUDE_ECHO_CEF_BROWSING_DATA_V1_H_
++#define CEF_INCLUDE_ECHO_CEF_BROWSING_DATA_V1_H_
++#include <stdint.h>
++#if defined(_WIN32)
++#define ECHO_DATA_CALL __cdecl
++#if defined(ECHO_DATA_IMPLEMENTATION)
++#define ECHO_DATA_EXPORT __declspec(dllexport)
++#else
++#define ECHO_DATA_EXPORT __declspec(dllimport)
++#endif
++#else
++#define ECHO_DATA_CALL
++#define ECHO_DATA_EXPORT __attribute__((visibility("default")))
++#endif
++#ifdef __cplusplus
++extern "C" {
++#endif
++// UI thread only. Callback receives failed Chromium datatype bits, zero on
++// success. An accepted call replies exactly once; rejected calls never reply.
++// Category bits: history=1, site data=2, cache=4, download history=8,
++// form data=16, site settings=32, hosted-app data=64. No password bit.
++// First argument is a live initialized cef_request_context_t from this CEF.
++// Null and off-the-record contexts are rejected; never defaulted.
++// since is Unix microseconds, or -1 for all time. End is unbounded.
++typedef void(ECHO_DATA_CALL* echo_data_callback_v1)(void*, uint64_t);
++typedef void(ECHO_DATA_CALL* echo_data_count_callback_v1)(void*, const char*);
++typedef struct echo_data_api_v1 {
++  uint32_t size;
++  uint32_t version;
++  uint32_t(ECHO_DATA_CALL* clear)(void*, uint32_t, int64_t,
++                                echo_data_callback_v1, void*);
++  uint32_t(ECHO_DATA_CALL* count)(void*, uint32_t, int64_t,
++                                echo_data_count_callback_v1, void*);
++} echo_data_api_v1;
++ECHO_DATA_EXPORT uint32_t ECHO_DATA_CALL
++cef_echo_browsing_data_get_api_v1(uint32_t size, echo_data_api_v1* output);
++#ifdef __cplusplus
++}
++#endif
++#endif
