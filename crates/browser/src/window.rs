@@ -1466,15 +1466,19 @@ impl BrowserWindow {
                         if self.route_lookup_link(identity, input_origin, url.clone(), requested_background, cx) { continue 'drain; }
                     }
                     let Some(source) = source_space.and_then(|id| self.browser.spaces.iter().position(|space| space.id == id && Some(space.user_profile_id) == page_profile)) else { continue; };
+                    let background = requested_background || self.browser.active_space != source;
                     let id = self.edit_browser(|browser| {
                         let mut selection = browser.window_selection();
-                        let background = requested_background || browser.active_space != source;
                         browser.switch_space(source);
                         let id = browser.new_tab(url.clone(), SystemTime::now());
+                        if let Some(opener) = identity.map(|identity| identity.tab).filter(|opener| browser.space().today.iter().any(|tab| tab.id == *opener)) {
+                            browser.move_tab_relative(id, opener, true);
+                        }
                         if background { browser.edit_in_window(&mut selection, |_| {}); }
                         id
                     });
                     self.edit_profile(|browser| browser.set_title(id, display_url(&url)));
+                    if background { self.preload_background_tab(id); }
                     if requested_background { self.show_background_tab(id, cx); }
                 }
                 Event::InspectorInput(input) => {
@@ -2215,6 +2219,10 @@ impl BrowserWindow {
         }
     }
 
+    pub(crate) fn preload_background_tab(&self, tab: TabId) {
+        if let Some(pages) = &self.pages { let _ = pages.borrow_mut().preload_background_tab(&self.browser, tab); }
+    }
+
     pub(crate) fn new_command_tab(&mut self, url: &str, background: bool, cx: &mut Context<Self>) -> TabId {
         let id = self.edit_browser(|browser| {
             let mut selection = browser.window_selection();
@@ -2222,7 +2230,7 @@ impl BrowserWindow {
             if background { browser.edit_in_window(&mut selection, |_| {}); }
             id
         });
-        if background { self.show_background_tab(id, cx); }
+        if background { self.preload_background_tab(id); self.show_background_tab(id, cx); }
         id
     }
 

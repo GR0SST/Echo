@@ -114,6 +114,7 @@ impl BrowserWindow {
                     browser.edit_in_window(&mut previous, |_| {});
                     id
                 });
+                self.preload_background_tab(id);
                 self.show_background_tab(id, cx);
             }
             Action::Open {

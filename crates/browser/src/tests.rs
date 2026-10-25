@@ -2246,13 +2246,14 @@ fn archive_toast_undo_restores_its_transaction_and_rejects_a_later_pin(cx: &mut 
 
 #[gpui::test]
 fn background_command_bar_keeps_the_page_and_toast_reveals_the_created_tab(cx: &mut TestAppContext) {
-    let (view, cx, _) = open_pages(cx);
+    let (view, cx, fake) = open_pages(cx);
     let original = active_url(&view, cx);
     cx.simulate_keystrokes("cmd-s cmd-t");
     bar(&view, cx).simulate_input("https://background.example/path");
     bar(&view, cx).simulate_keystrokes("cmd-enter");
     assert_eq!(active_url(&view, cx), original);
     assert_eq!(view.read_with(cx, |w, _| w.toast.as_ref().unwrap().message.clone()), "New Tab Created in Personal");
+    assert!(fake.0.borrow().calls.iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://background.example/path")));
     assert!(bar_text(&view, cx).is_none());
     click(&mut current_toast(&view, cx), "toast");
     cx.run_until_parked();
@@ -2266,11 +2267,63 @@ fn background_engine_request_keeps_focus_and_uses_the_hidden_sidebar_feedback(cx
     fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/a".into() });
     assert_eq!(active_url(&view, cx), original);
     assert!(view.read_with(cx, |w, _| w.toast.is_none()));
+    view.read_with(cx, |w, _| {
+        let today = &w.browser.space().today;
+        let source = today.iter().position(|tab| Some(tab.url.clone()) == original).unwrap();
+        let linked = today.iter().position(|tab| tab.url == "https://background.example/a").unwrap();
+        assert_eq!(linked, source + 1, "linked Today tabs appear immediately below their opener");
+    });
+    let calls = fake.take_calls();
+    let created = calls.iter().find_map(|call| match call { Call::Create(id, url) if url == "https://background.example/a" => Some(*id), _ => None }).expect("background page starts loading immediately");
+    assert!(calls.contains(&Call::Visible(created, false)));
+    assert!(!calls.contains(&Call::FocusPage(created)));
     cx.simulate_keystrokes("cmd-s");
     fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/b".into() });
     assert_eq!(active_url(&view, cx), original);
     click(&mut current_toast(&view, cx), "toast");
     assert_eq!(active_url(&view, cx).as_deref(), Some("https://background.example/b"));
+}
+
+#[gpui::test]
+fn background_page_loading_preserves_a_command_bar_draft_and_its_focus(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("kept draft");
+    fake.take_calls();
+    fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/while-editing".into() });
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("kept draft"));
+    assert!(bar_input_focused(&view, cx));
+    let calls = fake.take_calls();
+    assert!(calls.iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://background.example/while-editing")));
+    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_))));
+}
+
+#[gpui::test]
+fn background_page_context_initialization_retries_without_reviving_closed_tabs(cx: &mut TestAppContext) {
+    use crate::pages::StorageSelection;
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx);
+    fake.0.borrow_mut().pending_storage.insert(StorageSelection::Default);
+    fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/closed".into() });
+    view.update(cx, |view, _| {
+        let id = view.browser.all_tabs().find(|t| t.url == "https://background.example/closed").unwrap().id;
+        view.edit_browser(|browser| browser.close_tab(id, std::time::SystemTime::now()));
+    });
+    fake.take_calls();
+    fake.0.borrow_mut().pending_storage.clear();
+    view.update(cx, |view, _| { view.pages.as_ref().unwrap().borrow_mut().retry_pending_creation(&view.browser); });
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url == "https://background.example/closed")));
+    fake.0.borrow_mut().pending_storage.insert(StorageSelection::Default);
+    fake.send(cx, Event::OpenInBackgroundTab { opener: page(1), url: "https://background.example/ready".into() });
+    assert!(view.read_with(cx, |view, _| view.pages.as_ref().unwrap().borrow().creation_retry_pending()));
+    fake.0.borrow_mut().pending_storage.clear(); fake.take_calls();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    let calls = fake.take_calls();
+    let id = calls.iter().find_map(|call| match call { Call::Create(id, url) if url == "https://background.example/ready" => Some(*id), _ => None }).unwrap();
+    assert!(calls.contains(&Call::Visible(id, false)));
+    assert!(!calls.contains(&Call::FocusPage(id)));
+    assert_eq!(active_url(&view, cx), original);
 }
 
 #[gpui::test]
@@ -9492,11 +9545,11 @@ fn peek_rejects_background_stale_and_non_web_link_callbacks(cx: &mut TestAppCont
 fn peek_engine_policy_tracks_the_pin_and_both_settings(cx: &mut TestAppContext) {
     use browser_core::settings::Toggle;
     let (view, cx, fake) = open_pages(cx);
-    assert_eq!(fake.0.borrow().peek_policies[&1], engine::PeekPolicy { pinned: false, shift_click: true, capture_escape: false, capture_link_modifiers: false });
+    assert_eq!(fake.0.borrow().peek_policies[&1], engine::PeekPolicy { little_command_click: true, pinned: false, shift_click: true, capture_escape: false, capture_link_modifiers: false });
     cx.simulate_keystrokes("cmd-d"); cx.run_until_parked();
     assert!(fake.0.borrow().peek_policies[&1].pinned);
     view.update(cx, |view, cx| {
-        view.edit_profile(|browser| { browser.settings.set_enabled(Toggle::PeekPinned, false); browser.settings.set_enabled(Toggle::PeekCommandShiftClick, false); });
+        view.edit_profile(|browser| { browser.settings.set_enabled(Toggle::PeekPinned, false); browser.settings.set_enabled(Toggle::PeekCommandShiftClick, false); browser.settings.set_enabled(Toggle::LittleWindowCommandClick, false); });
         cx.notify();
     });
     cx.run_until_parked();

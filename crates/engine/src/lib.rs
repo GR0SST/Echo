@@ -53,6 +53,7 @@ pub use keyboard_priority::ShortcutPriority;
 #[cfg(target_os = "macos")]
 mod mac_shortcuts;
 mod document_color;
+mod link_click;
 mod boosts;
 mod site_info;
 mod passwords;
@@ -220,6 +221,7 @@ pub struct PeekPolicy {
     pub shift_click: bool,
     pub capture_escape: bool,
     pub capture_link_modifiers: bool,
+    pub little_command_click: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1591,6 +1593,7 @@ wrap_client! {
             if let Some((id, queue)) = &self.inspector {
                 return devtools::receive_frontend(*id, queue, browser, frame, source_process, message);
             }
+            if link_click::receive(browser.as_deref(), frame.as_deref(), source_process, message.as_deref()) { return 1; }
             if task_manager::receive_process(browser.as_deref(), frame.as_deref(), source_process, message.as_deref()) { return 1; }
             if passwords::receive(browser.as_deref(),frame.as_deref(),source_process,message.as_deref(),&self.events) { return 1; }
             if source_process == ProcessId::RENDERER && frame.as_ref().is_some_and(|frame| frame.is_main()!=0) {
@@ -1694,6 +1697,7 @@ wrap_request_handler! {
             if let Some(browser)=browser { push(&self.events, Some(&mut *browser), RawEvent::RendererState(None)); let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
         }
         fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, gesture: i32, redirect: i32) -> i32 {
+            if let Some(browser) = browser.as_deref() { link_click::forget(browser.identifier()); }
             if let Some(browser)=browser.as_deref() { let boosts=self.boosts.lock().unwrap().clone();boosts::update(browser,&boosts); }
             let Some(frame) = frame else { return 0; };
             if frame.is_main() == 0 {
@@ -1709,10 +1713,17 @@ wrap_request_handler! {
             push(&self.events, browser, RawEvent::Peek(target));
             1
         }
-        fn on_open_urlfrom_tab(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, target: Option<&CefString>, disposition: WindowOpenDisposition, gesture: i32) -> i32 {
-            if gesture == 0 || !self.policy.lock().unwrap().shift_click || disposition != WindowOpenDisposition::NEW_WINDOW { return 0; }
+        fn on_open_urlfrom_tab(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, target: Option<&CefString>, disposition: WindowOpenDisposition, gesture: i32) -> i32 {
+            if let (Some(b), Some(f), Some(target)) = (browser.as_deref(), frame.as_deref(), target) {
+                if let Some(event) = link_click::take(b, f, &target.to_string(), gesture != 0, self.policy.lock().unwrap().little_command_click) {
+                    push(&self.events, browser, event); return 1;
+                }
+            }
             let Some(target) = target else { return 0; };
-            push(&self.events, browser, RawEvent::Peek(target.to_string()));
+            // Alloy otherwise loads this URL in the source frame, even for a
+            // Command-click disposition. Cancel only the routes we own.
+            let Some(event) = open_url_event(target.to_string(), disposition, gesture != 0, self.policy.lock().unwrap().shift_click) else { return 0; };
+            push(&self.events, browser, event);
             1
         }
     }
@@ -1866,6 +1877,12 @@ wrap_load_handler! {
     }
 }
 
+fn open_url_event(url: String, disposition: WindowOpenDisposition, gesture: bool, shift: bool) -> Option<RawEvent> {
+    if ![WindowOpenDisposition::NEW_BACKGROUND_TAB, WindowOpenDisposition::NEW_FOREGROUND_TAB,
+        WindowOpenDisposition::NEW_WINDOW, WindowOpenDisposition::NEW_POPUP].contains(&disposition) { return None; }
+    popup_event(url, disposition, gesture, shift)
+}
+
 fn popup_event(url: String, disposition: WindowOpenDisposition, gesture: bool, shift: bool) -> Option<RawEvent> {
     // Document PiP is a video/document surface, not a navigation. Until a GPUI
     // host is prepared, reject it without turning its about:blank into a tab.
@@ -1888,7 +1905,7 @@ wrap_life_span_handler! {
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
-            _frame: Option<&mut cef::Frame>,
+            frame: Option<&mut cef::Frame>,
             _popup_id: ::std::os::raw::c_int,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
@@ -1902,6 +1919,11 @@ wrap_life_span_handler! {
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let url = target_url.map(CefString::to_string).unwrap_or_default();
+            if let (Some(b), Some(f)) = (browser.as_deref(), frame.as_deref()) {
+                if let Some(event) = link_click::take(b, f, &url, user_gesture != 0, self.policy.lock().unwrap().little_command_click) {
+                    push(&self.events, browser, event); return 1;
+                }
+            }
             let shift = self.policy.lock().unwrap().shift_click;
             if let Some(event) = popup_event(url, target_disposition, user_gesture != 0, shift) {
                 push(&self.events, browser, event);
@@ -1922,6 +1944,7 @@ wrap_life_span_handler! {
                 shutdown::enqueue(&self.lifecycle, shutdown::Callback::Closed(browser.identifier()));
                 task_manager::forget_process(browser.identifier());
                 site_data::destroyed(browser.identifier());
+                link_click::forget(browser.identifier());
                 permissions::destroyed(browser.identifier());
                 passwords::closed(browser.identifier());
                 capture::destroyed(browser.identifier());
@@ -2143,6 +2166,18 @@ fn next_zoom_factor(current: f64, direction: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modified_links_preserve_chromium_dispositions_without_replacing_the_source() {
+        let url = "https://destination.test/";
+        assert!(matches!(open_url_event(url.into(), WindowOpenDisposition::NEW_BACKGROUND_TAB, true, true), Some(RawEvent::BackgroundPopup(v)) if v == url));
+        assert!(matches!(open_url_event(url.into(), WindowOpenDisposition::NEW_FOREGROUND_TAB, true, true), Some(RawEvent::Popup(v)) if v == url));
+        assert!(matches!(open_url_event(url.into(), WindowOpenDisposition::NEW_WINDOW, true, true), Some(RawEvent::Peek(v)) if v == url));
+        assert!(matches!(open_url_event(url.into(), WindowOpenDisposition::NEW_WINDOW, true, false), Some(RawEvent::Popup(v)) if v == url));
+        for disposition in [WindowOpenDisposition::CURRENT_TAB, WindowOpenDisposition::SAVE_TO_DISK, WindowOpenDisposition::NEW_PICTURE_IN_PICTURE] {
+            assert!(open_url_event(url.into(), disposition, true, true).is_none());
+        }
+    }
 
     #[test]
     fn service_host_focus_requests_are_cancelled_through_the_cef_callback() {

@@ -433,3 +433,63 @@ normalization have regression coverage. The Shortcuts row remains partial for
 extension/Space/Favorites-ordering routes, the unobserved Reset All priority
 scope and additional native layouts/platforms. Its remaining visual differences
 are cosmetic.
+
+## Round 3 — modifier link routing
+
+Fresh guarded Arc references use only loopback fixtures in Echo Test:
+`target/parity/partial-closeout/arc-modifier-{little,cmdclick,cmdshift,cmdaltprevent}-r3.log`
+and their screenshots/AX receipts. Command-click loads a background Today tab;
+Command-Shift-click selects a new Today tab. Option-Command-click opens Little
+Arc in the source profile without replacing its normal tab. A page's prevented
+click opens nothing. `arc-modifier-disabled-r3.log` verifies the Little Arc
+checkbox disabled: the same Option-Command-click opens a right-hand Split View
+pane. Its preference receipt records restoration of the original enabled value.
+Split View also retains its separately verified context-menu action.
+
+The renderer reports trusted modifier metadata through a private callback.
+Only a subsequent CEF user-gesture navigation/pop-up with the same browser,
+frame, document, epoch and target may consume it. Metadata does not cancel a
+site's click or independently open a window. The Links preference gates the
+Little Arc route; private, Peek and Little hosts do not enable the Little Arc
+destination. Those host variants are not newly qualified.
+
+CEF Alloy's `OnOpenURLFromTab` default loads the source frame even for a new-tab
+disposition (`cef_request_handler.h`, `alloy_browser_host_impl.cc`). Echo now
+accepts the existing foreground/background/Peek routes explicitly. Background
+tabs materialize hidden CEF pages using their captured profile. Pending storage
+initialization retries without reviving closed/replaced identities. Native
+creation restores an already focused source page without pulling focus away
+from an open Command Bar. No CEF patch, build or publication is involved.
+
+The sidebar comparison also exposed Today ordering: linked tabs belong directly
+below their opener rather than at the head of Today. CEF link requests now use the existing whole-item relative move;
+Command Bar ordering and Pinned/Favorite placement are unchanged. The background
+GPUI regression checks this order as well as visibility, selection and focus.
+The existing relative-move helper keeps Split items together; native grouped-
+opener placement is not newly qualified.
+
+The initial native in-process-GPU background run passed destination loading,
+source selection and trusted source key delivery, but timed out inside
+`cef_shutdown` (strict status 124); it is not counted as a clean exit. A rerun
+with production's separate GPU process passed the same assertions and exited
+0 (`echo-modifier-cmdclick-r3-separate.log`). The canonical framework remains
+`20261025T192350Z-5008`, SHA-256
+`55a60b71fd32579a392ee53f337a908cecb7b0f012971d6ad3317b4a32ec82aa`.
+The in-process automation shutdown variant remains unqualified.
+
+The final Rust run is `modifier-full-split-r3.log`: 1,308 browser, 276 core
+and 195 engine tests pass, plus the remaining workspace suites. Twenty targeted
+background tests cover hidden loading, source focus, Command Bar drafts,
+profile-context retry, closed-identity rejection and linked-tab ordering.
+The Links row remains partial for custom global-shortcut recording and native
+platform/routing variants outside these HTTP(S) fixtures. The background-toast
+row retains its separate unqualified background Space-creation trigger.
+
+All five production/separate-GPU cases pass with strict native exit 0:
+`echo-modifier-{cmdclick,cmdshift,cmdalt,cmdaltdisabled,cmdaltprevent}-r3-split-qualified.log`.
+The disabled Little preference opens a two-pane Split View and sends keyboard
+input to its destination; it is not a background-tab fallback. The receipt is
+`modifier-routing-qualification-r3.json`. Reviewed pairs in the same directory
+are `pair-modifier-{cmdclick,cmdshift,cmdalt,cmdaltdisabled,cmdaltprevent}-r3.png`;
+`pair-modifier-order-r3-2x.png` enlarges the source/below-opener ordering. Existing
+Little-window width, Split toolbar appearance and row materials remain cosmetic.

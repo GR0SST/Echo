@@ -679,6 +679,7 @@ pub struct Pages {
     bounds: Option<Bounds>,
     seen_revision: u64,
     creation_pending: bool,
+    background_pending: HashMap<TabId, PageIdentity>,
 }
 
 thread_local! {
@@ -776,6 +777,15 @@ impl Pages {
     /// Extension-created background tabs are real model pages that must load
     /// without selecting a Space or stealing the foreground page's responder.
     pub(crate) fn materialize_extension_tab(&mut self, browser: &Browser, tab: TabId) -> Result<bool,String> {
+        self.materialize_background_page(browser, tab, false)
+    }
+    /// Start a newly requested background navigation, including asynchronous
+    /// profile initialization, without selecting it or taking native focus.
+    pub(crate) fn preload_background_tab(&mut self, browser: &Browser, tab: TabId) -> Result<bool,String> {
+        self.background_pending.remove(&tab);
+        self.materialize_background_page(browser, tab, true)
+    }
+    fn materialize_background_page(&mut self, browser: &Browser, tab: TabId, retry: bool) -> Result<bool,String> {
         let item = browser.all_tabs().find(|item|item.id == tab).ok_or("Extension tab closed")?;
         if browser_core::omnibox::is_internal_url(&item.url) { return Ok(false); }
         self.reconcile_inventory(browser);
@@ -787,15 +797,24 @@ impl Pages {
             .ok_or("Extension tab Space is unavailable")?.id;
         let storage = if browser.is_private() {StorageSelection::Current} else {StorageSelection::for_profile(identity.profile)};
         let frame = Bounds {x:-10000.,y:-10000.,width:1024.,height:768.};
+        // Native CEF child creation may replace AppKit's first responder even
+        // when the child is subsequently hidden. Restore only this host's
+        // already focused, visible page; never pull focus out of browser UI.
+        let restore_focus = (self.page_has_focus && self.page_focus && !self.preserve_ui_focus && store.active_host == self.host)
+            .then(|| self.shown.and_then(|tab| store.pages.get(&tab).filter(|page| page.visible && page.owner == self.host).map(|page| page.view))).flatten();
         let creation = if let Some(namespace) = self.extension_namespace {
             store.engine.create_model_page(&format!("{namespace}:{}",tab.get()),identity,source_space,&storage,self.parent,&item.url,frame)
         } else { store.engine.create_page_with_identity(identity,source_space,&storage,self.parent,&item.url,frame) };
         let view = match creation {
             PageCreation::Created(view) => view,
-            PageCreation::Pending => return Err("Extension tab storage is still initializing".into()),
+            PageCreation::Pending => {
+                if retry { self.background_pending.insert(tab, identity); }
+                return Err("Extension tab storage is still initializing".into());
+            },
             PageCreation::Failed => return Err("Extension tab renderer could not be created".into()),
         };
         store.engine.set_visible(view,false);
+        if let Some(source) = restore_focus { store.engine.focus_page(source); }
         if item.muted { store.engine.set_audio_muted(view,true); }
         store.pages.insert(tab,Page { input_attachment:0, identity, source_space, owner:self.host,
             frame, visible:false, view, url:item.url.clone(), state:PageState {loading:true,..Default::default()},
@@ -852,7 +871,7 @@ impl Pages {
             shown: None,
             bounds: None,
             seen_revision: 0,
-            creation_pending: false,
+            creation_pending: false, background_pending: HashMap::new(),
         };
         STORES.with(|stores| {
             let mut stores = stores.borrow_mut();
@@ -1047,7 +1066,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { extension_namespace: self.extension_namespace, extension_hosts: HashMap::new(), applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, viewport_clip: None, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false, background_pending: HashMap::new() }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -1325,7 +1344,7 @@ impl Pages {
             allow_little: !browser.is_private(), can_print: store.engine.supports_printing(),
         })).collect();
         for (view, policy) in contexts { store.engine.set_page_context_policy(view, policy); }
-        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode || self.overlay_escape, capture_link_modifiers: !browser.is_private() && !browser.is_blank() && browser.settings.max.enabled(echo_ai::MaxFeature::FiveSecondPreviews) }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
+        for (view, pinned) in policies { store.engine.set_peek_policy(view, engine::PeekPolicy { little_command_click: !browser.is_private() && !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::LittleWindowCommandClick), pinned, shift_click: !self.peek_mode && !self.square_top && browser.settings.enabled(browser_core::settings::Toggle::PeekCommandShiftClick), capture_escape: self.peek_mode || self.overlay_escape, capture_link_modifiers: !browser.is_private() && !browser.is_blank() && browser.settings.max.enabled(echo_ai::MaxFeature::FiveSecondPreviews) }); if self.peek_mode { store.engine.set_corner_radius(view, 8.); } }
     }
 
     /// Browser appearance applies to every retained page owned by this host.
@@ -2021,7 +2040,7 @@ impl Pages {
         }
     }
 
-    pub(crate) fn creation_retry_pending(&self) -> bool { self.creation_pending }
+    pub(crate) fn creation_retry_pending(&self) -> bool { self.creation_pending || !self.background_pending.is_empty() }
 
     /// The owner must refresh its authoritative projection before calling this.
     /// Rebuild intent rather than applying a cached URL/profile while waiting
@@ -2033,9 +2052,17 @@ impl Pages {
     /// Refresh intent with the host's current sidebar-page visibility so a
     /// deferred engine context cannot surface a page behind Library/creation.
     pub(crate) fn retry_pending_creation_with_visibility(&mut self, browser: &Browser, visible: bool) -> bool {
-        if !self.creation_pending { return false; }
+        if !self.creation_retry_pending() { return false; }
+        let foreground_pending = self.creation_pending;
         self.sync(browser, visible);
-        !self.creation_pending
+        let mut changed = foreground_pending && !self.creation_pending;
+        for (tab, identity) in std::mem::take(&mut self.background_pending) {
+            // A close, restore or profile reassignment invalidates the captured
+            // request rather than loading a replacement document accidentally.
+            if self.store.borrow().identities.get(&tab) != Some(&identity) { continue; }
+            changed |= self.preload_background_tab(browser, tab).unwrap_or(false);
+        }
+        changed
     }
 
     pub fn pump_fn(&self) -> fn() {

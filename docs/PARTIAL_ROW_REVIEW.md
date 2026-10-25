@@ -219,13 +219,14 @@ not promoted to done.
 ## Functional-only scope limits
 
 The Little Arc global shortcut, external-link routing and expiry choices already
-have consumers; the remaining launch toggle is Option-Command clicking a page
-link. Its setting currently persists without a click-routing consumer. Site
+have consumers. Round 3 adds the Option-Command page-link consumer, including
+the disabled preference’s Split View route and website cancellation. Custom global
+shortcut recording and additional platform qualification remain. Site
 Previews are also persisted choices rather than an implemented site-preview
 backend. Neither is accepted by its Settings overview pair.
 
-Shortcut website priority/two-press dispatch, extension bindings and dynamic
-Space reassignment remain functional work. The existing Command Bar Favorites
+Shortcut website priority/two-press dispatch is qualified in Round 3. Extension
+bindings and dynamic Space reassignment retain their separate qualification. The existing Command Bar Favorites
 ordering toggle works; its missing Settings menu is an entry-point gap, not an
 absent ordering model. Folder archive/restore needs a canonical archived-folder
 model. Background Space creation has no qualified source trigger: creating a
@@ -299,3 +300,25 @@ the remaining workspace suites. Reviewed pairs and receipts are recorded in
 The row remains partial for extension/Space/Favorites-ordering routes, Reset All
 priority scope and additional native layouts/platforms. Visual differences are
 cosmetic; no other parity section was changed.
+
+## Round 3 — modifier routing and remaining source limits
+
+The Links preference now controls trusted Option-Command link navigation.
+Command-click/background and Command-Shift-click/foreground preserve the
+opener's document, profile and Today position; background pages load without
+selection or keyboard-focus transfer. The disabled Little preference opens
+Split View, and a website's canceled click creates nothing.
+See the Round 3 modifier reference in `PROFILES_SETTINGS_REFERENCE.md`.
+
+The next folder reference did not reach a claimed source window: two guarded
+attempts found zero fresh windows; a later session found two fresh surfaces
+and was also rejected. No fixture actions followed those failed claims. A
+subsequent locked read-only diagnostic found no remaining fresh surface.
+Existing windows were not closed to force a usable session. Folder archival
+and restoration therefore retain the canonical-model gap. Site Previews,
+empty-Space profile-warning conditions, OS/no-window quit policy and SCC Full
+Page/Portrait behavior retain their existing functional gaps and require
+qualified source flows. Background Space creation still has no qualified
+trigger compatible with keeping the healthy shared Echo Test Space. None of
+these rows is promoted by a Settings overview, bundle string or a cosmetic
+comparison.
