@@ -160,6 +160,15 @@ impl Boosts {
         });
         Some(id)
     }
+    /// Names are presentation data; changing one never changes a Boost's rules
+    /// or executable identity. The caller owns any dialog validation.
+    pub fn rename(&mut self, id: BoostId, name: String) -> bool {
+        let Some(boost) = self.get_mut(id) else { return false; };
+        if boost.name == name { return false; }
+        boost.name = name;
+        true
+    }
+
     pub fn remove(&mut self, id: BoostId) -> bool {
         let before = self.entries.len();
         self.entries.retain(|boost| boost.id != id);
@@ -227,6 +236,37 @@ mod tests {
         assert!(boosts.remove(id));
         assert_ne!(boosts.create("https://example.com").unwrap(), id);
     }
+    #[test]
+    fn rename_and_delete_target_only_the_captured_profile_and_survive_sessions() {
+        let mut browser = Browser::new();
+        let owner = browser.active_user_profile_id();
+        let other = browser.create_user_profile("Other").unwrap();
+        let id = browser.user_profile_mut(owner).unwrap().boosts.create("https://example.com").unwrap();
+        let peer = browser.user_profile_mut(other).unwrap().boosts.create("https://example.com").unwrap();
+        assert_eq!(id, peer, "Boost IDs are profile-local");
+        let boosts = &mut browser.user_profile_mut(owner).unwrap().boosts;
+        let boost = boosts.get_mut(id).unwrap();
+        boost.enabled = false;
+        boost.css = "body { color: red; }".into();
+        boost.javascript = "window.custom = true".into();
+        boost.zap_selectors.push(".ad".into());
+        boost.appearance.tint = Some(220);
+        let mut expected = boost.clone();
+        expected.name = "Reading 🦉 — Текст".into();
+        assert!(boosts.rename(id, expected.name.clone()));
+        assert!(!boosts.rename(id, expected.name.clone()));
+        assert!(!boosts.rename(BoostId(999), "Missing".into()));
+        assert_eq!(boosts.iter().next(), Some(&expected));
+        let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
+        assert_eq!(restored.user_profile(owner).unwrap().boosts.iter().next(), Some(&expected));
+        assert_eq!(restored.user_profile(other).unwrap().boosts.iter().next().unwrap().name, "My Boost");
+        assert!(restored.user_profile_mut(owner).unwrap().boosts.remove(id));
+        assert!(!restored.user_profile_mut(owner).unwrap().boosts.remove(id));
+        let restored = session::from_json(&session::to_json(&restored)).unwrap();
+        assert_eq!(restored.user_profile(owner).unwrap().boosts.iter().count(), 0);
+        assert_eq!(restored.user_profile(other).unwrap().boosts.iter().next().unwrap().id, peer);
+    }
+
     #[test]
     fn corrupted_boost_ids_and_domains_are_rejected() {
         let mut browser = Browser::new();
