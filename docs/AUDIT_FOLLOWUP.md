@@ -43,3 +43,19 @@ inventory is in `final-cleanup/`; its header montage was inspected. A subsequent
 read-only CG check after the audit still found the same four owner window IDs
 32153–32156. The offscreen, non-AX surface 32164 is excluded from browser counts.
 Final header reinspection is blocked by the locked macOS session.
+
+## Folder menu (#16)
+
+The installed reference is `arc_folder_context_Dark.png` beside the audit brief.
+Echo now uses a 282 px minimum width and 247 px minimum root height. Its bounded
+native menu material is installed in the parent content view, above CEF and below
+the GPUI overlay, and removed on dismissal. An expired overlay cannot reinstall
+that material. This fixes the opaque appearance over a native page.
+
+`echo-audit-native-r2/folder-menu.png` verifies the page-backed material and
+working dismissal with clean CEF shutdown. The reviewed 2× comparison is
+`audit-pairs/folder-arc-echo-before-final-polish.png`. It precedes the final
+one-pixel height and tint adjustment, which need another native capture after
+unlock. The GPUI menu test checks 282×247 geometry. Arc's Move to submenu,
+curly-quote wording and exact edge/material calibration remain partial; the
+existing destination picker is retained. Arc-hosted sharing stays out of scope.

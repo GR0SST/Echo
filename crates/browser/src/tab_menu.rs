@@ -61,6 +61,7 @@ pub(crate) struct TabMenu {
     scroll: gpui::ScrollHandle,
     pane: bool,
     backdrop: [Rc<Cell<bool>>; 2],
+    material_alive: Rc<Cell<bool>>,
     position: Point<Pixels>,
     pub(crate) focus: FocusHandle,
     pub overlay: Option<WindowHandle<Overlay>>,
@@ -246,7 +247,7 @@ impl BrowserWindow {
         self.close_command_bar(cx);
         let focus = cx.focus_handle();
         let document=if target==MenuTarget::Address {self.browser.active_tab().and_then(|tab|{let pages=self.pages.as_ref()?.borrow();Some(AddressDocument{identity:pages.media_identity(tab.id)?,epoch:pages.page_document_epoch(tab.id)?,url:tab.url.clone()})})}else{None};
-        self.tab_menu = Some(TabMenu { document,native_share_open:false,target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
+        self.tab_menu = Some(TabMenu { document,native_share_open:false,target, owner_profile: self.menu_target_profile(target), selected: matches!(target,MenuTarget::Download(..)).then_some(0), submenu: None, sub_selected: None, alternate: window.modifiers().alt, max_height: (window.bounds().size.height - px(16.)).max(px(32.)), viewport: window.bounds().size, width: px(MIN_WIDTH), scroll: gpui::ScrollHandle::new(), pane: false, backdrop: Default::default(), material_alive: Rc::new(Cell::new(true)), position, focus: focus.clone(), overlay: None, bounds: Default::default() });
         let width = self.menu_level_width(&self.menu_entries(), false, window);
         if let Some(menu) = &mut self.tab_menu { menu.width = width; }
         let origin = window.bounds().origin;
@@ -298,6 +299,14 @@ impl BrowserWindow {
 
     pub(crate) fn close_tab_menu_with_focus(&mut self, focus: crate::window::PopupFocus, cx: &mut Context<Self>) {
         let Some(menu) = self.tab_menu.take() else { return; };
+        menu.material_alive.set(false);
+        if matches!(menu.target, MenuTarget::Folder(_)) {
+            if let Some(parent) = self.native_view {
+                for key in ["folder-menu", "folder-submenu"] {
+                    crate::native::set_content_backdrop(parent, key, None, 0., crate::material::BackdropConfig { appearance: crate::material::EffectAppearance::Dark, state: crate::material::EffectState::Active, blending: crate::material::EffectBlending::WithinWindow, emphasized: false, effect_alpha: 1., material: crate::material::EffectMaterial::Menu });
+                }
+            }
+        }
         self.close_popup_overlay(menu.overlay, focus, false, cx);
         cx.notify();
     }
@@ -638,6 +647,7 @@ impl BrowserWindow {
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_none() && !self.browser.is_favorite(id) =>
                     self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| if tab.pinned_url.is_some() { 200. } else { 208. }),
                 MenuTarget::Tab(id) if !menu.pane && self.browser.split_for(id).is_some() => Some(256.),
+                MenuTarget::Folder(_) => Some(282.),
                 MenuTarget::Selection(_) => Some(224.),
                 MenuTarget::Space(_) => Some(246.),
                 MenuTarget::Download(..) => Some(120.),
@@ -736,8 +746,13 @@ impl BrowserWindow {
         let id = if nested { "tab-context-submenu" } else { "tab-context-menu" };
         let width = self.menu_level_width(entries, nested, window);
         let backdrop = self.tab_menu.as_ref().map(|menu| menu.backdrop[usize::from(nested)].clone()).unwrap_or_default();
-        crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop).debug_selector(move || id.into())
-            .w(width).py(px(PADDING)).flex().flex_col().children(rows)
+        let folder = self.tab_menu.as_ref().is_some_and(|menu| matches!(menu.target, MenuTarget::Folder(_)));
+        let shell = if folder {
+            crate::panel::menu_shell_at(id, if nested { "folder-submenu" } else { "folder-menu" }, self.accent(), backdrop,
+                self.native_view.map(|v|v as usize), self.tab_menu.as_ref().unwrap().material_alive.clone())
+        } else { crate::panel::menu_shell(id, if nested { "submenu" } else { "menu" }, self.accent(), backdrop) };
+        shell.debug_selector(move || id.into())
+            .w(width).when(folder && !nested, |menu|menu.min_h(px(247.))).py(px(PADDING)).flex().flex_col().children(rows)
     }
 }
 

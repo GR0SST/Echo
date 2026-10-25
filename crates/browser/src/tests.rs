@@ -8872,6 +8872,7 @@ fn favorite_menu_uses_open_in_split_and_only_remove_favorite_at_the_bottom(cx: &
 fn folder_menu_matches_arc_sections_and_has_no_collapse_or_copy_rows(cx: &mut TestAppContext) {
     let (view, cx, _) = open_folder_pages(cx);
     right_click(cx, "folder-3");
+    assert_eq!(tab_menu(&view,cx).debug_bounds("tab-context-menu").unwrap().size, gpui::size(gpui::px(282.),gpui::px(247.)));
     assert_eq!(sidebar_menu_labels(&view, cx), [
         "Share Folder…", "|", "New Nested Folder…", "Turn \"Research\" into Space", "|",
         "Change Icon…", "Rename…", "|", "Duplicate", "Move to", "|", "Archive Folder",

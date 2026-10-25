@@ -34,20 +34,25 @@ pub(crate) fn shell(id: &'static str) -> gpui::Stateful<Div> {
 
 /// A context menu shell drawn like a native menu; `key` names its blur.
 pub(crate) fn menu_shell(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>) -> gpui::Stateful<Div> {
+    menu_shell_at(id, key, hue, installed, None, std::rc::Rc::new(std::cell::Cell::new(true)))
+}
+
+pub(crate) fn menu_shell_at(id: impl Into<gpui::ElementId>, key: &'static str, hue: f32, installed: std::rc::Rc<std::cell::Cell<bool>>, parent: Option<usize>, alive: std::rc::Rc<std::cell::Cell<bool>>) -> gpui::Stateful<Div> {
     div().id(id)
-        .relative().rounded(px(MENU_RADIUS)).bg(menu_fill(hue, installed.get()))
+        .relative().rounded(px(MENU_RADIUS)).bg(if parent.is_some() && installed.get() { hsla(0.,0.,0.45,0.38) } else { menu_fill(hue, installed.get()) })
         .shadow_lg()
         .text_color(hsla(0., 0., 1., 0.85)).font_family(".SystemUIFont").text_size(px(13.))
         .child(div().absolute().inset_0().rounded(px(MENU_RADIUS - 1.)).border_1().border_color(hsla(0., 0., 1., 0.10)))
         .child(canvas(|_, _, _| (), move |bounds, _, window, cx| {
             use crate::material::*;
-            let blurred = crate::native::view_of(window).is_some_and(|view| {
-                crate::native::set_backdrop_configured(view, key,
+            if !alive.get() { return; }
+            let blurred = parent.or_else(|| crate::native::view_of(window).map(|v|v as usize)).is_some_and(|view| {
+                (if parent.is_some() { crate::native::set_content_backdrop } else { crate::native::set_backdrop_configured })(view as *mut std::ffi::c_void, key,
                     Some([f32::from(bounds.origin.x) as f64, f32::from(bounds.origin.y) as f64,
                         f32::from(bounds.size.width) as f64, f32::from(bounds.size.height) as f64]),
                     MENU_RADIUS as f64, BackdropConfig {
                         appearance: EffectAppearance::Dark, state: EffectState::Active,
-                        blending: EffectBlending::BehindWindow, emphasized: false,
+                        blending: if parent.is_some() { EffectBlending::WithinWindow } else { EffectBlending::BehindWindow }, emphasized: false,
                         effect_alpha: 1., material: EffectMaterial::Menu,
                     }) == BackdropInstallation::Installed
             });
