@@ -160,3 +160,25 @@ settled process/window baseline, exact owned IDs, no inline restart and no
 difference-based cleanup. The old shell scripts are disabled. Successful Save
 reference sessions leave no owned windows and remove only this task's fixture
 tabs. An unowned Arc Settings window causes a read-only abort.
+
+
+## Appearance menu
+
+`arc-appearance-reference/appearance.png` is the inspected 269 × 106 px native
+submenu: a disabled "Websites, Easels, and Notes will use:" heading, then
+Automatic, Light and Dark. The active mode has a native checkmark. The menu and
+nib-derived Command Bar titles now use the existing shared appearance setting
+and material/color-scheme APIs. The Space palettes remain unchanged. A minimal
+macOS adapter supplies checked state because GPUI's menu model lacks it.
+
+Two GPUI tests cover menu color-scheme updates without new renderers/navigation,
+the disabled heading, cross-window settings propagation, Command Bar dismissal
+and appearance retention through sidebar Undo. Native acceptance is in `echo-appearance/`: Light, Dark and Automatic update
+`prefers-color-scheme`, preserve the fixture load counter at 1 and show exactly
+one native checkmark. The inspected menu pair is
+`arc-appearance-reference/appearance.png` ↔
+`echo-appearance/automatic-menu.png`; both are 269 × 106 px. Inspected 3× crops
+are `pairs/arc-appearance-menu-zoom.png` and
+`pairs/echo-appearance-menu-zoom.png`. The isolated profile is discarded on exit.
+Windows/Linux checked-state presentation and native acceptance remain partial;
+Incognito retains the pre-existing forced-dark material policy.

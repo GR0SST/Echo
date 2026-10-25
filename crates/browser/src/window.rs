@@ -430,6 +430,9 @@ pub enum Command {
     ManageSpaces,
     PrintPage,
     SavePage,
+    AutomaticAppearance,
+    LightAppearance,
+    DarkAppearance,
     ViewDownloads,
     RequestClearArchive,
     ResetPinnedTab,
@@ -1788,6 +1791,9 @@ impl BrowserWindow {
             let favorite = active.is_some_and(|tab| self.browser.is_favorite(tab.id));
             let modified_pin = active.is_some_and(|tab| tab.pinned_url.as_ref().is_some_and(|original| *original != tab.url));
             let commands = [
+                (Command::AutomaticAppearance, "Switch to Automatic Appearance", "switch to automatic appearance|automatic mode", true),
+                (Command::LightAppearance, "Switch to Light Mode", "switch to light mode|light mode|light appearance", true),
+                (Command::DarkAppearance, "Switch to Dark Mode", "switch to dark mode|dark mode|dark appearance|night mode", true),
                 (Command::NewBoost, "New Boost", "new boost|customize page", true),
                 (Command::NewFolder, "New Folder…", "new folder|create folder|add folder", true),
                 (Command::MoveToFolder, "Move to Folder…", "move to folder|pin to folder", active.is_some()),
@@ -2217,6 +2223,9 @@ impl BrowserWindow {
             }
             Command::PrintPage => self.print_page(cx),
             Command::SavePage => self.save_page(cx),
+            Command::AutomaticAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx),
+            Command::LightAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx),
+            Command::DarkAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Dark, cx),
             Command::Reload => self.with_active_page(|pages, tab| pages.reload(tab)),
             Command::ForceReload => self.with_active_page(|pages, tab| pages.force_reload(tab)),
             Command::StopLoading => self.with_active_page(|pages, tab| pages.stop_loading(tab)),
@@ -2319,6 +2328,9 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &ToggleSpaceHeader, _, cx| this.run_command(Command::ToggleSpaceHeader, cx)))
             .on_action(cx.listener(|this, _: &ToggleFavoritesOrdering, _, cx| this.run_command(Command::ToggleFavoritesOrdering, cx)))
             .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::AutomaticAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::LightAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::DarkAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Dark, cx)))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .on_action(cx.listener(|this, _: &AddSplit, window, cx| this.open_command_action(Command::AddSplit(None), window, cx)))
             .on_action(cx.listener(|this, _: &CloseSplitPane, _, cx| this.run_command(Command::CloseSplitPane, cx)))
@@ -2510,6 +2522,13 @@ impl BrowserWindow {
         if let Some(index) = self.today_row_index(self.browser.space().id, anchor) {
             self.sidebar_scrolls.entry(self.browser.space().id).or_default().pending.set(Some((Section::Today, index)));
         }
+        cx.notify();
+    }
+
+    fn set_website_appearance(&mut self, mode: browser_core::themes::ThemeAppearance, cx: &mut Context<Self>) {
+        self.edit_profile(|browser| browser.settings.theme_appearance = mode);
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync_color_schemes(self.theme_appearance()); }
+        crate::menus::sync_appearance(self.theme_appearance(), cx);
         cx.notify();
     }
 
@@ -4314,6 +4333,7 @@ impl Render for BrowserWindow {
             let labels = if let Some(owner) = self.peek_owner.as_ref().and_then(|state| state.owner.upgrade()) {
                 let owner = owner.read(cx); (owner.browser.sidebar_undo_action(), owner.browser.sidebar_redo_action())
             } else { (self.browser.sidebar_undo_action(), self.browser.sidebar_redo_action()) };
+            crate::menus::sync_appearance(self.theme_appearance(), cx);
             crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, self.sidebar_selection_items().len() > 1, cx);
         }
         if crate::quit::is_quitting() {
@@ -4476,6 +4496,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ToggleSpaceHeader, _, cx| this.run_command(Command::ToggleSpaceHeader, cx)))
             .on_action(cx.listener(|this, _: &ToggleFavoritesOrdering, _, cx| this.run_command(Command::ToggleFavoritesOrdering, cx)))
             .on_action(cx.listener(|this, _: &RevealTab, _, cx| this.reveal_active_tab(cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::AutomaticAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::LightAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx)))
+            .on_action(cx.listener(|this, _: &crate::menus::DarkAppearance, _, cx| this.set_website_appearance(browser_core::themes::ThemeAppearance::Dark, cx)))
             .on_action(cx.listener(|this, _: &DuplicateTab, _, cx| this.run_command(Command::DuplicateTab, cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(Self::on_toggle_pin)))
             .on_action(cx.listener(|this, _: &ToggleFavorite, _, cx| this.run_command(Command::ToggleFavorite, cx)))

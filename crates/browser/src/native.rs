@@ -831,3 +831,15 @@ pub(crate) fn application_active() -> bool {
 }
 #[cfg(target_os = "macos")]
 pub(crate) mod scripting;
+
+/// The toolkit's menu model does not yet expose checked items. Keep the
+/// platform's native checkmark presentation at this isolated boundary.
+pub(crate) fn set_appearance_menu_selection(selected: usize) {
+    #[cfg(all(target_os = "macos", not(test)))]
+    menu_appearance::set_selected(selected);
+    #[cfg(any(not(target_os = "macos"), test))]
+    let _ = selected;
+}
+#[cfg(all(target_os = "macos", not(test)))]
+#[path = "native/menu_appearance.rs"]
+mod menu_appearance;

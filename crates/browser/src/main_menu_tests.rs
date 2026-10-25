@@ -175,3 +175,43 @@ fn essential_shortcuts_without_a_browser_reuses_its_panel_and_command_w_closes_i
     visual.run_until_parked();
     assert!(visual.cx.read(|cx| cx.windows().is_empty()));
 }
+
+
+#[gpui::test]
+fn appearance_menu_updates_retained_documents_and_shared_settings_without_navigation(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, visual, fake) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    let original = active_url(&view, visual);
+    let themes = view.read_with(visual, |view, _| view.browser.spaces.iter().map(|space| space.theme.clone()).collect::<Vec<_>>());
+    assert!(!visual.update(|window, cx| window.is_action_available(&crate::menus::AppearanceHeading, cx)));
+    for (label, mode, scheme) in [("Light", ThemeAppearance::Light, Some(false)), ("Dark", ThemeAppearance::Dark, Some(true)), ("Automatic", ThemeAppearance::Automatic, None)] {
+        fake.take_calls();
+        dispatch_menu(visual, "View", label);
+        assert_eq!(view.read_with(visual, |view, _| view.browser.settings.theme_appearance), mode);
+        let calls = fake.take_calls();
+        assert!(calls.iter().any(|call| matches!(call, Call::ColorScheme(1, value) if *value == scheme)), "{calls:?}");
+        assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
+        assert_eq!(active_url(&view, visual), original);
+    }
+    assert_eq!(view.read_with(visual, |view, _| view.browser.spaces.iter().map(|space| space.theme.clone()).collect::<Vec<_>>()), themes);
+}
+
+#[gpui::test]
+fn appearance_command_updates_other_window_and_survives_sidebar_undo(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, visual, fake) = open_pages(cx);
+    let (other, mut other_visual) = another_profile_window(&view, visual);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    run_named_command(&view, visual, "switch to light mode");
+    other_visual.run_until_parked();
+    assert_eq!(other.read_with(&other_visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Light);
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+    fake.take_calls();
+    visual.simulate_keystrokes("cmd-z");
+    visual.run_until_parked();
+    assert_eq!(view.read_with(visual, |view, _| view.browser.settings.theme_appearance), ThemeAppearance::Light);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ColorScheme(..))));
+}

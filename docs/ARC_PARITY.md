@@ -121,7 +121,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| Appearance: websites use Automatic / Light / Dark | — | missing | — |
+| Appearance: websites use Automatic / Light / Dark | — | partial | Reference heading/order, menu and Command Bar routes use the existing shared appearance/material APIs. Changes update retained page color schemes and other windows without navigation or Space-theme edits; macOS checked-menu adapter. Two GPUI tests and native macOS mode changes pass without a reload (load counter remains 1); both inspected menus are 269 × 106 px. Other platforms lack the toolkit-native checkmark adapter and remain unvalidated. See docs/MAIN_MENU_WIP.md |
 | Show/Hide Sidebar | ⌘S | done | — |
 | Show/Hide Toolbar (top bar mode) | ⇧⌘D (hidden) | partial | Persistent mode moves the address/navigation into a 32 px page header plus its 1 px divider and shifts sidebar Favorites up 46 px. URL editing, Copy URL, site controls, navigation and split creation are connected. Split View retains its pane headers without a second toolbar; exact theme/motion and remaining address-menu actions need parity checks |
 | Expand/Collapse Pinned Section | hidden | done | Click the Space name or use the Command Bar; pins retract/expand beneath the name, with no separate Pinned label. Animation reverses on another click; state persists per Space |

@@ -6,6 +6,10 @@ actions!(
     menu,
     [
         About,
+        AppearanceHeading,
+        AutomaticAppearance,
+        LightAppearance,
+        DarkAppearance,
         PrivacyPolicy,
         Settings,
         ImportFromBrowser,
@@ -81,6 +85,26 @@ pub(crate) fn sync_sidebar_undo(undo: Option<&'static str>, redo: Option<&'stati
     if cx.try_global::<SidebarUndoLabels>() == Some(&labels) { return; }
     cx.set_global(labels);
     cx.set_menus(build_with_sidebar_undo(undo, redo, multiple));
+    sync_native_appearance(cx);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MenuAppearance(browser_core::themes::ThemeAppearance);
+impl gpui::Global for MenuAppearance {}
+pub(crate) fn sync_appearance(mode: browser_core::themes::ThemeAppearance, cx: &mut App) {
+    if cx.try_global::<MenuAppearance>().is_some_and(|state| state.0 == mode) { return; }
+    cx.set_global(MenuAppearance(mode));
+    sync_native_appearance(cx);
+}
+fn sync_native_appearance(cx: &mut App) {
+    if let Some(state) = cx.try_global::<MenuAppearance>() {
+        let index = match state.0 {
+            browser_core::themes::ThemeAppearance::Automatic => 0,
+            browser_core::themes::ThemeAppearance::Light => 1,
+            browser_core::themes::ThemeAppearance::Dark => 2,
+        };
+        native::set_appearance_menu_selection(index);
+    }
 }
 
 pub(crate) fn build() -> Vec<Menu> { build_with_sidebar_undo(None, None, false) }
@@ -149,6 +173,16 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
         Menu {
             name: "View".into(),
             items: vec![
+                MenuItem::submenu(Menu {
+                    name: "Appearance".into(),
+                    items: vec![
+                        MenuItem::action("Websites, Easels, and Notes will use:", AppearanceHeading),
+                        MenuItem::action("Automatic", AutomaticAppearance),
+                        MenuItem::action("Light", LightAppearance),
+                        MenuItem::action("Dark", DarkAppearance),
+                    ],
+                }),
+                MenuItem::separator(),
                 MenuItem::action("Add Split View…", window::AddSplit),
                 MenuItem::action("Close this Split Pane", window::CloseSplitPane),
                 MenuItem::action("Expand Current Split", window::ExpandCurrentSplit),
