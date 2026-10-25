@@ -715,6 +715,7 @@ impl BrowserWindow {
                                     hsla(0., 0., 1., 0.15),
                                     gpui::BorderStyle::Solid,
                                 ));
+                                if picked {
                                 let a = noise * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
                                 let direction = point(px(a.cos()), px(a.sin()));
                                 let start = b.center() + direction * 28.;
@@ -724,6 +725,7 @@ impl BrowserWindow {
                                 if let Ok(path) = path.build() { w.paint_path(path, hsla(0., 0., 1., 0.95)); }
                                 for p in [start, end] {
                                     w.paint_quad(gpui::fill(Bounds::new(p - point(px(4.), px(4.)), gpui::size(px(8.), px(8.))), hsla(0., 0., 1., 0.95)).corner_radii(px(4.)));
+                                }
                                 }
                             },
                         )
