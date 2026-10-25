@@ -8383,7 +8383,7 @@ fn split_pane_menu_matches_arc_order_and_keeps_unavailable_moves_visible(cx: &mu
     click(cx, "pane-menu-2");
     let entries = view.read_with(cx, |w, _| w.menu_entries());
     let labels: Vec<_> = entries.iter().map(|entry| match entry {
-        Entry::Item(item) => item.label.as_ref(), Entry::Separator => "---", Entry::Header(label) => label,
+        Entry::Item(item) => item.label.as_ref(), Entry::Separator => "---", Entry::Header(label) => label.as_ref(),
     }).collect();
     assert_eq!(labels, ["Move Left", "Move Right", "---", "Add Right Split", "Add Left Split", "---",
         "Separate Tab from Split", "Convert to Vertical Split View"]);

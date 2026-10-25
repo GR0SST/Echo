@@ -69,3 +69,24 @@ pub(super) fn passthrough(child: *mut c_void) {
 pub(super) fn prepare_windowing() -> Result<(), String> {
     platform::prepare_windowing()
 }
+
+pub(super) fn set_popup_bounds(view: *mut c_void, previous: gpui::Bounds<gpui::Pixels>, bounds: gpui::Bounds<gpui::Pixels>) {
+    let Some(mut rect) = platform::rect(view) else {return;};
+    let scale = engine::native_parent_scale(view);
+    rect[0] += (f32::from(bounds.left()-previous.left()) as f64*scale).round() as i32;
+    rect[1] += (f32::from(bounds.top()-previous.top()) as f64*scale).round() as i32;
+    rect[2] = (f32::from(bounds.size.width) as f64*scale).round() as i32;
+    rect[3] = (f32::from(bounds.size.height) as f64*scale).round() as i32;
+    // Publish the new placement before SetWindowPos can synchronously dispatch
+    // WM_SIZE/WM_MOVE. Never hold the registry across a native operation.
+    let parent = OVERLAYS.with(|registry|registry.borrow().get(&(view as usize)).map(|attachment|attachment.parent));
+    if let Some((parent,owner)) = parent.and_then(|parent|platform::rect(parent as *mut c_void).map(|owner|(parent,owner))) {
+        let owner_scale=engine::native_parent_scale(parent as *mut c_void);
+        OVERLAYS.with(|registry| {
+            if let Some(attachment) = registry.borrow_mut().get_mut(&(view as usize)).filter(|attachment|attachment.parent==parent) {
+                attachment.placement=Placement::new(owner,rect,owner_scale);
+            }
+        });
+    }
+    if !platform::position(view,rect) {eprintln!("[extension-popup] native positioning failed");}
+}

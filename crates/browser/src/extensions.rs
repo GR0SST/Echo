@@ -9,7 +9,7 @@ use browser_core::UserProfileId;
 use engine::{ExtensionEvent, ExtensionService};
 use gpui::{
     actions, div, point, prelude::*, px, size, AnyElement, App, Bounds, Context, Entity,
-    FocusHandle, KeyBinding, Pixels, Point, Subscription, WeakEntity, Window,
+    FocusHandle, Focusable, KeyBinding, Pixels, Point, Subscription, WeakEntity, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions,
 };
 use serde::Deserialize;
@@ -22,9 +22,14 @@ use std::{
 
 pub(crate) const URL: &str = "browser://extensions";
 pub(crate) const STORE: &str = "https://chromewebstore.google.com/category/extensions";
-actions!(extensions, [Dismiss]);
+actions!(extensions, [Dismiss, ConfirmRemove]);
 pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Dismiss, Some("ExtensionPopup"))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("ExtensionPopup")),
+        KeyBinding::new("escape", Dismiss, Some("ExtensionRemove")),
+        KeyBinding::new("enter", ConfirmRemove, Some("ExtensionRemove")),
+        KeyBinding::new("escape", Dismiss, Some("ExtensionManager")),
+    ]);
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -34,6 +39,22 @@ pub(crate) struct ExtensionCommand {
     pub description: String,
     #[serde(default)]
     pub shortcut: String,
+}
+impl ExtensionCommand {
+    pub(crate) fn display_description(&self, manifest: &serde_json::Value) -> String {
+        if let Some(description) = manifest["commands"][&self.name]["description"]
+            .as_str()
+            .filter(|value| !value.is_empty() && !value.starts_with("__MSG_"))
+        {
+            return description.to_owned();
+        }
+        if self.name != "_execute_action"
+            && (self.description.is_empty() || self.description == "Activate the extension")
+        {
+            return self.name.clone();
+        }
+        self.description.clone()
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Extension {
@@ -65,18 +86,60 @@ impl Extension {
                     .into_any_element();
             }
         }
-        icons::ionicon("extension-puzzle-outline", extent, 1.)
+        extension_puzzle(extent, false)
     }
     pub(crate) fn key(&self) -> Option<[u8; 32]> {
         self.id.as_bytes().try_into().ok()
     }
+}
+#[derive(Clone, PartialEq, Eq)]
+enum SheetIdentity {
+    Install(u64, UserProfileId),
+    Remove(String, UserProfileId),
 }
 struct Prompt {
     request: u64,
     data: serde_json::Value,
     profile: UserProfileId,
 }
+#[derive(Clone, Copy)]
+pub(crate) enum PopupAnchor {
+    Leading(Point<Pixels>),
+    Trailing(Point<Pixels>),
+}
+#[derive(Clone, Copy)]
+struct PopupPlacement {
+    anchor: Point<Pixels>,
+    trailing: bool,
+    browser: Bounds<Pixels>,
+    screen: Option<Bounds<Pixels>>,
+}
+impl PopupPlacement {
+    fn bounds(self, width: i32, height: i32) -> Bounds<Pixels> {
+        let size = size(px(width as f32), px(height as f32));
+        let mut origin = self.anchor;
+        if self.trailing {
+            origin.x -= size.width;
+        }
+        origin.x = origin.x.clamp(
+            self.browser.left(),
+            (self.browser.right() - size.width).max(self.browser.left()),
+        );
+        if let Some(screen) = self.screen {
+            origin.x = origin.x.clamp(
+                screen.left(),
+                (screen.right() - size.width).max(screen.left()),
+            );
+            origin.y = origin.y.clamp(
+                screen.top(),
+                (screen.bottom() - size.height).max(screen.top()),
+            );
+        }
+        Bounds::new(origin, size)
+    }
+}
 struct ActionPopup {
+    placement: PopupPlacement,
     window: WindowHandle<PopupFrame>,
     // Drop this before removing its native parent window.
     lease: Option<engine::ExtensionPopup>,
@@ -95,12 +158,14 @@ pub(crate) struct State {
     prompt: Option<Prompt>,
     prompt_focus: FocusHandle,
     pub(crate) confirm_remove: Option<String>,
-    pub(crate) menu: Option<String>,
     popup: Option<ActionPopup>,
     popup_generation: u64,
     pub(crate) pending_retirements: Rc<Cell<usize>>,
     pub(crate) overlay: Option<WindowHandle<Overlay>>,
     pub(crate) search: Entity<TextInput>,
+    search_active: bool,
+    manager_menu: bool,
+    manager_focus: FocusHandle,
     _search_changed: Subscription,
 }
 impl State {
@@ -117,12 +182,14 @@ impl State {
             prompt: None,
             prompt_focus: cx.focus_handle(),
             confirm_remove: None,
-            menu: None,
             popup: None,
             popup_generation: 0,
             pending_retirements: Rc::new(Cell::new(0)),
             overlay: None,
             search,
+            search_active: false,
+            manager_menu: false,
+            manager_focus: cx.focus_handle(),
             _search_changed: changed,
         }
     }
@@ -148,6 +215,9 @@ impl gpui::Render for PopupFrame {
 }
 
 impl BrowserWindow {
+    pub(crate) fn extension_surface_owns_focus(&self) -> bool {
+        self.extensions.popup.is_some() || self.extensions.overlay.is_some()
+    }
     pub(crate) fn extension_popup_window_id(&self) -> Option<gpui::WindowId> {
         self.extensions
             .popup
@@ -155,7 +225,9 @@ impl BrowserWindow {
             .map(|popup| popup.window.window_id())
     }
     pub(crate) fn extensions_is_open(&self) -> bool {
-        self.browser.active_tab().is_some_and(|tab| tab.url == URL)
+        self.browser
+            .active_tab()
+            .is_some_and(|tab| is_manager_url(&tab.url))
             && self.browser.active_split().is_none()
     }
     pub(crate) fn poll_extensions(&mut self, cx: &mut Context<Self>) {
@@ -169,6 +241,11 @@ impl BrowserWindow {
             self.extensions.owner = None;
             self.extensions.entries.clear();
             self.extensions.error = None;
+            self.extensions.search_active = false;
+            self.extensions.manager_menu = false;
+            self.extensions
+                .search
+                .update(cx, |input, cx| input.set_text("", cx));
             self.extensions.profile = Some(profile);
             self.extensions.next_attempt = Instant::now();
         }
@@ -223,11 +300,17 @@ impl BrowserWindow {
                             });
                             entries.sort_by_key(|e| e.name.to_lowercase());
                             self.extensions.entries = entries;
+                            if self.extensions.confirm_remove.as_ref().is_some_and(|id| {
+                                !self.extensions.entries.iter().any(|entry| &entry.id == id)
+                            }) {
+                                self.cancel_extension_remove(cx);
+                            }
                         }
                         Err(error) => self.extensions.error = Some(error.to_string()),
                     }
                 }
                 ExtensionEvent::InstallPrompt { request, prompt } => {
+                    self.close_extension_surfaces(cx);
                     self.extensions.prompt = Some(Prompt {
                         request,
                         data: prompt,
@@ -275,10 +358,18 @@ impl BrowserWindow {
             } else {
                 let preferred = popup.preferred.get();
                 if preferred != popup.size {
+                    let previous = popup.placement.bounds(popup.size.0, popup.size.1);
                     popup.size = preferred;
                     let (width, height) = preferred;
-                    let _ = popup.window.update(cx, |_, window, _| {
-                        window.resize(size(px(width as f32), px(height as f32)))
+                    let _ = popup.window.update(cx, |_, window, cx| {
+                        let moved = window.bounds().origin - previous.origin;
+                        popup.placement.anchor += moved;
+                        popup.placement.browser.origin += moved;
+                        popup.placement.screen = window.display(cx).map(|display| display.bounds());
+                        crate::native::set_popup_bounds(
+                            window,
+                            popup.placement.bounds(width, height),
+                        );
                     });
                     if let Some(lease) = &popup.lease {
                         let _ = lease.resize(width, height);
@@ -304,7 +395,7 @@ impl BrowserWindow {
             .iter()
             .chain(self.browser.space().pinned.iter())
             .chain(self.browser.space().today.iter())
-            .find(|t| t.url == URL)
+            .find(|t| is_manager_url(&t.url))
             .map(|t| t.id);
         self.edit_browser(|browser| {
             if let Some(id) = existing {
@@ -365,12 +456,11 @@ impl BrowserWindow {
         let id = id.to_owned();
         self.edit_profile(|browser| {
             if let Some(profile) = browser.user_profile_mut(profile) {
-                if !profile.unpinned_extensions.remove(&id) {
-                    profile.unpinned_extensions.insert(id);
+                if !profile.pinned_extensions.remove(&id) {
+                    profile.pinned_extensions.insert(id);
                 }
             }
         });
-        self.extensions.menu = None;
         cx.notify();
     }
     pub(crate) fn extension_remove(
@@ -431,14 +521,13 @@ impl BrowserWindow {
                 let _ = overlay.update(cx, |_, window, _| window.remove_window());
             });
         }
-        self.extensions.menu = None;
         self.extensions.confirm_remove = None;
     }
     pub(crate) fn invoke_extension(
         &mut self,
         id: &str,
         profile: UserProfileId,
-        anchor: Option<Point<Pixels>>,
+        anchor: Option<PopupAnchor>,
         cx: &mut Context<Self>,
     ) {
         if self.extensions.profile != Some(profile)
@@ -478,25 +567,23 @@ impl BrowserWindow {
             }) else {
                 return;
             };
-            let mut origin = bounds.origin + anchor.unwrap_or(point(px(245.), px(100.)));
-            if let Some(screen) = screen {
-                origin.x = origin.x.clamp(
-                    screen.left(),
-                    (screen.right() - px(320.)).max(screen.left()),
-                );
-                origin.y = origin
-                    .y
-                    .clamp(screen.top(), (screen.bottom() - px(240.)).max(screen.top()));
-            }
+            let (at, trailing) = match anchor {
+                Some(PopupAnchor::Leading(at)) => (at, false),
+                Some(PopupAnchor::Trailing(at)) => (at, true),
+                None => (point(px(245.), px(100.)), false),
+            };
+            let placement = PopupPlacement {
+                anchor: bounds.origin + at,
+                trailing,
+                browser: bounds,
+                screen,
+            };
             let closed = Rc::new(Cell::new(false));
             let preferred = Rc::new(Cell::new((320, 240)));
             let view = Rc::new(Cell::new(0));
             let parent = Rc::new(Cell::new(0usize));
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    origin,
-                    size(px(320.), px(240.)),
-                ))),
+                window_bounds: Some(WindowBounds::Windowed(placement.bounds(320, 240))),
                 titlebar: None,
                 is_movable: false,
                 is_resizable: false,
@@ -562,6 +649,7 @@ impl BrowserWindow {
             match result {
                 Ok(lease) => {
                     let popup = ActionPopup {
+                        placement,
                         window: handle,
                         lease: Some(lease),
                         view,
@@ -593,14 +681,149 @@ impl BrowserWindow {
             }
         });
     }
+    fn extension_sheet_identity(&self) -> Option<SheetIdentity> {
+        if let Some(prompt) = &self.extensions.prompt {
+            return Some(SheetIdentity::Install(prompt.request, prompt.profile));
+        }
+        Some(SheetIdentity::Remove(
+            self.extensions.confirm_remove.clone()?,
+            self.extensions.profile?,
+        ))
+    }
+    pub(crate) fn request_extension_remove(
+        &mut self,
+        id: &str,
+        profile: UserProfileId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.extensions.profile != Some(profile)
+            || self.browser.active_user_profile_id() != profile
+            || !self.extensions.entries.iter().any(|entry| entry.id == id)
+        {
+            return;
+        }
+        self.close_extension_surfaces(cx);
+        self.extensions.confirm_remove = Some(id.to_owned());
+        self.show_extension_prompt(cx);
+        cx.notify();
+    }
+    fn cancel_extension_remove(&mut self, cx: &mut Context<Self>) {
+        self.extensions.confirm_remove = None;
+        if let Some(handle) = self.extensions.overlay.take() {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
+        }
+        cx.notify();
+    }
+    fn confirm_extension_remove(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.extensions.confirm_remove.clone() else {
+            return;
+        };
+        let Some(profile) = self.extensions.profile else {
+            return;
+        };
+        self.extension_remove(&id, profile, cx);
+        self.cancel_extension_remove(cx);
+    }
+    fn render_extension_remove(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(extension) = self
+            .extensions
+            .confirm_remove
+            .as_ref()
+            .and_then(|id| self.extensions.entries.iter().find(|entry| &entry.id == id))
+        else {
+            return div().into_any_element();
+        };
+        div()
+            .key_context("ExtensionRemove")
+            .track_focus(&self.extensions.prompt_focus)
+            .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.cancel_extension_remove(cx)))
+            .on_action(
+                cx.listener(|this, _: &ConfirmRemove, _, cx| this.confirm_extension_remove(cx)),
+            )
+            .size_full()
+            .flex()
+            .items_start()
+            .justify_center()
+            .pt(px(70.))
+            .bg(gpui::rgba(0x00000018))
+            .child(
+                div()
+                    .id("extension-remove-sheet")
+                    .debug_selector(|| "extension-remove-sheet".into())
+                    .w(px(450.))
+                    .min_h(px(273.))
+                    .rounded(px(14.))
+                    .overflow_hidden()
+                    .bg(gpui::rgb(0x151c2f))
+                    .text_color(gpui::white())
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .px(px(38.))
+                            .pt(px(38.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(16.))
+                            .child(
+                                div()
+                                    .size(px(62.))
+                                    .rounded(px(15.))
+                                    .bg(gpui::rgb(0x3b3e55))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(extension_puzzle(32., true)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(18.))
+                                    .line_height(px(24.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(format!(
+                                        "Remove “{}” extension\nfrom Echo?",
+                                        extension.name
+                                    )),
+                            ),
+                    )
+                    .child(div().flex_1().min_h(px(45.)))
+                    .child(
+                        div()
+                            .px(px(28.))
+                            .pb(px(28.))
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                extension_sheet_button("extension-remove-cancel", "Cancel", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_extension_remove(cx)
+                                    })),
+                            )
+                            .child(
+                                extension_sheet_button(
+                                    "extension-remove-confirm",
+                                    "Remove Extension",
+                                    true,
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.confirm_extension_remove(cx)),
+                                ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
     fn show_extension_prompt(&mut self, cx: &mut Context<Self>) {
         if self.extensions.overlay.is_some() {
             return;
         }
-        let Some(prompt) = &self.extensions.prompt else {
+        let Some(identity) = self.extension_sheet_identity() else {
             return;
         };
-        let (request, profile) = (prompt.request, prompt.profile);
         let root = cx.entity().downgrade();
         let main = self.main_window;
         let parent = self.native_view;
@@ -609,10 +832,12 @@ impl BrowserWindow {
             if crate::quit::is_quitting()
                 || !root
                     .read_with(cx, |view, _| {
-                        view.extensions
-                            .prompt
-                            .as_ref()
-                            .is_some_and(|p| p.request == request && p.profile == profile)
+                        view.extension_sheet_identity().as_ref() == Some(&identity)
+                            && view.browser.active_user_profile_id()
+                                == match &identity {
+                                    SheetIdentity::Install(_, profile)
+                                    | SheetIdentity::Remove(_, profile) => *profile,
+                                }
                     })
                     .unwrap_or(false)
             {
@@ -666,6 +891,9 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn render_extension_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.extensions.confirm_remove.is_some() {
+            return self.render_extension_remove(cx);
+        }
         let Some(prompt) = &self.extensions.prompt else {
             return div().into_any_element();
         };
@@ -755,20 +983,74 @@ impl BrowserWindow {
             )
             .into_any_element()
     }
+    fn active_extensions(&self) -> impl Iterator<Item = &Extension> {
+        let current = self.extensions.profile == Some(self.browser.active_user_profile_id())
+            && !self.browser.is_private();
+        self.extensions.entries.iter().filter(move |_| current)
+    }
+    pub(crate) fn render_pinned_extensions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let profile = self.browser.active_user_profile_id();
+        let pins = &self.browser.active_user_profile().pinned_extensions;
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .children(
+                self.active_extensions()
+                    .filter(|entry| entry.enabled && pins.contains(&entry.id))
+                    .map(|extension| {
+                        let id = extension.id.clone();
+                        let selector = format!("toolbar-extension-{id}");
+                        let label = extension.name.clone();
+                        let anchor = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+                        let painted = anchor.clone();
+                        div()
+                            .id(gpui::SharedString::from(selector.clone()))
+                            .debug_selector(move || selector.clone())
+                            .w(px(32.))
+                            .h(px(32.))
+                            .flex_none()
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .hover(|item| item.bg(gpui::hsla(0., 0., 0.5, 0.12)))
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| ExtensionTooltip(label.clone())).into()
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.invoke_extension(
+                                    &id,
+                                    profile,
+                                    anchor.get().map(|bounds| {
+                                        PopupAnchor::Trailing(point(
+                                            bounds.right(),
+                                            bounds.bottom() + px(8.),
+                                        ))
+                                    }),
+                                    cx,
+                                );
+                            }))
+                            .child(extension.icon(16.))
+                            .child(
+                                gpui::canvas(
+                                    |_, _, _| (),
+                                    move |bounds, _, _, _| painted.set(Some(bounds)),
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
+                    }),
+            )
+            .into_any_element()
+    }
     pub(crate) fn render_extension_grid(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = self.browser.active_user_profile_id();
         let entries = self
-            .extensions
-            .entries
-            .iter()
-            .filter(|e| {
-                e.enabled
-                    && !self
-                        .browser
-                        .active_user_profile()
-                        .unpinned_extensions
-                        .contains(&e.id)
-            })
+            .active_extensions()
+            .filter(|e| e.enabled)
             .cloned()
             .collect::<Vec<_>>();
         div()
@@ -804,16 +1086,26 @@ impl BrowserWindow {
                                 cx.new(|_| ExtensionTooltip(label.clone())).into()
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                let at = anchor.get().map(|b| point(b.left(), b.bottom() + px(8.)));
+                                let at = anchor.get().map(|b| {
+                                    PopupAnchor::Leading(point(b.left(), b.bottom() + px(8.)))
+                                });
                                 this.invoke_extension(&action_id, profile, at, cx);
                             }))
                             .on_mouse_down(
                                 gpui::MouseButton::Right,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.extensions.menu = Some(menu_id.clone());
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }),
+                                cx.listener(
+                                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                        if let Ok(id) = menu_id.as_bytes().try_into() {
+                                            this.open_sidebar_menu(
+                                                crate::tab_menu::MenuTarget::Extension(id, profile),
+                                                event.position,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                        cx.stop_propagation();
+                                    },
+                                ),
                             )
                             .child(extension.icon(16.))
                             .child(
@@ -843,55 +1135,397 @@ impl BrowserWindow {
                             .on_click(cx.listener(|this, _, _, cx| this.open_extension_store(cx))),
                     ),
             )
-            .when_some(self.extensions.menu.clone(), |grid, id| {
-                let pin = id.clone();
-                grid.child(
+            .into_any_element()
+    }
+    pub(crate) fn open_extension_details(
+        &mut self,
+        id: &str,
+        profile: UserProfileId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.extensions.profile != Some(profile)
+            || self.browser.active_user_profile_id() != profile
+        {
+            return;
+        }
+        let Some(extension) = self
+            .active_extensions()
+            .find(|entry| entry.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(tab) = self.browser.active_tab().map(|tab| tab.id) else {
+            return;
+        };
+        self.edit_browser(|browser| {
+            browser.set_url(tab, format!("{URL}?id={id}"));
+            browser.set_title(tab, format!("Extensions - {}", extension.name));
+        });
+        cx.notify();
+    }
+    fn extension_details_back(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self
+            .browser
+            .active_tab()
+            .filter(|tab| is_manager_url(&tab.url))
+            .map(|tab| tab.id)
+        else {
+            return;
+        };
+        self.edit_browser(|browser| {
+            browser.set_url(tab, URL);
+            browser.set_title(tab, "Extensions");
+        });
+        cx.notify();
+    }
+    fn dismiss_extension_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.extensions.search_active = false;
+        self.extensions.manager_menu = false;
+        self.extensions
+            .search
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.extensions.manager_focus.focus(window);
+        cx.notify();
+    }
+    fn render_extension_manager_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let profile = self.browser.active_user_profile_id();
+        let developer = self.browser.active_user_profile().extension_developer_mode;
+        div()
+            .h(px(56.))
+            .pl(px(18.))
+            .pr(px(12.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .when(!self.extensions.search_active, |header| {
+                header
+                    .child(
+                        div()
+                            .id("extension-manager-menu-button")
+                            .debug_selector(|| "extension-manager-menu-button".into())
+                            .size(px(32.))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icons::ionicon("menu-outline", 18., 1.))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.extensions.manager_menu = !this.extensions.manager_menu;
+                                this.extensions.manager_focus.focus(window);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .ml(px(9.))
+                            .text_size(px(20.))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child("Extensions"),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("extension-search-open")
+                            .debug_selector(|| "extension-search-open".into())
+                            .size(px(32.))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icons::control_sized(Icon::Search, 18.))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.extensions.search_active = true;
+                                this.extensions.manager_menu = false;
+                                this.extensions
+                                    .search
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .focus(window);
+                                cx.notify();
+                            })),
+                    )
+            })
+            .when(self.extensions.search_active, |header| {
+                header
+                    .child(
+                        div()
+                            .size(px(28.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icons::control_sized(Icon::Search, 18.)),
+                    )
+                    .child(
+                        div()
+                            .id("extension-search-field")
+                            .debug_selector(|| "extension-search-field".into())
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(13.))
+                            .child(self.extensions.search.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("extension-search-close")
+                            .debug_selector(|| "extension-search-close".into())
+                            .size(px(32.))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icons::control_sized(Icon::Close, 18.))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dismiss_extension_manager(window, cx)
+                            })),
+                    )
+            })
+            .child(
+                div()
+                    .ml(px(14.))
+                    .w(px(142.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(13.))
+                    .child("Developer mode")
+                    .child(
+                        extension_switch("extension-developer-mode", developer).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                if this.browser.active_user_profile_id() != profile {
+                                    return;
+                                }
+                                this.edit_profile(|browser| {
+                                    if let Some(profile) = browser.user_profile_mut(profile) {
+                                        profile.extension_developer_mode = !developer;
+                                    }
+                                });
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            )
+            .into_any_element()
+    }
+    fn render_extension_manager_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .absolute()
+            .inset_0()
+            .bg(gpui::rgba(0x00000060))
+            .child(
+                div()
+                    .id("extension-manager-menu")
+                    .debug_selector(|| "extension-manager-menu".into())
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(256.))
+                    .bg(gpui::rgb(0x292a2d))
+                    .shadow_lg()
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.extensions.manager_menu = false;
+                        cx.notify();
+                    }))
+                    .flex()
+                    .flex_col()
+                    .px(px(8.))
+                    .child(
+                        div()
+                            .h(px(56.))
+                            .px(px(16.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(20.))
+                            .child("Extensions"),
+                    )
+                    .child(
+                        extension_manager_menu_item(
+                            "extension-manager-my-extensions",
+                            "My extensions",
+                            "extension-puzzle-outline",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.extensions.manager_menu = false;
+                            this.extension_details_back(cx);
+                        })),
+                    )
+                    .child(
+                        extension_manager_menu_item(
+                            "extension-manager-shortcuts",
+                            "Keyboard shortcuts",
+                            "keypad-outline",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.extensions.manager_menu = false;
+                            this.retain_normal_source(cx);
+                            crate::settings::open_shortcuts(cx);
+                            cx.notify();
+                        })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .px(px(16.))
+                            .pb(px(24.))
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .child("Discover more extensions and themes on the ")
+                            .child(
+                                div()
+                                    .id("extension-manager-store")
+                                    .debug_selector(|| "extension-manager-store".into())
+                                    .cursor_pointer()
+                                    .underline()
+                                    .text_color(gpui::rgb(0xa8c7fa))
+                                    .child("Chrome Web Store")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.extensions.manager_menu = false;
+                                        this.open_extension_store(cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+    fn render_extension_details(
+        &self,
+        extension: Option<Extension>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let profile = self.browser.active_user_profile_id();
+        let mut content = div()
+            .id("extension-details")
+            .debug_selector(|| "extension-details".into())
+            .w_full()
+            .max_w(px(680.))
+            .bg(gpui::rgb(0x292a2d))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(56.))
+                    .px(px(16.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .id("extension-details-back")
+                            .debug_selector(|| "extension-details-back".into())
+                            .size(px(24.))
+                            .mr(px(8.))
+                            .cursor_pointer()
+                            .child(icons::ionicon("arrow-back-outline", 20., 1.))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.extension_details_back(cx)),
+                            ),
+                    )
+                    .when_some(extension.clone(), |row, entry| {
+                        row.child(entry.icon(24.)).child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(entry.name),
+                        )
+                    }),
+            );
+        if let Some(extension) = extension {
+            let id = extension.id.clone();
+            let toggle = id.clone();
+            let pin = id.clone();
+            let remove = id.clone();
+            let pinned = self
+                .browser
+                .active_user_profile()
+                .pinned_extensions
+                .contains(&id);
+            content = content
+                .child(
                     div()
-                        .p(px(5.))
-                        .rounded(px(6.))
-                        .bg(gpui::hsla(0., 0., 0.1, 0.95))
+                        .h(px(56.))
+                        .px(px(20.))
                         .flex()
-                        .flex_col()
-                        .gap(px(3.))
+                        .items_center()
+                        .text_size(px(13.))
+                        .text_color(gpui::rgb(0xa8c7fa))
+                        .child(if extension.enabled { "On" } else { "Off" })
+                        .child(div().flex_1())
                         .child(
-                            button(
-                                "site-extension-pin",
-                                if self
-                                    .browser
-                                    .active_user_profile()
-                                    .unpinned_extensions
-                                    .contains(&id)
-                                {
-                                    "Pin"
-                                } else {
-                                    "Unpin"
+                            extension_switch(
+                                gpui::SharedString::from(format!("extension-details-toggle-{id}")),
+                                extension.enabled,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.extension_enable(&toggle, profile, !extension.enabled, cx)
                                 },
+                            )),
+                        ),
+                )
+                .child(extension_detail_row(
+                    "Description",
+                    extension.manifest["description"]
+                        .as_str()
+                        .unwrap_or_default(),
+                ))
+                .child(extension_detail_row("Version", &extension.version))
+                .child(extension_detail_row("ID", &extension.id))
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(gpui::rgb(0x3c4043))
+                        .px(px(20.))
+                        .h(px(56.))
+                        .flex()
+                        .items_center()
+                        .text_size(px(13.))
+                        .child("Pin to toolbar")
+                        .child(div().flex_1())
+                        .child(
+                            extension_switch(
+                                gpui::SharedString::from(format!("extension-pin-{id}")),
+                                pinned,
                             )
                             .on_click(cx.listener(
                                 move |this, _, _, cx| this.extension_pin(&pin, profile, cx),
                             )),
-                        )
-                        .child(
-                            button("site-manage-extensions", "Manage Extensions…")
-                                .on_click(cx.listener(|this, _, _, cx| this.open_extensions(cx))),
                         ),
                 )
-            })
-            .into_any_element()
-    }
-    pub(crate) fn render_extensions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let profile = self.browser.active_user_profile_id();
-        let query = self.extensions.search.read(cx).text().to_lowercase();
-        let entries = self
-            .extensions
-            .entries
-            .iter()
-            .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
-            .cloned()
-            .collect::<Vec<_>>();
+                .child(
+                    div()
+                        .border_t_1()
+                        .border_color(gpui::rgb(0x3c4043))
+                        .p(px(20.))
+                        .child(
+                            div()
+                                .id(gpui::SharedString::from(format!("extension-remove-{id}")))
+                                .debug_selector(move || format!("extension-remove-{id}"))
+                                .cursor_pointer()
+                                .text_size(px(13.))
+                                .text_color(gpui::rgb(0xa8c7fa))
+                                .child("Remove extension")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.request_extension_remove(&remove, profile, cx);
+                                })),
+                        ),
+                );
+        } else {
+            content = content.child(
+                div()
+                    .p(px(20.))
+                    .child("This extension is no longer installed."),
+            );
+        }
         div()
             .id("extensions-page")
             .debug_selector(|| "extensions-page".into())
+            .key_context("ExtensionManager")
+            .track_focus(&self.extensions.manager_focus)
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                this.dismiss_extension_manager(window, cx)
+            }))
             .absolute()
             .inset_0()
             .rounded(px(8.))
@@ -900,27 +1534,73 @@ impl BrowserWindow {
             .text_color(gpui::rgb(0xe8eaed))
             .flex()
             .flex_col()
+            .child(self.render_extension_manager_header(cx))
             .child(
                 div()
-                    .h(px(56.))
-                    .px(px(26.))
+                    .id("extension-details-scroll")
+                    .flex_1()
+                    .overflow_y_scroll()
                     .flex()
+                    .flex_col()
                     .items_center()
-                    .gap(px(20.))
-                    .child(icons::ionicon("menu-outline", 22., 1.))
-                    .child(div().text_size(px(20.)).child("Extensions"))
-                    .child(div().flex_1())
-                    .child(div().w(px(230.)).child(self.extensions.search.clone())),
+                    .px(px(24.))
+                    .child(content),
             )
+            .when(self.extensions.manager_menu, |page| {
+                page.child(self.render_extension_manager_menu(cx))
+            })
+            .into_any_element()
+    }
+    pub(crate) fn render_extensions(&self, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(id) = self
+            .browser
+            .active_tab()
+            .and_then(|tab| tab.url.strip_prefix("browser://extensions?id="))
+        {
+            return self.render_extension_details(
+                self.active_extensions()
+                    .find(|entry| entry.id == id)
+                    .cloned(),
+                cx,
+            );
+        }
+        let profile = self.browser.active_user_profile_id();
+        let developer = self.browser.active_user_profile().extension_developer_mode;
+        let query = self.extensions.search.read(cx).text().to_lowercase();
+        let entries = self
+            .active_extensions()
+            .filter(|entry| query.is_empty() || entry.name.to_lowercase().contains(&query))
+            .cloned()
+            .collect::<Vec<_>>();
+        div()
+            .id("extensions-page")
+            .debug_selector(|| "extensions-page".into())
+            .key_context("ExtensionManager")
+            .track_focus(&self.extensions.manager_focus)
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                this.dismiss_extension_manager(window, cx)
+            }))
+            .absolute()
+            .inset_0()
+            .rounded(px(8.))
+            .overflow_hidden()
+            .bg(gpui::rgb(0x202124))
+            .text_color(gpui::rgb(0xe8eaed))
+            .flex()
+            .flex_col()
+            .child(self.render_extension_manager_header(cx))
             .child(
                 div()
                     .id("extensions-scroll")
                     .flex_1()
                     .overflow_y_scroll()
-                    .p(px(24.))
+                    .pt(px(52.))
+                    .pb(px(24.))
+                    .px(px(24.))
                     .flex()
                     .flex_col()
-                    .gap(px(16.))
+                    .items_center()
+                    .gap(px(12.))
                     .when_some(self.extensions.error.clone(), |page, error| {
                         page.child(
                             div()
@@ -931,17 +1611,19 @@ impl BrowserWindow {
                     .when(entries.is_empty(), |page| {
                         page.child(
                             div()
-                                .mt(px(80.))
+                                .debug_selector(|| "extensions-empty".into())
                                 .flex()
                                 .justify_center()
                                 .gap(px(4.))
+                                .text_size(px(16.))
                                 .child("Find extensions and themes in the")
                                 .child(
                                     div()
                                         .id("extensions-store-link")
                                         .debug_selector(|| "extensions-store-link".into())
                                         .cursor_pointer()
-                                        .text_color(gpui::rgb(0x8ab4f8))
+                                        .text_color(gpui::rgb(0xa8c7fa))
+                                        .underline()
                                         .child("Chrome Web Store")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.open_extension_store(cx)
@@ -949,78 +1631,119 @@ impl BrowserWindow {
                                 ),
                         )
                     })
+                    .when(!entries.is_empty(), |page| {
+                        page.child(
+                            div()
+                                .w_full()
+                                .max_w(px(400.))
+                                .h(px(24.))
+                                .text_size(px(16.))
+                                .child("All Extensions"),
+                        )
+                    })
                     .children(entries.into_iter().map(|extension| {
                         let id = extension.id.clone();
                         let enabled = extension.enabled;
                         let remove = id.clone();
-                        let pin = id.clone();
+                        let details = id.clone();
                         div()
                             .id(gpui::SharedString::from(format!("extension-card-{id}")))
                             .debug_selector(move || format!("extension-card-{id}"))
                             .w_full()
-                            .max_w(px(800.))
-                            .p(px(20.))
-                            .border_1()
-                            .border_color(gpui::rgb(0x5f6368))
+                            .max_w(px(400.))
+                            .h(px(if developer { 208. } else { 160. }))
+                            .flex_shrink_0()
+                            .bg(gpui::rgb(0x292a2d))
                             .rounded(px(8.))
+                            .shadow_sm()
                             .flex()
                             .flex_col()
-                            .gap(px(14.))
                             .child(
                                 div()
+                                    .flex_1()
+                                    .px(px(24.))
+                                    .pt(px(20.))
                                     .flex()
                                     .items_start()
-                                    .gap(px(20.))
-                                    .child(extension.icon(32.))
+                                    .gap(px(32.))
+                                    .child(
+                                        div()
+                                            .size(px(36.))
+                                            .flex_shrink_0()
+                                            .child(extension.icon(36.)),
+                                    )
                                     .child(
                                         div()
                                             .flex_1()
+                                            .min_w_0()
+                                            .h_full()
                                             .flex()
                                             .flex_col()
-                                            .gap(px(8.))
-                                            .child(extension.name.clone())
+                                            .gap(px(4.))
+                                            .text_size(px(13.))
+                                            .line_height(px(20.))
                                             .child(
-                                                div().text_size(px(13.)).child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(8.))
+                                                    .child(
+                                                        div()
+                                                            .min_w_0()
+                                                            .truncate()
+                                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                                            .child(extension.name.clone()),
+                                                    )
+                                                    .when(developer, |line| {
+                                                        line.child(
+                                                            div()
+                                                                .flex_shrink_0()
+                                                                .child(extension.version.clone()),
+                                                        )
+                                                    }),
+                                            )
+                                            .child(
+                                                div().max_h(px(60.)).overflow_hidden().child(
                                                     extension.manifest["description"]
                                                         .as_str()
                                                         .unwrap_or_default()
                                                         .to_owned(),
                                                 ),
-                                            ),
-                                    )
-                                    .child(
-                                        div().text_size(px(12.)).child(extension.version.clone()),
+                                            )
+                                            .when(developer, |body| {
+                                                body.child(div().flex_1()).child(
+                                                    div()
+                                                        .pb(px(12.))
+                                                        .text_size(px(13.))
+                                                        .line_height(px(18.))
+                                                        .child(format!("ID: {}", extension.id)),
+                                                )
+                                            }),
                                     ),
                             )
                             .child(
                                 div()
+                                    .h(px(48.))
+                                    .flex_shrink_0()
+                                    .px(px(8.))
                                     .flex()
                                     .items_center()
-                                    .gap(px(12.))
+                                    .gap(px(8.))
                                     .child(
-                                        button(
+                                        extension_outline_button(
                                             gpui::SharedString::from(format!(
-                                                "extension-pin-{pin}"
+                                                "extension-details-{details}"
                                             )),
-                                            if self
-                                                .browser
-                                                .active_user_profile()
-                                                .unpinned_extensions
-                                                .contains(&pin)
-                                            {
-                                                "Pin"
-                                            } else {
-                                                "Unpin"
-                                            },
+                                            "Details",
                                         )
                                         .on_click(
                                             cx.listener(move |this, _, _, cx| {
-                                                this.extension_pin(&pin, profile, cx)
+                                                this.open_extension_details(&details, profile, cx);
                                             }),
                                         ),
                                     )
                                     .child(
-                                        button(
+                                        extension_outline_button(
                                             gpui::SharedString::from(format!(
                                                 "extension-remove-{remove}"
                                             )),
@@ -1028,21 +1751,20 @@ impl BrowserWindow {
                                         )
                                         .on_click(
                                             cx.listener(move |this, _, _, cx| {
-                                                this.extensions.confirm_remove =
-                                                    Some(remove.clone());
-                                                cx.notify();
+                                                this.request_extension_remove(&remove, profile, cx);
                                             }),
                                         ),
                                     )
                                     .child(div().flex_1())
                                     .child(
-                                        button(
+                                        extension_switch(
                                             gpui::SharedString::from(format!(
                                                 "extension-toggle-{}",
                                                 extension.id
                                             )),
-                                            if enabled { "On" } else { "Off" },
+                                            enabled,
                                         )
+                                        .mr(px(12.))
                                         .on_click(
                                             cx.listener(move |this, _, _, cx| {
                                                 this.extension_enable(
@@ -1055,39 +1777,11 @@ impl BrowserWindow {
                                         ),
                                     ),
                             )
-                    }))
-                    .when_some(self.extensions.confirm_remove.clone(), |page, id| {
-                        let confirm = id.clone();
-                        page.child(
-                            div()
-                                .p(px(20.))
-                                .rounded(px(8.))
-                                .border_1()
-                                .border_color(gpui::rgb(0x5f6368))
-                                .child("Remove this extension?")
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap(px(12.))
-                                        .child(
-                                            button("extension-remove-cancel", "Cancel").on_click(
-                                                cx.listener(|this, _, _, cx| {
-                                                    this.extensions.confirm_remove = None;
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                        )
-                                        .child(
-                                            button("extension-remove-confirm", "Remove").on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.extension_remove(&confirm, profile, cx)
-                                                }),
-                                            ),
-                                        ),
-                                ),
-                        )
-                    }),
+                    })),
             )
+            .when(self.extensions.manager_menu, |page| {
+                page.child(self.render_extension_manager_menu(cx))
+            })
             .into_any_element()
     }
 }
@@ -1118,5 +1812,235 @@ impl gpui::Render for ExtensionTooltip {
             .text_color(gpui::white())
             .text_size(px(12.))
             .child(self.0.clone())
+    }
+}
+
+fn extension_outline_button(
+    id: impl Into<gpui::SharedString>,
+    label: &str,
+) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
+    let selector = id.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || selector.clone())
+        .h(px(36.))
+        .px(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(18.))
+        .border_1()
+        .border_color(gpui::rgb(0x397c9d))
+        .text_color(gpui::rgb(0xa8c7fa))
+        .text_size(px(13.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .cursor_pointer()
+        .hover(|item| item.bg(gpui::rgba(0xa8c7fa14)))
+        .child(label.to_owned())
+}
+fn extension_switch(id: impl Into<gpui::SharedString>, enabled: bool) -> gpui::Stateful<gpui::Div> {
+    let id = id.into();
+    let selector = id.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || selector.clone())
+        .w(px(26.))
+        .h(px(16.))
+        .rounded(px(8.))
+        .cursor_pointer()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .px(px(2.))
+        .bg(gpui::rgb(if enabled { 0xa8c7fa } else { 0x5f6368 }))
+        .when(enabled, |track| track.justify_end())
+        .child(
+            div()
+                .size(px(12.))
+                .rounded(px(6.))
+                .bg(gpui::rgb(if enabled { 0x174ea6 } else { 0xbdbdbd })),
+        )
+}
+
+fn is_manager_url(url: &str) -> bool {
+    url == URL
+        || url
+            .strip_prefix("browser://extensions?id=")
+            .is_some_and(|id| {
+                id.len() == 32 && id.bytes().all(|byte| (b'a'..=b'p').contains(&byte))
+            })
+}
+fn extension_detail_row(label: &str, value: &str) -> AnyElement {
+    div()
+        .border_t_1()
+        .border_color(gpui::rgb(0x3c4043))
+        .px(px(20.))
+        .py(px(16.))
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .text_size(px(13.))
+        .line_height(px(18.))
+        .child(
+            div()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(label.to_owned()),
+        )
+        .child(value.to_owned())
+        .into_any_element()
+}
+
+fn extension_sheet_button(
+    id: &'static str,
+    label: &str,
+    primary: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .h(px(36.))
+        .w(px(if primary { 171. } else { 110. }))
+        .px(px(12.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(gpui::rgb(if primary { 0x6a5efa } else { 0x59528b }))
+        .bg(gpui::rgb(if primary { 0x3d35ef } else { 0x33305e }))
+        .text_color(gpui::white())
+        .text_size(px(13.))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_between()
+        .hover(|button| button.opacity(0.9))
+        .child(label.to_owned())
+        .child(
+            div()
+                .h(px(20.))
+                .px(px(4.))
+                .rounded(px(4.))
+                .bg(gpui::rgba(0xffffff26))
+                .text_size(px(11.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(if primary {
+                    icons::control_sized(Icon::Enter, 18.)
+                } else {
+                    div().child("ESC").into_any_element()
+                }),
+        )
+}
+
+fn extension_manager_menu_item(
+    id: &'static str,
+    label: &str,
+    icon: &str,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .h(px(48.))
+        .px(px(16.))
+        .rounded(px(24.))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .gap(px(24.))
+        .text_size(px(14.))
+        .hover(|row| row.bg(gpui::rgba(0xffffff0a)))
+        .child(if icon == "extension-puzzle-outline" {
+            extension_puzzle(18., false)
+        } else {
+            icons::ionicon(icon, 18., 1.)
+        })
+        .child(label.to_owned())
+}
+
+/// Fixed geometry for the extension puzzle, including dialogs without an icon.
+pub(crate) fn extension_puzzle(size: f32, filled: bool) -> AnyElement {
+    gpui::canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let at = |x, y| bounds.origin + point(px(x * size / 24.), px(y * size / 24.));
+            let mut path = if filled {
+                gpui::PathBuilder::fill()
+            } else {
+                gpui::PathBuilder::stroke(px(size / 16.))
+            };
+            path.move_to(at(3., 5.));
+            path.line_to(at(8., 5.));
+            path.line_to(at(8., 3.));
+            path.cubic_bezier_to(at(14., 3.), at(8., 0.), at(14., 0.));
+            path.line_to(at(14., 5.));
+            path.line_to(at(19., 5.));
+            path.line_to(at(19., 10.));
+            path.line_to(at(21., 10.));
+            path.cubic_bezier_to(at(21., 16.), at(24., 10.), at(24., 16.));
+            path.line_to(at(19., 16.));
+            path.line_to(at(19., 21.));
+            path.line_to(at(14., 21.));
+            path.line_to(at(14., 19.));
+            path.cubic_bezier_to(at(8., 19.), at(14., 16.), at(8., 16.));
+            path.line_to(at(8., 21.));
+            path.line_to(at(3., 21.));
+            path.line_to(at(3., 16.));
+            path.line_to(at(5., 16.));
+            path.cubic_bezier_to(at(5., 10.), at(8., 16.), at(8., 10.));
+            path.line_to(at(3., 10.));
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, window.text_style().color);
+            }
+        },
+    )
+    .size(px(size))
+    .flex_none()
+    .into_any_element()
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    #[test]
+    fn toolbar_popup_keeps_its_trailing_edge_when_extension_content_grows() {
+        let placement = PopupPlacement {
+            anchor: point(px(1000.), px(150.)),
+            trailing: true,
+            browser: Bounds::new(point(px(100.), px(100.)), size(px(1000.), px(760.))),
+            screen: Some(Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(1512.), px(982.)),
+            )),
+        };
+        for (width, height) in [(320, 240), (400, 580), (720, 600)] {
+            let bounds = placement.bounds(width, height);
+            assert_eq!(bounds.right(), px(1000.));
+            assert_eq!(bounds.top(), px(150.));
+        }
+    }
+    #[test]
+    fn action_popup_remains_visible_at_browser_and_negative_display_edges() {
+        let browser = Bounds::new(point(px(-1920.), px(100.)), size(px(1000.), px(760.)));
+        let placement = PopupPlacement {
+            anchor: point(px(-1700.), px(900.)),
+            trailing: true,
+            browser,
+            screen: Some(Bounds::new(
+                point(px(-1920.), px(0.)),
+                size(px(1920.), px(1080.)),
+            )),
+        };
+        let bounds = placement.bounds(480, 580);
+        assert_eq!(bounds.left(), px(-1920.));
+        assert_eq!(bounds.bottom(), px(1080.));
+        let leading = PopupPlacement {
+            anchor: point(px(-950.), px(300.)),
+            trailing: false,
+            ..placement
+        }
+        .bounds(400, 240);
+        assert_eq!(leading.right(), browser.right());
     }
 }

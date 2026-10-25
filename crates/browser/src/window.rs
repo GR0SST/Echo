@@ -1803,7 +1803,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.save_prompt_active || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.save_prompt_active || self.extension_surface_owns_focus() || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -2443,7 +2443,7 @@ impl BrowserWindow {
             Command::KeyboardShortcuts => { self.retain_normal_source(cx); self.close_command_bar(cx); crate::settings::open_shortcuts(cx); },
             Command::ManageExtensions => self.open_extensions(cx),
             Command::AddExtension => self.open_extension_store(cx),
-            Command::ExtensionAction(id, profile) => if let Ok(id)=std::str::from_utf8(&id) {self.close_command_bar(cx);self.invoke_extension(id,profile,None,cx)},
+            Command::ExtensionAction(id, profile) => if let Ok(id)=std::str::from_utf8(&id) {self.close_command_bar_with_focus(PopupFocus::OnActivation,cx);self.invoke_extension(id,profile,None,cx)},
             Command::AirTrafficControl => self.open_air_traffic_control(cx),
             Command::SearchSettings => self.search_settings_from_command(cx),
             Command::ManagePasswords => self.passwords_from_command(cx),
@@ -4241,6 +4241,7 @@ impl BrowserWindow {
                 .child(div().relative().left(px(-32.)).px(px(32.)).min_w_0().flex().items_center()
                 .child(div().id("toolbar-copy-url").text_color(hsla(0.,0.,ink,0.675)).debug_selector(||"toolbar-copy-url".into()).size(px(26.)).flex_none().flex().items_center().justify_center().on_click(cx.listener(|this,_,_,cx|{cx.stop_propagation();this.copy_url(false,cx);})).child(crate::icons::control(crate::icons::Icon::Link)))
                 .child(div().min_w_0().truncate().child(text))))
+            .child(self.render_pinned_extensions(cx))
             .child(button("toolbar-site-controls",crate::icons::Icon::SiteControls).on_click(cx.listener(|this,_,window,cx|this.toggle_site_controls(window,cx))).child(canvas(|_,_,_|(),move |bounds,_,_,_|anchor.set(Some(bounds))).absolute().inset_0()))
             .child(button("toolbar-split",crate::icons::Icon::Split).on_click(cx.listener(|this,_,_,cx|this.edit_split(None,cx))))
             .into_any_element()
@@ -4561,7 +4562,7 @@ impl BrowserWindow {
                     .when(history_result, |tile| tile.text_color(hsla(0., 0., if selected { 1. } else { ink }, 0.7)))
                     .when(selected && matches!(icon, crate::icons::Icon::AirTraffic), |this| this.text_color(gpui::rgb(0x6e74ff)))
                     .when(selected && action_page.is_some(), |tile| tile.text_color(gpui::rgb(0x6e74ff)))
-                    .child(if extension_row.is_some() { crate::icons::ionicon("extension-puzzle-outline", 16., 1.) } else { page.unwrap_or_else(|| action_page.map(|name| crate::icons::ionicon(name,14.,1.)).unwrap_or_else(|| crate::icons::control_sized(icon, 14.0))) });
+                    .child(if extension_row.is_some() { crate::extensions::extension_puzzle(16., false) } else { page.unwrap_or_else(|| action_page.map(|name| crate::icons::ionicon(name,14.,1.)).unwrap_or_else(|| crate::icons::control_sized(icon, 14.0))) });
                 let label_len = label.len();
                 let highlights = history_url.as_ref().map(|url| (
                     label_len - display_url(url).len() - " — ".len()..label_len,

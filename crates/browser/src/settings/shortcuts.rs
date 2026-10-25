@@ -244,12 +244,21 @@ impl SettingsWindow {
         if self.shortcuts.extension.is_some() {
             if matches!(key.key.as_str(),"shift"|"control"|"alt"|"cmd"|"super"|"fn"|"meta") {return;}
             let clear=matches!(key.key.as_str(),"backspace"|"delete")&&key.modifiers==gpui::Modifiers::default();
+            if !clear && key.modifiers.alt && (key.modifiers.platform || key.modifiers.control) {
+                self.shortcuts.extension_error=Some(if cfg!(target_os="macos") {"Option cannot be combined with Command or Control for extension shortcuts."}else{"Alt cannot be combined with Control for extension shortcuts."}.into());
+                cx.notify();return;
+            }
             let mut parts=Vec::new();
             if key.modifiers.platform {parts.push(if cfg!(target_os="macos"){"Command"}else{"Ctrl"}.to_owned());}
-            if key.modifiers.control {parts.push(if cfg!(target_os="macos"){"MacCtrl"}else{"Ctrl"}.to_owned());}
+            if key.modifiers.control && !parts.iter().any(|part|part=="Ctrl") {parts.push("Ctrl".to_owned());}
             if key.modifiers.alt {parts.push("Alt".into());}
             if key.modifiers.shift {parts.push("Shift".into());}
-            parts.push(key.key.to_uppercase());
+            let token=match key.key.as_str() {
+                "left"=>"Left", "right"=>"Right", "up"=>"Up", "down"=>"Down",
+                "home"=>"Home", "end"=>"End", "pageup"=>"PageUp", "pagedown"=>"PageDown",
+                "insert"=>"Insert", "delete"=>"Delete", "space"=>"Space", "tab"=>"Tab", ","=>"Comma", "."=>"Period", _=>"",
+            };
+            parts.push(if token.is_empty(){key.key.to_uppercase()}else{token.to_owned()});
             let value=if clear{String::new()}else{parts.join("+")};
             let conflict=if clear{None}else{self.shortcut_conflict("__extension",Some(&key.unparse()))};
             if let Some(conflict)=conflict{self.shortcuts.extension_error=Some(format!("Already in use by “{conflict}”"));}
@@ -285,7 +294,7 @@ impl SettingsWindow {
         self.owner.as_ref().and_then(|owner|owner.read_with(cx,|owner,_|{
             if owner.extensions.profile!=Some(self.selected_profile){return Vec::new();}
             owner.extensions.entries.iter().flat_map(|extension|extension.commands.iter().map(|command|(
-                extension.id.clone(),command.name.clone(),extension.name.clone(),command.description.clone(),command.shortcut.clone(),self.selected_profile))).collect()
+                extension.id.clone(),command.name.clone(),extension.name.clone(),command.display_description(&extension.manifest),command.shortcut.clone(),self.selected_profile))).collect()
         }).ok()).unwrap_or_default()
     }
     fn set_extension_shortcut(&mut self,value:&str,cx:&mut Context<Self>) {
@@ -306,7 +315,7 @@ impl SettingsWindow {
                 let selector=format!("extension-shortcut-{id}-{command}");
                 div().id(gpui::SharedString::from(selector.clone())).debug_selector(move||selector.clone()).h(px(48.)).border_b_1().border_color(colors.rgb(0x3e3f41)).flex().items_center().gap(px(8.)).px(px(8.)).cursor_pointer()
                     .child(div().flex_1().min_w_0().flex().flex_col().child(name).child(div().text_size(px(11.)).child(description)))
-                    .child(div().text_size(px(12.)).child(if key.is_empty(){"Not Set".into()}else{key}))
+                    .child(div().w(px(64.)).h(px(24.)).flex_none().rounded(px(5.)).bg(colors.rgb(0x3e3f41)).text_color(colors.rgb(0xd5d5d5)).flex().items_center().justify_center().text_size(px(12.)).child(extension_shortcut_display(&key)))
                     .on_click(cx.listener(move|this,_,window,cx|{this.shortcuts.extension=Some((id.clone(),command.clone(),profile));this.shortcuts.selected=None;this.shortcuts.extension_error=None;this.shortcuts.armed=true;this.shortcuts.focus.focus(window);cx.notify();}))
             })).into_any_element()
     }
@@ -323,7 +332,7 @@ impl SettingsWindow {
         let details = if let Some((id,command,profile)) = &self.shortcuts.extension {
             let label=self.extension_shortcuts(cx).into_iter().find(|(extension,name,_,_,_,owner)|extension==id&&name==command&&owner==profile);
             div().w(px(200.)).flex().flex_col().gap(px(14.))
-                .child(div().text_size(px(24.)).child(label.as_ref().map(|(_,_,_,_,key,_)|if key.is_empty(){"Not Set".into()}else{key.clone()}).unwrap_or_default()))
+                .child(div().text_size(px(24.)).child(label.as_ref().map(|(_,_,_,_,key,_)|if key.is_empty(){"Not Set".into()}else{extension_shortcut_display(key)}).unwrap_or_default()))
                 .child(label.map(|(_,_,name,description,_,_)|format!("{name} — {description}")).unwrap_or_default())
                 .when(self.shortcuts.armed,|panel|panel.child("Press a new shortcut"))
                 .when_some(self.shortcuts.extension_error.clone(),|panel,error|panel.child(error))
@@ -732,4 +741,14 @@ fn priority_choices() -> [(browser_core::shortcuts::ShortcutPriority, &'static s
         (UseBoth,"Use Both","Press this shortcut once to use the website’s shortcut. Press it twice to use Echo’s shortcut."),
         (PreferBrowser,"Prefer Echo","When shortcuts conflict, Echo wins."),
     ]
+}
+
+fn extension_shortcut_display(value: &str) -> String {
+    if value.is_empty() {return "---".into();}
+    let binding=value.split('+').map(|part|match part {
+        "Command"=>"cmd".into(), "Ctrl"|"MacCtrl"=>"ctrl".into(), "Alt"|"Option"=>"alt".into(), "Shift"=>"shift".into(),
+        "Comma"=>",".into(), "Period"=>".".into(), "Space"=>"space".into(), "PageUp"=>"pageup".into(), "PageDown"=>"pagedown".into(),
+        _=>part.to_lowercase(),
+    }).collect::<Vec<String>>().join("-");
+    runtime::display(Some(&binding))
 }

@@ -969,3 +969,27 @@ pub(crate) fn detach_extension_view(view:usize) {
     if view != 0 {unsafe{let _: ()=objc2::msg_send![view as *mut objc2::runtime::AnyObject,removeFromSuperview];}}
     let _=view;
 }
+
+/// GPUI exposes resize but no programmatic move. Keep a borderless action
+/// popup anchored while its extension changes the preferred content size.
+pub(crate) fn set_popup_bounds(window: &mut gpui::Window, bounds: gpui::Bounds<gpui::Pixels>) {
+    let previous = window.bounds();
+    let Some(view) = view_of(window) else { window.resize(bounds.size); return; };
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use objc2::{msg_send, runtime::AnyObject};
+        use objc2_foundation::{NSPoint,NSRect,NSSize};
+        let native: *mut AnyObject = msg_send![view as *mut AnyObject, window];
+        if native.is_null() {return;}
+        let frame: NSRect = msg_send![native, frame];
+        let width = f32::from(bounds.size.width) as f64;
+        let height = f32::from(bounds.size.height) as f64;
+        let x = frame.origin.x + f32::from(bounds.left()-previous.left()) as f64;
+        let y = frame.origin.y + frame.size.height - height - f32::from(bounds.top()-previous.top()) as f64;
+        let _: () = msg_send![native, setFrame:NSRect::new(NSPoint::new(x,y),NSSize::new(width,height)), display:true];
+    }
+    #[cfg(any(target_os = "windows",target_os = "linux"))]
+    desktop::set_popup_bounds(view, previous, bounds);
+    #[cfg(not(any(target_os = "macos",target_os = "windows",target_os = "linux")))]
+    {let _=(view,previous);window.resize(bounds.size);}
+}

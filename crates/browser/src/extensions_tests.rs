@@ -254,19 +254,24 @@ fn extension_grid_metrics_pin_and_store_route_use_real_controls(cx: &mut TestApp
     panel.simulate_mouse_down(second.center(), gpui::MouseButton::Right, Modifiers::none());
     panel.simulate_mouse_up(second.center(), gpui::MouseButton::Right, Modifiers::none());
     panel.run_until_parked();
-    click(&mut panel, "site-extension-pin");
+    let menu = view.read_with(&panel, |view, _| {
+        view.tab_menu.as_ref().unwrap().overlay.unwrap()
+    });
+    let mut menu = VisualTestContext::from_window(menu.into(), &cx.cx);
+    menu.run_until_parked();
+    menu.simulate_keystrokes("down down enter");
+    menu.run_until_parked();
     assert!(view.read_with(&panel, |view, _| view
         .browser
         .active_user_profile()
-        .unpinned_extensions
+        .pinned_extensions
         .contains(ONE)));
     panel.refresh().unwrap();
     panel.run_until_parked();
-    // GPUI 0.2 retains removed selectors in debug_bounds. The live + tile's
-    // new position and hit target prove that the extension left the grid.
+    // Pinning changes toolbar placement; every enabled action stays in SCC.
     assert_eq!(
         panel.debug_bounds("site-add-extension").unwrap().left(),
-        second.left()
+        second.right() + gpui::px(8.)
     );
     click(&mut panel, "site-add-extension");
     cx.run_until_parked();
@@ -278,7 +283,7 @@ fn extension_grid_metrics_pin_and_store_route_use_real_controls(cx: &mut TestApp
         assert!(view
             .browser
             .active_user_profile()
-            .unpinned_extensions
+            .pinned_extensions
             .contains(ONE))
     });
 }
@@ -303,7 +308,19 @@ fn extensions_management_waits_for_native_catalog_and_confirms_removal(cx: &mut 
         .unwrap()
         .enabled));
     click(cx, selector(format!("extension-remove-{TWO}")));
-    click(cx, "extension-remove-cancel");
+    let overlay = view.read_with(cx, |view, _| view.extensions.overlay.unwrap());
+    let mut sheet = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    sheet.run_until_parked();
+    assert_eq!(
+        sheet
+            .debug_bounds("extension-remove-sheet")
+            .unwrap()
+            .size
+            .width,
+        gpui::px(450.)
+    );
+    sheet.simulate_keystrokes("escape");
+    cx.run_until_parked();
     assert!(!service
         .0
         .borrow()
@@ -311,7 +328,11 @@ fn extensions_management_waits_for_native_catalog_and_confirms_removal(cx: &mut 
         .iter()
         .any(|call| call.starts_with("remove")));
     click(cx, selector(format!("extension-remove-{TWO}")));
-    click(cx, "extension-remove-confirm");
+    let overlay = view.read_with(cx, |view, _| view.extensions.overlay.unwrap());
+    let mut sheet = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    sheet.run_until_parked();
+    sheet.simulate_keystrokes("enter");
+    cx.run_until_parked();
     assert!(service.0.borrow().calls.contains(&format!("remove {TWO}")));
     assert!(
         !view.read_with(cx, |view, _| view.pages.as_ref().is_some_and(|pages| pages
@@ -395,16 +416,43 @@ fn extension_shortcuts_settings_records_through_the_profile_service_and_rejects_
         &mut settings,
         selector(format!("extension-shortcut-{ONE}-_execute_action")),
     );
-    settings.simulate_keystrokes("cmd-alt-shift-y");
+    settings.simulate_keystrokes("alt-9");
     settings.run_until_parked();
-    assert!(service.0.borrow().calls.contains(&format!(
-        "shortcut {ONE} _execute_action Command+Alt+Shift+Y"
-    )));
+    assert!(service
+        .0
+        .borrow()
+        .calls
+        .contains(&format!("shortcut {ONE} _execute_action Alt+9")));
+    click(
+        &mut settings,
+        selector(format!("extension-shortcut-{ONE}-_execute_action")),
+    );
+    settings.simulate_keystrokes("alt-left");
+    settings.run_until_parked();
+    assert!(service
+        .0
+        .borrow()
+        .calls
+        .contains(&format!("shortcut {ONE} _execute_action Alt+Left")));
+    click(
+        &mut settings,
+        selector(format!("extension-shortcut-{ONE}-_execute_action")),
+    );
+    settings.simulate_keystrokes("ctrl-shift-y");
+    settings.run_until_parked();
+    assert!(service
+        .0
+        .borrow()
+        .calls
+        .contains(&format!("shortcut {ONE} _execute_action Ctrl+Shift+Y")));
     let count = service.0.borrow().calls.len();
     click(
         &mut settings,
         selector(format!("extension-shortcut-{ONE}-_execute_action")),
     );
+    settings.simulate_keystrokes("cmd-alt-y");
+    settings.run_until_parked();
+    assert_eq!(service.0.borrow().calls.len(), count);
     settings.simulate_keystrokes("cmd-q");
     settings.run_until_parked();
     assert_eq!(service.0.borrow().calls.len(), count);
@@ -445,4 +493,172 @@ fn extension_confirmation_requires_click_and_quit_cancels_a_pending_install(
         view.read_with(cx, |view, _| view.extensions.service.is_none()
             && view.extensions.overlay.is_none())
     );
+}
+
+#[gpui::test]
+fn extension_manager_search_escape_and_details_back_use_live_controls(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let _service = install(&view, cx);
+    view.update(cx, |view, cx| view.open_extensions(cx));
+    cx.run_until_parked();
+    let card = cx
+        .debug_bounds(selector(format!("extension-card-{ONE}")))
+        .unwrap();
+    assert_eq!(card.size, gpui::size(gpui::px(400.), gpui::px(160.)));
+    click(cx, "extension-search-open");
+    cx.simulate_input("Dark Reader");
+    cx.run_until_parked();
+    let search = view.read_with(cx, |view, _| view.extensions.search.clone());
+    assert_eq!(
+        search.read_with(cx, |input, _| input.text().to_owned()),
+        "Dark Reader"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(search.read_with(cx, |input, _| input.text().is_empty()));
+    click(cx, selector(format!("extension-details-{ONE}")));
+    assert_eq!(
+        active_url(&view, cx).as_deref(),
+        Some(format!("{}?id={ONE}", crate::extensions::URL).as_str())
+    );
+    assert!(cx.debug_bounds("extension-details").is_some());
+    click(cx, selector(format!("extension-pin-{ONE}")));
+    assert!(view.read_with(cx, |view, _| view
+        .browser
+        .active_user_profile()
+        .pinned_extensions
+        .contains(ONE)));
+    click(cx, "extension-details-back");
+    assert_eq!(
+        active_url(&view, cx).as_deref(),
+        Some(crate::extensions::URL)
+    );
+    assert!(cx.debug_bounds("extensions-page").is_some());
+}
+
+#[gpui::test]
+fn extension_developer_toggle_changes_only_real_metadata_and_persists(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let _service = install(&view, cx);
+    view.update(cx, |view, cx| view.open_extensions(cx));
+    cx.run_until_parked();
+    click(cx, "extension-developer-mode");
+    assert!(view.read_with(cx, |view, _| view
+        .browser
+        .active_user_profile()
+        .extension_developer_mode));
+    let card = cx
+        .debug_bounds(selector(format!("extension-card-{ONE}")))
+        .unwrap();
+    assert_eq!(card.size.height, gpui::px(208.));
+    let serialized = view.read_with(cx, |view, _| {
+        serde_json::to_value(view.browser.active_user_profile()).unwrap()
+    });
+    assert_eq!(serialized["extension_developer_mode"], true);
+    // Advanced tools are a separate bridge task; none are advertised here.
+    assert!(cx.debug_bounds("extension-load-unpacked").is_none());
+    assert!(cx.debug_bounds("extension-pack").is_none());
+    assert!(cx.debug_bounds("extension-update").is_none());
+    click(cx, "extension-developer-mode");
+    assert!(!view.read_with(cx, |view, _| view
+        .browser
+        .active_user_profile()
+        .extension_developer_mode));
+    assert_eq!(
+        cx.debug_bounds(selector(format!("extension-card-{ONE}")))
+            .unwrap()
+            .size
+            .height,
+        gpui::px(160.)
+    );
+}
+
+#[gpui::test]
+fn extension_removal_sheet_closes_if_the_native_catalog_removes_its_target(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let service = install(&view, cx);
+    view.update(cx, |view, cx| view.open_extensions(cx));
+    cx.run_until_parked();
+    click(cx, selector(format!("extension-remove-{TWO}")));
+    assert!(view.read_with(cx, |view, _| view.extensions.overlay.is_some()));
+    service
+        .0
+        .borrow_mut()
+        .events
+        .push(ExtensionEvent::Catalog(json!({"extensions":[]})));
+    view.update(cx, |view, cx| view.poll_extensions(cx));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.extensions.overlay.is_none()));
+    assert!(!service
+        .0
+        .borrow()
+        .calls
+        .iter()
+        .any(|call| call.starts_with("remove")));
+}
+
+#[gpui::test]
+fn extension_pin_places_a_live_action_in_the_toolbar_and_unpin_keeps_scc_access(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let service = install(&view, cx);
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| {
+            browser
+                .settings
+                .set_enabled(browser_core::settings::Toggle::ShowToolbar, true)
+        });
+        view.open_extensions(cx);
+    });
+    cx.run_until_parked();
+    click(cx, selector(format!("extension-details-{ONE}")));
+    click(cx, selector(format!("extension-pin-{ONE}")));
+    click(cx, selector(format!("toolbar-extension-{ONE}")));
+    assert!(service.0.borrow().calls.contains(&format!("invoke {ONE}")));
+    click(cx, selector(format!("extension-pin-{ONE}")));
+    assert!(!view.read_with(cx, |view, _| view
+        .browser
+        .active_user_profile()
+        .pinned_extensions
+        .contains(ONE)));
+    click(cx, "toolbar-site-controls");
+    let overlay = view.read_with(cx, |view, _| {
+        view.site_controls.as_ref().unwrap().overlay.unwrap()
+    });
+    let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    panel.run_until_parked();
+    click(&mut panel, selector(format!("site-extension-{ONE}")));
+    assert_eq!(
+        service
+            .0
+            .borrow()
+            .calls
+            .iter()
+            .filter(|call| *call == &format!("invoke {ONE}"))
+            .count(),
+        2
+    );
+}
+
+#[gpui::test]
+fn extension_manager_never_paints_a_catalog_for_a_different_profile(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let _service = install(&view, cx);
+    view.update(cx, |view, cx| view.open_extensions(cx));
+    cx.run_until_parked();
+    view.update(cx, |view, cx| {
+        let other = view.edit_profile(|browser| {
+            browser
+                .create_user_profile("Extension catalog isolation")
+                .unwrap()
+        });
+        // Simulate the interval before the native service's profile change is polled.
+        view.extensions.profile = Some(other);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("extensions-empty").is_some());
 }

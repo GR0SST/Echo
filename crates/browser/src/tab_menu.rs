@@ -40,7 +40,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MenuTarget { Transfer(crate::downloads_view::TransferId,browser_core::UserProfileId,crate::library_downloads_host::DownloadsOwner), Tab(TabId), Folder(FolderId), Space(SpaceId), SpaceDelete(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
+pub(crate) enum MenuTarget { Extension([u8;32],browser_core::UserProfileId), Transfer(crate::downloads_view::TransferId,browser_core::UserProfileId,crate::library_downloads_host::DownloadsOwner), Tab(TabId), Folder(FolderId), Space(SpaceId), SpaceDelete(SpaceId), Selection(SpaceId), Address, Download(browser_core::downloads::CompletedDownloadId, crate::library_downloads_host::DownloadsOwner) }
 
 #[derive(Clone)]
 struct AddressDocument {identity:crate::pages::PageIdentity,epoch:u64,url:String}
@@ -70,7 +70,7 @@ pub(crate) struct TabMenu {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Command { LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, EditPinnedUrl, Mute, Close,
+pub(crate) enum Command { ExtensionPin, ExtensionManage, ExtensionRemove, LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId), LiveFilter(browser_core::live_folders::PullRequestFilter), LiveRepository, Transfer(crate::download_transfer_actions::Action), Capture, ToggleToolbar, CustomizePage, NewFolderWithTab, MoveToFolder, FolderIntoSpace, FolderDuplicate, FolderRename, FolderNew, FolderMove, FolderIcon, FolderCollapse, FolderDelete, FolderCopy, FolderCopyMarkdown, Icon, ResetCustomization, Duplicate, Copy, CopyMarkdown, Pin, Favorite, Rename, Reset, Replace, EditPinnedUrl, Mute, Close,
     Download(crate::download_files::FileAction),
     Share, SelectionSplit, SelectionMove(SpaceId), SelectionNewSpace, SelectionArchiveBelow, SelectionArchiveAbove, SelectionArchiveOthers,
     SpaceTheme, SpaceRename, SpaceIcon, SpaceNewFolder, SpaceProfile, SpaceSetProfile(browser_core::UserProfileId), SpaceNewProfile, SpaceManage, SpaceDelete, SpaceExport(SpaceId),
@@ -79,6 +79,7 @@ pub(crate) enum Command { LiveCreate, LiveRefresh, LiveConnect, LiveMove(SpaceId
 impl Command {
     fn selector(self) -> &'static str {
         match self {
+            Self::ExtensionPin => "extension-pin", Self::ExtensionManage => "extension-manage", Self::ExtensionRemove => "extension-remove",
             Self::LiveCreate => "live-create", Self::LiveRefresh => "live-refresh", Self::LiveConnect => "live-connect", Self::LiveMove(_) => "live-move", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::CreatedByMe) => "live-created", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::ReviewRequests) => "live-review", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::TeamReviewRequests) => "live-team-review", Self::LiveFilter(browser_core::live_folders::PullRequestFilter::Assigned) => "live-assigned", Self::LiveRepository => "live-repository",
             Self::Share => "share", Self::SelectionSplit => "selection-split", Self::SelectionMove(_) => "selection-move", Self::SelectionNewSpace => "selection-new-space", Self::SelectionArchiveBelow => "selection-archive-below", Self::SelectionArchiveAbove => "selection-archive-above", Self::SelectionArchiveOthers => "selection-archive-others",
             Self::ToggleToolbar => "toggle-toolbar",
@@ -107,7 +108,7 @@ impl Command {
 }
 
 #[derive(Clone)]
-pub(crate) enum Entry { Item(Item), Separator, Header(&'static str) }
+pub(crate) enum Entry { Item(Item), Separator, Header(SharedString) }
 
 #[derive(Clone)]
 pub(crate) struct Item {
@@ -219,6 +220,7 @@ impl BrowserWindow {
 
     pub(crate) fn menu_target_exists(&self, target: MenuTarget) -> bool {
         match target {
+            MenuTarget::Extension(id,profile) => self.browser.active_user_profile_id()==profile && self.extensions.profile==Some(profile) && self.extensions.entries.iter().any(|entry| entry.key()==Some(id)),
             MenuTarget::Tab(tab) => self.browser.active_user_profile().favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
             MenuTarget::Selection(id) => self.browser.space().id == id && self.sidebar_selection_items().len() > 1,
@@ -232,6 +234,7 @@ impl BrowserWindow {
 
     fn menu_target_profile(&self, target: MenuTarget) -> Option<browser_core::UserProfileId> {
         let space = match target {
+            MenuTarget::Extension(_,profile) => return Some(profile),
             MenuTarget::Tab(id) => return self.browser.user_profile_id_for_tab(id),
             MenuTarget::Address => return self.browser.active_tab().and_then(|tab| self.browser.user_profile_id_for_tab(tab.id)),
             MenuTarget::Folder(id) => self.browser.folder_space(id)?,
@@ -340,6 +343,12 @@ impl BrowserWindow {
     pub(crate) fn menu_entries(&self) -> Vec<Entry> {
         let Some(menu) = &self.tab_menu else { return Vec::new(); };
         tidy(match menu.target {
+            MenuTarget::Extension(id,_) => vec![
+                Entry::Header(self.extensions.entries.iter().find(|entry|entry.key()==Some(id)).map(|entry|entry.name.clone()).unwrap_or_default().into()),
+                item("Remove from Echo",Command::ExtensionRemove).into(),
+                item(if self.browser.active_user_profile().pinned_extensions.iter().any(|pin|pin.as_bytes()==id) {"Unpin"}else{"Pin"},Command::ExtensionPin).into(),
+                Entry::Separator, item("Manage Extension",Command::ExtensionManage).into(),
+            ],
             MenuTarget::Selection(_) => self.selection_menu_commands(),
             MenuTarget::SpaceDelete(_) => vec![],
             MenuTarget::Space(id) => self.space_menu_commands(id),
@@ -395,7 +404,7 @@ impl BrowserWindow {
         }
         if let Some(split) = split {
             let mut rows: Vec<Entry> = vec![item("Separate All Tabs", Command::SeparateAll).into(), item("Add Tab…", Command::Add(Placement::Right)).enabled(split.panes.len() < browser_core::splits::MAX_SPLIT_PANES).into(), orientation.into(),
-                Entry::Separator, Entry::Header("Tab Options")];
+                Entry::Separator, Entry::Header("Tab Options".into())];
             for pane in split.panes.iter().filter_map(|id| self.browser.all_tabs().find(|tab| tab.id == *id)) {
                 let pane_internal = browser_core::omnibox::is_internal_url(&pane.url);
                 let mut pane_item = Item { label: short_title(&pane.title).into(), ..pending("") };
@@ -552,6 +561,14 @@ impl BrowserWindow {
         if self.browser.is_blank() && matches!(command, Command::Pin | Command::Favorite | Command::NewFolderWithTab | Command::MoveToFolder) { return; }
         let pane_menu = pane_menu || item.pane.is_some();
         let id = match target {
+            MenuTarget::Extension(id,profile) => {
+                if let Ok(id)=std::str::from_utf8(&id) {match command {
+                    Command::ExtensionPin => self.extension_pin(id,profile,cx),
+                    Command::ExtensionRemove => {self.close_site_controls(cx);self.request_extension_remove(id,profile,cx);},
+                    Command::ExtensionManage => {self.open_extensions(cx);self.open_extension_details(id,profile,cx);}, _=>{}
+                }}
+                return;
+            }
             MenuTarget::Transfer(id,profile,owner)=>{
                 if let Command::Transfer(action)=command {self.confirm_transfer(id,profile,owner,action,cx);}return;
             }
@@ -570,6 +587,7 @@ impl BrowserWindow {
             MenuTarget::Tab(id) => item.pane.unwrap_or(id),
         };
         match command {
+            Command::ExtensionPin | Command::ExtensionManage | Command::ExtensionRemove => {},
             Command::Capture => self.capture_page(cx),
             Command::ToggleToolbar => self.toggle_toolbar(cx),
             Command::CustomizePage => { self.edit_browser(|browser|browser.activate_tab(id,std::time::SystemTime::now()));self.customize_page(cx); }
@@ -690,6 +708,7 @@ impl BrowserWindow {
                 MenuTarget::Space(_) => Some(246.),
                 MenuTarget::Download(..) | MenuTarget::Transfer(..) => Some(120.),
                 MenuTarget::Address => Some(204.),
+                MenuTarget::Extension(..) => Some(234.),
                 _ => None,
             }).unwrap_or(MIN_WIDTH)
         };
@@ -725,7 +744,7 @@ impl BrowserWindow {
             Entry::Separator => div().h(px(SEPARATOR_HEIGHT)).flex().items_center().pl(px(inset)).pr(px(17.))
                 .child(div().w_full().h(px(1.)).bg(hsla(0., 0., ink, 0.14))).into_any_element(),
             Entry::Header(label) => div().h(px(ROW_HEIGHT)).flex().items_center().pl(px(inset)).pr(px(17.))
-                .text_color(hsla(0., 0., ink, 0.35)).child(*label).into_any_element(),
+                .text_color(hsla(0., 0., ink, if self.tab_menu.as_ref().is_some_and(|menu|matches!(menu.target,MenuTarget::Extension(..))) {0.82}else{0.35})).child(label.clone()).into_any_element(),
             Entry::Item(item) => {
                 let highlighted = selected == Some(index) || open == Some(index);
                 let enabled = item.enabled;

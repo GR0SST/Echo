@@ -52,7 +52,9 @@ pub struct UserProfile {
     #[serde(default)]
     pub browsing_data: crate::browsing_data::BrowsingDataPreferences,
     #[serde(default)]
-    pub unpinned_extensions: std::collections::BTreeSet<String>,
+    pub pinned_extensions: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub extension_developer_mode: bool,
     #[serde(default)]
     pub developer_sites: std::collections::BTreeSet<String>,
     #[serde(default)]
@@ -108,7 +110,8 @@ impl UserProfile {
             browsing_data: Default::default(),
             developer_sites: Default::default(),
             developer_disabled_sites: Default::default(),
-            unpinned_extensions: Default::default(),
+            pinned_extensions: Default::default(),
+            extension_developer_mode: false,
         }
     }
 }
