@@ -2053,3 +2053,39 @@ raster and hover controls are not fully calibrated, draft fills are hue-only,
 and resize/expansion/drag timing and several overflow/group states remain
 unqualified. Existing drag reference and acceptance limits remain as documented
 above; these static pairs do not prove transition timing.
+
+### Theme editor pointer anchor and idle dial (2026-10-25)
+
+The guarded `partial-main-theme-pointer-probe` session moved the pointer over
+CEF to root y350, y500 and y650 before opening Spaces → Edit Theme. The visible
+panel tops are respectively y94, y244 and y394: its 512 px height centers on
+the pointer, rather than anchoring to the host's bottom. The center-column
+border spans y94–605 inclusive at the first position. Echo now uses that
+pointer offset, a 359 × 512 px panel and 9 px vertical padding; the same change
+also aligns the header-entry prompt while retaining its measured bottom anchor.
+The owned overlay extends below the host when necessary, as it already did
+above it. Native pointer lookup handles the CEF-covered part of the window;
+other platforms use GPUI's pointer. Screen-edge work-area clamping and the
+Library pencil entry remain explicitly unqualified.
+
+`arc_theme_picked_one.png` and `arc_theme_picked_three.png` show no bright noon
+marker on the idle noise dial even with chosen pigments. Echo now hides its
+marker while idle and retains it only during a picked dial drag. GPUI pointer
+input checks both transitions and the committed noise value. This does not
+qualify Arc's exact noise pattern, strength curve or drag-marker raster.
+Native after captures are `echo_editor_final_desktop_pointer-{350,500,650}-capture_*`
+and `echo_editor_final_desktop_noise-idle-capture_*` under
+`target/parity/partial-sections/`; both broader parity rows remain partial.
+
+For this editor follow-up, use the unoccluded editor region of desktop captures
+or the matching owned-window `echo_editor_final_pointer_*` stack captures.
+A persistent drag preview from a different Echo process overlaps the sidebar
+in the empty-Light/Dark desktop sessions; it was left untouched. That full desktop
+frame is not evidence for sidebar/window parity. Editor placement and idle
+marker checks do not claim a material match: the Light panel remains too gray,
+the wave lacks Arc's backing track, and the dial/picker raster still differs.
+
+The Dark pointer reference has Automatic selected with a dark system appearance;
+Echo's Dark run explicitly selects Dark. The pair qualifies placement, not the
+appearance-button selection. The remaining dim Dark prompt, missing dark panel
+edge, gray Light fill and different wave/dial are visible in the retained pair.

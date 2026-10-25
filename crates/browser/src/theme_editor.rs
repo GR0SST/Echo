@@ -13,7 +13,7 @@ use std::{cell::Cell, rc::Rc};
 
 const CONTEXT: &str = "SpaceThemeEditor";
 const WIDTH: f32 = 359.;
-const HEIGHT: f32 = 508.;
+const HEIGHT: f32 = 512.;
 actions!(theme_editor, [Dismiss]);
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -45,6 +45,12 @@ pub(crate) struct ThemeEditor {
     pub overlay: Option<WindowHandle<Overlay>>,
     backdrop: bool,
 }
+impl ThemeEditor {
+    pub(crate) fn noise_marker_visible(&self) -> bool {
+        self.picked && matches!(self.dragging, Some(Drag::Noise))
+    }
+}
+
 fn color(c: ThemeColor) -> gpui::Rgba {
     gpui::Rgba {
         r: c.red,
@@ -189,8 +195,16 @@ impl BrowserWindow {
         self.close_user_profile_dialog(cx);
         let focus = cx.focus_handle();
         let size = window.bounds().size;
-        let top = bottom.map_or(f32::from(size.height) - HEIGHT - 12., |bottom| bottom - HEIGHT);
+        // Main Spaces-menu entry follows the pointer; header menus supply their
+        // own bottom anchor. Read the native pointer too when it is over CEF.
+        let pointer_y = self.native_view.and_then(crate::native::pointer_position)
+            .map_or(f32::from(window.mouse_position().y), |position| position[1]);
+        let top = bottom.map_or_else(
+            || (pointer_y - 256.).max(-f32::from(window.bounds().origin.y).max(0.)),
+            |bottom| bottom - HEIGHT,
+        );
         let top_extension = (-top).max(0.).min(f32::from(window.bounds().origin.y).max(0.));
+        let bottom_extension = (top + HEIGHT - f32::from(size.height)).max(0.);
         let position = point(
             px((self.sidebar_width() + 14.).min((f32::from(size.width) - WIDTH - 8.).max(8.))),
             px(top + top_extension),
@@ -229,7 +243,7 @@ impl BrowserWindow {
                 return;
             };
             bounds.origin.y -= px(top_extension);
-            bounds.size.height += px(top_extension);
+            bounds.size.height += px(top_extension + bottom_extension);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: None,
@@ -658,6 +672,7 @@ impl BrowserWindow {
         let noise_bounds = e.noise_bounds.clone();
         let intensity_bounds = e.intensity_bounds.clone();
         let noise = e.draft.noise;
+        let noise_marker_visible = e.noise_marker_visible();
         let intensity = e.draft.intensity;
         let sliders = div()
             .h(px(80.))
@@ -756,7 +771,7 @@ impl BrowserWindow {
                                     hsla(0., 0., 1., 0.15),
                                     gpui::BorderStyle::Solid,
                                 ));
-                                if picked {
+                                if noise_marker_visible {
                                 let a = noise * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
                                 let direction = point(px(a.cos()), px(a.sin()));
                                 let start = b.center() + direction * 28.;
@@ -830,7 +845,7 @@ impl BrowserWindow {
                     ))
                     .child(div().absolute().inset_0().child(self.theme_surface_shadow(16.)))
                     .text_color(ink)
-                    .px(px(9.5)).py(px(7.))
+                    .px(px(9.5)).py(px(9.))
                     .flex()
                     .flex_col()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

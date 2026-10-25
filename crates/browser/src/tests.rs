@@ -8573,7 +8573,7 @@ fn space_theme_editor_color_modes_palettes_and_undo_preserve_completed_gestures(
     dispatch_menu(cx,"Spaces","Edit Theme…");
     let mut editor=space_theme_editor(&view,cx);
     let bounds=editor.debug_bounds("theme-editor").unwrap();
-    assert_eq!(bounds.size,gpui::size(gpui::px(359.),gpui::px(508.)));
+    assert_eq!(bounds.size,gpui::size(gpui::px(359.),gpui::px(512.)));
     assert!(editor.debug_bounds("theme-intensity-thumb").is_none());
     click(&mut editor,"theme-preset-4");
     assert!(editor.debug_bounds("theme-intensity-thumb").is_some());
@@ -11287,4 +11287,41 @@ fn theme_undo_while_the_picker_is_open_updates_its_handles_and_dismissal_adds_no
     editor.simulate_keystrokes("escape");cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.browser.space().theme.is_none()));
     assert_eq!(view.read_with(cx, |view, _| view.browser.sidebar_redo_action()), Some("Update Theme"));
+}
+
+#[gpui::test]
+fn main_menu_theme_editor_follows_the_pointer_and_extends_its_owned_window(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    visual.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(760.)));
+    visual.run_until_parked();
+    for (pointer_y, top, height) in [(350., 94., 760.), (500., 244., 760.), (650., 394., 906.)] {
+        visual.simulate_mouse_move(gpui::point(gpui::px(850.), gpui::px(pointer_y)), None, Modifiers::none());
+        dispatch_menu(visual, "Spaces", "Edit Theme…");
+        let mut editor = space_theme_editor(&view, visual);
+        let panel = editor.debug_bounds("theme-editor").unwrap();
+        assert_eq!(panel.origin.y, gpui::px(top));
+        assert_eq!(panel.size.height, gpui::px(512.));
+        assert_eq!(editor.update(|window, _| window.bounds().size.height), gpui::px(height));
+        editor.simulate_keystrokes("escape");
+        visual.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn theme_noise_marker_is_hidden_when_idle_even_after_a_color_is_picked(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    dispatch_menu(visual, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, visual);
+    click(&mut editor, "theme-preset-2");
+    assert!(!view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
+    let noise = editor.debug_bounds("theme-noise").unwrap();
+    let p = noise.center() + gpui::point(gpui::px(32.), gpui::px(0.));
+    editor.simulate_mouse_move(p, None, Modifiers::none());
+    editor.simulate_mouse_down(p, gpui::MouseButton::Left, Modifiers::none());
+    editor.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
+    editor.simulate_mouse_up(p, gpui::MouseButton::Left, Modifiers::none());
+    editor.run_until_parked();
+    assert!(!view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
+    assert_eq!(view.read_with(visual, |view, _| view.browser.space().theme().noise), 0.25);
 }
