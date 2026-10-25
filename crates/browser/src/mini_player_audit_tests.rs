@@ -70,3 +70,25 @@ fn mini_player_pip_request_cannot_follow_a_same_url_document_replacement(cx: &mu
         .iter()
         .any(|call| matches!(call, Call::PictureInPicture(..))));
 }
+
+#[gpui::test]
+fn mini_header_hover_outside_the_collapsed_layout_slot_stays_expanded(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    background_media(&view, visual, &fake);
+    let foreground = active_url(&view, visual);
+    let collapsed = visual.debug_bounds("mini-player").unwrap();
+    visual.simulate_mouse_move(collapsed.center(), None, Modifiers::none());
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(300));
+    visual.run_until_parked();
+    let expanded = visual.debug_bounds("mini-player").unwrap();
+    assert_eq!(expanded.size.height, gpui::px(66.));
+    let header = expanded.origin + gpui::point(gpui::px(20.), gpui::px(12.));
+    assert!(header.y < collapsed.top());
+    visual.simulate_mouse_move(header, None, Modifiers::none());
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_secs(3));
+    visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("mini-player").unwrap().size.height, gpui::px(66.));
+    assert_eq!(active_url(&view, visual), foreground);
+}

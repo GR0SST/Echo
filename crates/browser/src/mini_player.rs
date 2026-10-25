@@ -83,11 +83,7 @@ impl BrowserWindow {
             if !keep{break;}
         }));
     }
-    fn hover_mini_player(&mut self, hovered: bool, cx: &mut Context<Self>) {
-        if self.mini_player.hovered==hovered{return;}
-        self.mini_player.hovered=hovered;
-        self.mini_player.collapse=None;
-        if hovered {
+    fn ensure_mini_pointer_tracking(&mut self, cx: &mut Context<Self>) {
             if self.mini_player.pointer.is_none() {
                 if let Some(parent)=self.native_view {
                     self.mini_player.pointer=Some(cx.spawn(async move |this,cx|loop {
@@ -97,14 +93,19 @@ impl BrowserWindow {
                             if let (Some([x,y]),Some(bounds))=(crate::native::pointer_position(parent),this.mini_player.bounds.get()) {
                                 this.hover_mini_player(bounds.contains(&gpui::point(px(x),px(y))),cx);
                             }
-                            let keep=this.mini_player.hovered||this.mini_player.header>0.||this.mini_player.drag.is_some();
-                            if !keep {this.mini_player.pointer=None;}
-                            keep
+                            true
                         }).unwrap_or(false);
                         if !keep {break;}
                     }));
                 }
             }
+    }
+    fn hover_mini_player(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.mini_player.hovered==hovered{return;}
+        self.mini_player.hovered=hovered;
+        self.mini_player.collapse=None;
+        if hovered {
+            self.ensure_mini_pointer_tracking(cx);
             self.animate_mini_player(1.,if self.mini_player.volume_open{1.}else{0.},cx);
         }else{
             self.queue_mini_collapse(cx);
@@ -152,11 +153,20 @@ impl BrowserWindow {
     }
     fn render_mini_tracking(&self, cx: &mut Context<Self>) -> AnyElement {
         let owner=cx.entity().downgrade();
-        canvas(|_,_,_|(),move|_,_,window,_|{
+        let tracking_owner = owner.clone();
+        canvas(move |_,_,cx| {
+            cx.defer(move |cx| { let _ = tracking_owner.update(cx, |this,cx| this.ensure_mini_pointer_tracking(cx)); });
+        },move|_,_,window,_|{
             let moving=owner.clone();
             window.on_mouse_event(move|event:&gpui::MouseMoveEvent,phase,_,cx|{
                 if phase!=gpui::DispatchPhase::Capture{return;}
                 let _=moving.update(cx,|this,cx|{
+                    // An expanded card extends above its 33 px layout slot.
+                    // Track the painted rectangle in capture phase, rather than
+                    // relying on hover propagation through that smaller slot.
+                    if let Some(bounds) = this.mini_player.bounds.get() {
+                        this.hover_mini_player(bounds.contains(&event.position), cx);
+                    }
                     if this.mini_player.drag.is_some(){
                         if event.dragging(){this.move_mini_volume(f32::from(event.position.x),cx);}
                         else{this.mini_player.drag=None;this.queue_mini_collapse(cx);}
