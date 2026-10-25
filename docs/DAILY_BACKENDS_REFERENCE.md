@@ -311,3 +311,9 @@ Comparison crops: `clear-dialog-pair.png`, `clear-ranges-pair.png`,
 at its original pixel dimensions, accounting for the existing sidebar-width
 difference. Shared sidebar/header, exact typography/icons and non-macOS rendering
 remain partial; these captures do not close those independent rows.
+
+The range menu uses the reference's 128 × 80 px panel, 8 px padding/radius,
+16 px text inset and sRGB `#1f1f1f` background (measured after converting the
+reference screenshot's embedded display profile). Outside clicks dismiss the
+menu without activating the checkbox or action underneath; a GPUI regression
+covers that interaction.

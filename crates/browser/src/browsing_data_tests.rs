@@ -218,3 +218,26 @@ fn browsing_data_settings_entry_keeps_the_selected_unused_profile(cx: &mut TestA
         other
     );
 }
+
+#[gpui::test]
+fn browsing_data_range_menu_outside_click_only_dismisses_the_menu(cx: &mut TestAppContext) {
+    let (v, cx, _) = open_pages(cx);
+    let profile = v.read_with(cx, |v, _| v.browser.active_user_profile_id());
+    data(&v, cx, profile);
+    click(cx, "data-range-4");
+    let bounds = cx.debug_bounds("data-category-0").unwrap();
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    cx.simulate_click(bounds.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        v.read_with(cx, |v, _| v.browsing_data.mask),
+        7,
+        "Outside click reached the checkbox behind the menu"
+    );
+    click(cx, "data-category-0");
+    assert_eq!(
+        v.read_with(cx, |v, _| v.browsing_data.mask),
+        6,
+        "Outside click did not dismiss the menu"
+    );
+}

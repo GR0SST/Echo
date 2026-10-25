@@ -760,6 +760,21 @@ impl BrowserWindow {
         if state.more {
             overlay = overlay.child(
                 div()
+                    .id("data-more-dismiss")
+                    .debug_selector(|| "data-more-dismiss".into())
+                    .occlude()
+                    .absolute()
+                    .inset_0()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, w, cx| {
+                        cx.stop_propagation();
+                        this.browsing_data.more = false;
+                        this.browsing_data.controls[4].focus(w);
+                        cx.notify();
+                    })),
+            );
+            overlay = overlay.child(
+                div()
                     .occlude()
                     .absolute()
                     .top(gpui::relative(0.5))
@@ -772,9 +787,9 @@ impl BrowserWindow {
                     .left(gpui::relative(0.5))
                     .ml(px(80.))
                     .w(px(128.))
-                    .p(px(4.))
-                    .rounded(px(6.))
-                    .bg(c(0x323336))
+                    .p(px(8.))
+                    .rounded(px(8.))
+                    .bg(c(0x1f1f1f))
                     .shadow_lg()
                     .children(
                         [Range::FourWeeks, Range::AllTime]
@@ -786,7 +801,7 @@ impl BrowserWindow {
                                     .debug_selector(move || format!("data-more-range-{i}"))
                                     .track_focus(&controls[14 + i])
                                     .h(px(32.))
-                                    .px(px(12.))
+                                    .px(px(8.))
                                     .flex()
                                     .items_center()
                                     .cursor_pointer()
@@ -993,7 +1008,7 @@ fn color(dark: bool, v: u32) -> gpui::Rgba {
         }
     } else {
         match v {
-            0x202124 => 0xffffff,
+            0x202124 | 0x1f1f1f => 0xffffff,
             0x292a2d => 0xffffff,
             0x323336 => 0xf1f3f4,
             0xe8eaed => 0x202124,
