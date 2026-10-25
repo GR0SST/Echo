@@ -679,3 +679,79 @@ fn absolute_trailing_separator_and_dot_rejected_before_reservation() {
     );
     assert_eq!(fs::read_dir(&f.folder).unwrap().count(), 0);
 }
+
+#[test]
+fn chosen_existing_file_is_untouched_until_genuine_complete_then_replaced_once() {
+    let f = Fixture::new();
+    let target = f.folder.join("chosen.bin");
+    fs::write(&target, b"old bytes").unwrap();
+    let mut staging = Staging::reserve_chosen(10, &target).unwrap();
+    let path = staging.validate_handoff().unwrap().to_owned();
+    let registration = staging.registration();
+    fs::write(&path, b"new bytes").unwrap();
+    for observation in [Observation::UpdatedInProgress, Observation::UpdatedPaused] {
+        assert!(staging.observe(&registration, &10, observation, &path).unwrap().is_none());
+        assert_eq!(fs::read(&target).unwrap(), b"old bytes");
+    }
+    let mut publication = staging.observe(&registration, &10, Observation::UpdatedComplete, &path).unwrap().unwrap();
+    assert_eq!(publication.execute().unwrap().path(), target);
+    assert_eq!(fs::read(&target).unwrap(), b"new bytes");
+    assert_eq!(publication.execute().unwrap().path(), target);
+}
+
+#[test]
+fn chosen_file_replacement_or_edit_during_transfer_preserves_both_files() {
+    for replace_identity in [false, true] {
+        let f = Fixture::new();
+        let target = f.folder.join("chosen.bin");
+        fs::write(&target, b"old bytes").unwrap();
+        let staging = Staging::reserve_chosen(10, &target).unwrap();
+        let mut publication = f.complete(staging, b"download bytes");
+        if replace_identity {
+            fs::rename(&target, f.folder.join("old.bin")).unwrap();
+        }
+        fs::write(&target, b"a newer user file with a different length").unwrap();
+        assert!(matches!(publication.execute(), Err(Error::Replaced)));
+        assert_eq!(fs::read(&target).unwrap(), b"a newer user file with a different length");
+        assert_eq!(fs::read(publication.stage_path()).unwrap(), b"download bytes");
+    }
+}
+
+#[test]
+fn chosen_absent_path_cannot_gain_overwrite_authority_from_a_late_collision() {
+    let f = Fixture::new();
+    let target = f.folder.join("chosen.bin");
+    let staging = Staging::reserve_chosen(10, &target).unwrap();
+    let mut publication = f.complete(staging, b"download bytes");
+    fs::write(&target, b"late file").unwrap();
+    assert!(matches!(publication.execute(), Err(Error::CandidatesExhausted)));
+    assert_eq!(fs::read(&target).unwrap(), b"late file");
+    assert_eq!(fs::read(publication.stage_path()).unwrap(), b"download bytes");
+}
+
+#[test]
+fn selected_replacement_rechecks_identity_immediately_before_its_syscall() {
+    let f = Fixture::new();
+    let target = f.folder.join("chosen.bin");
+    fs::write(&target, b"old bytes").unwrap();
+    let staging = Staging::reserve_chosen(10, &target).unwrap();
+    let mut publication = f.complete(staging, b"download bytes");
+    assert!(matches!(publication.execute_with(|_, target| {
+        fs::rename(target, target.with_extension("original")).unwrap();
+        fs::write(target, b"late user bytes").unwrap();
+    }), Err(Error::Replaced)));
+    assert_eq!(fs::read(&target).unwrap(), b"late user bytes");
+    assert_eq!(fs::read(publication.stage_path()).unwrap(), b"download bytes");
+}
+
+#[cfg(unix)]
+#[test]
+fn native_chosen_symlink_does_not_authorize_replacing_its_target() {
+    let f = Fixture::new();
+    let real = f.folder.join("real.bin");
+    let link = f.folder.join("chosen.bin");
+    fs::write(&real, b"user bytes").unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert!(matches!(Staging::reserve_chosen(10, &link), Err(Error::Replaced)));
+    assert_eq!(fs::read(real).unwrap(), b"user bytes");
+}

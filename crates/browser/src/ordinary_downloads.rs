@@ -271,18 +271,9 @@ impl crate::window::BrowserWindow {
             let display_name=choice.as_ref().ok().and_then(|p|p.as_ref()).and_then(|p|p.file_name()).map(|n|n.to_string_lossy().into_owned());
             if !crate::quit::is_quitting() {
                 let stage = match choice {
-                    Ok(Some(path)) => path
-                        .parent()
-                        .ok_or_else(|| "Download folder is unavailable".to_owned())
-                        .and_then(|folder| {
-                            crate::downloads_publication::Staging::reserve(
-                                (pending.token, pending.request.provenance),
-                                folder,
-                                vec![path.clone()],
-                            )
-                            .map_err(|e| format!("{e:?}"))
-                        })
-                        .map(Some),
+                    Ok(Some(path)) => crate::downloads_publication::Staging::reserve_chosen(
+                        (pending.token, pending.request.provenance), &path,
+                    ).map_err(|e| format!("{e:?}")).map(Some),
                     Ok(None) => Ok(None),
                     Err(error) => Err(error),
                 };

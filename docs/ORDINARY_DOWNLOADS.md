@@ -129,7 +129,8 @@ Fine title truncation and the native menu edge/shadow remain visually qualified.
 No generic completion toast text was observed or added. The exact file-flight
 completion animation is still partial. The native save sheet inherits per-app
 expanded/compact preferences; its overall state-dependent dimensions differ in
-the recorded pair. Explicit replacement of an existing chosen file is not
-implemented: the staged publisher preserves existing targets. Canceled-row history
+the recorded pair. Explicit replacement of an existing chosen regular file is now implemented and
+natively verified; quiet paths still preserve existing targets. See
+[replacement evidence](DOWNLOAD_DESTINATION_REPLACEMENT.md). Canceled-row history
 is ephemeral. Private/Blank admission, other platforms, filesystem failures,
 crash recovery and staging cleanup remain qualified boundaries.

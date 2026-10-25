@@ -22,7 +22,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 8 | L129: Reveal Current Tab | S | **Fixed:** Control-Space now reaches the existing reveal/unfold/scroll action in both GPUI and renderer focus; see delivery evidence. |
 | 9 | L410: Ways to open a link: new tab (focused or not), Split View, Peek, new window, Little Arc | M | Complete user link-disposition routing while preserving source pages, focus and profile storage. |
 | 10 | L399: Shift-click opens a link in Peek (option) | M | Handle links opened inside Peek/Little without losing or replacing the wrong retained document. |
-| 11 | L599: Quiet downloads and the downloads tray | M | Support deliberate replacement of an existing download destination without weakening staged publication. |
+| 11 | L599: Quiet downloads and the downloads tray | M | **Fixed sub-gap:** accepted native replacement and quiet keep-both pass file-byte, canonical-record and native-shutdown checks; staging/provenance authority is retained. See delivery evidence. |
 | 12 | L440: General → Arc is not the default browser ("Set as default" button) | S | **Fixed:** General shows the conditional callout, uses the existing serialized registration interface, handles declined requests and refreshes OS status on activation. Native test-adapter acceptance preserves the owner’s real OS default; non-default Arc layout remains B. See [General evidence](DEFAULT_BROWSER_GENERAL.md). |
 | 13 | L298: **Actions (Type Travel)**: every menu item is available by name and synonyms (`arcTypeTravelTriggers` in the nib) | S | **Sub-gap fixed:** About Echo, Import and conditionally available Set as Default Browser now route to existing handlers; the complete in-scope action catalogue remains partial. |
 | 14 | L492: Crashed tab page (Sad Tab) | M | **Functional gap fixed:** retained-page failure/replacement state, scoped reload link and keyboard recovery, healthy Split isolation, popup-focus protection and native history-preserving recovery. Remaining illustration/layout work is C; see [recovery evidence](CRASHED_TABS.md). |
@@ -288,3 +288,26 @@ stale vault replies and stale picker callbacks cannot retarget a choice.
 - Final full workspace gate passed: 1,269 browser, 266 core, 179 engine tests
   and all other enabled suites; one pre-existing AI test ignored. Log:
   `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/login-full-tests-delivery.log`.
+
+### Deliberate download replacement — functional sub-gap completed
+
+An accepted native save choice can replace only its exact regular-file target
+after genuine owned Complete, original-file identity/version revalidation and
+source-path proof. Quiet naming retains the original no-clobber candidate list.
+Arc uses native Cancel/Replace; no extra conflict picker was added.
+
+- Arc/Echo pair: `target/parity/download-replacement/{arc-replace-crop.png,
+  echo-replace-crop.png}`, inspected at 2×; full native confirmations remain
+  beside those crops and in `echo-native-v5/`.
+- `echo-native-v5/{accepted.json,quiet-accepted.json}` verify unchanged old bytes
+  before Replace, exact replacement bytes, two distinct suffixed quiet files,
+  three canonical paths/names, CEF Complete and native exit zero. All files and
+  profiles are disposable synthetic fixtures. Earlier controller probes failed
+  to identify AppKit's unlabelled filename field and are not accepted evidence.
+- All 29 publication tests pass, including five new real-filesystem cases for
+  completion, replay, changed targets, late collisions and symlinks. Full workspace
+  passes: 1,299 browser, 274 core, 185 engine tests and all other enabled suites;
+  one pre-existing AI test ignored. Build-cache logs: `download-replace-full.log`
+  and `download-replace-focused-final.log`.
+- Parent Quiet Downloads parity stays partial for motion and platform/runtime
+  qualifications. [Implementation and boundaries](DOWNLOAD_DESTINATION_REPLACEMENT.md).

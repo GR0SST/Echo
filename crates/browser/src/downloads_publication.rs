@@ -1,4 +1,4 @@
-//! Dormant, engine-independent filesystem publication. No service/model wiring.
+//! Engine-independent staged filesystem publication for admitted downloads.
 //!
 //! TRUST BOUNDARY: only the single genuine event adapter may supply observations;
 //! use (DownloadToken, full DownloadProvenance) as K. Completion is never inferred
@@ -151,6 +151,38 @@ impl Directory {
     }
 }
 
+// Minted only for a destination accepted by the native save chooser. Keep
+// the old file open so an inode/file ID cannot be recycled during the transfer.
+struct Replacement {
+    target: PathBuf,
+    lease: Lease,
+    length: u64,
+    modified: std::time::SystemTime,
+}
+impl Replacement {
+    fn capture(target: &Path) -> Result<Option<Self>, Error> {
+        match fs::symlink_metadata(target) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(_) => (),
+        }
+        let lease = Lease::open(target, false)?;
+        let metadata = lease._file.metadata()?;
+        let captured = Self { target: target.to_owned(), length: metadata.len(),
+            modified: metadata.modified()?, lease };
+        captured.check()?;
+        Ok(Some(captured))
+    }
+    fn check(&self) -> Result<(), Error> {
+        self.lease.check(&self.target, false)?;
+        let current = self.lease._file.metadata()?;
+        if current.len() != self.length || current.modified()? != self.modified {
+            return Err(Error::Replaced);
+        }
+        Ok(())
+    }
+}
+
 struct Reservation {
     folder: Directory,
     stage_dir: PathBuf,
@@ -158,6 +190,7 @@ struct Reservation {
     stage_path: PathBuf,
     candidates: Vec<PathBuf>,
     nonce: Arc<()>,
+    replacement: Option<Replacement>,
 }
 impl Reservation {
     fn check(&self) -> Result<(), Error> {
@@ -214,6 +247,7 @@ impl<K: Clone + Eq> Staging<K> {
             folder,
             candidates,
             nonce: nonce.clone(),
+            replacement: None,
         };
         reservation.check()?;
         require_absent(&reservation.stage_path)?;
@@ -221,6 +255,16 @@ impl<K: Clone + Eq> Staging<K> {
             registration: Registration { key, nonce },
             reservation: Some(reservation),
         })
+    }
+    /// Only call with the exact accepted result of a native save chooser,
+    /// whose overwrite confirmation has completed. Quiet automatic naming must
+    /// always use `reserve`, which never mints replacement authority.
+    pub(crate) fn reserve_chosen(key: K, path: &Path) -> Result<Self, Error> {
+        let folder = path.parent().ok_or(Error::InvalidFolder)?;
+        let mut staging = Self::reserve(key, folder, vec![path.to_owned()])?;
+        let r = staging.reservation.as_mut().ok_or(Error::Detached)?;
+        r.replacement = Replacement::capture(&r.candidates[0])?;
+        Ok(staging)
     }
     pub(crate) fn registration(&self) -> Registration<K> {
         self.registration.clone()
@@ -233,6 +277,7 @@ impl<K: Clone + Eq> Staging<K> {
     pub(crate) fn validate_handoff(&self) -> Result<&Path, Error> {
         let r = self.reservation.as_ref().ok_or(Error::Detached)?;
         r.check()?;
+        if let Some(replacement) = &r.replacement { replacement.check()?; }
         require_absent(&r.stage_path)?;
         Ok(&r.stage_path)
     }
@@ -325,7 +370,7 @@ pub(crate) enum State {
     Ready {
         next: usize,
     },
-    /// Installed BEFORE invoking persist_noclobber. Any uncertain outcome blocks
+    /// Installed BEFORE invoking the publication syscall. Any uncertain outcome blocks
     /// retry; an executor must keep this object rather than minting another.
     Attempting {
         candidate: PathBuf,
@@ -400,14 +445,22 @@ impl Publication {
                 .as_ref()
                 .unwrap()
                 .check(self.stage_path(), false)?;
-            // No exists()+rename. TempPath does not create/open/reserve anything.
+            // Automatic destinations never overwrite. A chooser grant is revalidated
+            // separately below. TempPath itself creates/opens/reserves nothing.
             let mut temporary = tempfile::TempPath::try_from_path(self.stage_path())?;
             temporary.disable_cleanup(true); // BEFORE any fallible operation/drop.
             self.state = State::Attempting {
                 candidate: target.clone(),
             };
             before(self.stage_path(), &target);
-            match temporary.persist_noclobber(&target) {
+            let replacing = if let Some(replacement) = &self.reservation.replacement {
+                if replacement.target != target { return Err(Error::PathMismatch); }
+                replacement.check()?;
+                true
+            } else { false };
+            let result = if replacing { temporary.persist(&target) }
+                else { temporary.persist_noclobber(&target) };
+            match result {
                 Ok(()) => {
                     // May leave the owned source hardlink behind. Do not unlink it;
                     // it is retained for explicit recovery/cleanup work in the future.
@@ -419,7 +472,7 @@ impl Publication {
                     let kind = failure.error.kind();
                     // Dropping this error MUST retain the staged bytes.
                     drop(failure.path);
-                    if kind != io::ErrorKind::AlreadyExists {
+                    if replacing || kind != io::ErrorKind::AlreadyExists {
                         // EXDEV/unsupported/permissions are NOT collisions. Never
                         // copy, overwrite, or try another candidate on these errors.
                         return Err(Error::Io(failure.error));
