@@ -348,3 +348,17 @@ fn private_only_blank_source_retains_and_flushes_the_single_normal_session_write
     assert!(!saved.is_private() && !saved.is_blank());
     let _ = std::fs::remove_file(path);
 }
+
+#[gpui::test]
+fn same_timestamp_revisits_publish_frequency_between_blank_and_normal_windows(cx: &mut TestAppContext) {
+    let (normal, visual) = open(cx);
+    let url = "https://frequency.example";
+    normal.update(visual, |view, _| view.edit_profile(|browser| browser.record_visit(browser.active_user_profile_id(), url, NOW)));
+    let blank = blank(&normal, visual);
+    blank.update(visual, |view, _| view.edit_profile(|browser| browser.record_visit(browser.active_user_profile_id(), url, NOW)));
+    visual.run_until_parked();
+    assert_eq!(normal.read_with(visual, |view, _| view.browser.active_user_profile().history[0].visit_count), 2);
+    normal.update(visual, |view, _| view.edit_profile(|browser| browser.record_visit(browser.active_user_profile_id(), url, NOW)));
+    visual.run_until_parked();
+    assert_eq!(blank.read_with(visual, |view, _| view.browser.active_user_profile().history[0].visit_count), 3);
+}

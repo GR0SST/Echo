@@ -2122,36 +2122,54 @@ impl BrowserWindow {
             suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
         let preferences = &self.browser.active_user_profile().settings.search;
+        let ranking_time = SystemTime::now();
         suggestions.extend(preferences.resolve(text).map(Suggestion::Load));
         if let Some(prefix) = bar.completion(cx) { suggestions.push(Suggestion::Load(preferences.search(prefix))); }
         if bar.target == Target::NewTab {
-            // Typed matches keep section/Space order. An empty field uses recency,
+            // Typed matches keep section/Space order and rank Today within each
+            // Space by visit frequency/recency. An empty field uses recency,
             // keeping distinct URLs and choosing the most recent pane of a group.
             let current = self.browser.active_space;
             let spaces = std::iter::once(&self.browser.spaces[current]).chain(
                 self.browser.spaces.iter().enumerate().filter(|(index, _)| *index != current).map(|(_, space)| space)
             );
-            let favorites = self.browser.active_user_profile().favorites.iter().map(|tab| ("Favorites", tab));
+            let favorites = self.browser.active_user_profile().favorites.iter().map(|tab| (0usize, "Favorites", tab));
             let mut seen = std::collections::HashSet::new();
-            let mut candidates: Vec<_> = favorites.chain(spaces.filter(|space| space.user_profile_id == self.browser.active_user_profile_id()).flat_map(|space| {
-                space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))
+            let mut candidates: Vec<_> = favorites.chain(spaces.filter(|space| space.user_profile_id == self.browser.active_user_profile_id()).enumerate().flat_map(|(index, space)| {
+                space.pinned.iter().map(move |tab| (index * 2 + 1, space.name.as_str(), tab))
+                    .chain(space.today.iter().map(move |tab| (index * 2 + 2, space.name.as_str(), tab)))
             }))
-            .filter(|(_, tab)| Some(tab.id) != self.browser.space().active_tab || self.browser.split_for(tab.id).is_some())
-            .filter(|(_, tab)| page_query_matches(&query, &[&self.browser.item_title(tab.id), &tab.title, &tab.url, tab.page_title.as_deref().unwrap_or_default()]))
+            .filter(|(_, _, tab)| Some(tab.id) != self.browser.space().active_tab || self.browser.split_for(tab.id).is_some())
+            .filter(|(_, _, tab)| page_query_matches(&query, &[&self.browser.item_title(tab.id), &tab.title, &tab.url, tab.page_title.as_deref().unwrap_or_default()]))
             .collect();
-            if query.is_empty() { candidates.sort_by_key(|(_, tab)| std::cmp::Reverse(tab.last_active)); }
-            suggestions.extend(candidates.into_iter().filter(|(_, tab)| seen.insert(self.browser.item_anchor(tab.id)))
+            if query.is_empty() { candidates.sort_by_key(|(_, _, tab)| std::cmp::Reverse(tab.last_active)); }
+            else {
+                // Retain the existing matching pane representative when ranking
+                // groups; frequency must not silently select another pane.
+                let mut representatives = std::collections::HashSet::new();
+                candidates.retain(|(_, _, tab)| representatives.insert(self.browser.item_anchor(tab.id)));
+                let today_urls: std::collections::HashSet<_> = candidates.iter().filter(|(group, _, _)| *group > 0 && *group % 2 == 0).map(|(_, _, tab)| tab.url.as_str()).collect();
+                let scores: std::collections::HashMap<_, _> = if today_urls.is_empty() { std::collections::HashMap::new() } else { self.browser.active_user_profile().history.iter()
+                    .filter(|entry| today_urls.contains(entry.url.as_str()))
+                    .map(|entry| (entry.url.as_str(), browser_core::history::frecency_score(entry.visit_count, entry.visited_at, ranking_time))).collect() };
+                candidates.sort_by_key(|(group, _, tab)| {
+                    let today = *group > 0 && *group % 2 == 0;
+                    let score = if today { scores.get(tab.url.as_str()).copied().unwrap_or_else(|| browser_core::history::frecency_score(1, tab.last_active, ranking_time)) } else { 0 };
+                    (*group, std::cmp::Reverse(score))
+                });
+            }
+            suggestions.extend(candidates.into_iter().filter(|(_, _, tab)| seen.insert(self.browser.item_anchor(tab.id)))
                 .take(if query.is_empty() { 5 } else { MAX_TAB_SUGGESTIONS })
-                .map(|(space, tab)| Suggestion::SwitchToTab {
+                .map(|(_, space, tab)| Suggestion::SwitchToTab {
                     id: tab.id, title: self.browser.item_title(tab.id), url: tab.url.clone(), space: if self.browser.split_for(tab.id).is_some() { format!("{space} · Split View") } else { space.to_string() },
                 }));
         }
         if !query.is_empty() {
             let open: std::collections::HashSet<_> = self.browser.all_tabs().filter(|tab| self.browser.user_profile_id_for_tab(tab.id) == Some(self.browser.active_user_profile_id())).map(|tab| tab.url.as_str()).collect();
-            suggestions.extend(self.browser.active_user_profile().history.iter()
+            let matches = self.browser.active_user_profile().history.iter()
                 .filter(|entry| self.browser.active_tab().is_some_and(|tab| tab.url == entry.url) || !open.contains(entry.url.as_str()))
-                .filter(|entry| page_query_matches(&query, &[&entry.title, &entry.url]))
-                .take(MAX_HISTORY_SUGGESTIONS)
+                .filter(|entry| page_query_matches(&query, &[&entry.title, &entry.url]));
+            suggestions.extend(browser_core::history::ranked(matches, ranking_time, MAX_HISTORY_SUGGESTIONS).into_iter()
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
         }
         if preferences.suggestions && preferences.suggestion_engine().is_some() && !self.browser.is_private() {

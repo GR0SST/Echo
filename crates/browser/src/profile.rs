@@ -421,7 +421,7 @@ fn session_json(data: &RefCell<Browser>, drafts: &RefCell<Vec<Weak<RefCell<Optio
 
 fn same_history(a: &[browser_core::history::HistoryEntry], b: &[browser_core::history::HistoryEntry]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)|
-        a.url == b.url && a.title == b.title && a.visited_at == b.visited_at)
+        a.url == b.url && a.title == b.title && a.visited_at == b.visited_at && a.visit_count == b.visit_count)
 }
 
 #[cfg(test)]

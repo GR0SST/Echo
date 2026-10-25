@@ -35,7 +35,8 @@ pub fn read(
                 return Ok(());
             }
             let db = database(&path)?;
-            let mut query=db.prepare("SELECT i.url,COALESCE(v.title,''),MAX(v.visit_time) FROM history_items i JOIN history_visits v ON v.history_item=i.id GROUP BY i.id ORDER BY MAX(v.visit_time) DESC").map_err(|e|e.to_string())?;
+            let count = if db.prepare("SELECT visit_count FROM history_items LIMIT 0").is_ok() { "MAX(1,COALESCE(i.visit_count,1),COUNT(*))" } else { "COUNT(*)" };
+            let mut query=db.prepare(&format!("SELECT i.url,COALESCE(v.title,''),MAX(v.visit_time),{count} FROM history_items i JOIN history_visits v ON v.history_item=i.id GROUP BY i.id ORDER BY MAX(v.visit_time) DESC")).map_err(|e|e.to_string())?;
             let mut rows = query.query([]).map_err(|e| e.to_string())?;
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 if cancel.load(Ordering::Relaxed) {
@@ -48,6 +49,7 @@ pub fn read(
                         row.get::<_, f64>(2).map_err(|e| e.to_string())?,
                         978307200.,
                     ),
+                    visit_count: u32::try_from(row.get::<_, i64>(3).map_err(|e| e.to_string())?.max(1)).unwrap_or(u32::MAX),
                 });
             }
         }

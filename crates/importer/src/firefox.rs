@@ -83,7 +83,8 @@ pub fn read(
     }
     let db = database(&path)?;
     if category == Category::History {
-        let mut query=db.prepare("SELECT url, COALESCE(title,''), last_visit_date FROM moz_places WHERE last_visit_date IS NOT NULL ORDER BY last_visit_date DESC").map_err(|e|e.to_string())?;
+        let count = if db.prepare("SELECT visit_count FROM moz_places LIMIT 0").is_ok() { "MAX(1,COALESCE(visit_count,1))" } else { "1" };
+        let mut query=db.prepare(&format!("SELECT url, COALESCE(title,''), last_visit_date,{count} FROM moz_places WHERE last_visit_date IS NOT NULL ORDER BY last_visit_date DESC")).map_err(|e|e.to_string())?;
         let mut rows = query.query([]).map_err(|e| e.to_string())?;
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             if cancel.load(Ordering::Relaxed) {
@@ -93,6 +94,7 @@ pub fn read(
                 url: row.get(0).map_err(|e| e.to_string())?,
                 title: row.get(1).map_err(|e| e.to_string())?,
                 visited_at: timestamp(row.get::<_, f64>(2).map_err(|e| e.to_string())? / 1e6, 0.),
+                visit_count: u32::try_from(row.get::<_, i64>(3).map_err(|e| e.to_string())?.max(1)).unwrap_or(u32::MAX),
             });
         }
     } else {

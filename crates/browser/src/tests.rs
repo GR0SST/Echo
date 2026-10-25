@@ -1,6 +1,9 @@
 //! Drives the real window through gpui's test platform: keystrokes and
 //! clicks go through the same key bindings, focus and hit-testing as the app.
 
+#[path = "history_ranking_tests.rs"]
+mod history_ranking_tests;
+
 #[path = "default_browser_settings_tests.rs"]
 mod default_browser_settings_tests;
 

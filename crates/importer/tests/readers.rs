@@ -130,3 +130,24 @@ fn safari_binary_plist_bookmarks_and_history_epoch_and_platform_discovery() {
     );
     assert_eq!(report.data.bookmarks.len(), 1);
 }
+
+#[test]
+fn history_readers_preserve_source_frequency_and_safari_total_beyond_retained_visits() {
+    for (browser, file, schema) in [
+        (BrowserKind::Chrome, "History", "CREATE TABLE urls(url TEXT,title TEXT,last_visit_time INTEGER,visit_count INTEGER); INSERT INTO urls VALUES('https://frequency.example','Recent',11644473601000000,6);"),
+        (BrowserKind::Firefox, "places.sqlite", "CREATE TABLE moz_places(url TEXT,title TEXT,last_visit_date INTEGER,visit_count INTEGER); INSERT INTO moz_places VALUES('https://frequency.example','Recent',1000000,6);"),
+        (BrowserKind::Safari, "History.db", "CREATE TABLE history_items(id INTEGER,url TEXT,visit_count INTEGER); CREATE TABLE history_visits(history_item INTEGER,title TEXT,visit_time REAL); INSERT INTO history_items VALUES(1,'https://frequency.example',6); INSERT INTO history_visits VALUES(1,'Older',0.2),(1,'Recent',0.5);"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(file);
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch(schema).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let report = read_profile(&source(browser, dir.path()), Selection { bookmarks: false, history: true, tabs: false }, &AtomicBool::new(false), |_| {});
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        assert_eq!(report.data.history.len(), 1);
+        assert_eq!(report.data.history[0].visit_count, 6);
+        assert_eq!(report.data.history[0].title, "Recent");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}

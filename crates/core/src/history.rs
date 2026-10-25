@@ -8,6 +8,33 @@ pub struct HistoryEntry {
     pub url: String,
     pub title: String,
     pub visited_at: SystemTime,
+    #[serde(default = "one_visit", skip_serializing_if = "is_one_visit")]
+    pub visit_count: u32,
+}
+fn one_visit() -> u32 { 1 }
+fn is_one_visit(count: &u32) -> bool { *count == 1 }
+
+/// Bound accumulated frequency and decay it with age. Library ordering remains
+/// chronological; this aggregate score is for local suggestion ordering.
+pub fn frecency_score(visits: u32, visited_at: SystemTime, now: SystemTime) -> u64 {
+    let days = now.duration_since(visited_at).unwrap_or_default().as_secs() / 86_400;
+    u64::from(visits.clamp(1, 32)) * 1_000_000 / (days + 1)
+}
+
+/// Select only the requested number of results without sorting/copying a large
+/// history. Equal scores retain recency, then the input's stable order.
+pub fn ranked<'a>(entries: impl IntoIterator<Item = &'a HistoryEntry>, now: SystemTime, limit: usize) -> Vec<&'a HistoryEntry> {
+    if limit == 0 { return Vec::new(); }
+    let mut best: Vec<((u64, SystemTime), &HistoryEntry)> = Vec::new();
+    for entry in entries {
+        let key = (frecency_score(entry.visit_count, entry.visited_at, now), entry.visited_at);
+        let at = best.partition_point(|(rank, _)| *rank >= key);
+        if at < limit {
+            best.insert(at, (key, entry));
+            if best.len() > limit { best.pop(); }
+        }
+    }
+    best.into_iter().map(|(_, entry)| entry).collect()
 }
 
 impl Browser {
@@ -22,17 +49,21 @@ impl Browser {
             return;
         }
         let Some(data) = self.user_profile_mut(profile) else { return; };
-        let title = data.history
+        let (title, visit_count) = data.history
             .iter()
             .position(|entry| entry.url == url)
-            .map(|index| data.history.remove(index).title)
-            .unwrap_or_else(|| url.to_string());
+            .map(|index| {
+                let previous = data.history.remove(index);
+                (previous.title, previous.visit_count.saturating_add(1))
+            })
+            .unwrap_or_else(|| (url.to_string(), 1));
         data.history.insert(
             0,
             HistoryEntry {
                 url: url.into(),
                 title,
                 visited_at: now,
+                visit_count,
             },
         );
     }
@@ -57,6 +88,38 @@ impl Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frequency_survives_session_round_trip_and_legacy_entries_start_with_one_visit() {
+        let mut browser = Browser::new();
+        let profile = browser.active_user_profile_id();
+        let now = SystemTime::UNIX_EPOCH;
+        for _ in 0..6 { browser.record_visit(profile, "https://frequent.example", now); }
+        let restored = crate::session::from_json(&crate::session::to_json(&browser)).unwrap();
+        assert_eq!(restored.active_user_profile().history[0].visit_count, 6);
+        let mut old: serde_json::Value = serde_json::from_str(&crate::session::to_json(&browser)).unwrap();
+        old["profiles"]["1"]["history"][0].as_object_mut().unwrap().remove("visit_count");
+        let restored = crate::session::from_json(&old.to_string()).unwrap();
+        assert_eq!(restored.active_user_profile().history[0].visit_count, 1);
+        browser.active_user_profile_mut().history[0].visit_count = u32::MAX;
+        browser.record_visit(profile, "https://frequent.example", now);
+        assert_eq!(browser.active_user_profile().history[0].visit_count, u32::MAX);
+    }
+
+    #[test]
+    fn ranked_matches_prefer_revisits_but_age_out_old_frequency_without_reordering_library_data() {
+        let day = std::time::Duration::from_secs(86_400);
+        let now = SystemTime::UNIX_EPOCH + day * 1000;
+        let entries = vec![
+            HistoryEntry { url: "https://recent".into(), title: "Recent".into(), visited_at: now, visit_count: 1 },
+            HistoryEntry { url: "https://frequent".into(), title: "Frequent".into(), visited_at: now - std::time::Duration::from_secs(60), visit_count: 6 },
+            HistoryEntry { url: "https://ancient".into(), title: "Ancient".into(), visited_at: now - day * 400, visit_count: u32::MAX },
+        ];
+        assert_eq!(ranked(&entries, now, 2).iter().map(|entry| entry.title.as_str()).collect::<Vec<_>>(), vec!["Frequent", "Recent"]);
+        assert!(ranked(&entries, now, 0).is_empty());
+        assert_eq!(entries.iter().map(|entry| entry.title.as_str()).collect::<Vec<_>>(), vec!["Recent", "Frequent", "Ancient"]);
+        assert_eq!(ranked(entries[..1].iter(), now, 8).len(), 1);
+    }
 
     #[test]
     fn private_visits_stay_out_of_history_but_closed_tabs_can_be_restored() {

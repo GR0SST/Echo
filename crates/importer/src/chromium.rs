@@ -37,9 +37,10 @@ pub fn read(
                 return Ok(());
             }
             let db = database(&path)?;
+            let count = if db.prepare("SELECT visit_count FROM urls LIMIT 0").is_ok() { "MAX(1,COALESCE(visit_count,1))" } else { "1" };
             let mut query = db
                 .prepare(
-                    "SELECT url, title, last_visit_time FROM urls ORDER BY last_visit_time DESC",
+                    &format!("SELECT url, title, last_visit_time,{count} FROM urls ORDER BY last_visit_time DESC"),
                 )
                 .map_err(|e| e.to_string())?;
             let mut rows = query.query([]).map_err(|e| e.to_string())?;
@@ -57,6 +58,7 @@ pub fn read(
                         row.get::<_, f64>(2).map_err(|e| e.to_string())? / 1_000_000.,
                         -11_644_473_600.,
                     ),
+                    visit_count: u32::try_from(row.get::<_, i64>(3).map_err(|e| e.to_string())?.max(1)).unwrap_or(u32::MAX),
                 });
             }
         }

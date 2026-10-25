@@ -770,6 +770,14 @@ fn dump(this: &BrowserWindow, cx: &App) -> String {
     out += &format!("[dump] archived_count={}\n", browser.archive.len());
     out += &format!("[dump] history_count={}\n", browser.active_user_profile().history.len());
     out += &format!("[dump] default_browser={:?}\n", crate::setup::default_browser_state(cx));
+    if this.command_bar.is_some() {
+        let rows: Vec<_> = this.suggestions(cx).into_iter().filter_map(|row| match row {
+            crate::window::Suggestion::SwitchToTab { url, .. } => Some(serde_json::json!({"kind":"tab","url":url})),
+            crate::window::Suggestion::History { url, .. } => Some(serde_json::json!({"kind":"history","url":url})),
+            _ => None,
+        }).collect();
+        out += &format!("[dump] local_suggestions={}\n", serde_json::json!(rows));
+    }
     out += &format!("[dump] password_prompt={}\n", this.passwords.prompt.is_some());
     out += &format!("[dump] speech_speaking={}\n", engine::speech::is_speaking());
     if let Some((_, records)) = this.profile.handle.download_inventory() {

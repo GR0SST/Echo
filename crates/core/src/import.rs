@@ -122,12 +122,16 @@ impl Browser {
             }
             if let Some(index) = history_index.get(&entry.url) {
                 let previous = &mut target.history[*index];
+                let visits = previous.visit_count.max(entry.visit_count);
                 if previous.visited_at < entry.visited_at {
                     *previous = entry.clone();
                 }
+                previous.visit_count = visits.max(1);
             } else {
                 history_index.insert(entry.url.clone(), target.history.len());
-                target.history.push(entry.clone());
+                let mut entry = entry.clone();
+                entry.visit_count = entry.visit_count.max(1);
+                target.history.push(entry);
             }
             counts.history += 1;
         }
@@ -179,6 +183,7 @@ mod tests {
                 url: "https://old.example".into(),
                 title: "Older".into(),
                 visited_at: time,
+                visit_count: 6,
             }],
         };
         let (space, counts) = b.import_local(other, "From Chrome", &data, time).unwrap();
@@ -213,6 +218,10 @@ mod tests {
         assert!(b.spaces[0].pinned.is_empty());
         let saved = crate::session::from_json(&crate::session::to_json(&b)).unwrap();
         assert_eq!(saved.space().pinned[0].title, "A");
+        assert_eq!(saved.user_profile(other).unwrap().history[0].visit_count, 6);
+        b.import_local(other, "Repeated import", &data, time).unwrap();
+        assert_eq!(b.user_profile(other).unwrap().history.len(), 1);
+        assert_eq!(b.user_profile(other).unwrap().history[0].visit_count, 6);
     }
     #[test]
     fn overdeep_or_private_import_cannot_publish_half_a_space() {
