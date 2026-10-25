@@ -14,6 +14,9 @@ pub(crate) struct Transient {
     pub source: NormalProfile,
     pub space: SpaceId,
     pub picker: Option<Picker>,
+    pub last_active: std::time::Instant,
+    pub last_active_wall: SystemTime,
+    pub active: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PickerKind { Spaces, Profiles }
@@ -93,7 +96,7 @@ pub(crate) fn open_with(source: NormalProfile, space: SpaceId, profile: UserProf
             let mut view = BrowserWindow::with_profile_pages(profile, Some(selection), pages, window, cx);
             if let Some(pages) = &view.pages { pages.borrow_mut().square_top(); }
             view.sidebar_visible = false;
-            view.transient = Some(Transient { source, space, picker: None });
+            view.transient = Some(Transient { source, space, picker: None, last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
             view.focus(window);
             view
         })
@@ -103,6 +106,7 @@ pub(crate) fn open_with(source: NormalProfile, space: SpaceId, profile: UserProf
         cx.spawn(async move |cx| {
             let _ = handle.update(cx, |view, window, cx| {
                 window.activate_window();
+                view.start_little_archive_timer(cx);
                 if empty { view.open_command_bar(Target::NewTab, "", window, cx); }
             });
         }).detach();
@@ -111,6 +115,37 @@ pub(crate) fn open_with(source: NormalProfile, space: SpaceId, profile: UserProf
 }
 
 impl BrowserWindow {
+
+    pub(crate) fn set_little_archive_active(&mut self,active:bool,cx:&mut Context<Self>){
+        if self.peek_owner.is_some(){return;}
+        if let Some(state)=self.transient.as_mut(){if state.active==active{return;}state.active=active;state.last_active=cx.background_executor().now();state.last_active_wall=SystemTime::now();}
+    }
+
+    fn start_little_archive_timer(&self,cx:&mut Context<Self>) {
+        cx.spawn(async move |this,cx|loop {
+            cx.background_executor().timer(std::time::Duration::from_secs(30)).await;
+            if !matches!(this.update(cx,|this,cx|this.expire_little_if_due(cx)),Ok(false)){break;}
+        }).detach();
+    }
+
+    /// A monotonic age survives clock corrections; wall age includes system sleep.
+    pub(crate) fn expire_little_if_due(&mut self,cx:&mut Context<Self>)->bool {
+        if self.peek_owner.is_some()||self.transient.is_none(){return true;}
+        let owner=cx.entity_id();
+        let active_popup=cx.windows().into_iter().filter_map(|handle|handle.downcast::<Overlay>()).any(|handle|handle.update(cx,|overlay,window,_|overlay.belongs_to(owner)&&window.is_window_active()).unwrap_or(false));
+        if self.transient.as_ref().unwrap().active||active_popup{
+            let state=self.transient.as_mut().unwrap();
+            state.last_active=cx.background_executor().now();state.last_active_wall=SystemTime::now();
+            return false;
+        }
+        let state=self.transient.as_ref().unwrap();
+        let age=cx.background_executor().now().saturating_duration_since(state.last_active)
+            .max(SystemTime::now().duration_since(state.last_active_wall).unwrap_or_default());
+        let threshold=state.source.profile.read_settings(|browser|browser.settings.little_window_archive.duration());
+        if age<threshold{return false;}
+        self.close_window(cx);true
+    }
+
     pub(crate) fn new_little_window(&mut self, cx: &mut Context<Self>) { self.open_little_url(None, cx); }
 
     pub(crate) fn open_little_url(&mut self, url: Option<String>, cx: &mut Context<Self>) {

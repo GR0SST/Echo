@@ -65,7 +65,7 @@ impl BrowserWindow {
                     let mut view = BrowserWindow::with_profile_pages(profile, Some(selection), pages, window, cx);
                     if let Some(pages) = &view.pages { pages.borrow_mut().peek_mode = true; }
                     view.sidebar_visible = false;
-                    view.transient = Some(Transient { source, space, picker: None });
+                    view.transient = Some(Transient { source, space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
                     view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: None, redo_close: None, sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);
                     view
@@ -105,7 +105,7 @@ impl BrowserWindow {
                 cx.new(|cx| {
                     let mut view = BrowserWindow::with_profile_pages(document.profile, Some(document.selection), pages, window, cx);
                     view.sidebar_visible = false;
-                    view.transient = Some(Transient { source: document.source, space: document.space, picker: None });
+                    view.transient = Some(Transient { source: document.source, space: document.space, picker: None,last_active:cx.background_executor().now(),last_active_wall:SystemTime::now(),active:true });
                     view.peek_owner = Some(PeekOwner { owner: owner.clone(), history_token: Some(token), redo_close: None,
                         sidebar, origin, opened: cx.background_executor().now(), closing: None, detached: false, close_requested: false, close_image: None });
                     view.focus(window);

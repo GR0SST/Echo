@@ -571,6 +571,8 @@ pub struct Overlay {
 }
 
 impl Overlay {
+    pub(crate) fn belongs_to(&self,owner:gpui::EntityId)->bool {self.browser.entity_id()==owner}
+
     pub(crate) fn new(browser: WeakEntity<BrowserWindow>, kind: OverlayKind, cx: &mut Context<Self>) -> Self {
         let observe = browser
             .upgrade()
@@ -854,6 +856,7 @@ impl BrowserWindow {
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
+            this.set_little_archive_active(window.is_window_active(),cx);
             this.max_preview_activation(window.is_window_active(),cx);
             this.on_sidebar_resize_activation(window.window_handle(), window.is_window_active(), cx);
         }).detach();

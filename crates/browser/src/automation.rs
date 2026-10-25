@@ -657,6 +657,16 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                     }
                     cx.background_executor().timer(EVENT_GAP).await;
                 },
+                "little-age" => {
+                    let seconds=arg.parse::<u64>().expect("little-age requires seconds");
+                    let _=view.update(cx,|this,cx|{
+                        if let Some(state)=this.transient.as_mut(){
+                            state.active=false;
+                            state.last_active=cx.background_executor().now().checked_sub(Duration::from_secs(seconds)).expect("little age range");
+                            state.last_active_wall=std::time::SystemTime::now().checked_sub(Duration::from_secs(seconds)).expect("little wall age range");
+                        }
+                    });
+                }
                 "dump" => {
                     let _ = view.update(cx, |this, cx| eprintln!("{}", dump(this, cx)));
                 }

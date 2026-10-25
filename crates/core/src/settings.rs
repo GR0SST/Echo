@@ -119,6 +119,12 @@ pub enum LittleWindowArchive {
     TwelveHours,
 }
 
+impl LittleWindowArchive {
+    pub fn duration(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {Self::OneHour=>3600,Self::SixHours=>21600,Self::TwelveHours=>43200})
+    }
+}
+
 pub use crate::omnibox::SearchEngine;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

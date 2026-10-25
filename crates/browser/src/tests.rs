@@ -1,6 +1,9 @@
 //! Drives the real window through gpui's test platform: keystrokes and
 //! clicks go through the same key bindings, focus and hit-testing as the app.
 
+#[path = "little_archive_tests.rs"]
+mod little_archive_tests;
+
 #[path = "page_swipe_tests.rs"]
 mod page_swipe_tests;
 

@@ -1716,6 +1716,30 @@ inspected, including `echo-page-swipe-arrow-zoom.png`. Native exit was 0 with
 CEF Complete. Four regressions cover policy decoding, gesture
 threshold/direction/velocity and feedback focus, teardown and background rejection.
 
+## Little window inactivity timer, sweep round 2 — 2026-10-25
+
+The retained installed-Arc Links reference
+`~/Documents/Bot/parity-evidence/parity/settings/arc_little_popup.png` shows
+1 hour, 6 hours (default), and 12 hours. The existing Echo picker now governs
+Little window expiry rather than merely persisting a value. Each lookup reads
+its canonical source profile's live preference; its independent timer stops on
+promotion or window destruction. Foreground root/child popup activity protects
+the lookup. Monotonic and wall ages cover clock corrections and system sleep.
+A 30-second poll uses the existing close/engine-retirement coordinator and does
+not archive or replace the normal window's tabs. Little Library entries remain
+unfinished. Exact hours-long Arc expiry timing has not been measured.
+
+Two GPUI regressions cover all interval boundaries, foreground protection, live
+interval changes, automatic timer dispatch, and normal-tab preservation.
+
+`target/parity/sweep-r2/native-little-assertions.json` records the native check:
+a disposable OneHour profile, a 7,200-second idle lookup, two roots becoming one
+within a 35-second poll wait, unchanged normal URL, exit 0 and CEF Complete.
+`echo-little-before-expiry.png` and `echo-little-after-expiry.png` were inspected.
+`pair-little-interval-retained.png` reuses the checked Settings row captures;
+the timer does not change that control. Native Settings clicks were stopped by
+the overlay/pixel guard; live preference changes are covered by the GPUI test.
+
 ## Capture indicator static fallback, sweep round 2 — 2026-10-25
 
 Fresh guarded normal 22461 reused Echo Test; its R2 fixture streams and tabs were
