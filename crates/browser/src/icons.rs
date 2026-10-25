@@ -73,6 +73,44 @@ pub(crate) fn keyboard(size: f32) -> AnyElement {
         }).size_full()).into_any_element()
 }
 
+/// The dock menu uses compact, fixed control geometry, distinct from toolbar glyphs.
+pub(crate) fn new_menu_control(icon: Icon, background: gpui::Rgba) -> AnyElement {
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let color = window.text_style().color;
+        let at = |x, y| bounds.origin + gpui::point(px(x), px(y));
+        let paths: Vec<Vec<(f32,f32)>> = match icon {
+            Icon::NewSpace => {
+                let back = rounded_rect(3.,2.,11.,17.,1.5).into_iter().map(|(x,y)| {
+                    let (x,y)=(x-8.5,y-10.5); let a=-0.12_f32;
+                    (8.5+x*a.cos()-y*a.sin(),10.5+x*a.sin()+y*a.cos())
+                }).collect();
+                vec![back,rounded_rect(8.,7.,11.5,14.5,1.3),vec![(13.75,11.),(13.75,18.)],vec![(10.25,14.5),(17.25,14.5)]]
+            }
+            Icon::Folder => vec![vec![(2.5,7.),(2.5,6.),(3.5,5.),(8.,5.),(10.,7.),(19.,7.),(20.,8.),(20.,18.5),(19.,19.5),(3.5,19.5),(2.5,18.5),(2.5,7.)],vec![(4.,10.),(18.5,10.)]],
+            Icon::Split => vec![vec![(20.,6.),(20.,5.),(19.,4.),(5.,4.),(4.,5.),(4.,18.),(5.,19.),(19.,19.),(20.,18.)],vec![(11.5,4.),(11.5,19.)],vec![(17.,8.5),(17.,14.5)],vec![(14.,11.5),(20.,11.5)]],
+            Icon::NewTab => vec![rounded_rect(3.5,4.,15.5,15.,1.5),vec![(11.25,8.),(11.25,15.)],vec![(7.75,11.5),(14.75,11.5)]],
+            Icon::Boost => vec![vec![(12.,3.5),(14.,2.),(21.,9.),(21.,10.5),(16.,15.5),(14.,15.5),(7.5,9.),(7.5,7.),(10.,4.5),(12.,3.5)],vec![(9.5,11.5),(3.5,17.5),(3.5,19.),(5.5,21.),(7.,21.),(13.,15.)],vec![(5.5,18.),(7.,16.5)]],
+            _ => Vec::new(),
+        };
+        for (index,points) in paths.into_iter().enumerate() {
+            if matches!(icon,Icon::NewSpace) && index==1 {
+                let mut mask=gpui::PathBuilder::fill();
+                for (i,(x,y)) in points.iter().enumerate(){if i==0{mask.move_to(at(*x,*y));}else{mask.line_to(at(*x,*y));}}
+                mask.close();if let Ok(mask)=mask.build(){window.paint_path(mask,background);}
+            }
+            let mut path=gpui::PathBuilder::stroke(px(1.8));
+            for (i,(x,y)) in points.iter().enumerate() { if i==0 {path.move_to(at(*x,*y));} else {path.line_to(at(*x,*y));} }
+            if let Ok(path)=path.build(){window.paint_path(path,color);}
+            for (x,y) in points { window.paint_quad(gpui::fill(gpui::Bounds::new(at(x-0.9,y-0.9),gpui::size(px(1.8),px(1.8))),color).corner_radii(px(0.9))); }
+        }
+        if matches!(icon, Icon::Boost) {
+            let mut path=gpui::PathBuilder::fill();
+            for (i,(x,y)) in [(5.,1.5),(6.,4.),(8.5,5.),(6.,6.),(5.,8.5),(4.,6.),(1.5,5.),(4.,4.)].into_iter().enumerate() {if i==0{path.move_to(at(x,y));}else{path.line_to(at(x,y));}}
+            path.close();if let Ok(path)=path.build(){window.paint_path(path,color);}
+        }
+    }).size(px(24.)).flex_none().into_any_element()
+}
+
 pub(crate) fn more() -> AnyElement {
     gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
         for x in [5., 9., 13.] {

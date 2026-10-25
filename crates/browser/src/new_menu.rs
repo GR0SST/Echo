@@ -8,12 +8,12 @@ use gpui::{
 };
 
 const CONTEXT: &str = "NewMenu";
-pub(crate) const WIDTH: f32 = 222.0;
-const ROW_HEIGHT: f32 = 39.0;
+pub(crate) const WIDTH: f32 = 210.0;
+const ROW_HEIGHT: f32 = 40.0;
 const SEPARATOR_HEIGHT: f32 = 17.0;
-const PADDING: f32 = 6.0;
+const PADDING: f32 = 7.0;
 /// Space between the menu and the plus button below it.
-const ANCHOR_GAP: f32 = 6.0;
+const ANCHOR_GAP: f32 = 16.0;
 actions!(new_menu, [Dismiss, Next, Previous, Confirm]);
 
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -54,7 +54,7 @@ pub(crate) struct NewMenu {
 }
 
 fn height() -> f32 {
-    PADDING * 2. + ROW_HEIGHT * ITEMS.len() as f32 + SEPARATOR_HEIGHT * ITEMS.iter().filter(|(_, separated)| *separated).count() as f32
+    2. + PADDING * 2. + ROW_HEIGHT * ITEMS.len() as f32 + SEPARATOR_HEIGHT * ITEMS.iter().filter(|(_, separated)| *separated).count() as f32
 }
 
 impl BrowserWindow {
@@ -69,7 +69,7 @@ impl BrowserWindow {
         let origin = window.bounds().origin;
         let at = point(anchor.right() - px(WIDTH), anchor.top() - px(ANCHOR_GAP + height()));
         self.mark_new_menu_toggled();
-        self.new_menu = Some(NewMenu { selected: None, position: at, focus: focus.clone(), overlay: None });
+        self.new_menu = Some(NewMenu { selected: Some(ITEMS.len() - 1), position: at, focus: focus.clone(), overlay: None });
         let main = self.main_window;
         let parent = self.native_view;
         let browser = cx.entity().downgrade();
@@ -131,14 +131,18 @@ impl BrowserWindow {
 
     pub(crate) fn render_new_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(menu) = &self.new_menu else { return div().into_any_element(); };
+        let dark = self.theme_is_dark();
+        let fill = gpui::rgb(if dark {0x050627} else {0xfdfdff});
+        let ink = if dark {1.} else {0.};
+        let accent = gpui::rgb(if dark {0x2e3391} else {0xd3d4ff});
         let rows = ITEMS.iter().enumerate().map(|(index, (item, separated))| {
             let item = *item;
             div().flex().flex_col()
                 .when(*separated, |this| this.child(div().h(px(SEPARATOR_HEIGHT)).flex().items_center().px(px(8.))
-                    .child(div().w_full().h(px(1.)).bg(hsla(0., 0., 1., 0.12)))))
+                    .child(div().w_full().h(px(1.)).bg(hsla(0.67, 1., 0.75, 0.35)))))
                 .child(div().id(item.selector()).debug_selector(move || item.selector().into())
-                    .h(px(ROW_HEIGHT)).px(px(10.)).flex().items_center().gap(px(10.)).rounded(px(8.))
-                    .when(menu.selected == Some(index), |this| this.bg(hsla(0., 0., 1., 0.12)))
+                    .h(px(ROW_HEIGHT)).px(px(8.)).flex().items_center().gap(px(10.)).rounded(px(8.))
+                    .when(menu.selected == Some(index), |this| this.bg(accent))
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if let Some(menu) = &mut this.new_menu {
                             if *hovered { menu.selected = Some(index); } else if menu.selected == Some(index) { menu.selected = None; }
@@ -146,9 +150,9 @@ impl BrowserWindow {
                         cx.notify();
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.confirm_new_menu(item, window, cx); }))
-                    .child(crate::icons::control(item.icon()))
-                    .child(div().flex_1().text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD).child(item.label()))
-                    .when_some(item.shortcut(), |this, shortcut| this.child(div().text_size(px(13.)).text_color(hsla(0., 0., 1., 0.45)).child(shortcut))))
+                    .child(crate::icons::new_menu_control(item.icon(), if menu.selected==Some(index){accent}else{fill}))
+                    .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(item.label()))
+                    .when_some(item.shortcut(), |this, shortcut| this.child(div().text_size(px(12.)).text_color(hsla(0.67,1.,if dark {0.85} else {0.7},0.6)).child(shortcut))))
         });
         div().id("new-menu-backdrop").debug_selector(|| "new-menu-backdrop".into()).size_full()
             .key_context(CONTEXT).track_focus(&menu.focus)
@@ -163,11 +167,18 @@ impl BrowserWindow {
             }))
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| this.close_new_menu(cx)))
             .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, _, _, cx| this.close_new_menu(cx)))
-            .child(crate::panel::shell("new-menu")
+            .child(div().id("new-menu").debug_selector(|| "new-menu".into())
+                .relative().rounded(px(crate::panel::RADIUS)).bg(fill).border_1().border_color(hsla(0.,0.,ink,0.08)).shadow_lg()
+                .text_color(hsla(0.,0.,ink,1.)).font_family(".SystemUIFont")
                 .absolute().left(menu.position.x).top(menu.position.y).w(px(WIDTH)).p(px(PADDING))
                 .flex().flex_col()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .children(rows))
+                .children(rows)
+                .child(gpui::canvas(|_,_,_|(),move |bounds,_,window,_| {
+                    let mut path=gpui::PathBuilder::fill();
+                    path.move_to(bounds.origin);path.line_to(bounds.origin+point(px(9.),px(8.)));path.line_to(bounds.origin+point(px(18.),px(0.)));path.close();
+                    if let Ok(path)=path.build(){window.paint_path(path,fill);}
+                }).absolute().right(px(10.)).bottom(px(-7.)).w(px(18.)).h(px(8.))))
             .into_any_element()
     }
 }
