@@ -32,7 +32,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 18 | L227: Folders: nested, collapse/expand, turn a folder into a Space, folder from selected tabs | M | Add folder sibling insertion and folder/mixed-item selection using stable captured identities. |
 | 19 | L231: Multi-selecting tabs (⌘/⇧-click) | M | Extend range/toggle multi-selection to Favorites and folders without activating pages. |
 | 20 | L419: Deleting a profile by typing its name, "Delete unused Profiles". The default profile can't be deleted | M | Add confirmed bulk unused-profile deletion and safe retired-storage reclamation. |
-| 21 | L420: Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | M | Honor the selected profile's document-app preference when opening supported documents. |
+| 21 | L420: Per-profile settings: search engine, search suggestions, auto-archiving, downloads folder, document app, clearing data | M | Honor the selected profile's document-app preference when creating a new document from the Command Bar. Arc's bundle describes creation, not opening downloaded documents; qualify the action with a selected document type before implementation. |
 | 22 | L137: Cast | L | Implement platform casting discovery/control behind the engine boundary. |
 | 23 | L491: Page translation: "Translate this page to %@?", Use Original, Choose Another Language, Never Translate This Site | L | Implement page translation with per-site policy, original-language restoration and language selection. |
 | 24 | L337: **Page** (Chromium's menu plus Arc's items) (?) | L | Complete page-menu Save Page/media/editable/translation actions and clicked-node inspection. |
@@ -98,7 +98,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 84 | L488: Site Control Center: security icon, Copy URL, Capture / Full Page / Portrait, Share, Boosts, extensions (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | L | Complete cross-origin permission requests, main-panel keyboard traversal and global site-settings navigation. |
 | 85 | L494: Dragging the window by the top of the page (option) | S | Honor the saved drag-window-from-top-of-page option through a portable host interface. |
 | 86 | L498: Chrome extensions (icons, "Open pinned extensions picker") | L | Connect the extension picker/action host to the qualified engine bridge; replace the stale approval-gated note. |
-| 87 | L500: Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | S | Notify when a background tab is created while the sidebar is hidden and let the user reveal it. |
+| 87 | L500: Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | S | **Stale missing-feature note corrected; integration gate open:** existing background Command Bar and renderer routes retain source focus, notify only with the sidebar hidden and reveal the captured target. Native UI steps pass, but repeated separate-GPU quits reach CEF’s teardown watchdog. Keep F until the clean-quit gate is repeatable; visual qualification remains separate. See [evidence](BACKGROUND_TAB_NOTIFICATION.md). |
 | 88 | L506: Mini player in the sidebar: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | M | Handle paused-video PiP, active PiP state and supported iframe media/microphone/camera controls. |
 | 89 | L507: Automatic PiP when leaving a tab with video (option) | M | Qualify automatic PiP eligibility for split panes and iframe/unmanaged videos across platforms. |
 | 90 | L508: PiP window: Back to Tab, ±15 seconds, seeking by dragging up, Keep Window on Top, minimize or close, remembered position | L | Complete PiP context controls, drag-up seeking and cross-run bounds while retaining the live source. |
@@ -115,6 +115,15 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 101 | L598: Capture (screenshot of an area, ⇧⌘2), saved to Library | M | Complete private/Blank capture destination behavior and functional local-media publication; omit Easels/cloud sharing. |
 | 102 | L601: Task Manager, trace recording | L | Add GPU/utility/worker process IDs, network sampling and local trace recording through the CEF API extension. |
 | 103 | L603: Arc Max (AI: Tidy Tabs, tab/download renaming, 5-Second Previews, Ask on Page, ChatGPT in the Command Bar, Browse for Me, Instant Links) | M | Qualify live direct-provider capability/error handling and remaining automatic preview coverage; do not invent unavailable Ask/Browse controls. |
+
+## 2026-10-26 qualification blockers
+
+- **#16, navigation history:** the guarded Arc fixture reached three retained navigations. An 800 ms Back hold showed only its pressed state, with no history menu. Longer-hold/right-click follow-up did not reach its fixture after a guard abort. The requested menu remains unqualified; do not invent one from the inventory wording. Evidence: `target/parity/reaudit2/sessions/navigation-history-functional/arc-back-menu.png`.
+- **#17, Exit context:** entering native full screen creates AppKit snapshot/toolbar windows, including a transparent 32 px strip and a 600×600 auxiliary surface. The mandatory one-extra-window guard aborts before Command-Escape can be qualified. Subsequent Cmd-N attempts returned either no new window or multiple full-screen surfaces; an authorized Arc restart did not produce a qualified reference. Existing Peek Command-Escape behavior is unchanged. Evidence: `target/parity/reaudit2/sessions/exit-context-functional*` and `document-app-functional/after-command-n.json`.
+- **#21, document preference:** Arc's binary contains `Creates a new note. Document types can be set in the Profiles tab.` and the creation destinations `https://confluence.new`, `https://doc.new`, `https://app.notion.com/new`, and `https://word.new`. The previous proposed fix misidentified this as opening downloaded documents. The Command Bar reference remains blocked by fresh-window ownership checks; no account-backed document was created.
+- **#87, hidden-sidebar notification:** the feature already exists. Fresh native UI steps succeed; repeated bundled CEF shutdown reaches its watchdog in both GPU modes. Keep the integration gate open; see [the qualification note](BACKGROUND_TAB_NOTIFICATION.md).
+
+No rows in this qualification pass are marked done. These blockers do not authorize touching owner Spaces, bypassing the shared guard, or waiving native termination failures.
 
 ## Cosmetic-only inventory
 
