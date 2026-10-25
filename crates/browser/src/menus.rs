@@ -113,6 +113,15 @@ fn sync_native_appearance(cx: &mut App) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DeveloperModeMenu(bool);
+impl gpui::Global for DeveloperModeMenu {}
+pub(crate) fn sync_developer_mode(enabled: bool, cx: &mut App) {
+    if cx.try_global::<DeveloperModeMenu>().is_some_and(|mode|mode.0==enabled) { return; }
+    cx.set_global(DeveloperModeMenu(enabled));
+    refresh_shortcuts(cx);
+}
+
 pub(crate) fn refresh_shortcuts(cx: &mut App) {
     let labels = cx.try_global::<SidebarUndoLabels>().copied().unwrap_or_default();
     install_menu_model(build_with_sidebar_undo(labels.0, labels.1, labels.2), cx);
@@ -120,7 +129,19 @@ pub(crate) fn refresh_shortcuts(cx: &mut App) {
 
 // Replacing GPUI menus replaces their native NSMenu objects as well. Reapply
 // responder bindings and appearance checks at every installation boundary.
-fn install_menu_model(menus: Vec<Menu>, cx: &mut App) {
+fn install_menu_model(mut menus: Vec<Menu>, cx: &mut App) {
+    fn label(menus: &mut [Menu], enabled: bool) {
+        for menu in menus { for item in &mut menu.items {
+            match item {
+                MenuItem::Submenu(menu) => label(std::slice::from_mut(menu), enabled),
+                MenuItem::Action { name, .. } if name.as_ref() == "Toggle Developer Mode for this site" => {
+                    *name = if enabled { "Turn off Developer Mode for this site" } else { "Turn on Developer Mode for this site" }.into();
+                }
+                _ => {}
+            }
+        }}
+    }
+    label(&mut menus, cx.try_global::<DeveloperModeMenu>().is_some_and(|mode|mode.0));
     cx.set_menus(menus);
     native::configure_standard_edit_menu();
     sync_native_appearance(cx);
@@ -354,5 +375,6 @@ fn developer_items()->Vec<MenuItem>{
     let mut items=vec![MenuItem::action("View Source",window::ViewSource),MenuItem::action("Developer Tools",window::DeveloperTools),MenuItem::action("Inspect Elements",window::InspectElements),MenuItem::action("JavaScript Console",window::JavaScriptConsole),MenuItem::action("Network Inspector",window::NetworkInspector)];
     #[cfg(target_os="macos")]
     items.push(MenuItem::action("Allow JavaScript from Apple Events",AllowJavaScriptFromAppleEvents));
+    items.push(MenuItem::action("Toggle Developer Mode for this site",window::ToggleDeveloperMode));
     items
 }

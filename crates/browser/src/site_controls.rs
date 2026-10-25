@@ -68,6 +68,25 @@ pub(crate) struct SiteControls {
 pub(crate) type Anchor = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 impl BrowserWindow {
+    pub(crate) fn developer_site(&self) -> Option<String> {
+        let tab = self.browser.active_tab()?;
+        let url = url::Url::parse(&tab.url).ok()?;
+        matches!(url.scheme(), "http" | "https").then(|| url.host_str().map(str::to_owned)).flatten()
+    }
+    pub(crate) fn developer_mode_enabled(&self) -> bool {
+        self.developer_site().is_some_and(|host| self.browser.active_user_profile().developer_sites.contains(&host))
+    }
+    pub(crate) fn toggle_developer_mode(&mut self, cx: &mut Context<Self>) {
+        let Some(host) = self.developer_site() else { return; };
+        let profile = self.browser.active_user_profile_id();
+        self.edit_profile(|model| {
+            if let Some(profile) = model.user_profile_mut(profile) {
+                if !profile.developer_sites.remove(&host) { profile.developer_sites.insert(host); }
+            }
+        });
+        cx.notify();
+    }
+
     pub(crate) fn toggle_site_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.site_controls.is_some() {
             self.close_site_controls(cx);
@@ -1002,8 +1021,23 @@ impl BrowserWindow {
                                     }))
                             }))
                     })
+                    .child(heading("Settings"))
+                    .child(div().id("site-developer-mode").debug_selector(|| "site-developer-mode".into())
+                        .h(px(33.)).flex().items_center().gap(px(8.)).rounded(px(6.)).cursor_pointer()
+                        .hover(|row| row.bg(hsla(0.,0.,1.,0.08)))
+                        .child(div().size(px(32.)).flex_none().rounded_full().flex().items_center().justify_center()
+                            .bg(if self.developer_mode_enabled() { gpui::rgb(0xecedfe).into() } else { hsla(0.,0.,1.,0.3) })
+                            .text_color(hsla(0.,0.,0.2,1.)).child(crate::icons::ionicon("hammer",18.,1.)))
+                        .child(div().flex().flex_col().text_size(px(14.)).line_height(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Developer Mode").child(div().font_weight(gpui::FontWeight::NORMAL).text_color(hsla(0.,0.,1.,0.45))
+                                .child(if self.developer_mode_enabled() { "On" } else { "Off" })))
+                        .on_click(cx.listener(move |this,_,_,cx| {
+                            if this.site_controls.as_ref().is_some_and(|panel| this.site_scope_is_current(&panel.scope)) {
+                                this.toggle_developer_mode(cx);
+                            }
+                        })))
                     .when(!permissions.is_empty(), |panel| {
-                        panel.child(heading("Settings")).children(
+                        panel.children(
                             permissions
                                 .into_iter()
                                 .enumerate()

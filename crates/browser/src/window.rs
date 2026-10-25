@@ -24,6 +24,8 @@ use crate::text_input::{self, TextInput};
 
 #[path = "window_close.rs"]
 pub(crate) mod window_close;
+#[path = "developer_mode.rs"]
+mod developer_mode;
 #[path = "download_probe.rs"]
 pub(crate) mod download_probe;
 
@@ -129,6 +131,7 @@ actions!(
         RevealTab,
         ToggleSidebar,
         ToggleToolbar,
+        ToggleDeveloperMode,
         NextSpace,
         PreviousSpace,
         ClearToday,
@@ -225,6 +228,7 @@ window_shortcuts! {
     "cmd-d" => TogglePin,
     "cmd-s" => ToggleSidebar,
     "cmd-shift-d" => ToggleToolbar,
+    "ctrl-d" => ToggleDeveloperMode,
     "cmd-alt-right" => NextSpace,
     "cmd-alt-left" => PreviousSpace,
     "ctrl-1" => SwitchToSpace(0),
@@ -407,6 +411,7 @@ pub enum Command {
     ExpandCurrentSplit,
     ViewSource,
     DevTools(crate::devtools::Command),
+    ToggleDeveloperMode,
     FocusPane(usize),
     CyclePane(isize),
     MovePane(isize),
@@ -1895,6 +1900,7 @@ impl BrowserWindow {
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
                 (Command::StopLoading, "Stop Loading", "stop loading|stop page", active.is_some()),
                 (Command::ViewSource, "View Source", "view source|page source|show source", self.current_source_url().is_some()),
+                (Command::ToggleDeveloperMode, "Toggle Developer Mode", "developer mode|turn on developer mode|turn off developer mode", self.developer_site().is_some()),
                 (Command::DevTools(crate::devtools::Command::Toggle), "Developer Tools", "developer tools|devtools", self.devtools_available()),
                 (Command::DevTools(crate::devtools::Command::Elements), "Inspect Elements", "inspect elements|element inspector", self.devtools_available()),
                 (Command::DevTools(crate::devtools::Command::Console), "JavaScript Console", "javascript console|console", self.devtools_available()),
@@ -2189,6 +2195,7 @@ impl BrowserWindow {
             Command::ExpandCurrentSplit => self.expand_current_split(cx),
             Command::ViewSource => self.view_source(cx),
             Command::DevTools(command) => self.run_devtools(command, cx),
+            Command::ToggleDeveloperMode => self.toggle_developer_mode(cx),
             Command::FocusPane(index) => { self.edit_browser(|browser| browser.focus_split_pane(index, SystemTime::now())); }
             Command::CyclePane(delta) => { self.edit_browser(|browser| browser.cycle_split_pane(delta, SystemTime::now())); }
             Command::MovePane(delta) => { if let Some(id) = self.browser.space().active_tab { self.edit_browser(|browser| browser.move_split_pane(id, delta)); } }
@@ -2386,6 +2393,7 @@ impl BrowserWindow {
                 else { this.close_focused_tab(cx); }
             }))
             .on_action(cx.listener(|this, _: &ToggleToolbar, _, cx| this.toggle_toolbar(cx)))
+            .on_action(cx.listener(|this, _: &ToggleDeveloperMode, _, cx| this.toggle_developer_mode(cx)))
             .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
@@ -3950,6 +3958,7 @@ impl BrowserWindow {
     }
 
     fn render_top_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.developer_mode_enabled() { return self.render_developer_toolbar(cx); }
         let state = self.browser.active_tab().and_then(|tab| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(tab.id))).unwrap_or_default();
         let text = self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default();
         let anchor = self.site_controls_anchor.clone();
@@ -4026,7 +4035,7 @@ impl BrowserWindow {
                             .child(self.theme_surface_mask(panel_bounds, viewport, panel_mask))
                             .child(div().absolute().inset_0().rounded(px(CONTENT_CORNER_RADIUS)).bg(self.theme_empty_panel_fill())))))
                     .child(div().debug_selector(|| "page-document-surface".into()).absolute().left_0().right_0().bottom_0()
-                        .top(px(if has_page && self.toolbar_shown() && !split_open { TOP_TOOLBAR_HEIGHT } else { 0. }))
+                        .top(px(if has_page && self.page_toolbar_shown() && !split_open { self.page_toolbar_height() } else { 0. }))
                         .flex().flex_col().items_center().justify_center().gap_2()
                         .when(!split_open, |this| this.px_8())
                     .when(split_open, |this| this.child(self.render_split(cx)))
@@ -4050,7 +4059,7 @@ impl BrowserWindow {
                             )
                     }))
                     .children(self.render_page_viewport_canvas()))
-                    .when(has_page && self.toolbar_shown() && !split_open, |this| this.child(self.render_top_toolbar(cx))),
+                    .when(has_page && self.page_toolbar_shown() && !split_open, |this| this.child(self.render_top_toolbar(cx))),
             )
     }
 
@@ -4449,6 +4458,7 @@ impl Render for BrowserWindow {
             let labels = if let Some(owner) = self.peek_owner.as_ref().and_then(|state| state.owner.upgrade()) {
                 let owner = owner.read(cx); (owner.browser.sidebar_undo_action(), owner.browser.sidebar_redo_action())
             } else { (self.browser.sidebar_undo_action(), self.browser.sidebar_redo_action()) };
+            crate::menus::sync_developer_mode(self.developer_mode_enabled(), cx);
             crate::menus::sync_appearance(self.theme_appearance(), cx);
             crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, self.sidebar_selection_items().len() > 1, cx);
         }
@@ -4490,7 +4500,8 @@ impl Render for BrowserWindow {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
                     pages.preview_escape=self.max.preview.open.is_some();
-                    pages.set_top_toolbar(self.toolbar_shown() && self.browser.active_split().is_none());
+                    pages.set_top_toolbar(self.page_toolbar_shown() && self.browser.active_split().is_none());
+                    pages.set_top_toolbar_height(self.page_toolbar_height());
                     pages.sync(&self.browser, self.page_content_visible());
                     pages.sync_color_schemes(self.theme_appearance());
                 },
@@ -4637,6 +4648,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &TogglePinnedSection, _, cx| this.toggle_pinned_section(this.browser.active_space, cx)))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(|this, _: &ToggleToolbar, _, cx| this.toggle_toolbar(cx)))
+            .on_action(cx.listener(|this, _: &ToggleDeveloperMode, _, cx| this.toggle_developer_mode(cx)))
             .on_action(cx.listener(|this, _: &NextSpace, _, cx| this.cycle_space(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousSpace, _, cx| this.cycle_space(-1, cx)))
             .on_action(cx.listener(|this, action: &SwitchToSpace, _, cx| this.switch_space(action.0, cx)))

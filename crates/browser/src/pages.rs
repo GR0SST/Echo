@@ -572,6 +572,7 @@ pub struct Pages {
     split: bool,
     square_top: bool,
     top_toolbar: bool,
+    top_toolbar_height: f32,
     pub(crate) peek_mode: bool,
     pub(crate) preview_escape: bool,
     visible: HashSet<TabId>,
@@ -666,7 +667,7 @@ impl Pages {
             pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
-            square_top: false, top_toolbar: false, peek_mode: false, preview_escape: false,
+            square_top: false, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, preview_escape: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -840,7 +841,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, peek_mode: false, preview_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, preview_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -1184,6 +1185,7 @@ impl Pages {
         }
     }
 
+    pub(crate) fn set_top_toolbar_height(&mut self, height: f32) { self.top_toolbar_height = height; }
     pub(crate) fn set_top_toolbar(&mut self, shown: bool) { self.top_toolbar = shown; }
 
     pub(crate) fn square_top(&mut self) { self.square_top = true; }
@@ -1355,7 +1357,7 @@ impl Pages {
                 page.identity == intent.identity && page.owner == self.host && page.visible && self.visible.contains(&intent.tab))?;
             let mut frame = pane.frame;
             if self.top_toolbar && !self.split {
-                let height = f64::from(crate::window::TOP_TOOLBAR_HEIGHT);
+                let height = f64::from(self.top_toolbar_height);
                 frame.y -= height;
                 frame.height += height;
             }

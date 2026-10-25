@@ -7529,6 +7529,7 @@ fn developer_menu_preserves_observed_arc_order_without_visible_f12_duplicate() {
     }).collect();
     let mut expected=vec!["View Source", "Developer Tools", "Inspect Elements", "JavaScript Console", "Network Inspector"];
     #[cfg(target_os="macos")]expected.push("Allow JavaScript from Apple Events");
+    expected.push("Toggle Developer Mode for this site");
     assert_eq!(labels, expected);
 }
 
@@ -11038,3 +11039,6 @@ mod settings_appearance_tests;
 
 #[path = "shortcut_settings_tests.rs"]
 mod shortcut_settings_tests;
+
+#[path = "developer_mode_tests.rs"]
+mod developer_mode_tests;

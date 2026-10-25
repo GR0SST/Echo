@@ -47,6 +47,8 @@ pub struct UserProfile {
     pub captures: crate::captures::Captures,
     #[serde(default)]
     pub site_settings: crate::site_settings::SiteSettings,
+    #[serde(default)]
+    pub developer_sites: std::collections::BTreeSet<String>,
 }
 impl UserProfile {
     pub fn id(&self) -> UserProfileId {
@@ -78,6 +80,7 @@ impl UserProfile {
             boosts: crate::boosts::Boosts::default(),
             captures: crate::captures::Captures::default(),
             site_settings: crate::site_settings::SiteSettings::default(),
+            developer_sites: Default::default(),
         }
     }
 }
