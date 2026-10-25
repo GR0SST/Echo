@@ -1866,6 +1866,19 @@ Turn On All button and 37 px future-features row; the first feature group
 starts at y=404.
 Reference: `arc_max_bottom.png`; native Echo: `echo_max_round2_features.png`.
 
+Round 2 Ask-on-Page resource audit (2026-10-25):
+The installed 1.170 binary contains `AskInPageHostingView`, conversation/input
+view types, `onToggleAskInPageEnabled`, `askOnPageFocusToken`, and the
+`AskInPage/AskInPageChat.swift` placeholder “Ask a question” (extracted around
+lines 52445–52454 in `target/parity/arc-max/arc-strings.txt`). The separate
+`Arc/FindInPageView.swift` context near line 33412 defines the find placeholder,
+but the audit found no definition of a Command-F Ask button, its layout or its
+interaction. The resource inventory also found no Find-in-Page/Ask nib to
+inspect. These dormant conversation symbols are not a usable UI reference.
+The live Command-F checks and all seven Max settings switches likewise expose
+no Ask affordance. Echo's find bar remains unchanged; this item is blocked on
+an observable reference. No hidden preference or Max switch was changed.
+
 Ask on Page still exposes no Ask control in the installed desktop Command-F
 flow, including the available permitted Max flags. There is no separate Ask
 toggle in this build. Browse for Me captions exist in the bundle (52626–52635)
