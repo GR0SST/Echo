@@ -121,3 +121,67 @@ fn captures_read_only_named_files_in_the_captured_profile_without_external_acces
     fs::remove_file(root.path().join("own.png")).unwrap();
     assert!(capture_items(root.path(), profile, captures).is_empty());
 }
+
+#[test]
+fn each_approved_root_gets_a_budget_even_when_an_earlier_root_is_full() {
+    let large = tempfile::tempdir().unwrap();
+    let small = tempfile::tempdir().unwrap();
+    for n in 0..4 {
+        fs::write(large.path().join(format!("{n}.png")), b"fixture").unwrap();
+    }
+    fs::write(small.path().join("visible.png"), b"fixture").unwrap();
+    let approved =
+        ApprovedFolders::from_system_selection(vec![large.path().into(), small.path().into()])
+            .unwrap();
+    let result = scan(
+        &approved,
+        ScanLimits {
+            entries: 1,
+            depth: 0,
+        },
+        &AtomicBool::new(false),
+    );
+    assert!(result.truncated);
+    assert!(result.items.iter().any(|i| i.name == "visible.png"));
+}
+
+#[test]
+fn capture_only_discovery_watches_named_fixture_files_without_any_external_grant() {
+    let root = tempfile::tempdir().unwrap();
+    let mut browser = browser_core::Browser::new();
+    let profile = browser.active_user_profile_id();
+    let captures = &mut browser.user_profile_mut(profile).unwrap().captures;
+    captures
+        .add(
+            "Capture fixture".into(),
+            "Fixture".into(),
+            "https://example.org".into(),
+            "own.png".into(),
+            20,
+            10,
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
+    let watcher =
+        Discovery::start_sources(None, Some((root.path().into(), profile, captures.clone())));
+    let mut generation = 0;
+    let mut wait = |count| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some((next, snapshot)) = watcher.snapshot_since(generation) {
+                generation = next;
+                if snapshot.items.len() == count {
+                    return snapshot;
+                }
+            }
+            assert!(Instant::now() < deadline, "capture watcher did not update");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    wait(0);
+    fs::write(root.path().join("own.png"), b"capture").unwrap();
+    fs::write(root.path().join("not-in-model.png"), b"unrelated").unwrap();
+    assert_eq!(wait(1).items[0].name, "Capture fixture");
+    fs::remove_file(root.path().join("own.png")).unwrap();
+    wait(0);
+}

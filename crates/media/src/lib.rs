@@ -143,9 +143,9 @@ pub fn validate(expected: &MediaStamp) -> io::Result<()> {
 /// Only approved roots are touched; an inaccessible root does not hide others.
 pub fn scan(approved: &ApprovedFolders, limits: ScanLimits, cancelled: &AtomicBool) -> Snapshot {
     let mut result = Snapshot::default();
-    let mut budget = limits.entries;
     let mut seen = HashSet::new();
     for root in &approved.paths {
+        let mut budget = limits.entries;
         if cancelled.load(Ordering::Relaxed) {
             break;
         }
@@ -252,7 +252,6 @@ pub fn scan(approved: &ApprovedFolders, limits: ScanLimits, cancelled: &AtomicBo
         }
         if budget == 0 {
             result.truncated = true;
-            break;
         }
     }
     result.items.sort_by(|a, b| {
@@ -306,6 +305,16 @@ pub struct Discovery {
 }
 impl Discovery {
     pub fn start(approved: ApprovedFolders) -> Self {
+        Self::start_sources(Some(approved), None)
+    }
+    pub fn start_sources(
+        approved: Option<ApprovedFolders>,
+        captures: Option<(
+            PathBuf,
+            browser_core::UserProfileId,
+            browser_core::captures::Captures,
+        )>,
+    ) -> Self {
         let latest = Arc::new(Mutex::new(Snapshot::default()));
         let generation = Arc::new(AtomicU64::new(0));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -333,7 +342,13 @@ impl Discovery {
                 );
                 let mut watch_error = None;
                 if let Ok(watcher) = &mut watcher {
-                    for root in approved.paths() {
+                    for root in approved
+                        .as_ref()
+                        .map(|a| a.paths())
+                        .unwrap_or(&[])
+                        .iter()
+                        .chain(captures.as_ref().map(|c| &c.0))
+                    {
                         if let Err(error) = watcher.watch(root, RecursiveMode::Recursive) {
                             watch_error = Some(error.to_string());
                         }
@@ -345,7 +360,15 @@ impl Discovery {
                     if cancelled.load(Ordering::Relaxed) {
                         break;
                     }
-                    let mut snapshot = scan(&approved, ScanLimits::default(), &cancelled);
+                    let mut snapshot = approved
+                        .as_ref()
+                        .map(|a| scan(a, ScanLimits::default(), &cancelled))
+                        .unwrap_or_default();
+                    if let Some((directory, profile, captures)) = &captures {
+                        snapshot
+                            .items
+                            .extend(capture_items(directory, *profile, captures));
+                    }
                     snapshot.watch_error = watch_error.clone();
                     if cancelled.load(Ordering::Relaxed) {
                         break;
