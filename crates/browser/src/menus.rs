@@ -149,6 +149,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("Close Window", CloseWindow),
                 MenuItem::action("Archive Tab", window::CloseTab),
                 MenuItem::separator(),
+                MenuItem::action("Share…", window::SharePage),
                 MenuItem::action("Save Page As", window::SavePage),
                 MenuItem::action("Print", window::PrintPage),
             ],

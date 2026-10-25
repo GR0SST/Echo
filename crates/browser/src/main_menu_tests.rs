@@ -279,3 +279,71 @@ fn clear_site_menu_actions_are_unavailable_on_internal_pages_and_hidden_library_
     assert!(!visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCacheAndRefresh, cx)));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ClearSiteData(..))));
 }
+
+
+#[gpui::test]
+fn file_share_captures_the_existing_document_and_command_bar_dismisses_without_navigation(cx: &mut TestAppContext) {
+    let (view, visual, fake) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    let url = active_url(&view, visual).unwrap();
+    fake.take_calls();
+    dispatch_menu(visual, "File", "Share…");
+    visual.executor().advance_clock(Duration::from_millis(30));
+    visual.run_until_parked();
+    assert_eq!(view.read_with(visual, |view, _| view.share_picker.as_ref().unwrap().urls.clone()), vec![url.clone()]);
+    visual.simulate_keystrokes("cmd-t");
+    bar(&view, visual).simulate_input("share url");
+    bar(&view, visual).simulate_keystrokes("enter");
+    visual.executor().advance_clock(Duration::from_millis(30));
+    visual.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.command_bar.is_none()));
+    assert_eq!(view.read_with(visual, |view, _| view.share_picker.as_ref().unwrap().urls.clone()), vec![url]);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(..) | Call::Close(..))));
+}
+
+#[gpui::test]
+fn file_share_pending_presentation_rejects_a_same_address_reload(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    dispatch_menu(visual, "File", "Share…");
+    visual.simulate_keystrokes("cmd-r");
+    visual.executor().advance_clock(Duration::from_millis(40));
+    visual.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.share_picker.is_none()));
+}
+
+#[gpui::test]
+fn file_share_owner_close_cancels_a_pending_native_presenter(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    dispatch_menu(visual, "File", "Share…");
+    dispatch_menu(visual, "File", "Close Window");
+    visual.executor().advance_clock(Duration::from_millis(40));
+    visual.run_until_parked();
+    assert!(view.read_with(visual, |view, _| view.share_picker.is_none()));
+}
+
+
+#[gpui::test]
+fn file_share_anchor_stays_over_the_live_page_after_collapsing_the_sidebar(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    visual.update(|window, _| window.activate_window());
+    visual.run_until_parked();
+    visual.simulate_keystrokes("cmd-s");
+    visual.run_until_parked();
+    visual.executor().advance_clock(Duration::from_millis(500));
+    visual.run_until_parked();
+    dispatch_menu(visual, "File", "Share…");
+    visual.executor().advance_clock(Duration::from_millis(40));
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        let anchor = view.share_picker.as_ref().unwrap().anchor;
+        let tab = view.browser.active_tab().unwrap().id;
+        let page = view.pages.as_ref().unwrap().borrow().surface_layout().into_iter().find(|(id, _)| *id == tab).unwrap().1;
+        assert!((f64::from(anchor[0] + anchor[2] / 2.) - page.x - page.width / 2.).abs() < 0.1);
+        assert!(anchor[2] > 0. && anchor[3] > 0., "Native picker anchors must be non-empty");
+    });
+}

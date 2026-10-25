@@ -201,8 +201,10 @@ impl BrowserWindow {
         // application, entity and window borrows before native tracking.
         cx.spawn(async move |owner, cx| {
             let Ok((view, width)) = main.update(cx, |_, window, _| (crate::native::view_of(window), f32::from(window.viewport_size().width))) else { return; };
-            let picker = crate::native::sharing::show(view, [width - 60., 29., 32., 28.], &urls);
-            let _ = owner.update(cx, |this, _| this.share_picker = picker);
+            let mut picker = crate::native::sharing::show(view, [width - 60., 29., 32., 28.], &urls);
+            let previous = owner.update(cx, |this, _| std::mem::replace(&mut this.share_picker, picker.take())).ok().flatten();
+            drop(previous);
+            drop(picker);
         }).detach();
     }
 

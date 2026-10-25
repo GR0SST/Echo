@@ -231,3 +231,45 @@ teardown. A refreshed fixture changed its title after timeout; its leftover tab
 was subsequently located by exact URL and archived in
 `arc-clean-refresh-reference/`, with an inspected clean Space and no owned
 windows remaining. No other tab or Space was archived/deleted.
+
+
+## File → Share
+
+The inspected Arc reference is `arc-share-reference/share.png`: the standard
+macOS URL share picker, with page-title preview, Reading List, the installed
+system destinations, Copy and Edit Extensions. No destination was selected.
+Echo's File and nib-derived "Share URL" Command Bar routes now use that native
+presenter through the isolated platform interface. The original page identity,
+URL and document epoch are validated before presentation; replacing/destroying
+a picker happens outside GPUI and CEF borrows.
+
+Native menu and Command Bar acceptance is in `echo-page-share/`, including
+Escape cancellation, reopening after cancellation and zero-status CEF teardown.
+Both settled picker bodies are approximately 240 × 262 px plus the top arrow.
+The native URL metadata title resolves asynchronously. Echo's picker center is
+6 px to the right of Arc because its existing sidebar is 12 px wider; both are
+centered over their page content. Inspected 2× crops are
+`pairs/arc-page-share-zoom.png` and `pairs/echo-page-share-zoom.png`.
+
+Four GPUI tests cover page retention, Command Bar dismissal, same-address
+reload rejection, owner-close cancellation and alignment with the actual page
+bounds after collapsing the sidebar. Windows/Linux currently expose
+no native presenter and the action is unavailable there. The row remains
+partial. The exact-ID cleanup check for the extra window opened by Arc's
+Copy Arc Info found it already gone after its owned parent closed; no unknown
+or restored windows were closed by that cleanup (`arc-info-reference/cleanup-popup-after.json`).
+
+
+The final native run is `echo-page-share-final/`: menu and Command Bar
+presentation, cancellation/reopening and the collapsed-sidebar anchor all pass,
+with inspected screenshots and zero-status CEF teardown. The nonempty native
+anchor rectangle avoids AppKit's whole-view fallback. The final local suite
+passed 1,083 browser, 239 core, 148 engine and 18 AI tests plus importer/bundle
+checks (one existing native-credential integration test ignored).
+
+The later Info reference identified the extra surface as Arc's noninteractive
+"Copied Arc Info!" toast. With an active disposable page, the clipboard contains
+structured JSON; only redacted field names were saved in
+`arc-info-reference/info-format-redacted.txt`. It includes account, stable-device
+and Sentry fields that must be omitted from Echo. The passive surface closes
+with its owned parent, and the final cleanup inventories are empty.

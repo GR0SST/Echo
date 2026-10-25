@@ -98,6 +98,7 @@ actions!(
         ViewDownloads,
         PrintPage,
         SavePage,
+        SharePage,
         DeveloperTools,
         InspectElements,
         JavaScriptConsole,
@@ -436,6 +437,7 @@ pub enum Command {
     ManageSpaces,
     PrintPage,
     SavePage,
+    SharePage,
     AutomaticAppearance,
     LightAppearance,
     DarkAppearance,
@@ -695,6 +697,7 @@ pub struct BrowserWindow {
     pub(crate) pending_quote: Option<(u64, crate::pages::PageIdentity, String)>,
     pub(crate) retiring_toasts: Vec<crate::toast::Toast>,
     pub(crate) share_picker: Option<crate::native::sharing::SharePicker>,
+    pub(crate) page_share_generation: u64,
     pub(crate) link_status: Option<crate::link_status::LinkStatus>,
     pub(crate) link_status_generation: u64,
     pub(crate) page_zoom: Option<crate::page_zoom::PageZoom>,
@@ -979,6 +982,7 @@ impl BrowserWindow {
             pending_quote: None,
             retiring_toasts: Vec::new(),
             share_picker: None,
+            page_share_generation: 0,
             link_status: None,
             link_status_generation: 0,
             page_zoom: None,
@@ -1147,7 +1151,8 @@ impl BrowserWindow {
         self.save_prompt_active=false;
         if let Some(task)=self.save_page_task.take() {cx.spawn(async move |_| {drop(task);}).detach();}
         crate::peek_history::discard_owner(self.main_window.window_id(), cx);
-        self.share_picker.take();
+        self.page_share_generation = self.page_share_generation.wrapping_add(1);
+        if let Some(picker) = self.share_picker.take() { cx.spawn(async move |_| drop(picker)).detach(); }
         self.discard_sidebar_resize();
         if let Some(bar) = &self.command_bar { bar.material_alive.set(false); }
         self.retire_max_preview(cx);
@@ -1854,6 +1859,7 @@ impl BrowserWindow {
                 (Command::ClearToday, "Clear Today", "clear unpinned tabs|clear today|archive background today tabs", !self.browser.space().today.is_empty()),
                 (Command::RestoreTab, "Restore Last Closed Tab", "restore last closed tab|reopen closed tab|unarchive tab", !self.browser.archive.is_empty()),
                 (Command::PrintPage, "Print Page", "print|print page", self.print_available()),
+                (Command::SharePage, "Share URL", "share url|share page|share", self.can_share_page()),
                 (Command::SavePage, "Save Page As", "save page as|save page|save file", self.save_page_available()),
                 (Command::Reload, "Refresh the Page", "refresh page|reload tab", active.is_some()),
                 (Command::ForceReload, "Force Refresh the Page", "force refresh page|reload without cache|hard reload", active.is_some()),
@@ -2247,6 +2253,7 @@ impl BrowserWindow {
             }
             Command::PrintPage => self.print_page(cx),
             Command::SavePage => self.save_page(cx),
+            Command::SharePage => self.share_page(cx),
             Command::AutomaticAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Automatic, cx),
             Command::LightAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Light, cx),
             Command::DarkAppearance => self.set_website_appearance(browser_core::themes::ThemeAppearance::Dark, cx),
@@ -2368,6 +2375,7 @@ impl BrowserWindow {
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
             .when(self.save_page_available(), |this| this.on_action(cx.listener(|this, _: &SavePage, _, cx| this.save_page(cx))))
+            .when(self.can_share_page(), |this| this.on_action(cx.listener(|this, _: &SharePage, _, cx| this.share_page(cx))))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
@@ -4498,6 +4506,7 @@ impl Render for BrowserWindow {
             .when(!self.browser.is_private() && !self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &ViewLibrary, _, cx| this.run_command(Command::OpenLibrary, cx))).on_action(cx.listener(|this, _: &ViewDownloads, _, cx| this.run_command(Command::ViewDownloads, cx))).on_action(cx.listener(|this, _: &crate::menus::ManageSpaces, _, cx| this.run_command(Command::ManageSpaces, cx))))
             .on_action(cx.listener(|this, _: &crate::text_input::PasteAndMatchStyle, _, cx| this.paste_and_match_style(cx)))
             .when(self.save_page_available(), |this| this.on_action(cx.listener(|this, _: &SavePage, _, cx| this.save_page(cx))))
+            .when(self.can_share_page(), |this| this.on_action(cx.listener(|this, _: &SharePage, _, cx| this.share_page(cx))))
             .when(self.print_available(), |this| this.on_action(cx.listener(|this, _: &PrintPage, _, cx| this.print_page(cx))))
             .when(self.current_source_url().is_some(), |this| this.on_action(cx.listener(|this, _: &ViewSource, _, cx| this.view_source(cx))))
             .when(self.devtools_available(), |this| this
@@ -4735,5 +4744,7 @@ mod printing;
 #[path = "paste_style.rs"]
 mod paste_style;
 
+#[path = "page_share.rs"]
+mod page_share;
 #[path = "save_page.rs"]
 mod save_page;

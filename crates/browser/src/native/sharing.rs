@@ -4,8 +4,12 @@ use std::ffi::c_void;
 pub(crate) struct SharePicker {
     #[cfg(all(target_os = "macos", not(test)))]
     _menu: objc2::rc::Retained<objc2::runtime::AnyObject>,
+    #[cfg(all(target_os = "macos", not(test)))]
+    close_on_drop: bool,
     #[cfg(test)]
     pub(crate) urls: Vec<String>,
+    #[cfg(test)]
+    pub(crate) anchor: [f32; 4],
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
@@ -35,6 +39,7 @@ pub(crate) fn show(
         let _ = (view, anchor);
         return Some(SharePicker {
             urls: urls.to_vec(),
+            anchor,
         });
     }
     #[cfg(all(target_os = "macos", not(test)))]
@@ -136,11 +141,96 @@ pub(crate) fn show(
             y = bounds.size.height - y - height;
         }
         let _: Bool = msg_send![&*menu, popUpMenuPositioningItem: std::ptr::null_mut::<AnyObject>() atLocation: NSPoint::new(x, y) inView: view];
-        Some(SharePicker { _menu: menu })
+        Some(SharePicker {
+            _menu: menu,
+            close_on_drop: false,
+        })
     }
     #[cfg(all(not(target_os = "macos"), not(test)))]
     {
         let _ = (view, anchor, urls);
         None
+    }
+}
+
+pub(crate) fn page_picker_supported() -> bool {
+    cfg!(any(target_os = "macos", test))
+}
+
+/// File → Share uses the system's URL preview, service ordering, Copy and
+/// extension controls. The caller must be outside all application borrows.
+pub(crate) fn show_page(
+    view: Option<*mut c_void>,
+    anchor: [f32; 4],
+    url: &str,
+) -> Option<SharePicker> {
+    #[cfg(test)]
+    {
+        let _ = (view, anchor);
+        return Some(SharePicker {
+            urls: vec![url.to_owned()],
+            anchor,
+        });
+    }
+    #[cfg(all(target_os = "macos", not(test)))]
+    unsafe {
+        use objc2::{
+            msg_send,
+            rc::Retained,
+            runtime::{AnyObject, Bool},
+        };
+        use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+        let view = view? as *mut AnyObject;
+        let items: Retained<AnyObject> =
+            Retained::from_raw(msg_send![objc2::class!(NSMutableArray), new])?;
+        let value = NSString::from_str(url);
+        let url: *mut AnyObject = msg_send![objc2::class!(NSURL), URLWithString: &*value];
+        if url.is_null() {
+            return None;
+        }
+        let _: () = msg_send![&*items, addObject: url];
+        let picker: *mut AnyObject = msg_send![objc2::class!(NSSharingServicePicker), alloc];
+        let picker: Retained<AnyObject> =
+            Retained::from_raw(msg_send![picker, initWithItems: &*items])?;
+        let [x, y, width, height] = anchor.map(f64::from);
+        let bounds: NSRect = msg_send![view, bounds];
+        let flipped: Bool = msg_send![view, isFlipped];
+        let rect = NSRect::new(
+            NSPoint::new(
+                x,
+                if flipped.as_bool() {
+                    y
+                } else {
+                    bounds.size.height - y - height
+                },
+            ),
+            NSSize::new(width, height),
+        );
+        let edge = if flipped.as_bool() { 3usize } else { 1usize };
+        let _: () =
+            msg_send![&*picker, showRelativeToRect: rect, ofView: view, preferredEdge: edge];
+        Some(SharePicker {
+            _menu: picker,
+            close_on_drop: true,
+        })
+    }
+    #[cfg(all(not(target_os = "macos"), not(test)))]
+    {
+        let _ = (view, anchor, url);
+        None
+    }
+}
+impl Drop for SharePicker {
+    fn drop(&mut self) {
+        #[cfg(all(target_os = "macos", not(test)))]
+        if self.close_on_drop {
+            use objc2::{msg_send, runtime::Bool, sel};
+            unsafe {
+                let available: Bool = msg_send![&*self._menu, respondsToSelector: sel!(close)];
+                if available.as_bool() {
+                    let _: () = msg_send![&*self._menu, close];
+                }
+            }
+        }
     }
 }

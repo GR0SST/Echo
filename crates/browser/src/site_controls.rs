@@ -254,12 +254,14 @@ impl BrowserWindow {
             let Ok(view) = overlay.update(cx, |_, window, _| crate::native::view_of(window)) else {
                 return;
             };
-            let picker = crate::native::sharing::show(
+            let mut picker = crate::native::sharing::show(
                 view,
                 [f32::from(position.x), f32::from(position.y), 0., 0.],
                 &[url],
             );
-            let _ = owner.update(cx, |this, _| this.share_picker = picker);
+            let previous = owner.update(cx, |this, _| std::mem::replace(&mut this.share_picker, picker.take())).ok().flatten();
+            drop(previous);
+            drop(picker);
         })
         .detach();
     }

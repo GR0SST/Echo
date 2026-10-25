@@ -92,7 +92,7 @@ the menu but aren't shown; usually they are alternative shortcuts.
 | New Note (in Split) | ⌃⌥N (hidden) | missing | — |
 | Close Window | ⇧⌘W | done | File menu and shortcut close the owning window from page or popup input focus, retain tabs without archiving and remove child panels. Checked against Arc and in bundled Echo, including Dock restoration. The engine retains its native clip hosts until teardown so closing a live CEF page is safe |
 | Archive Tab | ⌘W | done | Today tabs go to the archive; a pinned tab closes, stays in Pinned and returns to its pinned URL |
-| Share… | — | missing | System share menu |
+| Share… | — | partial | File and Command Bar present the macOS native page share picker, with URL/title preview, Reading List, system destinations, Copy and Edit Extensions. Captured page identity/epoch validated before presenting; no navigation. Menu/Command Bar, Escape and quit verified natively; three GPUI tests cover retention and cancellation. Non-macOS presenters remain unavailable; see docs/MAIN_MENU_WIP.md |
 | Capture… | ⇧⌘2 | missing | Screenshot of a page area |
 | Capture Full Page / Capture in Portrait Mode | — | missing | — |
 | Save Page As | ⇧⌘S | partial | File menu, page shortcut and Command Bar export the retained document as HTML Only, Single File (MHTML), or Complete with a local resource folder. macOS native Format accessory; other backends use the common path prompt. All three formats save natively and Complete/MHTML reopen offline, retaining the original renderer and history. GPUI shortcut coverage passes; the physical ⇧⌘S chord did not open the panel in the current desktop session (the File action works). Format persistence, Chromium serializer equivalence and remaining platform UI are partial; see docs/MAIN_MENU_WIP.md |
@@ -112,7 +112,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 | Cut / Copy / Paste / Select All | ⌘X/⌘C/⌘V/⌘A | partial | Work in GPUI TextInput. Bundled macOS native Edit menu Copy/Paste and Select All/Cut/Paste were verified against a live CEF input with unchanged document identity. Native menu selectors target the page responder. Remaining platform and non-input editing contexts need verification |
 | Copy URL (clean link without trackers) | ⇧⌘C | done | Removes known advertising query parameters, preserves signed URLs, copies to the clipboard and shows a toast |
 | Copy URL as Markdown | ⌥⇧⌘C | done | Escaped page title and clean link; also available in the Command Bar |
-| Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | missing | — |
+| Copy URL as Quote (link to the selected text) | ⌃⇧⌘C | partial | Existing menu, shortcut and Command Bar use the local selection/text-fragment engine path, with identity/navigation-race GPUI coverage. Installed-Arc clipboard-format and remaining native acceptance are still pending |
 | Paste and Match Style | ⇧⌘V | partial | Edit menu and shared shortcut; GPUI plain-text selection/undo, exact native page/iframe and separate DevTools routing. Platform/menu-state acceptance remains; see [validation](PASTE_AND_MATCH_STYLE.md) |
 | Find… / Find and Replace / Find Next / Find Previous / Jump to Selection | ⌘F / ⌥⌘F / ⌘G / ⇧⌘G / ⌘J | partial | Find in Page via CEF, live matches/count, next/previous (Enter/Shift+Enter, ⌘G/⇧⌘G), Escape to close. Find and Replace and Jump to Selection remain missing |
 | Spelling, Substitutions, Transformations, Speech, Format (Bold/Italic/Underline) | ⌘: ⌘; ⌘B ⌘I ⌘U | missing | Standard macOS submenus |
