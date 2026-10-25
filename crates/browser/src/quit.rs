@@ -357,6 +357,7 @@ struct QuitState(Rc<RefCell<Coordinator>>);
 impl Global for QuitState {}
 
 pub(crate) fn request(cx: &mut App) {
+    crate::quit_confirmation::close_all(cx);
     seal();
     #[cfg(any(target_os = "macos", test))]
     NATIVE_GATE.with(|gate| gate.borrow_mut().note_app_request());
@@ -413,6 +414,7 @@ fn show_progress(cx: &mut App) {
 /// App-owned task: no window entity, page pool, or storage context is captured.
 /// Every CEF entry is outside cx.update and outside the coordinator borrow.
 pub(crate) fn init(cx: &mut App) {
+    crate::quit_confirmation::init(cx);
     SEALED.with(|value| value.set(false));
     #[cfg(any(target_os = "macos", test))]
     NATIVE_GATE.with(|gate| *gate.borrow_mut() = NativeQuitGate::default());

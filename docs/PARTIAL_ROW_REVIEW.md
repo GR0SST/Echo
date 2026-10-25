@@ -160,7 +160,7 @@ account consent or owner profile mutation was used to make a row look complete.
 | 12 — per-profile settings | Search, archive, download preferences and native data removal work. New documents still persist an app choice without the document-app integration; the overview does not close that backend gap. |
 | 13 — Archive tabs after | Four choices and selection work; the fresh menu crop still differs in vibrant material/corners/rasterization. |
 | 13 — Previews Settings | The fresh 422 × 370 pair still differs in checkbox, keycap and border treatment; site-specific hover previews are missing. |
-| 13 — Warn before quitting | The toggle persists, but the quit coordinator does not consume it. A global Cmd+Q probe with the owner's windows open was not used. |
+| 13 — Warn before quitting | The measured local confirmation now gates menu/Cmd+Q before teardown is sealed. Native Cancel, Return, remembered disable and cold-restart bypass pass with a disposable session. Private/Blank preference routing has GPUI coverage. Light, animation, OS/no-window entry and auxiliary-window host selection remain unqualified. |
 | 13 — Profiles tab | Rename/delete/search/data/manager entry points exist. The broader row still includes bulk deletion, document-app behavior and incomplete search/manager visual details. |
 | 13 — Links tab | Existing ATC is retained; remaining Little Arc launch preferences are not closed by the read-only Links overview. |
 | 13 — Shortcuts | Recording/reset/conflict markers work; priority/two-press dispatch, Remove Conflicting Shortcut, extension bindings, Space reassignment and Favorites ordering remain missing. Owner shortcuts were not edited. |

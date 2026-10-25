@@ -55,7 +55,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &BlankWindow, cx| { cx.defer(crate::blank_window::open); });
     cx.on_action(|_: &NewWindow, cx| { cx.defer(|cx| crate::new_window::open(true, cx)); });
     cx.on_action(|_: &NewIncognitoWindow, cx| { cx.defer(crate::open_incognito_window); });
-    cx.on_action(|_: &Quit, cx| crate::quit::request(cx));
+    cx.on_action(|_: &Quit, cx| cx.defer(crate::quit_confirmation::request));
     cx.on_action(|_: &AllowJavaScriptFromAppleEvents,cx|crate::scripting::toggle_javascript(cx));
     cx.on_action(|_: &HideApp, cx| native::set_app_visibility(native::AppVisibility::Hide, cx));
     cx.on_action(|_: &HideOthers, cx| {

@@ -8008,6 +8008,7 @@ mod user_profile_host_tests;
 #[gpui::test]
 fn cmd_q_seals_window_and_command_bar_producers_before_final_quit(cx: &mut TestAppContext) {
     let (view, visual) = open(cx);
+    view.update(visual, |v, _| v.edit_profile(|b| b.settings.set_enabled(browser_core::settings::Toggle::WarnBeforeQuitting, false)));
     let before = visual.cx.update(|cx| cx.windows().len());
     visual.simulate_keystrokes("cmd-q");
     visual.simulate_keystrokes("cmd-t");
@@ -11406,3 +11407,6 @@ fn theme_noise_marker_is_hidden_when_idle_even_after_a_color_is_picked(cx: &mut 
     assert!(!view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
     assert_eq!(view.read_with(visual, |view, _| view.browser.space().theme().noise), 0.25);
 }
+
+#[path = "quit_confirmation_tests.rs"]
+mod quit_confirmation_tests;

@@ -2,6 +2,7 @@
 mod automation;
 mod native;
 mod quit;
+mod quit_confirmation;
 mod scripting;
 mod capture;
 mod task_manager;

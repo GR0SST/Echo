@@ -300,3 +300,49 @@ owner’s existing customized rows; Echo filters its private fixture to Blank
 Window. Plain keycaps compare the source’s Add Split View chord with Echo’s
 Duplicate chord; only the shared keycap layout is claimed. The final tooltip
 pair intentionally records the remaining placement difference.
+
+
+## Round 2 quit confirmation
+
+A guarded, cancellation-only inspection in the shared Echo Test Space verified
+that the already-enabled “Warn before quitting” preference opens Arc’s local
+confirmation. No preference was changed and no source quit was accepted.
+Both a browser-origin Cmd+Q and a Cmd+Q from owned Settings raised the browser’s
+sheet. Settings and the one owned browser window were closed in the locked
+script’s cleanup; baseline windows were preserved.
+
+The settled reference is `target/parity/partial-closeout/arc-quit-warning-settled.png`.
+The card is 450 × 248, centered in the 1000 × 760 host at (275, 256), with
+17 px corners, a 50 px application icon at (44, 44), an 18 px bold heading,
+and 37 px footer buttons 27 px above its bottom. The exact executable copy
+contains U+2019 in “Quit, and don’t ask again”. The bundled Chromium string
+“Hold $1 to Quit” is not the installed Arc flow. An initial entrance frame
+placed the card above its settled position; it is retained as motion evidence,
+not the final alignment reference. Echo uses its own application artwork/name.
+
+The confirmation precedes the quit coordinator: Cancel/Escape leaves all
+producers active; Return and Quit defer the existing data-safe shutdown;
+remembered quit changes the install preference before saving. Repeated intent
+raises the existing sheet. Private/Blank windows use the retained normal
+settings, and focused browser overlays retain their parent identity. Forced
+internal teardown removes the confirmation and retains all existing CEF/data
+barriers. Native OS termination continues through its separately qualified gate;
+this change does not establish Arc’s OS/no-window confirmation policy.
+
+Native qualification uses only a disposable empty session. The probe verifies
+Escape, a subsequent Command Bar open/dismiss, Return with exit 0, remembered
+quit with exit 0, and a cold restart whose disabled preference quits without a
+sheet. The explicit child-window activation was required for native Escape;
+GPUI’s test platform alone did not expose the missing AppKit key-window handoff.
+The row stays partial for Light, entrance/exit motion and remaining host/OS
+entry conditions.
+
+Reviewed enlarged pair:
+`target/parity/partial-closeout/pair-quit-confirmation-2x.png` (settled Arc left,
+Echo right). Native receipt/log:
+`target/parity/partial-closeout/echo-quit-round2-final.log`, fixture
+`echo-quit-review-stm8azll` (the log retains the authoritative full path).
+The scripted source before/after pair also measures the dimmer without relying
+on a guessed theme color. Four GPUI checks cover cancellation without sealing,
+repeat presentation, remembered disable, disabled bypass and private preference
+routing. The existing pre-quit producer test explicitly disables the warning.
