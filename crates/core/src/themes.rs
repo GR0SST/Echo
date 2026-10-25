@@ -138,6 +138,16 @@ impl Space {
     }
 }
 impl Browser {
+    /// Removing the last picker color returns the Space to its unpicked field.
+    /// Keep this a theme-only undo entry, just like choosing a pigment.
+    pub fn clear_space_theme(&mut self, id: SpaceId) -> bool {
+        let Some(space) = self.spaces.iter_mut().find(|space| space.id == id) else {
+            return false;
+        };
+        let Some(before) = space.theme.take() else { return false; };
+        self.sidebar_history.record_theme(id, Some(before), None);
+        true
+    }
     /// A committed theme edit owns only appearance; Undo must not rewind tabs,
     /// the Space's name, or unrelated edits in another window.
     pub fn update_space_theme(&mut self, id: SpaceId, theme: SpaceTheme) -> bool {
@@ -161,6 +171,24 @@ mod tests {
     use super::*;
     use crate::session;
     use std::time::SystemTime;
+    #[test]
+    fn clearing_the_last_pigment_is_persistent_and_undo_restores_only_the_theme() {
+        let mut browser = Browser::new();
+        let space = browser.space().id;
+        let theme = SpaceTheme::from_hue(18.);
+        assert!(!browser.clear_space_theme(space));
+        assert!(browser.update_space_theme(space, theme.clone()));
+        assert!(browser.clear_space_theme(space));
+        assert!(browser.space().theme.is_none());
+        let saved = session::to_json(&browser);
+        assert!(session::from_json(&saved).unwrap().space().theme.is_none());
+        browser.rename_space(space, "Still here");
+        assert!(browser.undo_sidebar(SystemTime::now()));
+        assert_eq!(browser.space().theme, Some(theme));
+        assert_eq!(browser.space().name, "Still here");
+        assert!(browser.redo_sidebar(SystemTime::now()));
+        assert!(browser.space().theme.is_none());
+    }
     #[test]
     fn catalog_colors_decode_transfer_functions_and_clip_p3_to_srgb() {
         let cases = [

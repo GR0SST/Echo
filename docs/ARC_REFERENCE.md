@@ -2000,3 +2000,34 @@ reference opens at its clicked footer and extends below the host; Echo still
 uses the wrong origin and clamps its menu inside the host. Media discovery,
 Archive inventory/filtering and Boost naming/deletion remain separate gaps;
 the precise qualifications stay in section 14 of `ARC_PARITY.md`.
+
+## Theme gesture history and unpicked state — 2026-10-25
+
+Fresh Arc 1.170 verification in Echo Test showed that completed preset clicks
+are separate `Update Theme` entries, even with the editor kept open for several
+seconds. After orange then pink, one Cmd+Z restores orange. The same action
+updates the still-open picker. Dismissal does not combine the preceding edits.
+Arc also keeps the original large handle selected when adding a color and
+allows removing the final pigment to return to “Tap to pick a color for this
+space”. These observations supersede the older dismissal-only grouping note.
+
+`target/parity/partial-sections/arc_undo_while_open.png` and
+`arc_undo_verified_once.png` show the two Undo entry paths. Native Echo pairs
+are `echo_theme_undo_open_{Light,Dark}.png` and
+`echo_theme_undo_closed_{Light,Dark}.png`; the phase JSON files under
+`echo-theme-{Light,Dark}/` independently verify the persisted orange RGB.
+`arc_theme_undo_menu_owned_Light.png` versus
+`echo_theme_undo_menu_owned_Light.png` preserve the actual native menus;
+`pairs/undo-row.png` compares only their shared Update Theme row. Other menu
+entries are outside this acceptance. The row does not claim theme-shader or
+picker-position parity; those remain partial in section 4.
+
+Core/GPUI tests cover last-color persistence, undo preserving unrelated names,
+per-click and per-drag history, open-picker Undo/Redo and dismissal without an
+extra entry. The complete `theme-full-tests.log` passed (1220 browser tests,
+258 core tests and the remaining workspace suites/doctests). Both native
+processes exited 0 with CEF Complete and cleared the private fixture theme.
+The capture harness's final check was corrected to accept serde's omitted
+optional theme field; the saved sessions and phase evidence were revalidated.
+All Arc test pigments and appearance changes were restored; guarded session
+cleanup logs report no remaining owned windows.

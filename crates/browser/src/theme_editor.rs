@@ -16,7 +16,11 @@ const WIDTH: f32 = 359.;
 const HEIGHT: f32 = 508.;
 actions!(theme_editor, [Dismiss]);
 pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Dismiss, Some(CONTEXT))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some(CONTEXT)),
+        KeyBinding::new("cmd-z", crate::text_input::Undo, Some(CONTEXT)),
+        KeyBinding::new("cmd-shift-z", crate::text_input::Redo, Some(CONTEXT)),
+    ]);
 }
 #[derive(Clone, Copy)]
 enum Drag {
@@ -28,6 +32,7 @@ pub(crate) struct ThemeEditor {
     pub space: SpaceId,
     pub draft: SpaceTheme,
     original: SpaceTheme,
+    original_picked: bool,
     selected: usize,
     pub(crate) picked: bool,
     page: usize,
@@ -193,6 +198,7 @@ impl BrowserWindow {
         self.theme_editor = Some(ThemeEditor {
             space,
             original: draft.clone(),
+            original_picked: picked,
             draft,
             selected: 0,
             picked,
@@ -264,16 +270,43 @@ impl BrowserWindow {
         self.close_popup_overlay(overlay, policy, false, cx);
         cx.notify();
     }
+    fn undo_theme_editor(&mut self, redo: bool, cx: &mut Context<Self>) {
+        self.commit_theme_editor();
+        let label = if redo { self.browser.sidebar_redo_action() } else { self.browser.sidebar_undo_action() };
+        if label != Some("Update Theme") { return; }
+        let changed = self.edit_profile(|browser| if redo {
+            browser.redo_sidebar(std::time::SystemTime::now())
+        } else {
+            browser.undo_sidebar(std::time::SystemTime::now())
+        });
+        if changed {
+            if let Some(editor) = &mut self.theme_editor {
+                if let Some(space) = self.browser.spaces.iter().find(|space| space.id == editor.space) {
+                    editor.draft = space.theme();
+                    editor.original = editor.draft.clone();
+                    editor.picked = space.theme.is_some();
+                    editor.original_picked = editor.picked;
+                    editor.selected = editor.selected.min(editor.draft.colors.len() - 1);
+                    editor.dragging = None;
+                }
+            }
+            cx.notify();
+        }
+    }
     pub(crate) fn commit_theme_editor(&mut self) {
         let edit = self.theme_editor.as_mut().and_then(|editor| {
-            if editor.draft == editor.original {
+            if editor.draft == editor.original && editor.picked == editor.original_picked {
                 return None;
             }
             editor.original = editor.draft.clone();
-            Some((editor.space, editor.draft.clone()))
+            editor.original_picked = editor.picked;
+            Some((editor.space, editor.picked.then(|| editor.draft.clone())))
         });
         if let Some((space, theme)) = edit {
-            self.edit_profile(|browser| browser.update_space_theme(space, theme));
+            self.edit_profile(|browser| match theme {
+                Some(theme) => browser.update_space_theme(space, theme),
+                None => browser.clear_space_theme(space),
+            });
         }
     }
     pub(crate) fn take_theme_editor(&mut self) -> Option<WindowHandle<Overlay>> {
@@ -498,12 +531,7 @@ impl BrowserWindow {
                     .justify_center()
                     .gap(px(20.))
                     .children([false, true].into_iter().map(|add| {
-                        let enabled = picked
-                            && if add {
-                                e.draft.colors.len() < 3
-                            } else {
-                                e.draft.colors.len() > 1
-                            };
+                        let enabled = picked && (!add || e.draft.colors.len() < 3);
                         div()
                             .id(if add {
                                 "theme-add-color"
@@ -533,12 +561,15 @@ impl BrowserWindow {
                                                 s,
                                                 v,
                                             ));
-                                            e.selected = e.draft.colors.len() - 1;
+                                            // Arc keeps the existing large handle selected.
+                                        } else if e.draft.colors.len() == 1 {
+                                            e.picked = false;
                                         } else {
                                             e.draft.colors.remove(e.selected);
                                             e.selected = e.selected.min(e.draft.colors.len() - 1);
                                         }
                                     }
+                                    this.commit_theme_editor();
                                     cx.notify();
                                 }))
                             })
@@ -603,6 +634,7 @@ impl BrowserWindow {
                                     e.draft.colors[e.selected] = c;
                                     e.picked = true;
                                 }
+                                this.commit_theme_editor();
                                 cx.notify();
                             }))
                     }),
@@ -754,6 +786,7 @@ impl BrowserWindow {
                                 if let Some(e) = &mut this.theme_editor {
                                     e.draft.texture = e.draft.texture.next();
                                 }
+                                this.commit_theme_editor();
                                 cx.notify();
                             })),
                     ),
@@ -763,6 +796,8 @@ impl BrowserWindow {
             .key_context(CONTEXT)
             .track_focus(&e.focus)
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.close_theme_editor(cx)))
+            .on_action(cx.listener(|this, _: &crate::text_input::Undo, _, cx| this.undo_theme_editor(false, cx)))
+            .on_action(cx.listener(|this, _: &crate::text_input::Redo, _, cx| this.undo_theme_editor(true, cx)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.close_theme_editor(cx)),
@@ -772,10 +807,9 @@ impl BrowserWindow {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    if let Some(e) = &mut this.theme_editor {
-                        e.dragging = None;
-                    }
+                cx.listener(|this, _, _, cx| {
+                    let completed = this.theme_editor.as_mut().is_some_and(|e| e.dragging.take().is_some());
+                    if completed { this.commit_theme_editor(); cx.notify(); }
                 }),
             )
             .child(

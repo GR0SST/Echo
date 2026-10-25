@@ -8562,7 +8562,7 @@ fn space_theme_editor(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) 
 }
 
 #[gpui::test]
-fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: &mut TestAppContext) {
+fn space_theme_editor_color_modes_palettes_and_undo_preserve_completed_gestures(cx: &mut TestAppContext) {
     let (view,cx)=open(cx);
     let id=view.read_with(cx,|w,_|w.browser.space().id);
     let tabs=view.read_with(cx,|w,_|w.browser.all_tabs().count());
@@ -8584,11 +8584,12 @@ fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: 
     click(&mut editor,"theme-palette-next");click(&mut editor,"theme-preset-7");
     click(&mut editor,"theme-light");assert!(!view.read_with(cx,|w,_|w.theme_is_dark()));
     click(&mut editor,"theme-dark");assert!(view.read_with(cx,|w,_|w.theme_is_dark()));
+    let before_texture = view.read_with(cx, |w, _| w.browser.space().theme.clone());
     click(&mut editor,"theme-texture");
     let expected=view.read_with(cx,|w,_|w.theme_editor.as_ref().unwrap().draft.clone());
     assert_eq!(expected.texture,browser_core::themes::NoiseTexture::Sand);
-    // A draft previews immediately, but dismissal makes a single Undo entry.
-    assert!(view.read_with(cx,|w,_|w.browser.space().theme.is_none()));
+    // Each completed click is an Update Theme entry; dismissal adds none.
+    assert_eq!(view.read_with(cx,|w,_|w.browser.space().theme.clone()), Some(expected.clone()));
     editor.simulate_keystrokes("escape");cx.run_until_parked();
     view.read_with(cx,|w,_|{
         assert!(w.theme_editor.is_none());assert_eq!(w.browser.space().id,id);
@@ -8598,7 +8599,7 @@ fn space_theme_editor_color_modes_palettes_and_undo_are_one_persistent_edit(cx: 
         assert_eq!(browser_core::session::from_json(&saved).unwrap().space().theme(),expected);
     });
     cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
-    assert!(view.read_with(cx,|w,_|w.browser.space().theme.is_none()));
+    assert_eq!(view.read_with(cx,|w,_|w.browser.space().theme.clone()), before_texture);
     cx.simulate_keystrokes("cmd-shift-z");cx.run_until_parked();
     assert_eq!(view.read_with(cx,|w,_|w.browser.space().theme()),expected);
 }
@@ -11204,3 +11205,82 @@ fn header_theme_editor_uses_the_originating_menu_anchor(cx: &mut TestAppContext)
     }
 }
 
+
+#[gpui::test]
+fn theme_add_preserves_the_selected_color_and_last_remove_restores_the_unpicked_field(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-preset-8");
+    editor.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-add-color");
+    let added = view.read_with(cx, |view, _| view.theme_editor.as_ref().unwrap().draft.colors[1]);
+    click(&mut editor, "theme-preset-4");
+    view.read_with(cx, |view, _| {
+        let theme = &view.theme_editor.as_ref().unwrap().draft;
+        assert_eq!(theme.colors[0], crate::theme_editor::preset_color(0, 4));
+        assert_eq!(theme.colors[1], added, "Add color must keep the original handle selected");
+    });
+    click(&mut editor, "theme-remove-color");
+    let surviving = view.read_with(cx, |view, _| view.browser.space().theme.clone());
+    click(&mut editor, "theme-remove-color");
+    assert!(!view.read_with(cx, |view, _| view.theme_editor.as_ref().unwrap().picked));
+    editor.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.browser.space().theme.is_none()));
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().theme.clone()), surviving);
+}
+
+#[gpui::test]
+fn theme_preset_clicks_undo_individually_and_a_continuous_drag_is_one_edit(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-preset-4");
+    let orange = view.read_with(cx, |view, _| view.browser.space().theme.clone());
+    click(&mut editor, "theme-preset-1");
+    let pink = view.read_with(cx, |view, _| view.browser.space().theme.clone());
+    let slider = editor.debug_bounds("theme-intensity").unwrap();
+    editor.simulate_mouse_down(slider.center(), gpui::MouseButton::Left, Modifiers::none());
+    for fraction in [0.25, 0.4, 0.65] {
+        let point = gpui::point(slider.left() + slider.size.width * fraction, slider.center().y);
+        editor.simulate_mouse_move(point, Some(gpui::MouseButton::Left), Modifiers::none());
+    }
+    let end = gpui::point(slider.left() + slider.size.width * 0.65, slider.center().y);
+    editor.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    editor.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().theme.clone()), pink);
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().theme.clone()), orange);
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.browser.space().theme.is_none()));
+}
+
+#[gpui::test]
+fn theme_undo_while_the_picker_is_open_updates_its_handles_and_dismissal_adds_no_edit(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    click(&mut editor, "theme-preset-4");
+    let orange = view.read_with(cx, |view, _| view.browser.space().theme.clone());
+    click(&mut editor, "theme-preset-1");
+    editor.simulate_keystrokes("cmd-z");editor.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.browser.space().theme, orange);
+        assert_eq!(view.theme_editor.as_ref().unwrap().draft, orange.clone().unwrap());
+    });
+    editor.simulate_keystrokes("cmd-shift-z");editor.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.browser.space().theme.as_ref().unwrap().colors[0]), crate::theme_editor::preset_color(0, 1));
+    editor.simulate_keystrokes("cmd-z cmd-z");editor.run_until_parked();
+    assert!(!view.read_with(cx, |view, _| view.theme_editor.as_ref().unwrap().picked));
+    editor.simulate_keystrokes("escape");cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.browser.space().theme.is_none()));
+    assert_eq!(view.read_with(cx, |view, _| view.browser.sidebar_redo_action()), Some("Update Theme"));
+}
