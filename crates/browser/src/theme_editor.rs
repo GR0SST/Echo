@@ -203,12 +203,22 @@ impl BrowserWindow {
             || (pointer_y - 256.).max(-f32::from(window.bounds().origin.y).max(0.)),
             |bottom| bottom - HEIGHT,
         );
-        let top_extension = (-top).max(0.).min(f32::from(window.bounds().origin.y).max(0.));
-        let bottom_extension = (top + HEIGHT - f32::from(size.height)).max(0.);
-        let position = point(
+        let library_card = self.space_menu_is_in_library().then(||
+            self.sidebar_navigation.card_bounds.get(&space).and_then(|bounds| bounds.get())).flatten();
+        let desired = library_card.map_or_else(|| point(
             px((self.sidebar_width() + 14.).min((f32::from(size.width) - WIDTH - 8.).max(8.))),
-            px(top + top_extension),
-        );
+            px(top),
+        ), |card| point(card.right() + px(12.), px(pointer_y - HEIGHT / 2.)));
+        let host = window.bounds();
+        let mut panel = Bounds::new(host.origin + desired, gpui::size(px(WIDTH), px(HEIGHT)));
+        if let Some(work) = crate::native::display_work_area(window, cx) {
+            // Arc's 9 px popover padding plus 2 px outer screen clearance.
+            let inset = px(11.);
+            panel.origin.x = panel.origin.x.clamp(work.left() + inset, (work.right() - px(WIDTH) - inset).max(work.left() + inset));
+            panel.origin.y = panel.origin.y.clamp(work.top() + inset, (work.bottom() - px(HEIGHT) - inset).max(work.top() + inset));
+        }
+        let overlay_bounds = host.union(&panel);
+        let position = panel.origin - overlay_bounds.origin;
         self.theme_editor = Some(ThemeEditor {
             space,
             original: draft.clone(),
@@ -239,11 +249,10 @@ impl BrowserWindow {
             {
                 return;
             }
-            let Ok(mut bounds) = main.update(cx, |_, window, _| window.bounds()) else {
-                return;
-            };
-            bounds.origin.y -= px(top_extension);
-            bounds.size.height += px(top_extension + bottom_extension);
+            let Ok(current) = main.update(cx, |_, window, _| window.bounds()) else { return; };
+            // Dismiss instead of attaching a stale anchor after a window move.
+            if current.origin != host.origin { let _ = browser.update(cx, |view, cx| view.close_theme_editor(cx)); return; }
+            let bounds = overlay_bounds;
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: None,

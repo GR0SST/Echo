@@ -11525,7 +11525,10 @@ fn header_theme_editor_uses_the_originating_menu_anchor(cx: &mut TestAppContext)
         let mut editor = space_theme_editor(&view, visual);
         let panel = editor.debug_bounds("theme-editor").unwrap();
         assert_eq!(panel.size.width, gpui::px(359.));
-        assert_eq!(panel.bottom(), gpui::px(if pointer { 480. } else { 453. }));
+        // This test host starts at the display's top edge: the original
+        // 453/480 px bottom anchors would put the panel above the screen.
+        assert_eq!(panel.origin.y, gpui::px(11.));
+        assert_eq!(panel.bottom(), gpui::px(523.));
         editor.simulate_keystrokes("escape");
         visual.run_until_parked();
     }
@@ -12321,5 +12324,86 @@ fn document_fullscreen_checkpoint_keeps_window_intent_and_native_fullscreen_stil
         assert_eq!(saved.mode, WindowMode::Fullscreen);
         assert_eq!((saved.frame.width, saved.frame.height), (1920., 1080.));
         assert_eq!(saved.display.as_deref(), Some("browser-display"));
+    });
+}
+
+#[gpui::test]
+fn theme_editor_keeps_controls_on_screen_at_both_vertical_edges(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    visual.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(1080.)));
+    visual.run_until_parked();
+    let source = view.read_with(visual, |view, _| view.browser.space().id);
+    for y in [0., 1060.] {
+        visual.simulate_mouse_move(gpui::point(gpui::px(850.), gpui::px(y)), None, Modifiers::none());
+        dispatch_menu(visual, "Spaces", "Edit Theme…");
+        let mut editor = space_theme_editor(&view, visual);
+        let panel = editor.debug_bounds("theme-editor").unwrap();
+        let (host, screen) = editor.update(|window, cx| (window.bounds(), window.display(cx).unwrap().bounds()));
+        let global = gpui::Bounds::new(host.origin + panel.origin, panel.size);
+        assert!(global.top() >= screen.top() && global.bottom() <= screen.bottom());
+        assert!(global.left() >= screen.left() && global.right() <= screen.right());
+        for control in ["theme-preset-0", "theme-light"] {
+            let at = editor.debug_bounds(control).unwrap();
+            assert!(panel.contains(&at.center()), "{control} left its reachable panel");
+            click(&mut editor, control);
+        }
+        editor.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        view.read_with(visual, |view, _| {
+            assert!(view.theme_editor.is_none());
+            assert_eq!(view.browser.space().id, source);
+            assert_eq!(view.theme_appearance(), browser_core::themes::ThemeAppearance::Light);
+        });
+    }
+}
+
+#[gpui::test]
+fn library_theme_editor_anchors_to_its_captured_card_without_selecting_it(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    visual.simulate_resize(gpui::size(gpui::px(1000.), gpui::px(760.)));
+    visual.run_until_parked();
+    let (source, target) = view.read_with(visual, |view, _| (view.browser.space().id, view.browser.spaces[1].id));
+    dispatch_menu(visual, "Spaces", "Manage Spaces…");
+    visual.run_until_parked();
+    let card = visual.debug_bounds("library-space-1").unwrap();
+    for footer in [false, true] {
+        if footer {
+            click(visual, "library-space-overflow-1");
+            click(&mut tab_menu(&view, visual), "tab-menu-edit-theme-color");
+        } else { click(visual, "library-space-theme-1"); }
+        let mut editor = space_theme_editor(&view, visual);
+        let panel = editor.debug_bounds("theme-editor").unwrap();
+        assert_eq!(panel.origin.x, card.right() + gpui::px(12.));
+        assert_eq!(view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().space), target);
+        click(&mut editor, "theme-preset-4");
+        editor.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        view.read_with(visual, |view, _| {
+            assert_eq!(view.browser.space().id, source);
+            assert_eq!(view.browser.spaces[1].theme().colors[0], crate::theme_editor::preset_color(0, 4));
+        });
+    }
+}
+
+#[gpui::test]
+fn library_theme_editor_blocks_retired_popup_and_sidebar_focus_restoration(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_pages(cx);
+    dispatch_menu(visual, "Spaces", "Manage Spaces…");
+    click(visual, "library-space-theme-0");
+    let mut editor = space_theme_editor(&view, visual);
+    visual.update(|window, _| window.blur());
+    view.update(visual, |view, cx| {
+        view.close_popup_overlay(None, crate::window::PopupFocus::Restore, false, cx);
+        view.defer_sidebar_focus(cx);
+    });
+    visual.run_until_parked();
+    assert!(visual.update(|window, cx| window.focused(cx)).is_none());
+    assert!(editor.update(|window, cx| window.focused(cx)).is_some());
+    click(&mut editor, "theme-preset-4");
+    editor.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    view.read_with(visual, |view, _| {
+        assert!(view.sidebar_root_may_take_focus());
+        assert!(view.theme_editor.is_none());
     });
 }

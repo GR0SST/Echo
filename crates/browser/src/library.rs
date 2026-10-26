@@ -86,6 +86,7 @@ pub(crate) struct LibrarySpace {
     pub theme_image: Option<std::sync::Arc<gpui::RenderImage>>,
     pub foreground: Option<Hsla>,
     pub drag: Option<crate::space_drag::SpaceDrag>,
+    pub bounds: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
 /// Snapshot metadata only. Favorites, tabs, folders and their interactions are
@@ -117,6 +118,7 @@ impl LibraryProjection {
                     theme_image: None,
                     foreground: None,
                     drag: None,
+                    bounds: Default::default(),
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -516,6 +518,7 @@ fn render_card(
     sidebar: AnyElement,
 ) -> AnyElement {
     let target = space.id;
+    let painted_bounds = space.bounds.clone();
     let drops = events.clone();
     let handle_drag = space.drag.clone();
     let foreground = space.foreground.unwrap_or(colors.text);
@@ -600,6 +603,8 @@ fn render_card(
         // The host supplies its established Space theme mapping.
         .bg(if space.theme_image.is_some() { gpui::transparent_black() } else { (colors.card_surface)(space.hue) })
         .relative()
+        .child(gpui::canvas(|_, _, _| (), move |bounds, _, _, _| painted_bounds.set(Some(bounds)))
+            .absolute().inset_0().size_full())
         .when_some(space.theme_image.clone(), |card, image| card
             .child(gpui::img(image).absolute().inset_0().size_full().rounded_xl())
             .child(div().debug_selector(move || format!("library-space-material-{index}"))

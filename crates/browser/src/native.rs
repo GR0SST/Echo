@@ -24,6 +24,30 @@ pub fn view_of(window: &gpui::Window) -> Option<*mut c_void> {
     Some(view)
 }
 
+/// Available display area in the same coordinates as GPUI's window bounds.
+/// Backends without a toolkit work-area query use their display bounds.
+pub(crate) fn display_work_area(window: &gpui::Window, cx: &gpui::App) -> Option<gpui::Bounds<gpui::Pixels>> {
+    #[cfg(target_os = "macos")]
+    if let Some(view) = view_of(window) {
+        use objc2::runtime::AnyObject;
+        use objc2_foundation::NSRect;
+        unsafe {
+            let native: *mut AnyObject = objc2::msg_send![view as *mut AnyObject, window];
+            let screen: *mut AnyObject = objc2::msg_send![native, screen];
+            if !screen.is_null() {
+                let frame: NSRect = objc2::msg_send![screen, frame];
+                let visible: NSRect = objc2::msg_send![screen, visibleFrame];
+                return Some(gpui::Bounds::new(
+                    gpui::point(gpui::px((visible.origin.x - frame.origin.x) as f32),
+                        gpui::px((frame.size.height - visible.origin.y - visible.size.height + frame.origin.y) as f32)),
+                    gpui::size(gpui::px(visible.size.width as f32), gpui::px(visible.size.height as f32)),
+                ));
+            }
+        }
+    }
+    window.display(cx).map(|display| display.bounds())
+}
+
 /// Current responder ownership, rather than an asynchronously queued CEF
 /// notification. Backends without a native query keep the existing behavior.
 pub(crate) fn ui_owns_first_responder(window:&gpui::Window)->Option<bool> {

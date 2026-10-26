@@ -44,6 +44,7 @@ pub(crate) struct SidebarNavigation {
     pub(crate) media: Option<Entity<library::media::MediaView>>,
     boosts:Option<Entity<crate::boost_library::BoostLibrary>>,
     archive: Option<Entity<crate::library_archive::ArchiveLibrary>>,
+    pub(crate) card_bounds: std::collections::HashMap<SpaceId, Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>>,
     card_images: std::collections::HashMap<SpaceId, crate::space_theme::ProfileCardPreview>,
     media_events: Option<Subscription>,
     pub(crate) media_search_focus: bool,
@@ -74,6 +75,7 @@ impl SidebarNavigation {
             media: None,
             boosts:None,
             archive: None,
+            card_bounds: Default::default(),
             card_images: Default::default(),
             media_events: None,
             media_search_focus: false,
@@ -167,6 +169,7 @@ impl BrowserWindow {
     pub(crate) fn sidebar_root_may_take_focus(&self) -> bool {
         !self.save_prompt_active && self.user_profile_dialog.is_none()
             && self.command_bar.is_none()
+            && self.theme_editor.is_none()
             && self.tab_switcher.is_none()
             && self.find_bar.is_none()
             && self.tab_menu.is_none()
@@ -735,6 +738,7 @@ impl BrowserWindow {
             if let Some(space) = self.browser.spaces.iter().find(|space| space.id == card.id) {
                 let surface = self.theme_surface_for(space);
                 let height = (f32::from(self.sidebar_navigation.normal_content_size.height) - 76.).max(2.) as u32;
+                card.bounds = self.sidebar_navigation.card_bounds.entry(card.id).or_default().clone();
                 card.theme_image = Some(self.sidebar_navigation.card_images.entry(card.id).or_default().image_sized(surface, 240, height));
                 card.foreground = Some(self.theme_foreground_for(card.id));
             }
