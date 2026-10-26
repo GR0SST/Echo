@@ -33,6 +33,8 @@ mod private_availability_tests;
 mod missing_download_tests;
 #[path = "sidebar_width_inheritance_tests.rs"]
 mod sidebar_width_inheritance_tests;
+#[path = "suggestion_dismissal_tests.rs"]
+mod suggestion_dismissal_tests;
 
 use std::cell::RefCell;
 #[path = "split_drag_motion_tests.rs"]
@@ -838,6 +840,7 @@ fn command_bar_uses_profile_engine_and_remote_rows_are_selectable(cx: &mut TestA
         let bar = view.command_bar.as_mut().unwrap();
         assert!(bar.remote_task.is_none());
         bar.remote = vec!["rust language tutorial".into()];
+        bar.remote_engine = Some(browser_core::omnibox::SearchEngine::DuckDuckGo);
         cx.notify();
     });
     bar(&view, cx).simulate_keystrokes("down enter");

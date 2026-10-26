@@ -2,6 +2,7 @@
 
 pub mod calculator;
 pub mod search_settings;
+pub mod suggestion_dismissals;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,12 +31,13 @@ pub struct CommandBarSearchPreferences {
     #[serde(default = "search_settings::first_custom_id")]
     pub next_provider_id: u64,
     pub shortcut_mode: search_settings::ShortcutMode,
+    dismissed_suggestions: Vec<suggestion_dismissals::DismissedSuggestion>,
 }
 impl Default for CommandBarSearchPreferences {
     fn default() -> Self {
         Self { engine: SearchEngine::Google, suggestions: true, notice_dismissed: false,
             providers: search_settings::default_providers(), custom_default: None,
-            next_provider_id: search_settings::first_custom_id(), shortcut_mode: search_settings::ShortcutMode::default() }
+            next_provider_id: search_settings::first_custom_id(), shortcut_mode: search_settings::ShortcutMode::default(), dismissed_suggestions: Vec::new() }
     }
 }
 impl SearchEngine {

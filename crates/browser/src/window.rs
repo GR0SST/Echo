@@ -394,6 +394,7 @@ pub enum Target {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Suggestion {
+    Remote { engine: omnibox::SearchEngine, resolved: Resolved },
     Load(Resolved),
     AskChatGpt { query: String },
     Calculator { answer: String },
@@ -555,6 +556,7 @@ pub struct CommandBar {
     pub(crate) site_search: Option<omnibox::SiteSearch>,
     pub(crate) site_search_profile: Option<browser_core::UserProfileId>,
     pub(crate) remote: Vec<String>,
+    pub(crate) remote_engine: Option<omnibox::SearchEngine>,
     pub(crate) remote_generation: u64,
     pub(crate) remote_task: Option<Task<()>>,
     pub(crate) suggestions_privacy: bool,
@@ -1750,6 +1752,7 @@ impl BrowserWindow {
             site_search: None,
             site_search_profile: None,
             remote: Vec::new(),
+            remote_engine: None,
             remote_generation: 0,
             remote_task: None,
             suggestions_privacy: false,
@@ -2235,7 +2238,10 @@ impl BrowserWindow {
                 .map(|entry| Suggestion::History { title: entry.title.clone(), url: entry.url.clone() }));
         }
         if preferences.suggestions && preferences.suggestion_engine().is_some() && !self.browser.is_private() {
-            suggestions.extend(bar.remote.iter().map(|query| Suggestion::Load(preferences.search(query))));
+            if let Some(engine) = preferences.suggestion_engine().filter(|engine| bar.remote_engine == Some(*engine)) {
+                suggestions.extend(bar.remote.iter().filter(|query| !preferences.suggestion_dismissed(engine, query))
+                    .map(|query| Suggestion::Remote { engine, resolved: preferences.search(query) }));
+            }
         }
         let ask_chatgpt = chatgpt_enabled && !chatgpt_keyword
             && bar.target == Target::NewTab
@@ -2258,7 +2264,7 @@ impl BrowserWindow {
                     let preview = match &suggestions[bar.selected] {
                         Suggestion::SwitchToTab { url, .. } | Suggestion::History { url, .. }
                         | Suggestion::Load(Resolved::Url(url)) => display_url(url),
-                        Suggestion::Load(Resolved::Search { query, .. }) => query.clone(),
+                        Suggestion::Load(Resolved::Search { query, .. }) | Suggestion::Remote { resolved: Resolved::Search { query, .. }, .. } => query.clone(),
                         _ => query.text.clone(),
                     };
                     bar.input.update(cx, |input, cx| input.preview_navigation_text(&preview, cx));
@@ -2307,7 +2313,7 @@ impl BrowserWindow {
                 self.close_command_bar(cx);
                 return;
             }
-            Suggestion::Load(resolved) => {
+            Suggestion::Load(resolved) | Suggestion::Remote { resolved, .. } => {
                 if !self.page_content_visible() { self.sidebar_navigation.controller.select(&self.browser, crate::sidebar_pages::SidebarPage::Space(self.browser.space().id)); }
                 if let Target::Tab(id) = target {
                     if self.browser.all_tabs().any(|tab| tab.id == id && tab.url == resolved.url()) {
@@ -4473,17 +4479,21 @@ impl BrowserWindow {
             .into_any_element()
     }
 
+    pub(crate) fn restore_command_navigation_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(bar) = &mut self.command_bar {
+            if let Some(query) = bar.navigation_query.take() {
+                bar.input.update(cx, |input, cx| input.preview_navigation_text(&query.text, cx));
+            }
+        }
+    }
+
     pub(crate) fn delete_command_history_entry(&mut self, owner: browser_core::UserProfileId, url: &str, cx: &mut Context<Self>) {
         self.refresh_profile_projection();
         if self.browser.active_user_profile_id() != owner { return; }
         self.edit_browser(|browser| {
             if browser.active_user_profile_id() == owner { browser.delete_history_entry(owner, url); }
         });
-        if let Some(bar) = &mut self.command_bar {
-            if let Some(query) = bar.navigation_query.take() {
-                bar.input.update(cx, |input, cx| input.preview_navigation_text(&query.text, cx));
-            }
-        }
+        self.restore_command_navigation_preview(cx);
         let count = self.suggestions(cx).len();
         if let Some(bar) = &mut self.command_bar { bar.selected = bar.selected.min(count.saturating_sub(1)); }
         cx.notify();
@@ -4595,10 +4605,14 @@ impl BrowserWindow {
                 };
                 let archived_id = match &suggestion { Suggestion::ArchivedTab { id, .. } => Some(*id), _ => None };
                 let history_url = match &suggestion { Suggestion::History { url, .. } => Some(url.clone()), _ => None };
+                let remote_delete = match &suggestion {
+                    Suggestion::Remote { engine, resolved: Resolved::Search { query, .. } } => Some((*engine, query.clone(), bar.input.clone(), bar.remote_generation)),
+                    _ => None,
+                };
                 let history_result = history_url.is_some();
                 let row_group = SharedString::from(format!("command-result-{index}"));
                 let ask_chatgpt = matches!(&suggestion, Suggestion::AskChatGpt { .. });
-                let direct_search = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }));
+                let direct_search = matches!(&suggestion, Suggestion::Load(Resolved::Search { .. }) | Suggestion::Remote { resolved: Resolved::Search { .. }, .. });
                 let search_row = direct_search || matches!(&suggestion, Suggestion::Calculator { .. });
                 let extension_row=match &suggestion {
                     Suggestion::Action{command:Command::ExtensionAction(id,profile),..} if *profile==self.browser.active_user_profile_id()=>self.extensions.entries.iter().find(|extension|extension.key()==Some(*id)).cloned(),
@@ -4606,11 +4620,11 @@ impl BrowserWindow {
                 };
                 let (icon, label, detail): (crate::icons::Icon, String, String) = match suggestion {
                     Suggestion::AskChatGpt { query } => (crate::icons::Icon::Search, query, "Ask ChatGPT".into()),
-                    Suggestion::Load(Resolved::Search { query, .. }) => {
+                    Suggestion::Load(Resolved::Search { query, .. }) | Suggestion::Remote { resolved: Resolved::Search { query, .. }, .. } => {
                         (crate::icons::Icon::Search, query, String::new())
                     }
                     Suggestion::Calculator { answer } => (crate::icons::Icon::Calculator, format!("= {answer}"), "Copy".into()),
-                    Suggestion::Load(Resolved::Url(url)) => {
+                    Suggestion::Load(Resolved::Url(url)) | Suggestion::Remote { resolved: Resolved::Url(url), .. } => {
                         let display = display_url(&url);
                         let label = current_url_tab.map(|tab| self.browser.item_title(tab.id)).unwrap_or_else(||
                             std::iter::once(&("chatgpt.com", "ChatGPT")).chain(omnibox::TOP_DOMAINS.iter()).find(|(domain, _)| display.trim_end_matches('/') == *domain)
@@ -4715,6 +4729,15 @@ impl BrowserWindow {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.delete_command_history_entry(history_owner, &url, cx);
+                        })).child(crate::icons::control(crate::icons::Icon::Close))))
+                    .when_some(remote_delete, |row, (engine, query, input, generation)| row.child(div()
+                        .id(("delete-suggestion", index))
+                        .debug_selector(|| self.sidebar_debug_name((move || format!("delete-suggestion-{index}"))()))
+                        .px_2().rounded_md().invisible().group_hover(row_group.clone(), |s| s.visible())
+                        .hover(|s| s.bg(hsla(0., 0., ink, 0.12)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.dismiss_remote_suggestion(history_owner, &input, generation, engine, &query, cx);
                         })).child(crate::icons::control(crate::icons::Icon::Close))))
                     .when(!search_row && !completed_domain && !action_result && current_url_tab.is_none(), |this| this.child(div().size(px(24.0)).flex_none().flex().items_center().justify_center().rounded(px(5.0))
                         .when(history_result && !selected, |arrow| arrow.invisible().group_hover(row_group, |s| s.visible()))

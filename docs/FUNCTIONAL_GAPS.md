@@ -2,6 +2,12 @@
 
 ## Active code/test-only claims (2026-10-26)
 
+- `t3-71384893` claims **#65 held folder-drag auto-scroll**. Verifiable-by-tests: reuse the existing tab edge-scroll timer/physics for a validated folder payload, including hold, cancellation, Space/profile/workspace changes and drop cleanup. No new native gesture or visual policy.
+
+- `t3-71384893` claims **#71 missing Check for Updates Command Bar route**. Verifiable-by-tests: route to the existing app-owned update action/window, typed aliases, source retention and cancellation. No transport, installer or presentation changes.
+
+- `t3-71384893` owns **#39 remote suggestion dismissal** (implemented and tested). Verifiable-by-tests: profile/provider-scoped persisted suppression, existing delete-control routing, stale callback guards and history isolation. Supported transport rows only; no provider-account deletion API or native/visual qualification.
+
 - `t3-71384893` owns **#63 sidebar width inheritance** (implemented and tested): fresh normal-window requests capture the committed source width, while restored-window width is already persisted. Scope: request plumbing and GPUI/session tests, verifiable-by-tests; native drag/visual/platform acceptance excluded.
 
 - `t3-71384893`: **#55 private-window action availability** implemented; **#81 moved/deleted completed downloads** implemented and tested. Scope: shared GPUI/core logic and automated tests only; no screen, Arc reference or native-window qualification. These parts are verifiable-by-tests by inspection; broader platform/visual acceptance stays partial.
@@ -56,7 +62,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 36 | L166: Open Little Arc or Peek in… (pick a Space) | M | Complete reference-qualified cross-profile Little/Peek promotion without leaking storage or losing the lookup on failure. |
 | 37 | L390: Toolbar: Open in (Space, "More Spaces", "Search Spaces…"), Change profile, Extensions, Copy URL, downloads | M | Connect Little's extension/download controls to existing profile-scoped services. |
 | 38 | L306: Running an extension by name ("Extension …") | S | Invoke a matching enabled profile-owned extension action from the Command Bar through the engine bridge. |
-| 39 | L297: Removing a suggestion ("Delete Suggestion") | M | Persist dismissal of supported remote suggestion results without deleting unrelated local visits. |
+| 39 | L297: Removing a suggestion ("Delete Suggestion") | M | **Test-verifiable sub-gap implemented:** the existing delete control suppresses supported remote completion text locally per profile/provider, without deleting history or the typed search. Popup/request/provider/profile guards reject stale callbacks; session persistence and bounded storage are tested. Provider-account deletion and native/visual qualification are excluded. |
 | 40 | L296: Site Search: Tab or Space after a site's name searches that site; has a management menu | M | Discover supported site-search templates and persist per-profile activation/management. |
 | 41 | L292: Search engine suggestions (Chromium: Search Suggestion, Navigate Suggest) | M | Add missing provider completion transports and distinguish navigable suggestions from search text. |
 | 42 | L295: Popular domains (Popular Domains, ARC_TopDomains) | M | Expand the independent common-domain catalog and qualify ordering against local/history results. |
@@ -428,3 +434,24 @@ existing AI test ignored). `scripts/check-targets.sh` passes both Linux GNU and
 Windows MSVC for the combined code/test-only batch. Logs:
 `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/sidebar-width-{focused,full}.log`
 and `code-only-targets.log` in the same directory.
+
+### Remote suggestion dismissal — code/test-only delivery
+
+Supported Google/Bing/DuckDuckGo completions retain their provider provenance
+in the Command Bar. The existing delete control stores a local profile-owned
+suppression key for that provider/text, bounded to 256 recent choices. It never
+removes local history or blocks typing the same search directly. A fresh remote
+reply is filtered against current preferences, including another window's
+dismissal. New request generations, popup replacement, provider changes and
+profile changes revoke captured delete callbacks. No account deletion endpoint
+is called, and no suggestion transport was added.
+
+GPUI tests use only synthetic completion payloads. They exercise the real delete
+control, retained history/typed search/page identity, reopened popups, provider
+isolation and stale request/popup/profile callbacks. Core tests cover bounded
+eviction, normalization, unsupported payloads, legacy defaults and per-profile
+session round trips. Native appearance remains unqualified.
+
+Validation for #39: the full workspace suite passes (1,374 browser, 287 core
+and all remaining enabled suites; one existing AI test ignored). New coverage:
+two GPUI and three core regressions. Log: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/suggestion-dismiss-full.log`.

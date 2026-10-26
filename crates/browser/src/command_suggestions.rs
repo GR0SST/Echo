@@ -32,6 +32,25 @@ fn fetch(engine: SearchEngine, query: &str) -> Vec<String> {
 }
 
 impl BrowserWindow {
+    pub(crate) fn dismiss_remote_suggestion(&mut self, owner: browser_core::UserProfileId,
+        input: &gpui::Entity<crate::text_input::TextInput>, generation: u64, engine: SearchEngine,
+        query: &str, cx: &mut Context<Self>) {
+        self.refresh_profile_projection();
+        let preferences = &self.browser.active_user_profile().settings.search;
+        if self.browser.is_private() || self.browser.active_user_profile_id() != owner
+            || !preferences.suggestions || preferences.suggestion_engine() != Some(engine)
+            || preferences.suggestion_dismissed(engine, query)
+            || self.command_bar.as_ref().is_none_or(|bar| bar.input != *input
+                || bar.remote_generation != generation || bar.remote_engine != Some(engine)
+                || bar.site_search.is_some() || !matches!(bar.target, Target::NewTab | Target::Tab(_))
+                || !bar.remote.iter().any(|row| row == query)) { return; }
+        self.edit_browser(|browser| browser.active_user_profile_mut().settings.search.dismiss_suggestion(engine, query));
+        self.restore_command_navigation_preview(cx);
+        let count = self.suggestions(cx).len();
+        if let Some(bar) = &mut self.command_bar { bar.selected = bar.selected.min(count.saturating_sub(1)); }
+        cx.notify();
+    }
+
     pub(crate) fn reconcile_managed_search(&mut self, cx: &mut Context<Self>) {
         let profile=self.browser.active_user_profile_id();
         let preferences=&self.browser.active_user_profile().settings.search;
@@ -46,7 +65,7 @@ impl BrowserWindow {
             bar.input.update(cx,|input,cx|input.set_placeholder("Search or Enter URL…",cx));
         }
         if !valid || preferences.suggestion_engine().is_none() {
-            bar.remote.clear();bar.remote_task.take();
+            bar.remote.clear();bar.remote_engine=None;bar.remote_task.take();
         }
     }
     pub(crate) fn scope_site_search(&mut self, cx: &mut Context<Self>) -> bool {
@@ -62,7 +81,7 @@ impl BrowserWindow {
         if site == SiteSearch::ChatGpt && !chatgpt_enabled { return false; }
         bar.site_search = Some(site);
         bar.site_search_profile = Some(profile);
-        bar.remote.clear();
+        bar.remote.clear();bar.remote_engine=None;
         bar.remote_task.take();
         bar.remote_generation += 1;
         bar.selected = 0;
@@ -96,7 +115,7 @@ impl BrowserWindow {
                 bar.input.update(cx, |input, cx| input.complete_suffix(domain, cx));
             }
         }
-        bar.remote.clear();
+        bar.remote.clear();bar.remote_engine=None;
         bar.remote_task.take();
         bar.remote_generation += 1;
         let generation = bar.remote_generation;
@@ -125,6 +144,7 @@ impl BrowserWindow {
                 let Some(bar) = &mut this.command_bar else { return; };
                 if bar.input != input || bar.remote_generation != generation || bar.query(cx) != query { return; }
                 bar.remote = rows;
+                bar.remote_engine = Some(engine);
                 cx.notify();
             });
         }));
