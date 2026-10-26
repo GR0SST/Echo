@@ -51,7 +51,7 @@ impl ThemeEditor {
     }
 }
 
-fn color(c: ThemeColor) -> gpui::Rgba {
+pub(crate) fn color(c: ThemeColor) -> gpui::Rgba {
     gpui::Rgba {
         r: c.red,
         g: c.green,
@@ -59,7 +59,7 @@ fn color(c: ThemeColor) -> gpui::Rgba {
         a: 1.,
     }
 }
-fn chevron(forward: bool) -> AnyElement {
+pub(crate) fn chevron(forward: bool) -> AnyElement {
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
@@ -87,7 +87,7 @@ fn chevron(forward: bool) -> AnyElement {
     .size(px(18.))
     .into_any_element()
 }
-fn mode_icon(mode: ThemeAppearance) -> AnyElement {
+pub(crate) fn mode_icon(mode: ThemeAppearance) -> AnyElement {
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {

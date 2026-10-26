@@ -11070,22 +11070,7 @@ fn closing_import_owner_cancels_worker_and_discards_a_late_result(cx:&mut TestAp
     view.update(cx,|v,cx|v.close_window(cx));cx.run_until_parked();panel.run_until_parked();assert_eq!(owner.read_settings(|b|b.spaces.len()),before);
 }
 #[gpui::test]
-fn onboarding_default_is_explicit_and_cancellation_never_completes_that_step(cx:&mut TestAppContext) {
-    use crate::browser_registration::{BrowserRegistration,DefaultState};
-    struct Fake(std::sync::atomic::AtomicUsize);
-    impl BrowserRegistration for Fake {fn state(&self)->DefaultState {DefaultState::Other}fn request(&self)->Result<DefaultState,String>{self.0.fetch_add(1,std::sync::atomic::Ordering::Relaxed);Err("Cancelled".into())}}
-    let (view,cx)=open(cx);let fake=std::sync::Arc::new(Fake(std::sync::atomic::AtomicUsize::new(0)));
-    cx.cx.update(|cx|cx.set_global(crate::setup::Registration(fake.clone())));
-    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(browser_core::onboarding::SetupStep::DefaultBrowser));v.open_setup(true,cx);});
-    let (dialog,mut panel)=local_setup(&view,cx);assert_eq!(fake.0.load(std::sync::atomic::Ordering::Relaxed),0);
-    click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();assert_eq!(fake.0.load(std::sync::atomic::Ordering::Relaxed),1);
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(browser_core::onboarding::SetupStep::DefaultBrowser));
-    click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(browser_core::onboarding::SetupStep::Basics));
-    click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()));
-}
-
-#[gpui::test]
-fn onboarding_welcome_intro_waits_for_its_arrow_then_continues_to_theme(cx: &mut TestAppContext) {
+fn onboarding_welcome_intro_waits_for_its_arrow_then_continues_to_import(cx: &mut TestAppContext) {
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Welcome));v.open_setup(true,cx);});
@@ -11101,12 +11086,13 @@ fn onboarding_welcome_intro_waits_for_its_arrow_then_continues_to_theme(cx: &mut
     assert!(panel.debug_bounds("welcome-minimize").is_some());
     assert!(dialog.read_with(&panel,|d,_|d.welcome_frame.is_some()));
     click(&mut panel,"welcome-continue");cx.run_until_parked();
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Import));
     // The desktop-wide intro gives way to setup over the browser window.
     let (dialog,mut panel)=local_setup(&view,cx);
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Theme));
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Import));
     assert!(dialog.read_with(&panel,|d,_|d.welcome_frame.is_none()));
-    assert!(panel.debug_bounds("setup-theme-0").is_some());
+    assert!(panel.debug_bounds("onboarding-card").is_some());
+    assert!(panel.debug_bounds("import-none").is_some());
 }
 
 #[gpui::test]
@@ -11117,12 +11103,12 @@ fn onboarding_favorite_toggles_survive_redirects_and_leave_no_tabs(cx: &mut Test
     let (_,mut panel)=local_setup(&view,cx);
     let tabs=|cx:&mut VisualTestContext|view.read_with(cx,|v,_|v.browser.all_tabs().count());
     let before=tabs(cx);
-    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
+    click(&mut panel,"setup-favorite-1");cx.run_until_parked();
     // Gmail redirects to sign-in once it loads.
     view.update(cx,|v,_|{let id=v.browser.favorite_for_url("https://mail.google.com").unwrap();v.edit_browser(|b|b.set_url(id,"https://accounts.google.com/signin"));});
-    for _ in 0..3 {click(&mut panel,"setup-favorite-0");cx.run_until_parked();click(&mut panel,"setup-favorite-0");cx.run_until_parked();}
+    for _ in 0..3 {click(&mut panel,"setup-favorite-1");cx.run_until_parked();click(&mut panel,"setup-favorite-1");cx.run_until_parked();}
     view.read_with(cx,|v,_|assert_eq!(v.browser.active_user_profile().favorites.len(),1));
-    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
+    click(&mut panel,"setup-favorite-1");cx.run_until_parked();
     view.read_with(cx,|v,_|assert!(v.browser.active_user_profile().favorites.is_empty()));
     assert_eq!(tabs(cx),before);
 }
@@ -11134,49 +11120,81 @@ fn onboarding_return_skips_the_intro_at_once_and_every_step_has_window_buttons(c
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Welcome));v.open_setup(true,cx);});
     let (_,mut panel)=local_setup(&view,cx);
     panel.simulate_keystrokes("enter");panel.run_until_parked();cx.run_until_parked();
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Import));
     let (dialog,mut panel)=local_setup(&view,cx);
-    for step in [SetupStep::Theme,SetupStep::Favorites,SetupStep::Import,SetupStep::DefaultBrowser] {
+    for step in [SetupStep::Import,SetupStep::Favorites,SetupStep::Theme] {
         assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(step));
         for id in ["setup-window-close","setup-window-minimize","setup-window-zoom"] { assert!(panel.debug_bounds(id).is_some(),"{id} on {step:?}"); }
         let left=panel.debug_bounds("setup-window-close").unwrap().origin;
         assert_eq!((left.x,left.y),(gpui::px(12.),gpui::px(16.)));
-        if step==SetupStep::Import { click(&mut panel,"setup-later"); } else { panel.simulate_keystrokes("enter"); }
+        if step==SetupStep::Import { click(&mut panel,"import-none"); }
+        panel.simulate_keystrokes("enter");
         panel.run_until_parked();cx.run_until_parked();
     }
+    // The theme is the last step: Return enters the browser.
+    assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()&&v.setup.is_none()));
 }
 
 #[gpui::test]
-fn onboarding_theme_and_favorites_resume_without_duplicating_favorites(cx: &mut TestAppContext) {
+fn onboarding_favorites_and_theme_resume_go_back_and_never_duplicate(cx: &mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Favorites));v.open_setup(true,cx);});
+    let (dialog,mut panel)=local_setup(&view,cx);
+    let gmail=|cx:&mut VisualTestContext|view.read_with(cx,|v,_|v.browser.active_user_profile().favorites.iter().filter(|t|t.url=="https://mail.google.com").count());
+    let active=view.read_with(cx,|v,_|v.browser.space().active_tab);
+    click(&mut panel,"setup-favorite-1");cx.run_until_parked();
+    assert_eq!(gmail(cx),1);
+    // A picked app stays unloaded: the selection behind the sheet is kept.
+    assert_eq!(view.read_with(cx,|v,_|v.browser.space().active_tab),active);
+    click(&mut panel,"setup-next");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
+    click(&mut panel,"setup-theme-2");cx.run_until_parked();
+    view.read_with(cx,|v,_|assert_eq!(v.browser.space().theme().colors[0],crate::theme_editor::preset_color(0,2)));
+    // Back returns to Favorites with the pick intact; reopening keeps it single.
+    click(&mut panel,"setup-back");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Favorites));
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Favorites));
+    view.update(cx,|v,cx|{v.close_setup(cx);v.open_setup(true,cx);});let (_,mut panel)=local_setup(&view,cx);
+    assert_eq!(gmail(cx),1);
+    click(&mut panel,"setup-favorite-1");cx.run_until_parked();
+    assert_eq!(gmail(cx),0);
+    click(&mut panel,"setup-later");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
+    click(&mut panel,"setup-later");cx.run_until_parked();
+    assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()));
+}
+
+#[gpui::test]
+fn onboarding_theme_picker_sets_color_appearance_and_intensity(cx: &mut TestAppContext) {
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Theme));v.open_setup(true,cx);});
-    let (_,mut panel)=local_setup(&view,cx);
-    click(&mut panel,"setup-theme-2");cx.run_until_parked();
-    view.read_with(cx,|v,_|assert_eq!(v.browser.space().theme().colors[0],crate::theme_editor::preset_color(0,2)));
-    click(&mut panel,"setup-next");cx.run_until_parked();
-    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
-    view.read_with(cx,|v,_|assert_eq!(v.browser.active_user_profile().favorites.iter().filter(|t|t.url=="https://mail.google.com").count(),1));
-    panel.simulate_keystrokes("escape");panel.run_until_parked();cx.run_until_parked();
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Favorites));
-    view.update(cx,|v,cx|v.open_setup(true,cx));let (_,mut panel)=local_setup(&view,cx);
-    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
-    view.read_with(cx,|v,_|assert!(!v.browser.active_user_profile().favorites.iter().any(|t|t.url=="https://mail.google.com")));
-    click(&mut panel,"setup-next");cx.run_until_parked();
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Import));
+    let (dialog,mut panel)=local_setup(&view,cx);
+    let field=panel.debug_bounds("theme-pick-field").unwrap();
+    // Straight up from the center is red at full saturation.
+    let top=gpui::point(field.center().x,field.origin.y+gpui::px(20.));
+    panel.simulate_mouse_move(top,None,gpui::Modifiers::none());panel.simulate_mouse_down(top,gpui::MouseButton::Left,gpui::Modifiers::none());panel.simulate_mouse_up(top,gpui::MouseButton::Left,gpui::Modifiers::none());cx.run_until_parked();
+    let (h,sat,_)=view.read_with(cx,|v,_|v.browser.space().theme().colors[0].hsv());
+    assert!(h<10.||h>350.,"{h}");assert!(sat>0.7,"{sat}");
+    click(&mut panel,"setup-theme-add");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.space().theme().colors.len()),2);
+    click(&mut panel,"setup-mode-dark");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.settings.theme_appearance),browser_core::themes::ThemeAppearance::Dark);
+    let wave=panel.debug_bounds("setup-theme-wave").unwrap();
+    let right=gpui::point(wave.origin.x+wave.size.width-gpui::px(1.),wave.center().y);
+    panel.simulate_mouse_move(right,None,gpui::Modifiers::none());panel.simulate_mouse_down(right,gpui::MouseButton::Left,gpui::Modifiers::none());panel.simulate_mouse_up(right,gpui::MouseButton::Left,gpui::Modifiers::none());cx.run_until_parked();
+    assert!(view.read_with(cx,|v,_|v.browser.space().theme().intensity)>0.95);
+    assert!(dialog.read_with(&panel,|d,_|d.theme_picked));
 }
 
 #[gpui::test]
-fn onboarding_shortcuts_escape_returns_to_basics_and_done_completes_setup(cx:&mut TestAppContext) {
+fn onboarding_saved_at_a_retired_step_finishes_setup(cx:&mut TestAppContext) {
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);
-    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Basics));v.open_setup(true,cx);});
-    let (dialog,mut panel)=local_setup(&view,cx);
-    click(&mut panel,"setup-shortcuts");assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Shortcuts);
-    panel.simulate_keystrokes("escape");panel.run_until_parked();
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Basics));
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Basics));
-    click(&mut panel,"setup-next");cx.run_until_parked();assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()&&v.setup.is_none()));
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::DefaultBrowser));v.open_setup(true,cx);});
+    cx.run_until_parked();
+    assert!(view.read_with(cx,|v,_|v.browser.onboarding.is_none()&&v.setup.is_none()));
 }
 
 #[gpui::test]
@@ -11222,22 +11240,24 @@ fn local_setup_card_stays_centered_when_its_owner_resizes(cx:&mut TestAppContext
 }
 
 #[gpui::test]
-fn onboarding_import_returns_directly_to_default_step_without_an_extra_completion_screen(cx:&mut TestAppContext) {
+fn onboarding_import_goes_into_the_current_profile_then_on_to_favorites(cx:&mut TestAppContext) {
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);let _fixture=import_fixture(cx);
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Import));v.open_setup(true,cx);});
     let (dialog,mut panel)=local_setup(&view,cx);
     // The step lists installed browsers itself, the first already chosen.
     assert_eq!(dialog.read_with(&panel,|d,_|d.source),Some(0));
-    assert!(panel.debug_bounds("import-source-0").is_some());
-    click(&mut panel,"setup-next");
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Destination);
-    click(&mut panel,"setup-back");
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Import));
-    click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    click(&mut panel,"import-none");
+    assert_eq!(dialog.read_with(&panel,|d,_|(d.source,d.no_import)),(None,true));
+    click(&mut panel,"import-source-0");
+    // First run has one profile, so there is no destination question.
+    let profiles=view.read_with(cx,|v,_|v.browser.user_profiles().count());
+    click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Bookmarks);
     click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::DefaultBrowser));
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::DefaultBrowser));
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Favorites));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Favorites));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.user_profiles().count()),profiles);
 }
 
 #[gpui::test]
@@ -11253,11 +11273,10 @@ fn onboarding_imports_a_whole_browser_with_every_profile_without_the_bookmark_pi
     cx.cx.update(|cx|cx.set_global(crate::setup::ImportSources(vec![importer::SourceProfile {browser:importer::BrowserKind::Chrome,name:"Chrome".into(),path:root.path().into()}])));
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Import));v.open_setup(true,cx);});
     let (dialog,mut panel)=local_setup(&view,cx);
-    panel.simulate_keystrokes("enter");panel.run_until_parked();
-    click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    panel.simulate_keystrokes("enter");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
     assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Passwords);
     click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
-    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::DefaultBrowser));
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Favorites));
     view.read_with(cx,|v,_|{
         let work=v.browser.user_profiles().find(|p|p.name()=="Work").expect("second profile recreated").id();
         let spaces:Vec<_>=v.browser.spaces.iter().filter(|s|s.name=="From Chrome").map(|s|s.user_profile_id).collect();

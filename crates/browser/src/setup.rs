@@ -60,6 +60,8 @@ impl gpui::Global for ImportSources {}
 struct Artwork {
     brand: Option<Arc<gpui::RenderImage>>,
     browsers: std::collections::HashMap<BrowserKind, Arc<gpui::RenderImage>>,
+    /// Each browser icon's dominant color, for its tile in the import list.
+    tints: std::collections::HashMap<BrowserKind, gpui::Rgba>,
 }
 #[derive(Clone)]
 struct ArtworkTask(futures::future::Shared<gpui::Task<Arc<Artwork>>>);
@@ -104,8 +106,22 @@ impl Artwork {
                 }
             }
         }
-        Self { brand, browsers }
+        let tints = browsers.iter().filter_map(|(kind, icon)| Some((*kind, dominant(icon)?))).collect();
+        Self { brand, browsers, tints }
     }
+}
+/// The average of an icon's vivid pixels (images are BGRA).
+fn dominant(icon: &gpui::RenderImage) -> Option<gpui::Rgba> {
+    let bytes = icon.as_bytes(0)?;
+    let (mut sum, mut weight) = ([0f32; 3], 0f32);
+    for p in bytes.chunks_exact(4) {
+        let [b, g, r, a] = [p[0], p[1], p[2], p[3]].map(|v| v as f32 / 255.);
+        let saturation = r.max(g).max(b) - r.min(g).min(b);
+        let w = a * saturation * saturation;
+        sum = [sum[0] + r * w, sum[1] + g * w, sum[2] + b * w];
+        weight += w;
+    }
+    (weight > 0.).then(|| gpui::Rgba { r: sum[0] / weight, g: sum[1] / weight, b: sum[2] / weight, a: 1. })
 }
 #[derive(Clone)]
 pub(crate) struct Registration(pub Arc<dyn BrowserRegistration>);
@@ -189,8 +205,11 @@ enum Event {
     Close,
     Imported(bool),
     Advance(SetupStep),
-    Theme(usize),
+    Theme(browser_core::themes::SpaceTheme),
+    Appearance(browser_core::themes::ThemeAppearance),
     Favorite(usize),
+    /// Back to the previous onboarding step.
+    Retreat(SetupStep),
     /// Minimize or zoom the browser window under the onboarding sheet.
     Window(crate::menus::WindowOperation),
     Publish(Rc<ImportedData>, Option<UserProfileId>, String),
@@ -223,8 +242,6 @@ pub(crate) struct SetupDialog {
     credentials: Vec<importer::Credential>,
     password_file: bool,
     credential_store: Arc<dyn importer::CredentialStore>,
-    registration: Arc<dyn BrowserRegistration>,
-    default_state: DefaultState,
     /// False while installed browsers are still being looked up.
     sources_ready: bool,
     artwork: Arc<Artwork>,
@@ -234,6 +251,18 @@ pub(crate) struct SetupDialog {
     /// The current per-frame orb image; replaced (and released) every frame.
     welcome_orb: Option<Arc<gpui::RenderImage>>,
     welcome_field: Option<Arc<gpui::RenderImage>>,
+    /// The onboarding background, redrawn each frame.
+    field: Option<Arc<gpui::RenderImage>>,
+    /// The profile onboarding imports into; first run has only this one.
+    home_profile: UserProfileId,
+    /// "No, I want to type in all my passwords again." on the import step.
+    pub(crate) no_import: bool,
+    /// The theme being picked, and whether the user has picked one yet.
+    pub(crate) theme: browser_core::themes::SpaceTheme,
+    pub(crate) theme_picked: bool,
+    theme_page: usize,
+    theme_field: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+    theme_wave: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 impl Drop for SetupDialog {
     fn drop(&mut self) {
@@ -249,11 +278,17 @@ impl Focusable for SetupDialog {
         self.focus.clone()
     }
 }
-// URLs are present verbatim in the installed Arc resource strings.
-const FAVORITES: [(&str, &str); 3] = [
+/// Arc's onboarding app grid, in its order.
+pub(crate) const FAVORITES: [(&str, &str); 9] = [
+    ("X", "https://x.com"),
     ("Gmail", "https://mail.google.com"),
     ("Google Calendar", "https://calendar.google.com"),
+    ("Spotify", "https://open.spotify.com"),
     ("YouTube", "https://www.youtube.com"),
+    ("Notion", "https://www.notion.so"),
+    ("Slack", "https://app.slack.com"),
+    ("Figma", "https://www.figma.com"),
+    ("Outlook", "https://outlook.live.com/mail"),
 ];
 impl SetupDialog {
     fn new(browser: &browser_core::Browser, onboarding: bool, cx: &mut Context<Self>) -> Self {
@@ -283,12 +318,8 @@ impl SetupDialog {
             });
         })
         .detach();
-        let registration = cx
-            .try_global::<Registration>()
-            .map(|r| r.0.clone())
-            .unwrap_or_else(|| Arc::new(SystemRegistration));
         let step = if onboarding {
-            Step::Onboard(browser.onboarding.unwrap_or(SetupStep::Theme))
+            Step::Onboard(browser.onboarding.unwrap_or(SetupStep::Import))
         } else {
             Step::Sources
         };
@@ -322,12 +353,10 @@ impl SetupDialog {
             published: None,
             credentials: vec![],
             password_file: false,
-            default_state: registration.state(),
             credential_store: cx
                 .try_global::<CredentialStorage>()
                 .map(|s| s.0.clone())
                 .unwrap_or_else(|| Arc::new(crate::import_credentials::SystemCredentialStore)),
-            registration,
             sources_ready,
             artwork: Arc::default(),
             // Arc's music starts with the orb and keeps playing into setup.
@@ -337,6 +366,14 @@ impl SetupDialog {
             welcome_frame: None,
             welcome_orb: None,
             welcome_field: None,
+            field: None,
+            home_profile: browser.active_user_profile_id(),
+            no_import: false,
+            theme: browser.space().theme(),
+            theme_picked: browser.space().theme.is_some(),
+            theme_page: 0,
+            theme_field: Rc::default(),
+            theme_wave: Rc::default(),
         };
         this.preselect_source();
         this
@@ -346,6 +383,7 @@ impl SetupDialog {
     fn preselect_source(&mut self) {
         if self.step == Step::Onboard(SetupStep::Import)
             && self.source.is_none()
+            && !self.no_import
             && !self.sources.is_empty()
         {
             self.source = Some(0);
@@ -397,6 +435,7 @@ impl SetupDialog {
                 Step::SafariAccess => false,
                 Step::Destination => self.destination.is_some(),
                 Step::Reading => false,
+                Step::Onboard(SetupStep::Import) => self.source.is_some() || self.no_import,
                 _ => true,
             }
     }
@@ -405,9 +444,9 @@ impl SetupDialog {
             return;
         }
         match self.step {
-            Step::Onboard(SetupStep::Import) if self.source.is_some() => self.choose_source(cx),
-            Step::Onboard(SetupStep::Import) => self.change(Step::Sources, cx),
-            Step::Onboard(SetupStep::DefaultBrowser) => self.request_default(cx),
+            Step::Onboard(SetupStep::Import) if self.no_import => self.advance(SetupStep::Import, cx),
+            Step::Onboard(SetupStep::Import) => self.choose_source(cx),
+
             // Return or the arrow continues at once, even mid-intro.
             Step::Onboard(step) => self.advance(step, cx),
             Step::Sources => self.choose_source(cx),
@@ -434,9 +473,40 @@ impl SetupDialog {
         if needs_access {
             self.change(Step::SafariAccess, cx);
             open_privacy_settings();
+        } else if self.onboarding {
+            // First run has a single profile: import straight into it.
+            self.destination = Some(Some(self.home_profile));
+            self.read(cx);
         } else {
             self.change(Step::Destination, cx);
         }
+    }
+    /// Onboarding's Back link.
+    fn retreat(&mut self, cx: &mut Context<Self>) {
+        if self.busy || self.published.is_some() {
+            return;
+        }
+        match self.step {
+            Step::Onboard(step) => {
+                if let Some(previous) = step.previous() {
+                    cx.emit(Event::Retreat(step));
+                    self.change(Step::Onboard(previous), cx);
+                }
+            }
+            Step::SafariAccess | Step::Bookmarks | Step::Passwords => {
+                self.change(Step::Onboard(SetupStep::Import), cx)
+            }
+            _ => self.back(cx),
+        }
+    }
+    fn has_back(&self) -> bool {
+        !self.busy
+            && self.published.is_none()
+            && match self.step {
+                Step::Onboard(step) => step.previous().is_some(),
+                Step::SafariAccess | Step::Bookmarks | Step::Passwords => true,
+                _ => false,
+            }
     }
     fn later(&mut self, cx: &mut Context<Self>) {
         if self.busy {
@@ -670,34 +740,6 @@ impl SetupDialog {
                     Err(error) => this.error = Some(error),
                 }
                 cx.notify();
-            });
-        })
-        .detach();
-    }
-    fn request_default(&mut self, cx: &mut Context<Self>) {
-        let registration = self.registration.clone();
-        self.busy = true;
-        self.error = None;
-        let Some(task) = registration_task(registration, cx) else {
-            self.busy = false;
-            return;
-        };
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(state) => {
-                        this.default_state = state;
-                        if state == DefaultState::Ours {
-                            this.advance(SetupStep::DefaultBrowser, cx);
-                        }
-                    }
-                    Err(error) => {
-                        this.error = Some(error);
-                        cx.notify();
-                    }
-                }
             });
         })
         .detach();
@@ -972,6 +1014,8 @@ fn action_key(prefix: &str, index: usize) -> String {
         format!("{prefix}.{index}")
     }
 }
+#[path = "onboarding_ui.rs"]
+mod onboarding_ui;
 impl gpui::Render for SetupDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = match self.appearance {
@@ -1030,6 +1074,9 @@ impl gpui::Render for SetupDialog {
                     arrow,
                     (close, minimize),
                 ));
+        }
+        if self.onboarding {
+            return self.render_onboarding(dark, window, cx);
         }
         let elapsed = cx
             .background_executor()
@@ -1223,66 +1270,6 @@ impl gpui::Render for SetupDialog {
                             }
                         })),
                 )
-            }
-            Step::Onboard(SetupStep::Theme) => {
-                right = right.flex_row().flex_wrap().gap(px(12.));
-                for i in 0..9 {
-                    let c = crate::theme_editor::preset_color(0, i);
-                    right = right.child(
-                        div()
-                            .id(("setup-theme", i))
-                            .debug_selector(move || format!("setup-theme-{i}"))
-                            .size(px(48.))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.3))
-                            .bg(gpui::Rgba {
-                                r: c.red,
-                                g: c.green,
-                                b: c.blue,
-                                a: 1.,
-                            })
-                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(Event::Theme(i)))),
-                    );
-                }
-            }
-            Step::Onboard(SetupStep::Favorites) => {
-                for (i, (name, _)) in FAVORITES.iter().enumerate() {
-                    right = right.child(
-                        self.choice(
-                            format!("setup-favorite-{i}"),
-                            (*name).into(),
-                            self.selected_favorites.contains(&i),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.selected_favorites.insert(i) {
-                                this.selected_favorites.remove(&i);
-                            }
-                            cx.emit(Event::Favorite(i));
-                            cx.notify();
-                        })),
-                    );
-                }
-            }
-            Step::Onboard(SetupStep::Basics) => {
-                for (label, key) in [
-                    ("Open your first tab", "⌘T"),
-                    ("Pin tabs to save for later", "⌘D"),
-                    ("Multitask with Split View", "⌃⇧="),
-                    ("Spaces for work and life", "⌃1 … ⌃9"),
-                ] {
-                    right = right.child(
-                        div()
-                            .min_h(px(40.))
-                            .text_size(px(13.))
-                            .child(label)
-                            .child(div().text_color(hsla(0., 0., if self.palette.dark { 1. } else { 0. }, 0.6)).child(key)),
-                    );
-                }
-                right = right.child(
-                    self.button("Learn Essential Shortcuts", "setup-shortcuts", false, true)
-                        .on_click(cx.listener(|this, _, _, cx| this.change(Step::Shortcuts, cx))),
-                );
             }
             _ => {}
         }
@@ -1532,6 +1519,12 @@ impl BrowserWindow {
         if let Some(pages) = &self.pages {
             pages.borrow_mut().request_ui_focus();
         }
+        if onboarding {
+            if let Some(step @ (SetupStep::DefaultBrowser | SetupStep::Basics)) = self.browser.onboarding {
+                self.edit_browser(|b| b.advance_setup(step));
+                return;
+            }
+        }
         let dialog = cx.new(|cx| SetupDialog::new(&self.browser, onboarding, cx));
         let events = cx.subscribe(&dialog, |_, sender, event: &Event, cx| {
             let sender = sender.clone();
@@ -1678,11 +1671,19 @@ impl BrowserWindow {
                     });
                 });
             }
-            Event::Theme(index) => {
+            Event::Theme(theme) => {
                 let space = self.browser.space().id;
-                let mut theme = self.browser.space().theme();
-                theme.colors = vec![crate::theme_editor::preset_color(0, index)];
                 self.edit_browser(|b| b.update_space_theme(space, theme));
+            }
+            Event::Appearance(mode) => {
+                self.edit_profile(|b| b.set_browser_appearance(mode));
+            }
+            Event::Retreat(step) => {
+                if !self.edit_browser(|b| b.retreat_setup(step)) {
+                    if let Some(current) = self.browser.onboarding {
+                        sender.update(cx, |d, cx| d.change(Step::Onboard(current), cx));
+                    }
+                }
             }
             Event::Favorite(index) => {
                 let (name, url) = FAVORITES[index];
@@ -1692,9 +1693,7 @@ impl BrowserWindow {
                     if let Some(id) = b.favorite_for_url(url) {
                         b.remove_favorite(id);
                     } else {
-                        let id = b.new_tab(url, std::time::SystemTime::now());
-                        b.set_title(id, name);
-                        b.favorite_tab(id);
+                        b.add_favorite(url, name, std::time::SystemTime::now());
                     }
                 });
             }

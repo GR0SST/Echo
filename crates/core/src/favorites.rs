@@ -55,6 +55,21 @@ impl Browser {
         true
     }
 
+    /// Adds `url` as a Favorite without selecting it, so it stays unloaded
+    /// and the current page keeps focus (onboarding's app picks).
+    pub fn add_favorite(&mut self, url: &str, title: &str, now: std::time::SystemTime) -> Option<TabId> {
+        let previous = self.space().active_tab;
+        let id = self.new_tab(url, now);
+        self.set_title(id, title);
+        if !self.favorite_tab(id) {
+            self.close_tab(id, now);
+            self.space_mut().active_tab = previous;
+            return None;
+        }
+        self.space_mut().active_tab = previous;
+        Some(id)
+    }
+
     /// Returns a Favorite to Today in the current Space.
     pub fn unfavorite_tab(&mut self, id: TabId) -> bool {
         if !self.can_edit_persistent_sidebar() { return false; }
@@ -111,6 +126,17 @@ impl Browser {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn added_favorite_stays_unselected() {
+        let mut b = crate::Browser::new();
+        let now = std::time::SystemTime::UNIX_EPOCH;
+        let open = b.new_tab("https://open.example", now);
+        let id = b.add_favorite("https://mail.example", "Mail", now).unwrap();
+        assert!(b.is_favorite(id));
+        assert_eq!(b.space().active_tab, Some(open));
+        assert!(b.space().tabs().all(|t| t.id != id));
+    }
+
     use super::*;
     use crate::{Closed, Section};
     use std::time::{Duration, SystemTime};

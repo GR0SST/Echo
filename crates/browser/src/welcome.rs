@@ -16,7 +16,7 @@ pub(crate) const READY: f32 = 10.2;
 // by cross-correlating the recorded audio (the recording leads by 2.572 s).
 const ORB_IN: (f32, f32) = (0.3, 1.0);
 const DIM: (f32, f32) = (0.3, 1.6);
-const DIM_ALPHA: f32 = 0.86;
+const DIM_ALPHA: f32 = 0.6;
 const GLASS: (f32, f32) = (3.85, 4.0);
 const BLOOM: (f32, f32) = (3.95, 4.3);
 const FIELD_IN: (f32, f32) = (4.0, 4.45);
