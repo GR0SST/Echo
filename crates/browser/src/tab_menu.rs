@@ -248,6 +248,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn open_sidebar_menu(&mut self, target: MenuTarget, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_navigation_history(crate::window::PopupFocus::Restore,cx);
         if !self.menu_target_exists(target) { return; }
         let position = match target {
             MenuTarget::Transfer(..)=>point(position.x-px(1.),position.y+px(1.)),

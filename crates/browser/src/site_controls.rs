@@ -91,6 +91,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn toggle_site_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_navigation_history(crate::window::PopupFocus::Restore,cx);
         if self.site_controls.is_some() {
             self.close_site_controls(cx);
             return;

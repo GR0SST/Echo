@@ -85,6 +85,8 @@ mod host;
 mod x11_key_event;
 mod native_geometry;
 mod snapshot;
+mod navigation_history;
+pub use navigation_history::{NavigationEntry, NavigationHistory, NavigationHistoryError, NavigationHistoryRequest};
 mod page_archive;
 pub use page_archive::{PageArchiveError, PageArchiveRequest};
 mod storage;
@@ -367,6 +369,7 @@ pub struct Engine {
     next_id: u64,
     snapshots: snapshot::Snapshots,
     archives: page_archive::Archives,
+    histories: navigation_history::Histories,
     site_data: site_data::SiteData,
     script_evaluations: script_evaluation::Evaluations,
     boosts: Vec<(std::rc::Weak<RequestContext>, Arc<Mutex<Vec<SiteBoost>>>)>,
@@ -482,6 +485,7 @@ impl Engine {
             next_id: 1,
             snapshots: snapshot::Snapshots::default(),
             archives: page_archive::Archives::default(),
+            histories: navigation_history::Histories::default(),
             site_data: site_data::SiteData::default(),
             script_evaluations: script_evaluation::Evaluations::default(),
             boosts: Vec::new(),
@@ -1021,6 +1025,7 @@ impl Engine {
         if let Some(view)=self.views.get(&id) {page_context::cancel(view.browser.identifier());}
         self.snapshots.close(id);
         self.archives.close(id);
+        self.histories.close(id);
         self.site_data.close(id);
         self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }
@@ -1451,6 +1456,7 @@ impl Engine {
         for inspector in inspectors { self.close_inspector(inspector); }
         self.snapshots.close(id);
         self.archives.close(id);
+        self.histories.close(id);
         self.site_data.close(id);
         self.script_evaluations.close(id);
         if let Some(page) = self.views.get(&id) { permissions::cancel_browser(page.browser.identifier()); }

@@ -82,6 +82,7 @@ mod folder_drag;
 mod inline_rename;
 mod link_status;
 mod page_zoom;
+mod navigation_history;
 mod page_loading;
 mod status_url;
 mod private;
@@ -166,6 +167,7 @@ pub fn init(cx: &mut App) {
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);
     site_controls::bind_keys(cx);
+    navigation_history::bind_keys(cx);
     extensions::bind_keys(cx);
     site_settings_page::bind_keys(cx);
     boosts::bind_keys(cx);

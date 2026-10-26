@@ -276,6 +276,8 @@ enum Call {
     FocusPage(u64),
     FocusUi,
     Navigate(u64, String),
+    HistoryRequest(u64),
+    HistoryEntry(u64,i32),
     Back(u64),
     Forward(u64),
     Undo(u64),
@@ -311,6 +313,7 @@ struct FakeState {
     shortcut_priorities: Vec<(engine::Shortcut, engine::ShortcutPriority)>,
     data_clear_reply: Option<Rc<RefCell<Option<Result<(),String>>>>>,
     preview_tokens: std::collections::HashMap<u64,u64>,
+    navigation_histories: std::collections::HashMap<u64,engine::NavigationHistory>,
     archive_data: Option<Vec<u8>>,
     document_epochs: std::collections::HashMap<u64,u64>,
     context_images: Vec<(u64,u64,String,String)>,
@@ -387,6 +390,15 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn request_navigation_history(&mut self,view:ViewId)->Option<engine::NavigationHistoryRequest> {
+        self.call(Call::HistoryRequest(raw(view)));
+        self.0.borrow().navigation_histories.get(&raw(view)).cloned().map(|history|engine::NavigationHistoryRequest::completed(Ok(history)))
+    }
+    fn navigate_history_entry(&mut self,view:ViewId,history:&engine::NavigationHistory,entry:i32)->bool {
+        if !history.entries().iter().any(|row|row.id==entry) {return false;}
+        self.call(Call::HistoryEntry(raw(view),entry));true
+    }
+
     fn take_extension_model_requests(&mut self) -> Vec<engine::ExtensionModelRequest> {
         std::mem::take(&mut self.0.borrow_mut().extension_model_requests)
     }
@@ -11729,4 +11741,77 @@ fn restored_folder_library_toast_expands_the_tree_and_rejects_a_deleted_target(c
     view.update(cx,|w,cx| {w.show_folder_restore(folder,cx);w.edit_browser(|b|b.archive_folder(folder,std::time::SystemTime::now()));});
     click(&mut current_toast(&view,cx),"toast");cx.run_until_parked();
     assert!(view.read_with(cx,|w,_|w.browser.folder(folder).is_none()));
+}
+
+
+fn history_fixture(fake:&FakeEngine, view:u64, current:usize) {
+    fake.0.borrow_mut().navigation_histories.insert(view,engine::NavigationHistory::new((1..=3).map(|id|engine::NavigationEntry {id:id*11,title:format!("History {id}"),url:format!("https://history.example/{id}")}).collect(),current).unwrap());
+}
+fn history_popover(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext)->VisualTestContext {
+    cx.run_until_parked();
+    let handle=view.read_with(cx,|b,_|b.navigation_history.menu.as_ref().unwrap().overlay.unwrap());
+    VisualTestContext::from_window(handle.into(),cx)
+}
+#[gpui::test]
+fn retained_history_menu_uses_entry_ids_and_preserves_the_tab(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);history_fixture(&fake,1,2);fake.take_calls();
+    let before=active_url(&view,cx);
+    right_click(cx,"go-back");
+    let mut menu=history_popover(&view,cx);
+    menu.simulate_keystrokes("down down enter");cx.run_until_parked();
+    let calls=fake.take_calls();
+    assert!(calls.contains(&Call::HistoryRequest(1)));assert!(calls.contains(&Call::HistoryEntry(1,11)));
+    assert!(!calls.iter().any(|call|matches!(call,Call::Navigate(..)|Call::Create(..)|Call::Back(..))));
+    assert_eq!(active_url(&view,cx),before);
+    assert!(view.read_with(cx,|b,_|b.navigation_history.menu.is_none()));
+}
+#[gpui::test]
+fn forward_history_and_escape_work_in_toolbar_mode(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);history_fixture(&fake,1,0);
+    cx.dispatch_action(crate::window::ToggleToolbar);cx.run_until_parked();fake.take_calls();
+    right_click(cx,"toolbar-forward");
+    let mut menu=history_popover(&view,cx);menu.simulate_keystrokes("down enter");cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::HistoryEntry(1,22)));
+    right_click(cx,"toolbar-forward");history_popover(&view,cx).simulate_keystrokes("escape");cx.run_until_parked();
+    assert!(view.read_with(cx,|b,_|b.navigation_history.menu.is_none()));
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::HistoryEntry(..))));
+}
+#[gpui::test]
+fn history_menu_cannot_navigate_after_a_document_change(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);history_fixture(&fake,1,2);right_click(cx,"go-back");
+    let _menu=history_popover(&view,cx);fake.take_calls();
+    fake.0.borrow_mut().document_epochs.insert(1,17);
+    view.update(cx,|_,cx|cx.notify());cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::HistoryEntry(..))));
+    assert!(view.read_with(cx,|b,_|b.navigation_history.menu.is_none()));
+}
+#[gpui::test]
+fn history_with_no_directional_entries_does_not_open_a_popover(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);history_fixture(&fake,1,0);fake.take_calls();
+    right_click(cx,"go-back");cx.run_until_parked();
+    assert!(view.read_with(cx,|b,_|b.navigation_history.menu.is_none()));
+    click(cx,"go-forward");
+    assert!(fake.take_calls().contains(&Call::Forward(1)));
+}
+
+#[gpui::test]
+fn history_menu_points_to_its_sidebar_or_toolbar_button(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);history_fixture(&fake,1,2);
+    for selector in ["go-back","toolbar-back"] {
+        if selector=="toolbar-back" {cx.dispatch_action(crate::window::ToggleToolbar);cx.run_until_parked();}
+        let anchor=cx.debug_bounds(selector).unwrap().center();right_click(cx,selector);
+        let mut menu=history_popover(&view,cx);
+        assert_eq!(menu.debug_bounds("navigation-history-menu").unwrap().center().x,anchor.x);
+        menu.simulate_keystrokes("escape");cx.run_until_parked();
+    }
+}
+#[gpui::test]
+fn split_history_menu_uses_the_focused_pane_with_toolbar_enabled(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_split_pages(cx,2);
+    for id in 1..=4 {history_fixture(&fake,id,2);}
+    cx.dispatch_action(crate::window::ToggleToolbar);cx.run_until_parked();
+    let source=raw(fake.0.borrow().focused_page.unwrap());fake.take_calls();
+    right_click(cx,"go-back");history_popover(&view,cx).simulate_keystrokes("down enter");cx.run_until_parked();
+    let calls=fake.take_calls();assert!(calls.contains(&Call::HistoryRequest(source)));assert!(calls.contains(&Call::HistoryEntry(source,22)));
+    assert!(!calls.iter().any(|call|matches!(call,Call::HistoryEntry(id,_) if *id!=source)));
 }

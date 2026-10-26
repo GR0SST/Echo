@@ -597,6 +597,7 @@ pub enum OverlayKind {
     Sidebar,
     TabMenu,
     SiteControls,
+    NavigationHistory,
     ExtensionPrompt,
     Capture,
     NewMenu,
@@ -680,6 +681,7 @@ impl Render for Overlay {
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
+                    OverlayKind::NavigationHistory => browser.render_navigation_history(cx),
                     OverlayKind::SiteControls => browser.render_site_controls(window, cx),
                     OverlayKind::ExtensionPrompt => browser.render_extension_prompt(cx),
                     OverlayKind::Capture => browser.render_capture(window, cx),
@@ -797,6 +799,7 @@ pub struct BrowserWindow {
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) search_settings: crate::search_settings::State,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
+    pub(crate) navigation_history: crate::navigation_history::NavigationHistory,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
     pub(crate) site_settings_page: crate::site_settings_page::State,
     pub(crate) capture: Option<crate::capture::Capture>,
@@ -838,6 +841,12 @@ pub struct BrowserWindow {
 }
 
 impl BrowserWindow {
+    pub(crate) fn cached_favicon_image(&self,profile:browser_core::UserProfileId,url:&str,dark:bool)->Option<std::sync::Arc<gpui::Image>> {
+        let png=self.browser.favicon(profile,url)?;
+        let style=self.favicon_styles.borrow_mut().get(png);
+        Some(if dark {style.on_dark}else{style.image})
+    }
+
     pub(crate) fn favicon_image_for(&self, tab: &browser_core::Tab) -> Option<std::sync::Arc<gpui::Image>> {
         let profile = self.browser.user_profile_id_for_tab(tab.id)?;
         let png = self.browser.favicon(profile, &tab.url)?;
@@ -1116,6 +1125,7 @@ impl BrowserWindow {
             engine_shortcut_pending: false,
             floating_sidebar: None,
             tab_menu: None,
+            navigation_history: Default::default(),
             site_controls: None,
             site_settings_page: Default::default(),
             capture: None,
@@ -1367,7 +1377,7 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.navigation_history.menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             let extension_metadata_changed = matches!(&event,
                 Event::LoadingChanged { .. } | Event::TitleChanged { .. } |
                 Event::UrlChanged { .. } | Event::AudioStateChanged { .. });
@@ -1644,6 +1654,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_navigation_history(PopupFocus::Restore,cx);
         self.close_password_prompt(PopupFocus::OnActivation,cx);
         self.close_theme_editor(cx);
         if target == Target::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
@@ -1816,7 +1827,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
-        self.save_prompt_active || self.extension_surface_owns_focus() || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
+        self.save_prompt_active || self.extension_surface_owns_focus() || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.navigation_history.menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
             || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
     }
 
@@ -1831,7 +1842,7 @@ impl BrowserWindow {
             // A root with no popup already owns its responder intent (for
             // example History search or docked DevTools). Only replace it when
             // this operation actually takes over a popup's restoration.
-            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
+            self.popup_focus_on_activation |= self.tab_switcher.is_some() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.navigation_history.menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some()
                 || self.find_bar.is_some() || self.tab_menu.is_some()
                 || self.popup_focus_pending > 0;
             self.popup_focus_generation = self.popup_focus_generation.wrapping_add(1);
@@ -1848,6 +1859,7 @@ impl BrowserWindow {
         self.close_live_connection_with_focus(focus,cx);
         self.close_user_profile_dialog_with_focus(focus, cx);
         self.close_setup_with_focus(focus,cx);
+        self.close_navigation_history(focus,cx);
         self.close_site_controls_with_focus(focus, cx);
         self.close_capture(focus,cx);
         self.close_new_menu_with_focus(focus, cx);
@@ -3607,11 +3619,11 @@ impl BrowserWindow {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)))
                     .child(crate::icons::control(crate::icons::Icon::Sidebar)))
                 .child(div().flex_1())
-                .when(!self.toolbar_shown() || self.browser.active_split().is_some(), |this| this.child(control("go-back")
+                .when(!self.toolbar_shown() || self.browser.active_split().is_some(), |this| this.child(self.navigation_history_button(control("go-back"),false,cx)
                     .text_color(hsla(0., 0., if dark { 1. } else { 0. }, if state.can_go_back { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_back(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Back)))
-                .child(control("go-forward")
+                .child(self.navigation_history_button(control("go-forward"),true,cx)
                     .text_color(hsla(0., 0., if dark { 1. } else { 0. }, if state.can_go_forward { 0.6 } else { 0.25 }))
                     .on_click(cx.listener(|this, _, _, _| { this.with_active_page(|pages, tab| pages.go_forward(tab)); }))
                     .child(crate::icons::control(crate::icons::Icon::Forward)))
@@ -4252,8 +4264,8 @@ impl BrowserWindow {
         let anchor = self.site_controls_anchor.clone();
         let button = |id: &'static str, icon| div().id(id).debug_selector(move || id.into()).flex_none().w(px(38.)).h(px(TOP_TOOLBAR_HEIGHT)).flex().items_center().justify_center().rounded(px(5.)).hover(move |s|s.bg(hsla(0.,0.,ink,0.08))).child(crate::icons::control_sized(icon, if matches!(icon, crate::icons::Icon::Reload) { 16. } else { 18. }));
         div().debug_selector(|| "top-toolbar".into()).absolute().top_0().left_0().right_0().h(px(TOP_TOOLBAR_HEIGHT)).px(px(2.)).flex().items_center().bg(background).border_b_1().border_color(hsla(0.,0.,ink,0.08)).text_color(hsla(0.,0.,ink,0.675))
-            .child(button("toolbar-back",crate::icons::Icon::Back).opacity(if state.can_go_back {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_back(tab)))))
-            .child(button("toolbar-forward",crate::icons::Icon::Forward).opacity(if state.can_go_forward {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_forward(tab)))))
+            .child(self.navigation_history_button(button("toolbar-back",crate::icons::Icon::Back),false,cx).opacity(if state.can_go_back {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_back(tab)))))
+            .child(self.navigation_history_button(button("toolbar-forward",crate::icons::Icon::Forward),true,cx).opacity(if state.can_go_forward {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_forward(tab)))))
             .child(button("toolbar-reload",if state.loading {crate::icons::Icon::Close} else {crate::icons::Icon::Reload}).on_click(cx.listener(move |this,_,_,_|this.with_active_page(|pages,tab|if state.loading {pages.stop_loading(tab)} else {pages.reload(tab)}))))
             .child(div().id("toolbar-address").debug_selector(||"toolbar-address".into()).flex_1().min_w_0().h_full().flex().items_center().justify_center().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(hsla(0.,0.,ink,0.75))
                 .on_click(cx.listener(|this,_,window,cx|this.on_edit_current_url(&EditCurrentUrl,window,cx)))
@@ -4890,6 +4902,7 @@ impl Render for BrowserWindow {
         self.sync_live_folders(cx);
         self.sync_max_previews(window,cx);
         self.sync_link_status(window, cx);
+        self.sync_navigation_history(cx);
         self.sync_page_zoom(window, cx);
         self.sync_page_swipe(window,cx);
         self.sync_page_loading(window, cx);

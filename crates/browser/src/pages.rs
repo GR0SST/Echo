@@ -101,6 +101,8 @@ pub trait WebEngine {
     fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
     fn supports_page_archiving(&self) -> bool { false }
     fn page_document_epoch(&self, _view:ViewId)->Option<u64> {Some(0)}
+    fn request_navigation_history(&mut self, _view:ViewId)->Option<engine::NavigationHistoryRequest> {None}
+    fn navigate_history_entry(&mut self,_view:ViewId,_history:&engine::NavigationHistory,_entry:i32)->bool {false}
     fn request_page_archive(&mut self, _view:ViewId)->Option<engine::PageArchiveRequest> {None}
     fn prepare_file_download(&mut self, _view: ViewId, _url: &str) -> Option<NativeFileDownload> { None }
     fn supports_printing(&self) -> bool { false }
@@ -321,6 +323,8 @@ impl WebEngine for Chromium {
     }
     fn supports_page_archiving(&self)->bool {true}
     fn page_document_epoch(&self,view:ViewId)->Option<u64> {self.engine.page_document_epoch(view)}
+    fn request_navigation_history(&mut self,view:ViewId)->Option<engine::NavigationHistoryRequest> {self.engine.request_navigation_history(view)}
+    fn navigate_history_entry(&mut self,view:ViewId,history:&engine::NavigationHistory,entry:i32)->bool {self.engine.navigate_history_entry(view,history,entry)}
     fn request_page_archive(&mut self,view:ViewId)->Option<engine::PageArchiveRequest> {self.engine.request_page_archive(view)}
     fn prepare_file_download(&mut self, view: ViewId, url: &str) -> Option<NativeFileDownload> {
         let request = self.engine.prepare_file_download(view, url)?;
@@ -1856,6 +1860,13 @@ impl Pages {
 
     fn view(&self, tab: TabId) -> Option<ViewId> {
         self.store.borrow().pages.get(&tab).filter(|page| page.owner == self.host).map(|page| page.view)
+    }
+
+    pub(crate) fn request_navigation_history(&mut self,tab:TabId)->Option<engine::NavigationHistoryRequest> {
+        let view=self.view(tab)?; self.store.borrow_mut().engine.request_navigation_history(view)
+    }
+    pub(crate) fn navigate_history_entry(&mut self,tab:TabId,history:&engine::NavigationHistory,entry:i32)->bool {
+        self.view(tab).is_some_and(|view|self.store.borrow_mut().engine.navigate_history_entry(view,history,entry))
     }
 
     pub fn go_back(&mut self, tab: TabId) {
