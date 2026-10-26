@@ -13,9 +13,18 @@ lz4_flex = "0.14"
 csv = "1.4"
 url = "2"
 zeroize = "1.8"
+# Chromium's saved-password encryption (AES-128-CBC, PBKDF2-HMAC-SHA1 key).
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 html5ever = "0.40"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The browser's "<Name> Safe Storage" key lives in the login Keychain.
+keyring = { version = "=3.6.3", features = ["apple-native"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

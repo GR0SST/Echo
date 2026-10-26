@@ -72,6 +72,12 @@ const ORB: [(u32, f32, f32, f32, f32, f32); 4] = [
 const ORB_EXTENT: f32 = 290.;
 const ORB_PIXELS: u32 = 160;
 
+/// A glow's soft edge, `(1 - smoothstep(d))^1.5`, without `powf`.
+fn falloff(d: f32) -> f32 {
+    let x = 1. - d * d * (3. - 2. * d);
+    x * x.sqrt()
+}
+
 fn smooth(range: (f32, f32), t: f32) -> f32 {
     let x = ((t - range.0) / (range.1 - range.0)).clamp(0., 1.);
     x * x * (3. - 2. * x)
@@ -97,7 +103,7 @@ pub(crate) fn orb_image(t: f32) -> Arc<RenderImage> {
         let mut sum = [0f32; 3];
         for (rgb, gx, gy, half) in &glows {
             let d = (((px_ - gx).powi(2) + (py_ - gy).powi(2)).sqrt() / half).min(1.);
-            let a = (1. - d * d * (3. - 2. * d)).powf(1.5);
+            let a = falloff(d);
             for c in 0..3 {
                 sum[c] += rgb[c] * a;
             }
@@ -111,7 +117,9 @@ pub(crate) fn orb_image(t: f32) -> Arc<RenderImage> {
     Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 
-const FIELD_PIXELS: (u32, u32) = (320, 200);
+/// The field is a soft gradient: a small bake scaled up on the GPU looks the
+/// same and keeps baking far ahead of the display.
+const FIELD_PIXELS: (u32, u32) = (160, 100);
 
 fn unpack(color: u32) -> [f32; 3] {
     [
@@ -143,7 +151,7 @@ pub(crate) fn field_image(t: f32, aspect: f32) -> Arc<RenderImage> {
         let mut color = base;
         for (rgb, gx, gy, half) in &glows {
             let d = (((u - gx).powi(2) + (v - gy).powi(2)).sqrt() / half).min(1.);
-            let a = (1. - d * d * (3. - 2. * d)).powf(1.5);
+            let a = falloff(d);
             for c in 0..3 {
                 color[c] += (rgb[c] - color[c]) * a;
             }

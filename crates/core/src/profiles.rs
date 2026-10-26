@@ -1,7 +1,7 @@
 //! User profiles own browsing data inside one globally ordered workspace.
 mod repair;
 use crate::{
-    Browser, DEFAULT_ARCHIVE_AFTER, SpaceId, Tab, TabId, favicons::SiteIcon, history::HistoryEntry,
+    Browser, DEFAULT_ARCHIVE_AFTER, SpaceId, Tab, TabId, favicons::SiteIcon,
     splits::SplitView,
 };
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub struct UserProfile {
     #[serde(default)]
     pub favorite_splits: Vec<SplitView>,
     #[serde(default)]
-    pub history: Vec<HistoryEntry>,
+    pub history: crate::history::History,
     pub archive_after: Option<Duration>,
     #[serde(default = "crate::default_enabled")]
     pub include_favorites_in_ordering: bool,
@@ -99,7 +99,7 @@ impl UserProfile {
             include_favorites_in_ordering: true,
             favorites: Vec::new(),
             favorite_splits: Vec::new(),
-            history: Vec::new(),
+            history: Default::default(),
             archive_after,
             empty_favorites_dismissed: false,
             favicon_cache: Vec::new(),
@@ -159,6 +159,20 @@ impl Browser {
     pub fn active_user_profile_mut(&mut self) -> &mut UserProfile {
         let id = self.active_user_profile_id();
         self.profiles.get_mut(&id).expect("validated Space profile")
+    }
+    /// Every tab's profile in one pass, for callers that look up many tabs.
+    pub fn tab_profiles(&self) -> std::collections::HashMap<TabId, UserProfileId> {
+        let mut map: std::collections::HashMap<_, _> = self
+            .spaces
+            .iter()
+            .flat_map(|space| space.tabs().map(move |tab| (tab.id, space.user_profile_id)))
+            .collect();
+        for profile in self.profiles.values() {
+            for tab in &profile.favorites {
+                map.entry(tab.id).or_insert(profile.id);
+            }
+        }
+        map
     }
     pub fn user_profile_id_for_tab(&self, id: TabId) -> Option<UserProfileId> {
         self.spaces

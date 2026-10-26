@@ -16,3 +16,6 @@ unicode-segmentation = "1"
 mailparse = "0.16"
 lol_html = "2"
 cssparser = "0.36"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

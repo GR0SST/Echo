@@ -11270,13 +11270,22 @@ fn onboarding_imports_a_whole_browser_with_every_profile_without_the_bookmark_pi
         std::fs::write(root.path().join(directory).join("Bookmarks"),format!(r#"{{"roots":{{"bookmark_bar":{{"type":"folder","name":"Bar","children":[{{"type":"url","name":"Page","url":"{url}"}}]}}}}}}"#)).unwrap();
     }
     std::fs::write(root.path().join("Local State"),r#"{"profile":{"info_cache":{"Default":{"name":"Me"},"Profile 2":{"name":"Work"}}}}"#).unwrap();
+    struct Store(std::sync::Mutex<Vec<(String,String)>>);
+    impl importer::CredentialStore for Store {fn store(&self,profile:&str,c:&importer::Credential)->Result<(),String>{self.0.lock().unwrap().push((profile.into(),c.origin.clone()));Ok(())}}
+    let store=std::sync::Arc::new(Store(std::sync::Mutex::new(vec![])));
+    cx.cx.update(|cx|{cx.set_global(crate::setup::CredentialStorage(store.clone()));cx.set_global(crate::setup::TestLogins(vec![(0,"https://main.example".into()),(1,"https://work.example".into())]));});
     cx.cx.update(|cx|cx.set_global(crate::setup::ImportSources(vec![importer::SourceProfile {browser:importer::BrowserKind::Chrome,name:"Chrome".into(),path:root.path().into()}])));
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Import));v.open_setup(true,cx);});
     let (dialog,mut panel)=local_setup(&view,cx);
+    // Logins come straight from the browser: no CSV step, no profile question.
     panel.simulate_keystrokes("enter");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
-    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Passwords);
-    click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
     assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Favorites));
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Favorites));
+    let (home,work)=view.read_with(cx,|v,_|(v.browser.active_user_profile_id(),v.browser.user_profiles().find(|p|p.name()=="Work").unwrap().id()));
+    let key=|id:browser_core::UserProfileId|id.storage_key().unwrap_or_else(||"default".into());
+    let mut saved=store.0.lock().unwrap().clone();saved.sort();
+    let mut expected=vec![(key(home),"https://main.example".to_owned()),(key(work),"https://work.example".to_owned())];expected.sort();
+    assert_eq!(saved,expected);
     view.read_with(cx,|v,_|{
         let work=v.browser.user_profiles().find(|p|p.name()=="Work").expect("second profile recreated").id();
         let spaces:Vec<_>=v.browser.spaces.iter().filter(|s|s.name=="From Chrome").map(|s|s.user_profile_id).collect();

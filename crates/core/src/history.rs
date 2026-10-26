@@ -1,7 +1,57 @@
 //! Persistent browsing history, separate from open tabs and the archive.
 use crate::{Browser, UserProfileId};
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
+
+/// A profile's history, shared copy-on-write: cloning the model (window
+/// projections, session snapshots) is free, and only an actual change
+/// copies the entries. Imports can bring hundreds of thousands of them.
+#[derive(Clone, Debug, Default)]
+pub struct History(Arc<Vec<HistoryEntry>>);
+impl std::ops::Deref for History {
+    type Target = Vec<HistoryEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for History {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+impl From<Vec<HistoryEntry>> for History {
+    fn from(entries: Vec<HistoryEntry>) -> Self {
+        Self(Arc::new(entries))
+    }
+}
+impl FromIterator<HistoryEntry> for History {
+    fn from_iter<I: IntoIterator<Item = HistoryEntry>>(entries: I) -> Self {
+        Self::from(entries.into_iter().collect::<Vec<_>>())
+    }
+}
+impl<'a> IntoIterator for &'a History {
+    type Item = &'a HistoryEntry;
+    type IntoIter = std::slice::Iter<'a, HistoryEntry>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl History {
+    /// Whether two histories are the same allocation, i.e. unchanged.
+    pub fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Serialize for History {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for History {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::deserialize(deserializer).map(Self::from)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEntry {

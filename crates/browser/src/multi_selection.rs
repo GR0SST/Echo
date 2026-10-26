@@ -9,7 +9,7 @@ pub(crate) struct SidebarSelection {
     space: Option<SpaceId>,
     profile: Option<browser_core::UserProfileId>,
     anchor: Option<SidebarItem>,
-    ids: Vec<SidebarItem>,
+    pub(crate) ids: Vec<SidebarItem>,
     extending_range: bool,
     pub(crate) new_space_selection: Option<ItemSelection>,
     pub(crate) new_space_items: Vec<TabId>,

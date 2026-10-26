@@ -1,6 +1,7 @@
 //! Read-only browser discovery and import. No source profile is modified.
 mod arc;
 mod chromium;
+mod chromium_passwords;
 mod firefox;
 mod passwords;
 mod exports;
@@ -232,12 +233,15 @@ pub enum Category {
     Bookmarks,
     History,
     OpenTabs,
+    Passwords,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Selection {
     pub bookmarks: bool,
     pub history: bool,
     pub tabs: bool,
+    /// Saved logins of whole Chromium browsers, read with the OS-held key.
+    pub passwords: bool,
 }
 impl Default for Selection {
     fn default() -> Self {
@@ -245,6 +249,7 @@ impl Default for Selection {
             bookmarks: true,
             history: true,
             tabs: true,
+            passwords: true,
         }
     }
 }
@@ -256,6 +261,8 @@ pub struct ImportIssue {
 #[derive(Debug, Default)]
 pub struct ReadReport {
     pub data: ImportedData,
+    /// Saved logins, each with the index of its profile in `data.profiles`.
+    pub credentials: Credentials,
     pub issues: Vec<ImportIssue>,
     pub cancelled: bool,
 }
@@ -330,6 +337,10 @@ fn read_browser(
     progress: &mut impl FnMut(Category),
     report: &mut ReadReport,
 ) {
+    let profiles = browser_profiles(source.browser, &source.path);
+    if selection.passwords {
+        read_chromium_passwords(source, &profiles, cancel, progress, report);
+    }
     if source.browser == BrowserKind::Arc && arc::has_sidebar(&source.path) {
         match arc::read_all(&source.path, selection, cancel, progress) {
             Ok((profiles, issues)) => {
@@ -340,7 +351,6 @@ fn read_browser(
         }
         return;
     }
-    let profiles = browser_profiles(source.browser, &source.path);
     if profiles.is_empty() {
         let message = match std::fs::read_dir(&source.path) {
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => format!(
@@ -372,6 +382,48 @@ fn read_browser(
             });
         }
         report.data.profiles.push(imported);
+    }
+}
+/// Logins read from a browser; never printed.
+#[derive(Default)]
+pub struct Credentials(pub Vec<(usize, Credential)>);
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Credentials({})", self.0.len())
+    }
+}
+/// Saved logins of every profile of a Chromium browser, read with the key
+/// the OS holds for it (one consent prompt on macOS).
+fn read_chromium_passwords(
+    source: &SourceProfile,
+    profiles: &[SourceProfile],
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(Category),
+    report: &mut ReadReport,
+) {
+    if matches!(source.browser, BrowserKind::Safari | BrowserKind::Firefox) || profiles.is_empty() {
+        return;
+    }
+    // Automation never raises the real Keychain prompt.
+    if std::env::var_os("BROWSER_SCRIPT").is_some() && std::env::var_os("BROWSER_TEST_KEYCHAIN").is_none() {
+        return;
+    }
+    progress(Category::Passwords);
+    let key = match chromium_passwords::key(source.browser) {
+        Ok(key) => key,
+        Err(message) => {
+            report.issues.push(ImportIssue { category: Category::Passwords, message });
+            return;
+        }
+    };
+    for (index, profile) in profiles.iter().enumerate() {
+        match chromium_passwords::read(&profile.path, &key, cancel) {
+            Ok(found) => report.credentials.0.extend(found.into_iter().map(|c| (index, c))),
+            Err(message) => report.issues.push(ImportIssue {
+                category: Category::Passwords,
+                message: format!("{}: {message}", profile.name),
+            }),
+        }
     }
 }
 pub(crate) type Result<T> = std::result::Result<T, String>;

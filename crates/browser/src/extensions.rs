@@ -164,6 +164,11 @@ pub(crate) struct State {
     prompt: Option<Prompt>,
     pub(crate) prompt_focus: FocusHandle,
     pub(crate) confirm_remove: Option<String>,
+    /// What the extension tab model was last built from, so the frequent
+    /// reconciliation (every render and engine pump) can skip rebuilding.
+    pub(crate) model_inputs: Option<String>,
+    /// The native minimized state, polled at most a few times a second.
+    pub(crate) minimized: Option<(Instant, bool)>,
     popup: Option<ActionPopup>,
     popup_generation: u64,
     pub(crate) pending_retirements: Rc<Cell<usize>>,
@@ -190,6 +195,8 @@ impl State {
             prompt: None,
             prompt_focus: cx.focus_handle(),
             confirm_remove: None,
+            model_inputs: None,
+            minimized: None,
             popup: None,
             popup_generation: 0,
             pending_retirements: Rc::new(Cell::new(0)),

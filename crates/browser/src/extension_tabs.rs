@@ -29,6 +29,16 @@ pub(crate) struct WindowModel {
     pub serial: u64,
     pub profiles: BTreeSet<ProfileScope>,
 }
+impl WindowModel {
+    /// The same published content, whatever its serial.
+    fn same(&self, other: &Self) -> bool {
+        self.window == other.window
+            && self.scope == other.scope
+            && self.tabs == other.tabs
+            && self.focused == other.focused
+            && self.profiles == other.profiles
+    }
+}
 #[derive(Default)]
 pub(crate) struct Model {
     pub windows: BTreeMap<u64, WindowModel>,
@@ -469,7 +479,14 @@ impl BrowserWindow {
             }
         }
     }
+    /// Every render: publishes only when this window's model changed.
+    pub(crate) fn sync_extension_model_on_render(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.sync_extension_model_with(window, false, cx);
+    }
     pub(crate) fn sync_extension_model(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.sync_extension_model_with(window, true, cx);
+    }
+    fn sync_extension_model_with(&mut self, window: &Window, force: bool, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() {
             return;
         }
@@ -486,17 +503,14 @@ impl BrowserWindow {
         let Some(pages) = self.pages.clone() else {
             return;
         };
-        let Ok(pages_read) = pages.try_borrow() else {
-            return;
+        let minimized = match self.extensions.minimized {
+            Some((at, minimized)) if at.elapsed() < std::time::Duration::from_millis(250) => minimized,
+            _ => {
+                let minimized = crate::native::window_minimized(window);
+                self.extensions.minimized = Some((std::time::Instant::now(), minimized));
+                minimized
+            }
         };
-        let id = self.main_window.window_id().as_u64();
-        let namespace = self.profile.handle.model_namespace();
-        let key = format!("window:{id}");
-        let scope = ProfileScope(
-            self.browser.active_user_profile_id(),
-            self.browser.is_private(),
-        );
-        let bounds = window.bounds();
         let focused = cx.active_window().is_some_and(|active| {
             active.window_id() == self.main_window.window_id()
                 || Some(active.window_id()) == self.extension_popup_window_id()
@@ -506,7 +520,43 @@ impl BrowserWindow {
                         .is_ok_and(|overlay| overlay.belongs_to(cx.entity_id()))
                 })
         });
+        // Page state changes arrive through the forced path; everything
+        // else the model is built from is here.
+        let inputs = format!(
+            "{} {:?} {focused} {minimized} {} {} {} {:?}",
+            self.profile.revision,
+            window.bounds(),
+            self.transient.is_some(),
+            window.is_fullscreen(),
+            window.is_maximized(),
+            self.sidebar_selection.ids,
+        );
+        if !force && self.extensions.model_inputs.as_ref() == Some(&inputs) {
+            return;
+        }
+        let Ok(pages_read) = pages.try_borrow() else {
+            return;
+        };
+        self.extensions.model_inputs = Some(inputs);
+        let id = self.main_window.window_id().as_u64();
+        let namespace = self.profile.handle.model_namespace();
+        let key = format!("window:{id}");
+        let scope = ProfileScope(
+            self.browser.active_user_profile_id(),
+            self.browser.is_private(),
+        );
+        let bounds = window.bounds();
         let selected_profiles = profile_selections(&self.browser);
+        // One pass over the model instead of a search per tab: imports bring
+        // hundreds of tabs, and this runs on every render.
+        let tab_profiles = self.browser.tab_profiles();
+        let pinned: std::collections::HashSet<_> = self
+            .browser
+            .user_profiles()
+            .flat_map(|profile| profile.favorites.iter().map(|tab| tab.id))
+            .chain(self.browser.spaces.iter().flat_map(|space| space.pinned.iter().map(|tab| tab.id)))
+            .collect();
+        let active_tab = self.browser.active_tab().map(|tab| tab.id);
         let split_ids: BTreeMap<_, _> = self
             .browser
             .all_tabs()
@@ -524,12 +574,9 @@ impl BrowserWindow {
                 .all_tabs()
                 .enumerate()
                 .filter_map(|(index, tab)| {
-                    let profile = self.browser.user_profile_id_for_tab(tab.id)?;
+                    let profile = *tab_profiles.get(&tab.id)?;
                     let (browser_id, state) = pages_read.extension_attachment(tab.id);
-                    let active = self
-                        .browser
-                        .active_tab()
-                        .is_some_and(|active| active.id == tab.id)
+                    let active = active_tab == Some(tab.id)
                         || (profile != scope.0 && selected_profiles.get(&profile) == Some(&tab.id));
                     let status = if state.as_ref().is_some_and(|state| state.loading) {
                         engine::ExtensionTabStatus::Loading
@@ -547,10 +594,7 @@ impl BrowserWindow {
                             index: index as u32,
                             active,
                             highlighted: active || self.sidebar_item_selected(tab.id),
-                            pinned: self.browser.is_favorite(tab.id)
-                                || self.browser.spaces.iter().any(|space| {
-                                    space.pinned.iter().any(|pinned| pinned.id == tab.id)
-                                }),
+                            pinned: pinned.contains(&tab.id),
                             muted: tab.muted,
                             audible: state.as_ref().is_some_and(|state| state.audible),
                             auto_discardable: true,
@@ -582,7 +626,7 @@ impl BrowserWindow {
                 } else {
                     engine::ExtensionWindowKind::Normal
                 },
-                state: if crate::native::window_minimized(window) {
+                state: if minimized {
                     engine::ExtensionWindowState::Minimized
                 } else if window.is_fullscreen() {
                     engine::ExtensionWindowState::Fullscreen
@@ -608,12 +652,20 @@ impl BrowserWindow {
                 .map(|space| ProfileScope(space.user_profile_id, scope.1))
                 .collect(),
         };
-        let live = cx
+        let live: BTreeSet<u64> = cx
             .windows()
             .into_iter()
             .filter(|handle| handle.downcast::<BrowserWindow>().is_some())
             .map(|handle| handle.window_id().as_u64())
             .collect();
+        if !force {
+            let model = cx.global::<Model>();
+            let unchanged = model.windows.get(&id).is_some_and(|previous| previous.same(&record))
+                && model.windows.keys().copied().eq(live.iter().copied());
+            if unchanged {
+                return;
+            }
+        }
         let snapshots = {
             let model = cx.global_mut::<Model>();
             model.update(id, record, &live);

@@ -53,6 +53,7 @@ pub fn read(
                 });
             }
         }
+        Category::Passwords => {}
         Category::OpenTabs => {
             let path = root.join("LastSession.plist");
             if !path.exists() {

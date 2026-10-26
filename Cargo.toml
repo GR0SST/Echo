@@ -12,6 +12,8 @@ publish = false
 [patch.crates-io]
 xattr = { path = "third_party/rust/xattr" }
 
-# Decoding the welcome cue gates the intro's start; keep it fast in dev builds.
-[profile.dev.package.lewton]
+# Dev builds optimize every dependency (GPUI layout and paint, image
+# decoding, the welcome cue's decoder) while our own crates stay quick to
+# rebuild and debug. Unoptimized GPUI cannot keep up with the display.
+[profile.dev.package."*"]
 opt-level = 3

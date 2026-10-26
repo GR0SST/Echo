@@ -1377,6 +1377,7 @@ dependencies = [
  "mailparse",
  "serde",
  "serde_json",
+ "tempfile",
  "unicode-segmentation",
  "url",
 ]
@@ -3674,13 +3675,18 @@ checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 name = "importer"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "cbc",
  "core",
  "csv",
  "html5ever",
+ "keyring",
  "lz4_flex",
+ "pbkdf2",
  "plist",
  "rusqlite",
  "serde_json",
+ "sha1 0.10.7",
  "tempfile",
  "url",
  "zeroize",

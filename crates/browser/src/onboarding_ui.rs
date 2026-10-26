@@ -105,14 +105,11 @@ impl SetupDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        cx.on_next_frame(window, |_, _, cx| cx.notify());
         let size = window.viewport_size();
         let (w, h) = (f32::from(size.width), f32::from(size.height));
-        if let Some(previous) = self.field.take() {
-            let _ = window.drop_image(previous);
-        }
-        let field = crate::welcome::field_image(field_time(), w / h.max(1.));
-        self.field = Some(field.clone());
+        // Baking finishes with a notify, which renders and bakes the next.
+        self.bake_field(field_time(), w / h.max(1.), window, cx);
+        let field = self.field.clone();
         let s = (w / REFERENCE.0).min(h / REFERENCE.1).clamp(0.5, 1.5);
         let u = move |v: f32| px(v * s);
         let accent = self.accent();
@@ -315,12 +312,21 @@ impl SetupDialog {
                 }
             }))
             .child(
-                img(field)
+                div()
                     .absolute()
                     .inset_0()
-                    .size_full()
-                    .object_fit(gpui::ObjectFit::Fill)
-                    .rounded(px(10.)),
+                    .rounded(px(10.))
+                    .bg(rgba(0x4a3ce6))
+                    .when_some(field, |b, field| {
+                        b.child(
+                            img(field)
+                                .absolute()
+                                .inset_0()
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Fill)
+                                .rounded(px(10.)),
+                        )
+                    }),
             )
             .child(crate::welcome::window_buttons(
                 div()

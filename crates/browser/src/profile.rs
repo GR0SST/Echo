@@ -15,6 +15,12 @@ pub(crate) struct Profile {
     revision: Rc<Cell<u64>>,
     path: Option<PathBuf>,
     saved: Option<String>,
+    /// The history last written for each profile; unchanged histories are
+    /// the same shared allocation, so skipping them costs nothing.
+    saved_histories: std::collections::HashMap<UserProfileId, browser_core::history::History>,
+    /// Background history writes finish in order: an older snapshot never
+    /// replaces a newer one.
+    history_writes: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<UserProfileId, u64>>>,
     /// Captured on session load, never expanded by an unsaved live deletion.
     reclaimable_storage: Vec<String>,
     _save_on_quit: Option<Subscription>,
@@ -22,23 +28,66 @@ pub(crate) struct Profile {
 }
 
 impl Profile {
-    fn session_json(&self) -> String { session_json(&self.data, &self.drafts) }
-
     fn flush(&mut self) {
         if crate::quit::is_quitting() { return; }
-        let Some(path) = &self.path else { return; };
-        let json = self.session_json();
-        if self.saved.as_ref() == Some(&json) { return; }
-        match browser_core::session::save(path, &json) {
-            Ok(()) => self.saved = Some(json),
-            Err(error) => eprintln!("Cannot save the session to {}: {error}", path.display()),
+        self.write(true);
+    }
+
+    /// Writes changed histories (first, so the session never lacks one),
+    /// then the session itself, which no longer carries history.
+    fn write(&mut self, background: bool) -> Result<(), String> {
+        let Some(path) = self.path.clone() else { return Ok(()); };
+        let (json, histories) = session_parts(&self.data, &self.drafts);
+        let mut result = Ok(());
+        let live: Vec<UserProfileId> = histories.iter().map(|(id, _)| *id).collect();
+        let profiles_changed = live.len() != self.saved_histories.len()
+            || live.iter().any(|id| !self.saved_histories.contains_key(id));
+        for (id, history) in histories {
+            if self.saved_histories.get(&id).is_some_and(|saved| saved.same(&history)) { continue; }
+            // The first write after loading may migrate inline history: do it
+            // before the lean session replaces the old one.
+            // Tests read the file right after a flush; write in place there.
+            if background && !cfg!(test) && self.saved_histories.contains_key(&id) {
+                let writes = self.history_writes.clone();
+                let generation = {
+                    let mut latest = writes.lock().unwrap();
+                    let next = latest.get(&id).copied().unwrap_or(0) + 1;
+                    latest.insert(id, next);
+                    next
+                };
+                let (path, snapshot) = (path.clone(), history.clone());
+                std::thread::spawn(move || {
+                    let latest = writes.lock().unwrap();
+                    if latest.get(&id) == Some(&generation) {
+                        if let Err(error) = browser_core::session::save_history(&path, id, &snapshot) {
+                            eprintln!("Cannot save history to {}: {error}", path.display());
+                        }
+                    }
+                });
+            } else if let Err(error) = browser_core::session::save_history(&path, id, &history) {
+                result = Err(format!("Cannot save history to {}: {error}", path.display()));
+                continue;
+            }
+            self.saved_histories.insert(id, history);
         }
+        if profiles_changed {
+            self.saved_histories.retain(|id, _| live.contains(id));
+            browser_core::session::retain_histories(&path, &live);
+        }
+        if self.saved.as_ref() != Some(&json) {
+            match browser_core::session::save(&path, &json) {
+                Ok(()) => self.saved = Some(json),
+                Err(error) => result = Err(format!("Cannot save {}: {error}", path.display())),
+            }
+        }
+        if let Err(error) = &result { eprintln!("{error}"); }
+        result
     }
 
     fn save_session_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if self.data.borrow().is_private() || self.data.borrow().is_blank() || self.path.is_some() { return; }
         self.path = Some(path);
-        self._save_on_quit = Some(cx.on_app_quit(|this, _| { this.flush(); async {} }));
+        self._save_on_quit = Some(cx.on_app_quit(|this, _| { if !crate::quit::is_quitting() { let _ = this.write(false); } async {} }));
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             if this.update(cx, |this, _| this.flush()).is_err() { break; }
@@ -100,7 +149,9 @@ impl ProfileHandle {
         let selections = Selections::default();
         let revision = Rc::<Cell<u64>>::default();
         let owner = cx.new(|cx| {
-            cx.on_release(|profile: &mut Profile, _| profile.flush()).detach();
+            cx.on_release(|profile: &mut Profile, _| {
+                if !crate::quit::is_quitting() { let _ = profile.write(false); }
+            }).detach();
             cx.spawn(async move |this, cx| loop {
                 cx.background_executor().timer(Duration::from_secs(60)).await;
                 if this.update(cx, |this: &mut Profile, cx| {
@@ -111,7 +162,7 @@ impl ProfileHandle {
                 }).is_err() { break; }
             }).detach();
             Profile { data: data.clone(), drafts: drafts.clone(), selections: selections.clone(), revision: revision.clone(),
-                path: None, saved: None, reclaimable_storage, _save_on_quit: None, _observe_history: None }
+                path: None, saved: None, saved_histories: Default::default(), history_writes: Default::default(), reclaimable_storage, _save_on_quit: None, _observe_history: None }
         });
         Self { owner, data, drafts, selections, revision, pending: Rc::default(),
             executor: cx.foreground_executor().clone(), app: cx.to_async(), history_source: None, ai_title_claims: Rc::default() }
@@ -175,11 +226,8 @@ impl ProfileHandle {
 
     pub(crate) fn flush_for_quit(&self, cx: &mut App) -> Result<(), String> {
         self.owner.update(cx, |profile, _| {
-            let Some(path) = &profile.path else { return Ok(()); };
-            let json = profile.session_json();
-            browser_core::session::save(path, &json).map_err(|error| format!("Cannot save {}: {error}", path.display()))?;
-            profile.saved = Some(json);
-            Ok(())
+            profile.saved = None;
+            profile.write(false)
         })
     }
 
@@ -294,7 +342,7 @@ impl ProfileHandle {
 pub(crate) struct ProfileBinding {
     pub(crate) handle: ProfileHandle,
     selection: WindowSelection,
-    revision: u64,
+    pub(crate) revision: u64,
     draft: DraftSlot,
     protected: Rc<RefCell<Vec<TabId>>>,
     seen_auto_archive: std::collections::HashSet<TabId>,
@@ -420,7 +468,22 @@ impl BrowserWindow {
     }
 }
 
+/// The session without history, and each profile's history. Cloning the
+/// model shares histories, so this stays cheap however long they grow.
+fn session_parts(data: &RefCell<Browser>, drafts: &RefCell<Vec<Weak<RefCell<Option<SplitDraft>>>>>)
+    -> (String, Vec<(UserProfileId, browser_core::history::History)>)
+{
+    let mut browser = session_browser(data, drafts);
+    let histories = browser_core::session::take_histories(&mut browser);
+    (browser_core::session::to_json(&browser), histories)
+}
+
+#[cfg(test)]
 fn session_json(data: &RefCell<Browser>, drafts: &RefCell<Vec<Weak<RefCell<Option<SplitDraft>>>>>) -> String {
+    browser_core::session::to_json(&session_browser(data, drafts))
+}
+
+fn session_browser(data: &RefCell<Browser>, drafts: &RefCell<Vec<Weak<RefCell<Option<SplitDraft>>>>>) -> Browser {
     let mut browser = data.borrow().clone();
     let mut drafts = drafts.borrow_mut();
     drafts.retain(|draft| draft.strong_count() > 0);
@@ -433,11 +496,11 @@ fn session_json(data: &RefCell<Browser>, drafts: &RefCell<Vec<Weak<RefCell<Optio
             if let Some(mut selection) = preserve { browser.edit_in_window(&mut selection, |_| {}); }
         }
     }
-    browser_core::session::to_json(&browser)
+    browser
 }
 
-fn same_history(a: &[browser_core::history::HistoryEntry], b: &[browser_core::history::HistoryEntry]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(a, b)|
+fn same_history(a: &browser_core::history::History, b: &browser_core::history::History) -> bool {
+    a.same(b) || a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)|
         a.url == b.url && a.title == b.title && a.visited_at == b.visited_at && a.visit_count == b.visit_count)
 }
 

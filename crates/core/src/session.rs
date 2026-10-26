@@ -1,9 +1,9 @@
 //! Saves and restores the browser model between launches.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::Browser;
+use crate::{Browser, UserProfileId, history::History};
 
 /// Version 2 is one workspace with an explicit profile registry. Versioned
 /// corruption is an error; it must never authenticate through legacy Default.
@@ -103,11 +103,62 @@ fn migrate_legacy(value: &mut serde_json::Value) -> Result<(), serde_json::Error
 /// `Ok(None)` when no session was saved yet.
 pub fn load(path: &Path) -> io::Result<Option<Browser>> {
     match std::fs::read_to_string(path) {
-        Ok(json) => from_json(&json)
-            .map(Some)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+        Ok(json) => {
+            let mut browser =
+                from_json(&json).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            load_histories(path, &mut browser);
+            Ok(Some(browser))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
+    }
+}
+
+/// Each profile's history is kept beside the session in
+/// `<session>.history/<id>.json`, so the frequently saved session stays small
+/// however long history grows, and sessions sharing a folder stay apart.
+fn history_dir(session: &Path) -> PathBuf {
+    let stem = session.file_stem().and_then(|s| s.to_str()).unwrap_or("session");
+    session.with_file_name(format!("{stem}.history"))
+}
+pub fn history_path(session: &Path, id: UserProfileId) -> PathBuf {
+    history_dir(session).join(format!("{}.json", id.0))
+}
+/// Takes every profile's history out of `browser`, for a session without it.
+pub fn take_histories(browser: &mut Browser) -> Vec<(UserProfileId, History)> {
+    browser
+        .profiles
+        .iter_mut()
+        .map(|(id, profile)| (*id, std::mem::take(&mut profile.history)))
+        .collect()
+}
+pub fn save_history(session: &Path, id: UserProfileId, history: &History) -> io::Result<()> {
+    let json = serde_json::to_string(history).map_err(io::Error::other)?;
+    save(&history_path(session, id), &json)
+}
+/// Removes history files of profiles that no longer exist.
+pub fn retain_histories(session: &Path, live: &[UserProfileId]) {
+    let keep: Vec<_> = live.iter().map(|id| history_path(session, *id)).collect();
+    if let Ok(entries) = std::fs::read_dir(history_dir(session)) {
+        for entry in entries.flatten() {
+            if !keep.contains(&entry.path()) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+/// A session written inline by an older Echo keeps its own history; other
+/// profiles read theirs from the history file.
+fn load_histories(session: &Path, browser: &mut Browser) {
+    for (id, profile) in browser.profiles.iter_mut() {
+        if !profile.history.is_empty() {
+            continue;
+        }
+        let Ok(json) = std::fs::read_to_string(history_path(session, *id)) else { continue };
+        match serde_json::from_str::<History>(&json) {
+            Ok(history) => profile.history = history,
+            Err(error) => eprintln!("Cannot read the history of profile {}: {error}", id.0),
+        }
     }
 }
 
@@ -119,6 +170,34 @@ pub fn save(path: &Path, json: &str) -> io::Result<()> {
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, json)?;
     std::fs::rename(&temp, path)
+}
+
+#[cfg(test)]
+mod history_file_tests {
+    use super::*;
+    #[test]
+    fn history_lives_beside_the_session_and_inline_history_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let mut browser = Browser::new();
+        let id = browser.active_user_profile_id();
+        browser.record_visit(id, "https://kept.example", std::time::SystemTime::UNIX_EPOCH);
+        // An older Echo wrote history inline.
+        save(&path, &to_json(&browser)).unwrap();
+        assert_eq!(load(&path).unwrap().unwrap().active_user_profile().history.len(), 1);
+        // Now: the session without history, history in its own file.
+        let mut lean = browser.clone();
+        let histories = take_histories(&mut lean);
+        save(&path, &to_json(&lean)).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("kept.example"));
+        for (id, history) in &histories {
+            save_history(&path, *id, history).unwrap();
+        }
+        let restored = load(&path).unwrap().unwrap();
+        assert_eq!(restored.active_user_profile().history[0].url, "https://kept.example");
+        retain_histories(&path, &[]);
+        assert!(load(&path).unwrap().unwrap().active_user_profile().history.is_empty());
+    }
 }
 
 #[cfg(test)]

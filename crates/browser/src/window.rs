@@ -804,6 +804,13 @@ pub struct BrowserWindow {
     pub(crate) page_zoom_generation: u64,
     pub(crate) page_zoom_refresh: bool,
     pub(crate) loading_indicators: crate::page_loading::LoadingIndicators,
+    loading_view: Option<Entity<crate::page_loading::LoadingView>>,
+    /// The docked sidebar as its own view. A frame requested only by the
+    /// loading animation reuses its last layout and paint; any other frame
+    /// renders it afresh, as before.
+    sidebar_view: Option<Entity<SidebarView>>,
+    loading_tick: Rc<Cell<bool>>,
+    window_notified: Rc<Cell<bool>>,
     pub(crate) extensions: crate::extensions::State,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) search_settings: crate::search_settings::State,
@@ -1038,7 +1045,7 @@ impl BrowserWindow {
                     // Reconcile both edges against the native pointer rather than
                     // leaving GPUI's cached hover stuck after a page interaction.
                     let _ = this.update_in(cx, |this, window, cx| {
-                        this.sync_extension_model(window, cx);
+                        this.sync_extension_model_on_render(window, cx);
                         this.poll_extension_model_requests(cx);
                         this.poll_extensions(cx);
                         this.poll_download_ui(cx);
@@ -1158,6 +1165,10 @@ impl BrowserWindow {
             page_zoom_generation: 0,
             page_zoom_refresh: false,
             loading_indicators: Default::default(),
+            loading_view: None,
+            sidebar_view: None,
+            loading_tick: Rc::default(),
+            window_notified: Rc::default(),
             extensions: crate::extensions::State::new(cx),
             history_page: crate::history::HistoryPage::new(cx),
             search_settings: crate::search_settings::State::new(cx),
@@ -4921,6 +4932,30 @@ impl BrowserWindow {
     }
 }
 
+/// The docked sidebar, rendered by its window. It re-renders whenever the
+/// window is notified, i.e. on any state change, but not for frames that
+/// only animate another view (the loading pulse).
+pub(crate) struct SidebarView {
+    browser: gpui::WeakEntity<BrowserWindow>,
+    _observe: Subscription,
+}
+impl SidebarView {
+    fn new(browser: &Entity<BrowserWindow>, notified: Rc<Cell<bool>>, cx: &mut Context<Self>) -> Self {
+        let observe = cx.observe(browser, move |_, _, cx| {
+            notified.set(true);
+            cx.notify();
+        });
+        Self { browser: browser.downgrade(), _observe: observe }
+    }
+}
+impl Render for SidebarView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.browser
+            .update(cx, |browser, cx| browser.render_sidebar(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = crate::native::view_of(window);
@@ -4980,7 +5015,7 @@ impl Render for BrowserWindow {
         self.sync_page_fullscreen(window, cx);
         self.sync_web_theme_palette(cx);
         self.sync_page_viewport();
-        self.sync_extension_model(window, cx);
+        self.sync_extension_model_on_render(window, cx);
         if let Some(pages) = &self.pages {
             match pages.try_borrow_mut() {
                 Ok(mut pages) => {
@@ -4994,7 +5029,7 @@ impl Render for BrowserWindow {
                 Err(_) => cx.on_next_frame(window, |_, _, cx| cx.notify()),
             }
         }
-        self.sync_extension_model(window, cx);
+        self.sync_extension_model_on_render(window, cx);
         if !cx.has_active_drag() {
             self.sidebar_drag_scroll = None;
             if self.split_drop.is_some() { self.close_split_drop(cx); }
@@ -5005,7 +5040,6 @@ impl Render for BrowserWindow {
         self.sync_navigation_history(cx);
         self.sync_page_zoom(window, cx);
         self.sync_page_swipe(window,cx);
-        self.sync_page_loading(window, cx);
         let sidebar_amount = self.sidebar_amount();
         let sidebar_offset = self.sidebar_width() * (sidebar_amount - 1.);
         let window_controls_offset = self.window_controls_offset();
@@ -5014,7 +5048,23 @@ impl Render for BrowserWindow {
         }
 
         let library_open = !self.page_content_visible() && self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library;
-        let sidebar = (!library_open && sidebar_amount > 0.).then(|| self.render_sidebar(cx));
+        let animation_only = self.loading_tick.replace(false) && !self.window_notified.replace(false);
+        let sidebar = (!library_open && sidebar_amount > 0.).then(|| {
+            let entity = cx.entity();
+            let notified = self.window_notified.clone();
+            let view = self.sidebar_view.get_or_insert_with(|| cx.new(|cx| SidebarView::new(&entity, notified, cx))).clone();
+            let view = gpui::AnyView::from(view);
+            if animation_only {
+                view.cached(gpui::StyleRefinement::default().w(px(self.sidebar_width())).h_full()).into_any_element()
+            } else {
+                view.into_any_element()
+            }
+        });
+        let loading = {
+            let browser = cx.entity().downgrade();
+            let tick = self.loading_tick.clone();
+            self.loading_view.get_or_insert_with(|| cx.new(|_| crate::page_loading::LoadingView { browser, tick })).clone()
+        };
         let library = library_open.then(|| self.render_library_host(cx));
         let compact = self.transient.is_some();
         let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(window, cx).into_any_element() };
@@ -5183,7 +5233,7 @@ impl Render for BrowserWindow {
             .when_some(library, |this, library| this.child(library))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))
-            .child(self.render_page_loading(cx))
+            .child(loading)
             .when(self.page_fullscreen.is_some(), |this| this.children(self.render_document_viewport_canvas()))
             .child(release_hover_on_exit())
             .into_any_element()

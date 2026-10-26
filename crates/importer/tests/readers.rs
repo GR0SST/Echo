@@ -149,7 +149,7 @@ fn history_readers_preserve_source_frequency_and_safari_total_beyond_retained_vi
         let db = rusqlite::Connection::open(&path).unwrap();
         db.execute_batch(schema).unwrap();
         let before = std::fs::read(&path).unwrap();
-        let report = read_profile(&source(browser, dir.path()), Selection { bookmarks: false, history: true, tabs: false }, &AtomicBool::new(false), |_| {});
+        let report = read_profile(&source(browser, dir.path()), Selection { bookmarks: false, history: true, tabs: false, passwords: false }, &AtomicBool::new(false), |_| {});
         assert!(report.issues.is_empty(), "{:?}", report.issues);
         assert_eq!(report.data.history.len(), 1);
         assert_eq!(report.data.history[0].visit_count, 6);
@@ -247,7 +247,9 @@ fn installed_browser_is_one_source_that_reads_every_profile() {
     let sources = paths.profiles();
     assert_eq!(sources.len(), 1);
     assert_eq!((sources[0].name.as_str(), sources[0].path.as_path()), ("Chrome", root.as_path()));
-    let report = read_profile(&sources[0], Selection::default(), &AtomicBool::new(false), |_| {});
+    // Never the real Keychain from a test.
+    let selection = Selection { passwords: false, ..Selection::default() };
+    let report = read_profile(&sources[0], selection, &AtomicBool::new(false), |_| {});
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     let profiles = &report.data.profiles;
     assert_eq!(profiles.iter().map(|p| p.name.as_deref()).collect::<Vec<_>>(), [None, Some("Work")]);

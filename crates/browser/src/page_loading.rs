@@ -2,7 +2,7 @@
 use crate::{pages::PageIdentity, window::BrowserWindow};
 use browser_core::TabId;
 use engine::Bounds as PageBounds;
-use gpui::{div, hsla, prelude::*, px, AnyElement, Context, Window};
+use gpui::{div, hsla, prelude::*, px, AnyElement, Context, WeakEntity, Window};
 use std::{collections::HashMap, time::Instant};
 
 const PULSE_PERIOD: f32 = 1.6;
@@ -58,6 +58,34 @@ impl LoadingIndicators {
     }
 }
 
+/// The indicators in their own view: their per-frame animation redraws only
+/// this view. Animating through the browser window would re-render its whole
+/// sidebar every frame, which with hundreds of tabs saturates the UI thread.
+pub(crate) struct LoadingView {
+    pub(crate) browser: WeakEntity<BrowserWindow>,
+    /// Set for a frame requested only by this animation.
+    pub(crate) tick: std::rc::Rc<std::cell::Cell<bool>>,
+}
+impl Render for LoadingView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (element, animating) = self
+            .browser
+            .update(cx, |browser, cx| {
+                browser.sync_page_loading(window, cx);
+                (browser.render_page_loading(cx), !browser.loading_indicators.is_empty())
+            })
+            .unwrap_or_else(|_| (div().into_any_element(), false));
+        if animating {
+            let tick = self.tick.clone();
+            cx.on_next_frame(window, move |_, _, cx| {
+                tick.set(true);
+                cx.notify();
+            });
+        }
+        div().absolute().inset_0().child(element)
+    }
+}
+
 impl BrowserWindow {
     pub(crate) fn sync_page_loading(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let snapshots = if self.page_content_visible() && self.transient.is_none() {
@@ -75,11 +103,9 @@ impl BrowserWindow {
         } else {
             Vec::new()
         };
+        let _ = window;
         self.loading_indicators
             .update(snapshots, cx.background_executor().now());
-        if !self.loading_indicators.is_empty() {
-            cx.on_next_frame(window, |_, _, cx| cx.notify());
-        }
     }
 
     pub(crate) fn render_page_loading(&self, cx: &Context<Self>) -> AnyElement {

@@ -53,6 +53,11 @@ pub(crate) fn init(cx: &mut App) {
 }
 #[derive(Clone)]
 pub(crate) struct ImportSources(pub Vec<SourceProfile>);
+/// Logins a test pretends the browser handed over, by imported profile.
+#[cfg(test)]
+pub(crate) struct TestLogins(pub Vec<(usize, String)>);
+#[cfg(test)]
+impl gpui::Global for TestLogins {}
 impl gpui::Global for ImportSources {}
 /// App icons for the setup sheet. Extracting them from the OS takes seconds
 /// in all, so they are found once, off the UI thread.
@@ -239,7 +244,11 @@ pub(crate) struct SetupDialog {
     focus: FocusHandle,
     opened: std::time::Instant,
     published: Option<UserProfileId>,
+    /// Where each imported profile landed, in `report.data.profiles` order.
+    published_profiles: Vec<UserProfileId>,
     credentials: Vec<importer::Credential>,
+    /// Logins read straight from the browser, by imported profile.
+    browser_credentials: Vec<(usize, importer::Credential)>,
     password_file: bool,
     credential_store: Arc<dyn importer::CredentialStore>,
     /// False while installed browsers are still being looked up.
@@ -250,9 +259,12 @@ pub(crate) struct SetupDialog {
     pub(crate) welcome_frame: Option<gpui::Bounds<gpui::Pixels>>,
     /// The current per-frame orb image; replaced (and released) every frame.
     welcome_orb: Option<Arc<gpui::RenderImage>>,
-    welcome_field: Option<Arc<gpui::RenderImage>>,
-    /// The onboarding background, redrawn each frame.
+    /// The color field behind the intro and setup, baked off the UI thread:
+    /// the latest finished frame, whether one is being baked, and frames
+    /// to release from the window's atlas.
     field: Option<Arc<gpui::RenderImage>>,
+    field_pending: bool,
+    retired_fields: Vec<Arc<gpui::RenderImage>>,
     /// The profile onboarding imports into; first run has only this one.
     home_profile: UserProfileId,
     /// "No, I want to type in all my passwords again." on the import step.
@@ -351,7 +363,9 @@ impl SetupDialog {
             focus: cx.focus_handle(),
             opened: cx.background_executor().now(),
             published: None,
+            published_profiles: vec![],
             credentials: vec![],
+            browser_credentials: vec![],
             password_file: false,
             credential_store: cx
                 .try_global::<CredentialStorage>()
@@ -365,8 +379,9 @@ impl SetupDialog {
                 && engine::play_ui_sound(engine::UiSound::Welcome),
             welcome_frame: None,
             welcome_orb: None,
-            welcome_field: None,
             field: None,
+            field_pending: false,
+            retired_fields: Vec::new(),
             home_profile: browser.active_user_profile_id(),
             no_import: false,
             theme: browser.space().theme(),
@@ -408,6 +423,33 @@ impl SetupDialog {
             Some(start) => start.elapsed().as_secs_f32(),
             None => (elapsed - 3.).max(0.),
         }
+    }
+    /// Starts baking the next field frame unless one is in progress. The
+    /// finished frame triggers the next render, which bakes the one after,
+    /// so the field animates at the baking rate without ever blocking input.
+    fn bake_field(&mut self, t: f32, aspect: f32, window: &mut Window, cx: &mut Context<Self>) {
+        for old in self.retired_fields.drain(..) {
+            let _ = window.drop_image(old);
+        }
+        // The test executor runs until idle: bake one frame, not a loop.
+        if self.field_pending || (cfg!(test) && self.field.is_some()) {
+            return;
+        }
+        self.field_pending = true;
+        let task = cx
+            .background_executor()
+            .spawn(async move { crate::welcome::field_image(t, aspect) });
+        cx.spawn(async move |this, cx| {
+            let image = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(old) = this.field.replace(image) {
+                    this.retired_fields.push(old);
+                }
+                this.field_pending = false;
+                cx.notify();
+            });
+        })
+        .detach();
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
         self.cancel.store(true, Ordering::Relaxed);
@@ -551,8 +593,11 @@ impl SetupDialog {
         self.change(Step::Reading, cx);
         let cancel = self.cancel.clone();
         let category = self.current_category.clone();
+        let source_browser = source.browser;
         let task = cx.background_executor().spawn(async move {
-            importer::read_profile(&source, Selection::default(), &cancel, |current| {
+            // Tests never reach for the real Keychain.
+            let selection = Selection { passwords: !cfg!(test), ..Selection::default() };
+            importer::read_profile(&source, selection, &cancel, |current| {
                 *category.lock().unwrap() = Some(current);
             })
         });
@@ -563,11 +608,28 @@ impl SetupDialog {
                     return;
                 }
                 this.busy = false;
+                let mut report = report;
+                this.browser_credentials = std::mem::take(&mut report.credentials.0);
+                #[cfg(test)]
+                if let Some(logins) = cx.try_global::<TestLogins>() {
+                    this.browser_credentials = logins.0.iter().map(|(index, origin)| (*index, importer::Credential {
+                        origin: origin.clone(), username: "me".into(), password: "secret".into(),
+                    })).collect();
+                }
                 // A whole browser comes over complete, as its Spaces and
                 // profiles; only a single profile's bookmarks are picked.
                 let whole = !report.data.profiles.is_empty();
+                // Chromium browsers hand over their saved logins directly;
+                // the CSV step is only a fallback when that was refused.
+                let direct_passwords = whole
+                    && !matches!(source_browser, BrowserKind::Safari | BrowserKind::Firefox)
+                    && !report.issues.iter().any(|i| i.category == importer::Category::Passwords);
                 this.report = Some(Rc::new(report));
-                this.change(if whole { Step::Passwords } else { Step::Bookmarks }, cx);
+                if direct_passwords {
+                    this.publish(cx);
+                } else {
+                    this.change(if whole { Step::Passwords } else { Step::Bookmarks }, cx);
+                }
             });
         })
         .detach();
@@ -653,24 +715,32 @@ impl SetupDialog {
         let Some(profile) = self.published else {
             return;
         };
-        if self.credentials.is_empty() {
+        if self.credentials.is_empty() && self.browser_credentials.is_empty() {
             self.busy = false;
             self.finish_import(cx);
             return;
         }
-        let credentials = std::mem::take(&mut self.credentials);
+        let key_for = |id: UserProfileId| id.storage_key().unwrap_or_else(|| "default".into());
+        // An uploaded CSV goes to the destination; logins read from the
+        // browser go to the profile their source profile became.
+        let mut keyed: Vec<(String, importer::Credential)> = std::mem::take(&mut self.credentials)
+            .into_iter()
+            .map(|c| (key_for(profile), c))
+            .collect();
+        keyed.extend(std::mem::take(&mut self.browser_credentials).into_iter().map(|(index, c)| {
+            (key_for(self.published_profiles.get(index).copied().unwrap_or(profile)), c)
+        }));
         let cancel = self.cancel.clone();
-        let key = profile.storage_key().unwrap_or_else(|| "default".into());
         self.busy = true;
         let store = self.credential_store.clone();
         let task = cx.background_executor().spawn(async move {
-            let result = credentials.iter().try_for_each(|credential| {
+            let result = keyed.iter().try_for_each(|(key, credential)| {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("Import cancelled.".into());
                 }
-                store.store(&key, credential)
+                store.store(key, credential)
             });
-            (credentials, result)
+            (keyed.into_iter().map(|(_, c)| c).collect::<Vec<_>>(), result)
         });
         cx.spawn(async move |this, cx| {
             let (credentials, result) = task.await;
@@ -795,7 +865,7 @@ impl SetupDialog {
         Step::SafariAccess=>"To import Safari browser history, Echo will need Full Disk Access. Feel free to remove access when this step is finished.\n\nAfter you have given access, you can choose to restart Echo now, or continue and restart later.".into(),
         Step::Shortcuts=>String::new(),
         Step::Destination=>"A new Profile will keep your existing data separate from what you’re importing.".into(),
-        Step::Reading=>self.current_category.lock().unwrap().map(|c|format!("{}…",match c {importer::Category::Bookmarks=>"Bookmarks",importer::Category::History=>"History",importer::Category::OpenTabs=>"Open Tabs"})).unwrap_or_else(||"Importing…".into()),
+        Step::Reading=>self.current_category.lock().unwrap().map(|c|format!("{}…",match c {importer::Category::Bookmarks=>"Bookmarks",importer::Category::History=>"History",importer::Category::OpenTabs=>"Open Tabs",importer::Category::Passwords=>"Passwords"})).unwrap_or_else(||"Importing…".into()),
         Step::Bookmarks=>"It’s easy to import the rest later.".into(),
         Step::Passwords=>"To manually import passwords, you’ll have to export them. Once imported, your passwords will be encrypted locally on your computer.".into(),
     }
@@ -1027,7 +1097,7 @@ impl gpui::Render for SetupDialog {
         if self.step == Step::Onboard(SetupStep::Welcome) {
             let t = self.welcome_time(cx);
             cx.on_next_frame(window, |_, _, cx| cx.notify());
-            for previous in [self.welcome_orb.take(), self.welcome_field.take()].into_iter().flatten() {
+            for previous in self.welcome_orb.take() {
                 let _ = window.drop_image(previous);
             }
             if t < crate::welcome::ORB_GONE {
@@ -1035,7 +1105,7 @@ impl gpui::Render for SetupDialog {
             }
             let size = self.welcome_frame.map_or(window.viewport_size(), |f| f.size);
             let aspect = f32::from(size.width) / f32::from(size.height).max(1.);
-            self.welcome_field = Some(crate::welcome::field_image(t, aspect));
+            self.bake_field(t, aspect, window, cx);
             let arrow = div()
                 .id("welcome-continue")
                 .debug_selector(|| "welcome-continue".into())
@@ -1069,7 +1139,7 @@ impl gpui::Render for SetupDialog {
                     window.viewport_size(),
                     self.welcome_frame,
                     self.welcome_orb.clone(),
-                    self.welcome_field.clone(),
+                    self.field.clone(),
                     window.scale_factor(),
                     arrow,
                     (close, minimize),
@@ -1300,6 +1370,7 @@ impl gpui::Render for SetupDialog {
                                         importer::Category::Bookmarks => "Bookmarks",
                                         importer::Category::History => "History",
                                         importer::Category::OpenTabs => "Open tabs",
+                                        importer::Category::Passwords => "Passwords",
                                     },
                                     i.message
                                 )
@@ -1721,8 +1792,19 @@ impl BrowserWindow {
                     };
                     match next.import_local(target, &name, &data, std::time::SystemTime::now()) {
                         Ok(_) => {
+                            let landed = data
+                                .profiles
+                                .iter()
+                                .map(|p| match p.name.as_deref() {
+                                    Some(name) => next
+                                        .user_profiles()
+                                        .find(|candidate| candidate.name() == name.trim())
+                                        .map_or(target, |candidate| candidate.id()),
+                                    None => target,
+                                })
+                                .collect::<Vec<_>>();
                             *browser = next;
-                            Ok(target)
+                            Ok((target, landed))
                         }
                         Err(e) => Err(e.to_owned()),
                     }
@@ -1730,7 +1812,8 @@ impl BrowserWindow {
                 sender.update(cx, |dialog, cx| {
                     dialog.busy = false;
                     match result {
-                        Ok(profile) => {
+                        Ok((profile, landed)) => {
+                            dialog.published_profiles = landed;
                             dialog.published = Some(profile);
                             dialog.save_passwords(cx);
                         }

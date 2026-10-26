@@ -62,6 +62,7 @@ pub fn read(
                 });
             }
         }
+        Category::Passwords => {}
         Category::OpenTabs => {
             let directory = root.join("Sessions");
             let newest = std::fs::read_dir(&directory)
