@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Echo Developer Fixture",
+  "version": "1.0",
+  "description": "Owned fixture for extension Developer mode acceptance.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://example.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" }
+}

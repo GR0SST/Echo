@@ -24,6 +24,7 @@ pub(crate) const URL: &str = "browser://extensions";
 pub(crate) const STORE: &str = "https://chromewebstore.google.com/category/extensions";
 actions!(extensions, [Dismiss, ConfirmRemove]);
 pub(crate) fn bind_keys(cx: &mut App) {
+    crate::extensions_developer::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("escape", Dismiss, Some("ExtensionPopup")),
         KeyBinding::new("cmd-w", Dismiss, Some("ExtensionPopup")),
@@ -97,6 +98,7 @@ impl Extension {
 enum SheetIdentity {
     Install(u64, UserProfileId),
     Remove(String, UserProfileId),
+    Pack(u64, UserProfileId),
 }
 struct Prompt {
     request: u64,
@@ -157,9 +159,10 @@ pub(crate) struct State {
     pub(crate) entries: Vec<Extension>,
     pub(crate) error: Option<String>,
     pub(crate) picker_selection: Option<String>,
+    pub(crate) developer: crate::extensions_developer::State,
     next_attempt: Instant,
     prompt: Option<Prompt>,
-    prompt_focus: FocusHandle,
+    pub(crate) prompt_focus: FocusHandle,
     pub(crate) confirm_remove: Option<String>,
     popup: Option<ActionPopup>,
     popup_generation: u64,
@@ -182,6 +185,7 @@ impl State {
             entries: vec![],
             error: None,
             picker_selection: None,
+            developer: Default::default(),
             next_attempt: Instant::now(),
             prompt: None,
             prompt_focus: cx.focus_handle(),
@@ -239,7 +243,7 @@ impl gpui::Render for PopupFrame {
 
 impl BrowserWindow {
     pub(crate) fn extension_surface_owns_focus(&self) -> bool {
-        self.extensions.popup.is_some() || self.extensions.overlay.is_some()
+        self.extensions.popup.is_some() || self.extensions.overlay.is_some() || self.extension_worker_owns_focus()
     }
     pub(crate) fn extension_popup_window_id(&self) -> Option<gpui::WindowId> {
         self.extensions
@@ -254,12 +258,14 @@ impl BrowserWindow {
             && self.browser.active_split().is_none()
     }
     pub(crate) fn poll_extensions(&mut self, cx: &mut Context<Self>) {
+        self.poll_extension_developer(cx);
         if self.browser.is_private() || self.browser.is_blank() {
             return;
         }
         let profile = self.browser.active_user_profile_id();
         if self.extensions.profile != Some(profile) {
             self.close_extension_surfaces(cx);
+            self.reset_extension_developer(true, cx);
             self.extensions.service = None;
             self.extensions.owner = None;
             self.extensions.entries.clear();
@@ -281,7 +287,8 @@ impl BrowserWindow {
             && active_identity != self.extensions.owner
             && self.extensions.service.is_some()
         {
-            self.close_extension_surfaces(cx);
+            self.close_extension_page_surfaces(cx);
+            self.reset_extension_developer(false, cx);
             self.extensions.service = None;
             self.extensions.owner = None;
             self.extensions.next_attempt = Instant::now();
@@ -323,6 +330,7 @@ impl BrowserWindow {
                             });
                             entries.sort_by_key(|e| e.name.to_lowercase());
                             self.extensions.entries = entries;
+                            self.extension_developer_catalog(&data);
                             if self.extensions.confirm_remove.as_ref().is_some_and(|id| {
                                 !self.extensions.entries.iter().any(|entry| &entry.id == id)
                             }) {
@@ -341,8 +349,12 @@ impl BrowserWindow {
                     });
                     self.show_extension_prompt(cx);
                 }
-                ExtensionEvent::InstallComplete { result, .. }
-                | ExtensionEvent::OperationComplete { result, .. } => {
+                ExtensionEvent::OperationComplete { request, result } => {
+                    if !self.extension_developer_result(request, &result, cx) && result["success"] == false {
+                        self.extensions.error = Some(result["error"].as_str().unwrap_or("Extension operation failed").into());
+                    }
+                }
+                ExtensionEvent::InstallComplete { result, .. } => {
                     if result["success"] == false {
                         self.extensions.error = Some(
                             result["error"]
@@ -366,8 +378,10 @@ impl BrowserWindow {
                         });
                     }
                 }
+                ExtensionEvent::DeveloperChanged { id } => self.extension_developer_changed(&id),
                 ExtensionEvent::Closed => {
-                    self.close_extension_surfaces(cx);
+                    self.close_extension_page_surfaces(cx);
+                    self.reset_extension_developer(false, cx);
                     self.extensions.service = None;
                     self.extensions.owner = None;
                     self.extensions.entries.clear();
@@ -535,6 +549,10 @@ impl BrowserWindow {
         self.extensions.pending_retirements.clone()
     }
     pub(crate) fn close_extension_surfaces(&mut self, cx: &mut App) {
+        self.close_extension_worker(cx);
+        self.close_extension_page_surfaces(cx);
+    }
+    pub(crate) fn close_extension_page_surfaces(&mut self, cx: &mut App) {
         self.close_extension_popup(cx);
         if let Some(prompt) = self.extensions.prompt.take() {
             if let Some(service) = &self.extensions.service {
@@ -547,6 +565,7 @@ impl BrowserWindow {
             });
         }
         self.extensions.confirm_remove = None;
+        self.clear_extension_pack();
     }
     pub(crate) fn invoke_extension(
         &mut self,
@@ -727,6 +746,7 @@ impl BrowserWindow {
         });
     }
     fn extension_sheet_identity(&self) -> Option<SheetIdentity> {
+        if let Some((generation, profile)) = self.extension_pack_identity() { return Some(SheetIdentity::Pack(generation, profile)); }
         if let Some(prompt) = &self.extensions.prompt {
             return Some(SheetIdentity::Install(prompt.request, prompt.profile));
         }
@@ -862,7 +882,7 @@ impl BrowserWindow {
             )
             .into_any_element()
     }
-    fn show_extension_prompt(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_extension_prompt(&mut self, cx: &mut Context<Self>) {
         if self.extensions.overlay.is_some() {
             return;
         }
@@ -881,7 +901,8 @@ impl BrowserWindow {
                             && view.browser.active_user_profile_id()
                                 == match &identity {
                                     SheetIdentity::Install(_, profile)
-                                    | SheetIdentity::Remove(_, profile) => *profile,
+                                    | SheetIdentity::Remove(_, profile)
+                                    | SheetIdentity::Pack(_, profile) => *profile,
                                 }
                     })
                     .unwrap_or(false)
@@ -900,8 +921,9 @@ impl BrowserWindow {
                 window_background: WindowBackgroundAppearance::Transparent,
                 ..Default::default()
             };
+            let pack_focus = root.read_with(cx, |view,cx| view.extension_pack_focus(cx)).ok().flatten();
             if let Ok(handle) = cx.open_window(options, |window, cx| {
-                focus.focus(window);
+                pack_focus.as_ref().unwrap_or(&focus).focus(window);
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
                 }
@@ -935,7 +957,8 @@ impl BrowserWindow {
         }
         cx.notify();
     }
-    pub(crate) fn render_extension_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_extension_prompt(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.extension_pack_identity().is_some() { return self.render_extension_pack(window, cx); }
         if self.extensions.confirm_remove.is_some() {
             return self.render_extension_remove(cx);
         }
@@ -1289,7 +1312,7 @@ impl BrowserWindow {
     }
     fn render_extension_manager_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let profile = self.browser.active_user_profile_id();
-        let developer = self.browser.active_user_profile().extension_developer_mode;
+        let developer = self.extension_developer_mode();
         div()
             .h(px(56.))
             .pl(px(18.))
@@ -1395,12 +1418,7 @@ impl BrowserWindow {
                                 if this.browser.active_user_profile_id() != profile {
                                     return;
                                 }
-                                this.edit_profile(|browser| {
-                                    if let Some(profile) = browser.user_profile_mut(profile) {
-                                        profile.extension_developer_mode = !developer;
-                                    }
-                                });
-                                cx.notify();
+                                this.toggle_extension_developer_mode(profile, !developer, cx);
                             }),
                         ),
                     ),
@@ -1571,6 +1589,7 @@ impl BrowserWindow {
                 ))
                 .child(extension_detail_row("Version", &extension.version))
                 .child(extension_detail_row("ID", &extension.id))
+                .child(self.render_extension_permissions(&extension.id))
                 .child(
                     div()
                         .border_t_1()
@@ -1664,7 +1683,7 @@ impl BrowserWindow {
             );
         }
         let profile = self.browser.active_user_profile_id();
-        let developer = self.browser.active_user_profile().extension_developer_mode;
+        let developer = self.extension_developer_mode();
         let query = self.extensions.search.read(cx).text().to_lowercase();
         let entries = self
             .active_extensions()
@@ -1688,6 +1707,7 @@ impl BrowserWindow {
             .flex()
             .flex_col()
             .child(self.render_extension_manager_header(cx))
+            .child(self.render_extension_developer_toolbar(cx))
             .child(
                 div()
                     .id("extensions-scroll")
@@ -1815,7 +1835,8 @@ impl BrowserWindow {
                                                         .pb(px(12.))
                                                         .text_size(px(13.))
                                                         .line_height(px(18.))
-                                                        .child(format!("ID: {}", extension.id)),
+                                                        .child(format!("ID: {}", extension.id))
+                                                        .child(self.render_extension_worker_link(&extension, cx)),
                                                 )
                                             }),
                                     ),
@@ -1878,6 +1899,7 @@ impl BrowserWindow {
                             )
                     })),
             )
+            .child(self.render_extension_developer_toast())
             .when(self.extensions.manager_menu, |page| {
                 page.child(self.render_extension_manager_menu(cx))
             })
@@ -1914,7 +1936,7 @@ impl gpui::Render for ExtensionTooltip {
     }
 }
 
-fn extension_outline_button(
+pub(crate) fn extension_outline_button(
     id: impl Into<gpui::SharedString>,
     label: &str,
 ) -> gpui::Stateful<gpui::Div> {

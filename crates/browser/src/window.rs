@@ -687,7 +687,7 @@ impl Render for Overlay {
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
                     OverlayKind::NavigationHistory => browser.render_navigation_history(cx),
                     OverlayKind::SiteControls => browser.render_site_controls(window, cx),
-                    OverlayKind::ExtensionPrompt => browser.render_extension_prompt(cx),
+                    OverlayKind::ExtensionPrompt => browser.render_extension_prompt(window, cx),
                     OverlayKind::Capture => browser.render_capture(window, cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },

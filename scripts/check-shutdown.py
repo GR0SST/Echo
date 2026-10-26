@@ -177,7 +177,9 @@ def main():
                     profile.mkdir(parents=True)
                     count = args.profiles if case in ("profiles", "combined") else 1
                     seed = workspace(count)
-                    seed["settings"] = {"theme_appearance": args.appearance}
+                    # Measure accepted quit; confirmation has its own native suite.
+                    seed["settings"] = {"theme_appearance": args.appearance,
+                                        "toggles": {"warn_before_quitting": False}}
                     (profile / "session.json").write_text(json.dumps(seed))
                     gpu = "separate" if case in ("gpu", "combined", "media-pip", "media-archived") else "in-process"
                     prefix = f"r{repeat + 1}-{case}"

@@ -15,6 +15,70 @@ portable prebuilt default unless wrapped or given an explicit `CEF_PATH`.
 
 ## Canonical distribution
 
+### Developer/API v4 build record
+
+Generation `20261026T015700Z-65318` is published outside Git at
+`~/Documents/Bot/cef-src/canonical-adapters/20261026T015700Z-65318`.
+Its framework SHA-256 is
+`c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`;
+the complete six-patch stack digest is
+`b61b2c6b66df8acce5af52cc58b957cbac79b370cc576c280ff667a5cdc0739e`.
+The CEF/Chromium pins remain `154.0.34+g14c5a08` / `154.0.8037.98`,
+with Rust `cef` 154.5.0. This incremental Release arm64 build took 104 seconds;
+build plus minimal packaging took 182 seconds (01:57:00–02:00:02 UTC).
+The minimal distribution occupies 500,132 KiB; the Release output occupies
+9,056,848 KiB. Both measurements are logical `du -sk` sizes; APFS clones can
+share physical blocks. The GN definitions were:
+
+```text
+proprietary_codecs=true ffmpeg_branding=Chrome is_official_build=true
+symbol_level=0 use_thin_lto=false chrome_pgo_phase=0
+use_remoteexec=false use_siso=false use_system_xcode=true
+```
+
+CEF's generated arguments additionally set `target_cpu="arm64"`,
+`is_debug=false` and `is_component_build=false`. Exact generated GN arguments,
+source pins and patch hashes are in the generation's `build.json`. The build
+used `scripts/build-cef.sh release` under the shared CEF build lock with
+`nice -n 10` and Ninja `-j 8`; it retained every patch, including PiP and
+browsing-data deletion.
+
+The canonical record is
+`~/Documents/Bot/cef-src/qualification/canonical-2026-10-26T02-34-03.543Z/result.json`.
+Codec, popup privilege/redaction/isolation, metadata and Developer/real HTTPS
+extension gates retain the frozen executable `b84623f…aefa3`; the full fresh
+engine evidence is linked from `resumed_native_evidence`. Recovery, deletion and
+the complete matrix use the rebased main `4cf9291` + Developer app, executable
+`bf91401563d7f13f345269611fd4460a10cf3683d0c7daead9f6dfe10dc005c1`,
+including both quit-policy commits. All bundles use the framework above.
+Full Rust qualification passed 1,928 tests, zero failures and one ignored;
+Linux GNU and Windows MSVC checks passed. The matrix's eight write/restart pairs
+gave **16/16 actual zero exits**, retained cookies and graceful network cleanup;
+`shutdown/run-msupi00d/native-failures.json` is empty. Forced-timeout recovery
+terminated its owned helper, exited normally, verified cookie/localStorage/
+IndexedDB integrity and cleared the dirty marker. The browsing-data gate removed
+all seeded cookies, localStorage, IndexedDB and CacheStorage with callback
+`failed_bits=0`. Screenshots were inspected. Four complete PiP checks passed
+against this framework, including keyboard reveal, mouse return/close and manual
+re-entry at retained 224×126 bounds. Developer Pack reference/evidence pairs and
+the real Dark Reader/uBOL HTTPS behavior are in
+[the Developer record](CEF154_EXTENSION_DEVELOPER.md).
+
+The first native holder grouped PiP, recovery and deletion while reusing passing
+same-app engine receipts; the second holder ran the whole matrix. A third short
+holder measured accepted quit-to-window-gone at **37.973, 28.818 and 44.412 ms**
+(5 ms CoreGraphics polling), with three further actual zero exits. No screen
+work was required after these checks. See [quit latency](CEF_SHUTDOWN.md#quit-visibility-and-latency).
+Automatic-default bundling passed without `ECHO_CEF_DIST` or `CEF_PATH`.
+After qualification, the locked cleanup removed superseded external adapters
+and distributions totaling 1,973,220 logical KiB (`cleanup-initial.json`).
+A concurrent job subsequently recreated an obsolete adapter path as a prebuilt
+download cache; after that job completed, a second locked cleanup removed its
+478,364 KiB (`cleanup.json`). Only the current generation remains. The source
+checkout and incremental output were retained.
+
+### Ordered build and publication
+
 The current recipe applies every top-level patch in
 [`patches/cef154/series.json`](../patches/cef154/series.json), in this order:
 
@@ -72,6 +136,45 @@ must be rejected without modifying it. A separate deletion smoke test seeds and
 removes cookies, localStorage, IndexedDB and CacheStorage through patch #6.
 Every native result must carry the candidate framework hash. Screen holders use
 `/tmp/echo-screen.lock`, hard timeouts and disposable Echo Test profiles.
+
+The canonical runner acquires the screen lock once for codecs, popup isolation,
+metadata, Developer/real-extension input, PiP, recovery and deletion. Its long
+session marker allows the shared watchdog's 720-second budget; the runner bounds
+the group below that limit. It then acquires a second long session for all 16
+shutdown exits. Set `ECHO_CEF_SCREEN_DEADLINE` to an ISO timestamp to refuse a
+session that cannot finish before the screen-work cutoff. Individual checks use
+`--locked` and do not queue for a nested lock.
+
+For a later native harness retry against the same immutable app, set
+`ECHO_CEF_RESUME_QUALIFICATION=/absolute/path/to/previous/result.json`.
+The runner still executes the complete Rust suite. It reuses only passing codec,
+privileged/redacted popup and metadata-model results after requiring the same
+candidate path, framework hash, frozen app path and executable hash. Developer
+and real-extension receipts are revalidated, including their existing artifacts.
+PiP, recovery, deletion and the complete shutdown matrix always run again; a
+failed PiP or partial shutdown result is never inherited. The new report links
+the original native evidence directory.
+
+If main advances its application quit path during engine qualification, freeze a
+rebased app and set `ECHO_CEF_SHUTDOWN_BUNDLE=/absolute/path/to/rebased/Echo.app`.
+Recovery, browsing-data deletion and all sixteen exits use that bundle, while
+the engine/Developer receipts retain their original frozen executable. Both
+bundles must contain the exact candidate framework. The report records each
+bundle path and executable hash. These three acceptance fixtures explicitly set
+`settings.toggles.warn_before_quitting=false` in their fresh session JSON, using
+the normal persisted preference to measure accepted quit without confirmation
+clicks. The warning and native/Dock quit policy have their own qualification in
+[NATIVE_QUIT_POLICY_REFERENCE.md](NATIVE_QUIT_POLICY_REFERENCE.md).
+
+Developer API v4 extends patch #3 with real unpacked installation, foreground
+updates, permission metadata, worker inspection and CRX packing. Its mandatory
+receipt has the same framework/executable hash requirements as the Store receipt,
+with checks `load_unpacked`, `update`, `worker_inspection`, `permissions`, `pack`,
+`overwrite_confirmation` and `profile_isolation`. Set
+`ECHO_CEF_DEVELOPER_RUNNER='["python3","scripts/check-cef-developer.py"]'` and
+`ECHO_CEF_REAL_EXTENSION_PROFILE=/absolute/path/to/owned/test/profile` to collect
+both receipts within the first long session. See
+[Developer qualification](CEF154_EXTENSION_DEVELOPER.md) for the operator protocol.
 
 The metadata bridge adds two mandatory automated gates: unprivileged popup
 redaction (including URL-filter result counts) and the GPUI tab/window fixture

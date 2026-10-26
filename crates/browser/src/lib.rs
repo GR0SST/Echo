@@ -428,6 +428,7 @@ pub fn run() {
 }
 
 mod extensions;
+mod extensions_developer;
 mod extension_tabs;
 
 mod nested_navigation;

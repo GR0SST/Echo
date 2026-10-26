@@ -380,3 +380,24 @@ Its thread-pool shutdown took 21.758 seconds; the observed final atomic writes
 took 0.781–6.249 ms. This remains a background latency case, not a visible wait
 or a forced termination. The native log is
 `target/parity/extensions-ui/qualify/final-real-extensions-cef.log`.
+
+The API-v4/PiP canonical generation `20261026T015700Z-65318` repeated the full
+matrix on main `4cf9291` + Developer tools, including accepted-quit policy commits
+`a70317e` and `1bf393b`. Fresh fixture sessions explicitly disable the normal
+`settings.toggles.warn_before_quitting` preference; no confirmation clicks mask
+the quit path. All sixteen actual exits were zero, all eight restart scenarios
+retained cookies, and all network helpers completed normally. Recovery and
+browsing-data deletion used the same rebased executable. Evidence:
+`~/Documents/Bot/cef-src/qualification/canonical-2026-10-26T02-34-03.543Z/`.
+The separate forced-timeout recovery case also exited zero and terminated its
+owned helper, then verified storage on restart. The normal matrix has no dirty
+shutdown, watchdog or crash failure.
+
+With this rebased app, three further native accepted-quit measurements were
+**37.973, 28.818 and 44.412 ms** to window disappearance (median **37.973 ms**,
+5 ms CoreGraphics polling), all followed by actual exit zero. Before-quit
+screenshots were inspected. Framework SHA-256 is
+`c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`;
+executable SHA-256 is
+`bf91401563d7f13f345269611fd4460a10cf3683d0c7daead9f6dfe10dc005c1`.
+Evidence: `~/Documents/Bot/cef-src/qualification/developer-rebased-quit-latency/`.

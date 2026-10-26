@@ -58,7 +58,7 @@ for run in range(3):
     (profile / "session.json").write_text(json.dumps({"format_version": 2, "next_id": 4,
         "default_user_profile_id": 1, "next_user_profile_id": 2, "active_space": 0, "archive": [],
         "profiles": {"1": {"id": 1, "name": "Echo Test", "archive_after": None}},
-        "settings": {"theme_appearance": "Dark"}, "spaces": [{"id": 1, "user_profile_id": 1,
+        "settings": {"theme_appearance": "Dark", "toggles": {"warn_before_quitting": False}}, "spaces": [{"id": 1, "user_profile_id": 1,
         "name": "Echo Test", "hue": 250, "pinned": [], "today": [], "active_tab": None}]}))
     log = output / f"run-{run}.log"
     with log.open("w") as stream:

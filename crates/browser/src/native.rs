@@ -908,6 +908,7 @@ pub(crate) fn pointer_in_view(view: *mut c_void) -> Option<(f32, f32)> {
 
 /// Platform-owned sharing destination menu.
 pub(crate) mod sharing;
+pub(crate) mod extension_files;
 
 pub(crate) mod link_source;
 /// Displays the platform certificate sheet without retaining engine handles.

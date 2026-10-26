@@ -24,9 +24,10 @@ uses a real internal tab URL, with native enable/disable and confirmed removal.
 Enabled state changes only when Chromium sends its catalog update.
 
 The header's Developer mode toggle persists per profile. It reveals actual
-version/ID metadata. Developer tools are a separate parity row: Load unpacked,
-Update, worker inspection, permission tools and Pack are not advertised until
-their native operations are implemented and qualified.
+version/ID metadata. The separate [Developer tooling follow-up](CEF154_EXTENSION_DEVELOPER.md)
+adds native Load unpacked, Update, worker inspection, permission details and
+Pack through optional bridge API v4. Unsupported prebuilt CEF does not display
+these operations.
 
 Settings → Shortcuts lists each extension command with its own manifest
 label (or command identifier), rather than labelling every command as an
@@ -108,7 +109,7 @@ both Arc and Echo at their original frames. Arc's comparison is recorded in
 `arc-reference/drag-{before,after}.json` (276×612 at 140,110 in both). Echo uses
 AppKit's standard titlebar drag path with the original NSEvent. A custom pointer
 fallback was investigated and discarded; no synthetic-input workaround is shipped.
-Developer tooling remains a separate task after the common controls.
+Developer tooling is qualified separately in [its closeout](CEF154_EXTENSION_DEVELOPER.md).
 
 
 ## Common-flow closeout
@@ -136,4 +137,4 @@ extension windows. Screenshots were inspected directly.
 
 The requested common flows are qualified on macOS. Physical titlebar dragging
 and native popup hosts on other platforms remain unqualified. Developer mode
-tooling remains the separate follow-up described above.
+tooling has its own reference and qualification record linked above.

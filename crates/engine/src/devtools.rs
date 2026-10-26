@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::{Shortcut, ViewId};
 
 pub const INSPECTOR_FRONTEND_URL: &str = "devtools://devtools/bundled/devtools_app.html";
+pub(crate) const WORKER_FRONTEND_URL: &str = "devtools://devtools/bundled/worker_app.html";
 
 /// Separate from tab/page identity. Never add this to browser sessions/history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -190,10 +191,12 @@ pub(crate) enum Backend {
 }
 pub(crate) type Queue = Arc<Mutex<Vec<(InspectorId, Backend)>>>;
 
-pub(crate) struct NativeBinding {
-    // Retain the actual inspected context for the whole inspector lifetime.
-    pub(crate) _context: RequestContext,
-    pub(crate) _registration: Registration,
+pub(crate) enum NativeBinding {
+    Page {
+        _context: RequestContext,
+        _registration: Registration,
+    },
+    Worker(crate::extensions::WorkerHandle),
 }
 
 pub(crate) struct Session<Binding> {
@@ -540,7 +543,7 @@ impl<Binding> Inspectors<Binding> {
 /// Exact URL is only one capability check. Both IPC directions also require
 /// native role, generation, main-frame identity and live document epoch.
 pub(crate) fn expected_frontend(url: &str) -> bool {
-    url == INSPECTOR_FRONTEND_URL
+    url == INSPECTOR_FRONTEND_URL || url == WORKER_FRONTEND_URL
 }
 
 wrap_dev_tools_message_observer! {
@@ -596,18 +599,31 @@ mod tests {
         let source_callbacks = source.queue.clone();
         source.close(source_id);
         drop(source);
-        source_callbacks.lock().unwrap().push((source_id, Backend::Detached));
+        source_callbacks
+            .lock()
+            .unwrap()
+            .push((source_id, Backend::Detached));
         assert!(fork.take().is_empty());
-        assert_eq!(fork.sessions[&fork_id].status.phase, InspectorPhase::Opening);
-        assert!(std::rc::Rc::ptr_eq(&fork.sessions[&fork_id]._binding, &context));
-        fork.queue.lock().unwrap().push((fork_id, Backend::Message(
-            format!(r#"{{"id":{fork_wire},"result":{{}}}}"#).into_bytes(),
-        )));
+        assert_eq!(
+            fork.sessions[&fork_id].status.phase,
+            InspectorPhase::Opening
+        );
+        assert!(std::rc::Rc::ptr_eq(
+            &fork.sessions[&fork_id]._binding,
+            &context
+        ));
+        fork.queue.lock().unwrap().push((
+            fork_id,
+            Backend::Message(format!(r#"{{"id":{fork_wire},"result":{{}}}}"#).into_bytes()),
+        ));
         let events = fork.take();
-        assert_eq!(events, vec![InspectorEvent::Protocol {
-            inspector: fork_id,
-            message: r#"{"id":7,"result":{}}"#.into(),
-        }]);
+        assert_eq!(
+            events,
+            vec![InspectorEvent::Protocol {
+                inspector: fork_id,
+                message: r#"{"id":7,"result":{}}"#.into(),
+            }]
+        );
         assert!(fork.sessions[&fork_id].protocol.pending.is_empty());
         fork.close(fork_id);
         assert_eq!(std::rc::Rc::strong_count(&context), 1);
@@ -646,11 +662,10 @@ mod tests {
         state.queue.lock().unwrap().push((id, Backend::Detached));
         let reopened = insert(&mut state, 1, binding.clone());
         assert_ne!(id, reopened);
-        assert!(
-            state.take().iter().all(
-                |event| matches!(event, InspectorEvent::Status(status) if status.id == reopened)
-            )
-        );
+        assert!(state
+            .take()
+            .iter()
+            .all(|event| matches!(event, InspectorEvent::Status(status) if status.id == reopened)));
         state.load_failed(
             reopened,
             INSPECTOR_FRONTEND_URL.into(),
@@ -662,12 +677,10 @@ mod tests {
             state.sessions[&reopened].status.phase,
             InspectorPhase::LoadFailed
         );
-        assert!(
-            state
-                .take()
-                .iter()
-                .any(|event| matches!(event, InspectorEvent::LoadFailed { code: -302, .. }))
-        );
+        assert!(state
+            .take()
+            .iter()
+            .any(|event| matches!(event, InspectorEvent::LoadFailed { code: -302, .. })));
     }
 
     #[test]
@@ -746,11 +759,9 @@ mod tests {
             vec![InspectorEvent::Detached { inspector: id }]
         );
         assert!(state.sessions[&id].protocol.pending.is_empty());
-        assert!(
-            state
-                .submit(id, &ids, r#"{"id":2,"method":"Runtime.enable"}"#)
-                .is_none()
-        );
+        assert!(state
+            .submit(id, &ids, r#"{"id":2,"method":"Runtime.enable"}"#)
+            .is_none());
         state.loading(id, INSPECTOR_FRONTEND_URL.into(), false);
         assert_eq!(state.sessions[&id].status.phase, InspectorPhase::Detached);
     }
@@ -770,16 +781,12 @@ mod tests {
         let sent: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(sent["sessionId"], "child");
         assert_eq!(sent["id"], wire);
-        assert!(
-            protocol
-                .receive(format!(r#"{{"id":{snapshot},"result":{{}}}}"#).as_bytes())
-                .is_none()
-        );
-        assert!(
-            protocol
-                .receive(format!(r#"{{"id":{wire},"result":{{}}}}"#).as_bytes())
-                .is_none()
-        );
+        assert!(protocol
+            .receive(format!(r#"{{"id":{snapshot},"result":{{}}}}"#).as_bytes())
+            .is_none());
+        assert!(protocol
+            .receive(format!(r#"{{"id":{wire},"result":{{}}}}"#).as_bytes())
+            .is_none());
         let response = protocol
             .receive(format!(r#"{{"id":{wire},"sessionId":"child","result":{{}}}}"#).as_bytes())
             .unwrap();
@@ -837,14 +844,12 @@ mod tests {
         assert!(protocol.pending.contains_key(&live));
         assert!(protocol.receive(error.as_bytes()).is_none());
         // Reusing the frontend ID is now accepted; no pending slot leaked.
-        assert!(
-            protocol
-                .submit(
-                    &ids,
-                    r#"{"id":7,"method":"Runtime.enable","sessionId":"gone"}"#
-                )
-                .is_some()
-        );
+        assert!(protocol
+            .submit(
+                &ids,
+                r#"{"id":7,"method":"Runtime.enable","sessionId":"gone"}"#
+            )
+            .is_some());
         let reply = format!(r#"{{"id":{live},"sessionId":"live","result":{{}}}}"#);
         assert!(protocol.receive(reply.as_bytes()).is_some());
     }
@@ -856,26 +861,20 @@ mod tests {
         let (id, _) = protocol
             .submit(&ids, r#"{"id":5,"method":"Missing.method"}"#)
             .unwrap();
-        assert!(
-            protocol
-                .submit(&ids, r#"{"id":5,"method":"Runtime.enable"}"#)
-                .is_none()
-        );
-        assert!(
-            protocol
-                .submit(
-                    &ids,
-                    r#"{"id":5,"method":"Runtime.enable","sessionId":"other"}"#
-                )
-                .is_some()
-        );
+        assert!(protocol
+            .submit(&ids, r#"{"id":5,"method":"Runtime.enable"}"#)
+            .is_none());
+        assert!(protocol
+            .submit(
+                &ids,
+                r#"{"id":5,"method":"Runtime.enable","sessionId":"other"}"#
+            )
+            .is_some());
         let error = format!(r#"{{"id":{id},"error":{{"code":-32601,"message":"unknown"}}}}"#);
-        assert!(
-            protocol
-                .receive(error.as_bytes())
-                .unwrap()
-                .contains("-32601")
-        );
+        assert!(protocol
+            .receive(error.as_bytes())
+            .unwrap()
+            .contains("-32601"));
         assert!(protocol.receive(error.as_bytes()).is_none());
         for bad in [
             "null",
@@ -905,15 +904,17 @@ mod tests {
             .submit(&ids, r#"{"id":1,"method":"Runtime.enable"}"#)
             .unwrap();
         assert_ne!(old_id, new_id);
-        assert!(
-            new.receive(format!(r#"{{"id":{old_id},"result":{{}}}}"#).as_bytes())
-                .is_none()
-        );
+        assert!(new
+            .receive(format!(r#"{{"id":{old_id},"result":{{}}}}"#).as_bytes())
+            .is_none());
         assert!(expected_frontend(INSPECTOR_FRONTEND_URL));
+        assert!(expected_frontend(WORKER_FRONTEND_URL));
         for url in [
             "devtools://devtools/bundled/inspector.html",
             "devtools://devtools/bundled/devtools_app.html?can_dock=true",
             "devtools://devtools/bundled/devtools_app.html?ws=evil",
+            "devtools://devtools/bundled/worker_app.html?ws=evil",
+            "devtools://devtools.evil/bundled/worker_app.html",
             "devtools://devtools/bundled/devtools_app.html#elements",
             "https://devtools/bundled/inspector.html",
             "devtools://devtools/bundled/inspector.html?ws=evil",
@@ -1660,11 +1661,10 @@ mod navigation_tests {
             inspector_navigation(&state.queue, id, INSPECTOR_FRONTEND_URL),
             0
         );
-        assert!(
-            state.take().iter().any(
-                |e| matches!(e, InspectorEvent::Status(s) if s.phase == InspectorPhase::Opening)
-            )
-        );
+        assert!(state
+            .take()
+            .iter()
+            .any(|e| matches!(e, InspectorEvent::Status(s) if s.phase == InspectorPhase::Opening)));
         assert!(!state.sessions[&id].bridge.is_ready());
     }
 }

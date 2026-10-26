@@ -112,13 +112,15 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
 const appLog = Bun.file(join(evidence, "native.log"));
 const browser = Bun.spawn([join(appPath, "Contents/MacOS/Echo"), "--in-process-gpu", "--autoplay-policy=no-user-gesture-required"], {
   env: { ...process.env, BROWSER_DATA_DIR: join(privateRoot, "profile"),
-    BROWSER_SCRIPT: `wait 3; activate; resize 1000 760; position 100 100; requirefocus; key escape; key cmd-t; type http://127.0.0.1:${server.port}/check/${nonce}; key enter; wait 25; activate; wait 1; requirefocus; windows; shotstack ${join(evidence, "playback.png")}; dump; quit` },
+    BROWSER_SCRIPT: `wait 3; activate; resize 1000 760; position 100 100; require-focus; key escape; key cmd-t; type http://127.0.0.1:${server.port}/check/${nonce}; key enter; wait 25; activate; wait 1; require-focus; windows; shotstack ${join(evidence, "playback.png")}; dump; quit` },
   stdout: appLog, stderr: appLog,
 });
 ownedBrowser = browser;
 try {
   const exitCode = await browser.exited;
-  const passed = exitCode === 0 && result && !result.error && !result.videoError &&
+  const nativeLog = await appLog.text();
+  const passed = exitCode === 0 && !nativeLog.includes('[automation] aborted:') &&
+    !nativeLog.includes('[automation] unknown command') && result && !result.error && !result.videoError &&
     result.timeAfter - result.timeBefore > 1 && result.frames > 0 && result.width > 0 && !result.muted && result.volume > 0 &&
     result.audioSamples > 0 && result.audioChannels > 0 && result.audioPeak > 0;
   const report = { passed: Boolean(passed), exitCode, result, bundledHash, executableHash,

@@ -26,7 +26,7 @@ output=Path(a.output).resolve();output.mkdir(parents=True,exist_ok=True)
 evidence=Path(tempfile.mkdtemp(prefix='browsing-data-',dir=output));runtime=evidence/'runtime';runtime.mkdir()
 profile=runtime/'browser-drive-profile';profile.mkdir()
 (profile/'session.json').write_text(json.dumps({'format_version':2,'next_id':4,'default_user_profile_id':1,'next_user_profile_id':2,'active_space':0,'archive':[],
- 'profiles':{'1':{'id':1,'name':'Echo Test','archive_after':None}},'settings':{'theme_appearance':'Dark','air_traffic_control':None},
+ 'profiles':{'1':{'id':1,'name':'Echo Test','archive_after':None}},'settings':{'theme_appearance':'Dark','air_traffic_control':None,'toggles':{'warn_before_quitting':False}},
  'spaces':[{'id':1,'user_profile_id':1,'name':'Echo Test','hue':250.0,'pinned':[],'today':[{'id':2,'title':'Fixture','url':'about:blank','last_active':{'secs_since_epoch':int(time.time()),'nanos_since_epoch':0}}],'active_tab':2}]}))
 app=evidence/'source.app';S.run(['cp','-cR',str(Path(a.bundle).resolve()),str(app)],check=True)
 framework_name='Chromium Embedded Framework.framework';binary='Chromium Embedded Framework'

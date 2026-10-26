@@ -35,6 +35,16 @@ the window, preserving Echo's existing semantic return-button bridge. Leaving
 the window restores the video-only presentation. This
 keyboard fallback is an accessibility accommodation, not verified Arc parity.
 
+The Developer-mode canonical candidate also removes a visibility race in this
+fallback: Echo reveals controls synchronously before dispatching the key and
+keeps them visible while the keyboard-reveal flag is set. Chromium's fade target
+otherwise allowed photographed controls to disagree with hit testing. Pointer
+exit still clears that flag. The native harness raises the owned PiP window,
+verifies keyboard focus and uses normal Views clicks; its strict visibility
+guard is unchanged. Two consecutive complete checks and the subsequent fresh
+canonical check passed on framework
+`c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`.
+
 The sidebar hover header retains the two-window PiP icon for audio-only sources,
 as in audit `old18-mini-pip`. It requests PiP only for a retained video source;
 its page identity and document epoch guards still reject stale requests.

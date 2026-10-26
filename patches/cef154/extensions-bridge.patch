@@ -57,10 +57,10 @@ index 46a09e6..eeea92c 100644
        'tests/cefclient/browser/browser_window_std_mac.h',
 diff --git a/cef/include/echo_cef_extensions_v1.h b/cef/include/echo_cef_extensions_v1.h
 new file mode 100644
-index 0000000..d6a8363
+index 0000000..0debe28
 --- /dev/null
 +++ b/cef/include/echo_cef_extensions_v1.h
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,162 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#ifndef CEF_INCLUDE_ECHO_CEF_EXTENSIONS_V1_H_
@@ -86,8 +86,9 @@ index 0000000..d6a8363
 +// READY transfers no ownership: attach the view, then detach it synchronously
 +// in CLOSED before the host destroys its WebContents. On macOS native_view is
 +// an NSView*. Other native embedding platforms are not enabled by this probe.
-+// Requires --echo-enable-extensions-bridge. Unpacked loading additionally
-+// requires --enable-unsafe-extension-debugging and preserves installer checks.
++// Requires --echo-enable-extensions-bridge. The v1 test loader additionally
++// requires --enable-unsafe-extension-debugging. Production developer operations
++// use v4 and preserve Chromium's profile preferences and installer checks.
 +enum echo_ext_status_v1 {
 +  ECHO_EXT_OK = 0,
 +  ECHO_EXT_NOT_FOUND = 1,
@@ -120,7 +121,8 @@ index 0000000..d6a8363
 +  ECHO_EXT_OPERATION_COMPLETE = 12,
 +  ECHO_EXT_INSTALL_PROMPT = 13,
 +  ECHO_EXT_INSTALL_COMPLETE = 14,
-+  ECHO_EXT_MODEL_REQUEST = 17
++  ECHO_EXT_MODEL_REQUEST = 17,
++  ECHO_EXT_DEVELOPER_CHANGED = 18
 +};
 +typedef void(ECHO_EXT_CALL* echo_ext_management_callback_v1)(void* userdata,
 +                                                             uint32_t event,
@@ -187,6 +189,28 @@ index 0000000..d6a8363
 +  uint32_t(ECHO_EXT_CALL* complete)(int owner, uint64_t request, const char* result);
 +  uint32_t(ECHO_EXT_CALL* pending)(int owner, uint64_t request);
 +} echo_ext_api_v3;
++// Developer tooling is explicit, profile-owned and additive. v1's debug-only
++// loader is unchanged. Operations emit OPERATION_COMPLETE on the owner watcher.
++// Worker callback: 1 = attached, 2 = JSON protocol bytes, 3 = closed/error.
++// Once attach succeeds, userdata stays owned until exactly one closed callback.
++typedef void(ECHO_EXT_CALL* echo_ext_worker_callback_v4)(void* userdata,
++                                                       uint32_t event,
++                                                       uint64_t token,
++                                                       const char* bytes,
++                                                       uint32_t length);
++typedef struct echo_ext_api_v4 {
++  uint32_t size;
++  uint32_t version;
++  uint32_t capabilities; // load=1, update=2, info=4, worker=8, pack=16.
++  uint32_t(ECHO_EXT_CALL* operation)(int owner, const char* json, uint64_t request);
++  uint32_t(ECHO_EXT_CALL* attach_worker)(int owner, const char* extension_id,
++      echo_ext_worker_callback_v4 callback, void* userdata, uint64_t* token);
++  uint32_t(ECHO_EXT_CALL* send_worker)(int owner, uint64_t token,
++                                      const char* bytes, uint32_t length);
++  uint32_t(ECHO_EXT_CALL* close_worker)(int owner, uint64_t token);
++} echo_ext_api_v4;
++ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
++cef_echo_extensions_get_api_v4(uint32_t size, echo_ext_api_v4* output);
 +ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
 +cef_echo_extensions_get_api_v3(uint32_t size, echo_ext_api_v3* output);
 +ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
@@ -295,10 +319,10 @@ index f5289c3..47004de 100644
    CefRefPtr<CefBrowserHostBase> browser = GetOrAssociateBrowser(item);
 diff --git a/cef/libcef/browser/extensions_bridge.cc b/cef/libcef/browser/extensions_bridge.cc
 new file mode 100644
-index 0000000..13e28ba
+index 0000000..de5ece4
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge.cc
-@@ -0,0 +1,1136 @@
+@@ -0,0 +1,1760 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#include "cef/libcef/browser/extensions_bridge.h"
@@ -306,6 +330,9 @@ index 0000000..13e28ba
 +#include <algorithm>
 +#include <map>
 +#include <memory>
++#include <limits>
++#include <string_view>
++#include <vector>
 +
 +#include "base/auto_reset.h"
 +#include "base/base64.h"
@@ -364,6 +391,30 @@ index 0000000..13e28ba
 +#include "extensions/common/mojom/context_type.mojom.h"
 +#include "extensions/common/mojom/view_type.mojom.h"
 +#include "ui/events/event_constants.h"
++#include "base/json/json_reader.h"
++#include "base/memory/weak_ptr.h"
++#include "base/time/time.h"
++#include "chrome/browser/devtools/devtools_window.h"
++#include "chrome/browser/extensions/api/developer_private/extension_info_generator.h"
++#include "chrome/browser/extensions/extension_management.h"
++#include "chrome/browser/extensions/pack_extension_job.h"
++#include "chrome/browser/extensions/updater/extension_updater.h"
++#include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/devtools_agent_host.h"
++#include "content/public/browser/devtools_agent_host_client.h"
++#include "extensions/browser/lazy_context_id.h"
++#include "extensions/browser/lazy_context_task_queue.h"
++#include "extensions/browser/load_error_reporter.h"
++#include "extensions/browser/process_manager.h"
++#include "extensions/browser/process_manager_observer.h"
++#include "extensions/browser/service_worker/worker_id.h"
++#include "chrome/browser/ui/extensions/extension_enable_flow.h"
++#include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
++#include "extensions/common/manifest_handlers/background_info.h"
++
 +
 +namespace cef::extensions_bridge {
 +#if !BUILDFLAG(IS_MAC)
@@ -716,6 +767,8 @@ index 0000000..13e28ba
 +  return names;
 +}
 +// Profile services, never a default-profile or Chrome-window fallback.
++base::DictValue DeveloperState(content::BrowserContext* context);
++void CancelDeveloper(int owner);
 +base::DictValue Catalog(int id) {
 +  base::DictValue payload;
 +  base::ListValue entries;
@@ -768,6 +821,7 @@ index 0000000..13e28ba
 +    entries.Append(std::move(entry));
 +  }
 +  payload.Set("extensions", std::move(entries));
++  payload.Set("developer", DeveloperState(context));
 +  return payload;
 +}
 +class Watch;
@@ -780,9 +834,28 @@ index 0000000..13e28ba
 +                    uint32_t event,
 +                    uint64_t request,
 +                    base::DictValue data);
++uint64_t NextWatchGeneration() {
++  static uint64_t next = 1;
++  return next++;
++}
++// Keep Chromium's permission-escalation and re-enable flow, including its
++// normal prompt. Watch owns the operation until a deferred completion cleanup.
++class EnableOperation : public ExtensionEnableFlowDelegate {
++ public:
++  EnableOperation(Profile* profile, const std::string& extension,
++                  base::OnceCallback<void(bool)> done)
++      : flow_(profile, extension, this), done_(std::move(done)) {}
++  void Start(content::WebContents* owner) { flow_.StartForWebContents(owner); }
++  void ExtensionEnableFlowFinished() override { std::move(done_).Run(true); }
++  void ExtensionEnableFlowAborted(bool) override { std::move(done_).Run(false); }
++ private:
++  ExtensionEnableFlow flow_;
++  base::OnceCallback<void(bool)> done_;
++};
 +class Watch : public content::WebContentsObserver,
 +              public extensions::ExtensionRegistryObserver,
-+              public extensions::CommandService::Observer {
++              public extensions::CommandService::Observer,
++              public extensions::ProcessManagerObserver {
 + public:
 +  Watch(int id,
 +        CefRefPtr<CefBrowserHostBase> owner,
@@ -799,14 +872,48 @@ index 0000000..13e28ba
 +    commands_ = extensions::CommandService::Get(
 +        owner->GetWebContents()->GetBrowserContext());
 +    commands_->AddObserver(this);
++    preferences_.Init(Profile::FromBrowserContext(
++        owner->GetWebContents()->GetBrowserContext())->GetPrefs());
++    preferences_.Add(prefs::kExtensionsUIDeveloperMode,
++                     base::BindRepeating(&Watch::Changed, base::Unretained(this)));
 +  }
 +  ~Watch() override {
++    if (processes_) processes_->RemoveObserver(this);
 +    if (commands_) {
 +      commands_->RemoveObserver(this);
 +    }
 +    registry_->RemoveObserver(this);
 +    Emit(ECHO_EXT_WATCH_CLOSED, 0, {});
 +  }
++  void EnableDeveloperEvents() {
++    if (!processes_) {
++      processes_ = extensions::ProcessManager::Get(web_contents()->GetBrowserContext());
++      processes_->AddObserver(this);
++    }
++  }
++  void OnStartedTrackingServiceWorkerInstance(const extensions::WorkerId& worker) override {
++    WorkerChanged(worker.extension_id);
++  }
++  void OnStoppedTrackingServiceWorkerInstance(content::BrowserContext&,
++                                             const extensions::WorkerId& worker) override {
++    WorkerChanged(worker.extension_id);
++  }
++  void OnProcessManagerShutdown(extensions::ProcessManager*) override {
++    processes_->RemoveObserver(this);
++    processes_ = nullptr;
++  }
++  uint32_t BeginEnable(const std::string& extension, uint64_t request) {
++    if (!request || enables_.contains(request) || enables_.size() >= 32)
++      return ECHO_EXT_BAD_ARGUMENT;
++    auto operation = std::make_unique<EnableOperation>(
++        Profile::FromBrowserContext(web_contents()->GetBrowserContext()), extension,
++        base::BindOnce(&Watch::Enabled, weak_factory_.GetWeakPtr(), extension, request));
++    auto* pending = operation.get();
++    enables_.emplace(request, std::move(operation));
++    pending->Start(web_contents());
++    return ECHO_EXT_OK;
++  }
++  uint64_t generation() const { return generation_; }
 +  void Emit(uint32_t event, uint64_t request, base::DictValue data) {
 +    const std::string json = base::WriteJson(data).value_or("{}");
 +    base::AutoReset<bool> guard(&in_callback, true);
@@ -842,18 +949,41 @@ index 0000000..13e28ba
 +  void OnCommandServiceDestroying() override { commands_ = nullptr; }
 +  void WebContentsDestroyed() override {
 +    CancelInstalls(id_);
++    CancelDeveloper(id_);
 +    auto self = std::move(Watchers().at(id_));
 +    Watchers().erase(id_);
 +  }
 +
 + private:
++  void WorkerChanged(const std::string& extension) {
++    base::DictValue data;
++    data.Set("id", extension);
++    Emit(ECHO_EXT_DEVELOPER_CHANGED, 0, std::move(data));
++  }
++  void Enabled(const std::string& extension, uint64_t request, bool success) {
++    base::DictValue data;
++    const bool enabled = registry_->enabled_extensions().Contains(extension);
++    data.Set("id", extension);
++    data.Set("enabled", enabled);
++    data.Set("success", success && enabled);
++    if (!success) data.Set("error", "Extension enablement was canceled or blocked.");
++    Emit(ECHO_EXT_OPERATION_COMPLETE, request, std::move(data));
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
++        base::BindOnce(&Watch::ForgetEnable, weak_factory_.GetWeakPtr(), request));
++  }
++  void ForgetEnable(uint64_t request) { enables_.erase(request); }
 +  void Changed() { Emit(ECHO_EXT_CATALOG, 0, Catalog(id_)); }
 +  int id_;
++  const uint64_t generation_ = NextWatchGeneration();
 +  CefRefPtr<CefRequestContext> context_;
 +  echo_ext_management_callback_v1 callback_;
 +  void* userdata_;
 +  raw_ptr<extensions::ExtensionRegistry> registry_;
 +  raw_ptr<extensions::CommandService> commands_ = nullptr;
++  PrefChangeRegistrar preferences_;
++  raw_ptr<extensions::ProcessManager> processes_ = nullptr;
++  std::map<uint64_t, std::unique_ptr<EnableOperation>> enables_;
++  base::WeakPtrFactory<Watch> weak_factory_{this};
 +};
 +Watches& Watchers() {
 +  static base::NoDestructor<Watches> value;
@@ -893,6 +1023,7 @@ index 0000000..13e28ba
 +    return ECHO_EXT_NOT_FOUND;
 +  }
 +  CancelInstalls(id);
++  CancelDeveloper(id);
 +  auto watch = std::move(Watchers().at(id));
 +  Watchers().erase(id);
 +  return ECHO_EXT_OK;
@@ -927,6 +1058,9 @@ index 0000000..13e28ba
 +  }
 +  auto* registrar = extensions::ExtensionRegistrar::Get(context);
 +  if (enabled) {
++    if (registry->disabled_extensions().Contains(extension_id) ||
++        registry->terminated_extensions().Contains(extension_id))
++      return Watchers().at(id)->BeginEnable(extension_id, request);
 +    registrar->EnableExtension(extension_id);
 +  } else {
 +    registrar->DisableExtension(
@@ -1405,6 +1539,514 @@ index 0000000..13e28ba
 +  it->second->Decide(accepted);
 +  return ECHO_EXT_OK;
 +}
++// Explicit developer actions, separate from the debug-only v1 loader.
++using DeveloperKey = std::pair<int, uint64_t>;
++void DeveloperResult(int owner, uint64_t request, const char* operation,
++                     bool success, std::string error = {},
++                     base::DictValue extra = {}, uint64_t generation = 0) {
++  auto watch = Watchers().find(owner);
++  if (!Owner(owner) || watch == Watchers().end() ||
++      (generation && watch->second->generation() != generation)) return;
++  extra.Set("developer_operation", operation);
++  extra.Set("success", success);
++  if (!error.empty()) extra.Set("error", std::move(error));
++  EmitManagement(owner, ECHO_EXT_OPERATION_COMPLETE, request, std::move(extra));
++}
++base::DictValue DeveloperState(content::BrowserContext* context) {
++  auto* profile = Profile::FromBrowserContext(context);
++  auto* prefs = profile->GetPrefs();
++  const bool child = supervised_user::AreExtensionsPermissionsEnabled(profile);
++  const bool blocked = extensions::ExtensionManagementFactory::GetForBrowserContext(profile)
++                           ->BlocklistedByDefault();
++  const bool mode = !child && !profile->IsOffTheRecord() &&
++                   prefs->GetBoolean(prefs::kExtensionsUIDeveloperMode);
++  base::DictValue result;
++  result.Set("enabled", mode);
++  result.Set("managed", prefs->FindPreference(prefs::kExtensionsUIDeveloperMode)->IsManaged());
++  result.Set("can_load_unpacked", mode && !blocked);
++  result.Set("blocked", blocked || child || profile->IsOffTheRecord());
++  return result;
++}
++std::string DeveloperRestriction(Profile* profile, bool loading) {
++  if (profile->IsOffTheRecord()) return "Developer tools are unavailable in a private profile.";
++  if (supervised_user::AreExtensionsPermissionsEnabled(profile))
++    return "Child account users cannot load unpacked extensions.";
++  if (!profile->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode))
++    return "Developer mode must be enabled for this profile.";
++  if (loading && extensions::ExtensionManagementFactory::GetForBrowserContext(profile)
++                     ->BlocklistedByDefault())
++    return "Extension installation is blocked by policy.";
++  return {};
++}
++bool DeveloperPath(const std::string* text, base::FilePath* path, bool optional = false) {
++  if (!text || text->empty()) return optional;
++  if (text->find('\0') != std::string::npos) return false;
++  *path = base::FilePath::FromUTF8Unsafe(*text);
++  return path->IsAbsolute();
++}
++struct DeveloperLoad {
++  CefRefPtr<CefRequestContext> context;
++  scoped_refptr<extensions::UnpackedInstaller> installer;
++};
++auto& DeveloperLoads() {
++  static base::NoDestructor<std::map<DeveloperKey, DeveloperLoad>> jobs;
++  return *jobs;
++}
++struct DeveloperInfo {
++  uint64_t generation;
++  CefRefPtr<CefRequestContext> context;
++  std::unique_ptr<extensions::ExtensionInfoGenerator> generator;
++};
++auto& DeveloperInfos() {
++  static base::NoDestructor<std::map<DeveloperKey, DeveloperInfo>> jobs;
++  return *jobs;
++}
++class DeveloperUpdate;
++using DeveloperUpdateMap = std::map<int, std::unique_ptr<DeveloperUpdate>>;
++DeveloperUpdateMap& DeveloperUpdates();
++class DeveloperUpdate : public extensions::ExtensionRegistryObserver,
++                        public extensions::LoadErrorReporter::Observer {
++ public:
++  DeveloperUpdate(int owner, uint64_t request, Profile* profile)
++      : owner_(owner), request_(request), profile_(profile),
++        registry_(extensions::ExtensionRegistry::Get(profile)) {
++    registry_->AddObserver(this);
++    extensions::LoadErrorReporter::GetInstance()->AddObserver(this);
++  }
++  ~DeveloperUpdate() override {
++    if (registry_) registry_->RemoveObserver(this);
++    extensions::LoadErrorReporter::GetInstance()->RemoveObserver(this);
++  }
++  void Start() {
++    auto* updater = extensions::ExtensionUpdater::Get(profile_);
++    if (!updater || !updater->enabled()) {
++      Updated();
++    } else {
++      extensions::ExtensionUpdater::CheckParams params;
++      params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
++      params.install_immediately = true;
++      params.callback = base::BindOnce(&DeveloperUpdate::Updated, weak_.GetWeakPtr());
++      updater->CheckNow(std::move(params));
++    }
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, base::BindOnce(&DeveloperUpdate::TimedOut, weak_.GetWeakPtr()),
++        base::Seconds(120));
++  }
++  void OnExtensionLoaded(content::BrowserContext* context,
++                          const extensions::Extension* extension) override {
++    if (context == profile_ && extension->id() == current_id_) NextSoon();
++  }
++  void OnLoadFailure(content::BrowserContext* context, const base::FilePath& path,
++                      const std::u16string& error) override {
++    if (context == profile_ && !current_path_.empty() && path == current_path_)
++      Finish(false, base::UTF16ToUTF8(error));
++  }
++  void OnShutdown(extensions::ExtensionRegistry*) override {
++    registry_ = nullptr;
++    Finish(false, "The extension profile is shutting down.");
++  }
++ private:
++  void Updated() {
++    if (!Owner(owner_)) { DeveloperUpdates().erase(owner_); return; }
++    for (const auto& extension : registry_->GenerateInstalledExtensionsSet()) {
++      if (extensions::Manifest::IsUnpackedLocation(extension->location()))
++        pending_.push_back(extension->id());
++    }
++    NextSoon();
++  }
++  void NextSoon() {
++    current_id_.clear();
++    current_path_.clear();
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&DeveloperUpdate::Next, weak_.GetWeakPtr()));
++  }
++  void Next() {
++    if (!Owner(owner_)) { DeveloperUpdates().erase(owner_); return; }
++    while (!pending_.empty()) {
++      current_id_ = std::move(pending_.back());
++      pending_.pop_back();
++      const auto* extension = registry_->GetExtensionById(
++          current_id_, extensions::ExtensionRegistry::EVERYTHING);
++      if (!extension) continue;
++      current_path_ = extension->path();
++      extensions::ExtensionRegistrar::Get(profile_)->ReloadExtensionWithQuietFailure(current_id_);
++      return;
++    }
++    Finish(true, {});
++  }
++  void TimedOut() { Finish(false, "The extension update check timed out."); }
++  void Finish(bool success, std::string error) {
++    DeveloperResult(owner_, request_, "update", success, std::move(error));
++    DeveloperUpdates().erase(owner_);
++  }
++  int owner_;
++  uint64_t request_;
++  raw_ptr<Profile> profile_;
++  raw_ptr<extensions::ExtensionRegistry> registry_;
++  std::vector<std::string> pending_;
++  std::string current_id_;
++  base::FilePath current_path_;
++  base::WeakPtrFactory<DeveloperUpdate> weak_{this};
++};
++DeveloperUpdateMap& DeveloperUpdates() {
++  static base::NoDestructor<DeveloperUpdateMap> jobs;
++  return *jobs;
++}
++// Packing keeps only file paths after the initial profile/policy check. A
++// closed owner cannot receive the result, but file work remains owned until
++// Chromium calls its client back; PackExtensionJob uses an unretained client.
++class DeveloperPack;
++using DeveloperPackMap = std::map<DeveloperKey, std::unique_ptr<DeveloperPack>>;
++DeveloperPackMap& DeveloperPacks();
++class DeveloperPack : public extensions::PackExtensionJob::Client {
++ public:
++  DeveloperPack(DeveloperKey key, const base::FilePath& root,
++                 const base::FilePath& pem, bool overwrite, uint64_t generation)
++      : key_(key), generation_(generation) {
++    job_ = std::make_unique<extensions::PackExtensionJob>(this, root, pem,
++        overwrite ? extensions::ExtensionCreator::kOverwriteCRX : 0);
++  }
++  void Start() { job_->Start(); }
++  void OnPackSuccess(const base::FilePath& crx, const base::FilePath& pem) override {
++    base::DictValue result;
++    result.Set("status", "success");
++    result.Set("crx_path", crx.AsUTF8Unsafe());
++    result.Set("key_path", pem.AsUTF8Unsafe());
++    result.Set("message", base::UTF16ToUTF8(
++        extensions::PackExtensionJob::StandardSuccessMessage(crx, pem)));
++    DeveloperResult(key_.first, key_.second, "pack", true, {}, std::move(result), generation_);
++    DeveloperPacks().erase(key_);
++  }
++  void OnPackFailure(const std::u16string& error,
++                     extensions::ExtensionCreator::ErrorType type) override {
++    base::DictValue result;
++    result.Set("status", type == extensions::ExtensionCreator::kCRXExists ? "warning" : "error");
++    result.Set("can_overwrite", type == extensions::ExtensionCreator::kCRXExists);
++    DeveloperResult(key_.first, key_.second, "pack", false,
++                    base::UTF16ToUTF8(error), std::move(result), generation_);
++    DeveloperPacks().erase(key_);
++  }
++ private:
++  DeveloperKey key_;
++  uint64_t generation_;
++  std::unique_ptr<extensions::PackExtensionJob> job_;
++};
++DeveloperPackMap& DeveloperPacks() {
++  static base::NoDestructor<DeveloperPackMap> jobs;
++  return *jobs;
++}
++void CloseDeveloperWorkers(int owner);
++void CancelDeveloper(int owner) {
++  CloseDeveloperWorkers(owner);
++  DeveloperUpdates().erase(owner);
++  std::erase_if(DeveloperInfos(), [owner](const auto& entry) { return entry.first.first == owner; });
++  for (auto it = DeveloperLoads().begin(); it != DeveloperLoads().end();) {
++    if (it->first.first != owner) { ++it; continue; }
++    it->second.installer->set_completion_callback(base::BindOnce(
++        [](const extensions::Extension*, const base::FilePath&, const std::u16string&) {}));
++    it = DeveloperLoads().erase(it);
++  }
++}
++uint32_t ECHO_EXT_CALL DeveloperOperation(int id, const char* json, uint64_t request) {
++  if (auto status = Check()) return status;
++  if (!json || !request || std::string_view(json).size() > 65536) return ECHO_EXT_BAD_ARGUMENT;
++  auto args = base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++  if (!args) return ECHO_EXT_BAD_ARGUMENT;
++  const auto* operation = args->FindString("operation");
++  if (!operation) return ECHO_EXT_BAD_ARGUMENT;
++  auto owner = Owner(id);
++  if (!owner || !Watchers().contains(id)) return ECHO_EXT_NOT_FOUND;
++  auto* profile = Profile::FromBrowserContext(owner->GetWebContents()->GetBrowserContext());
++  Watchers().at(id)->EnableDeveloperEvents();
++  const DeveloperKey key{id, request};
++  if (*operation == "mode") {
++    const auto enabled = args->FindBool("enabled");
++    if (!enabled) return ECHO_EXT_BAD_ARGUMENT;
++    auto* prefs = profile->GetPrefs();
++    const auto* preference = prefs->FindPreference(prefs::kExtensionsUIDeveloperMode);
++    std::string error;
++    if (profile->IsOffTheRecord()) error = "Developer mode is unavailable in a private profile.";
++    else if (*enabled && supervised_user::AreExtensionsPermissionsEnabled(profile))
++      error = "Developer mode is unavailable for a child account.";
++    else if (preference->IsManaged() && *enabled != prefs->GetBoolean(prefs::kExtensionsUIDeveloperMode))
++      error = "Developer mode is managed by policy.";
++    if (error.empty() && !preference->IsManaged())
++      prefs->SetBoolean(prefs::kExtensionsUIDeveloperMode, *enabled);
++    const bool success = error.empty();
++    DeveloperResult(id, request, "mode", success, std::move(error), DeveloperState(profile));
++    return ECHO_EXT_OK;
++  }
++  if (*operation == "info") {
++    if (profile->IsOffTheRecord()) {
++      DeveloperResult(id, request, "info", false, "Extension details are unavailable in a private profile.");
++      return ECHO_EXT_OK;
++    }
++    const auto* extension_id = args->FindString("id");
++    if (!extension_id || !crx_file::id_util::IdIsValid(*extension_id)) return ECHO_EXT_BAD_ARGUMENT;
++    if (DeveloperInfos().contains(key) || DeveloperInfos().size() >= 128) return ECHO_EXT_BAD_ARGUMENT;
++    auto generator = std::make_unique<extensions::ExtensionInfoGenerator>(profile);
++    auto* generator_ptr = generator.get();
++    const auto generation = Watchers().at(id)->generation();
++    DeveloperInfos().emplace(key, DeveloperInfo{generation, owner->GetRequestContext(), std::move(generator)});
++    generator_ptr->CreateExtensionInfo(*extension_id, base::BindOnce(
++        [](DeveloperKey key, uint64_t generation, extensions::ExtensionInfoGenerator::ExtensionInfoList infos) {
++          base::DictValue result;
++          if (!infos.empty()) {
++            auto info = infos.front().ToValue();
++            info.Remove("iconUrl");
++            info.Remove("iconUrlAndMonochrome");
++            result.Set("info", std::move(info));
++          }
++          DeveloperResult(key.first, key.second, "info", !infos.empty(),
++                          infos.empty() ? "Extension not found." : "", std::move(result), generation);
++          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++              FROM_HERE, base::BindOnce([](DeveloperKey key, uint64_t generation) {
++                auto it = DeveloperInfos().find(key);
++                if (it != DeveloperInfos().end() && it->second.generation == generation)
++                  DeveloperInfos().erase(it);
++              }, key, generation));
++        }, key, generation));
++    return ECHO_EXT_OK;
++  }
++  auto restriction = DeveloperRestriction(profile, *operation == "load");
++  if (!restriction.empty()) {
++    DeveloperResult(id, request, operation->c_str(), false, std::move(restriction));
++    return ECHO_EXT_OK;
++  }
++  if (*operation == "load") {
++    base::FilePath path;
++    if (!DeveloperPath(args->FindString("path"), &path)) return ECHO_EXT_BAD_ARGUMENT;
++    if (DeveloperLoads().contains(key) || DeveloperLoads().size() >= 32) return ECHO_EXT_BAD_ARGUMENT;
++    auto installer = extensions::UnpackedInstaller::Create(profile);
++    installer->set_be_noisy_on_failure(false);
++    installer->set_completion_callback(base::BindOnce(
++        [](DeveloperKey key, const extensions::Extension* extension, const base::FilePath&,
++           const std::u16string& error) {
++          base::DictValue result;
++          if (extension) result.Set("id", extension->id());
++          DeveloperResult(key.first, key.second, "load", !!extension,
++                          base::UTF16ToUTF8(error), std::move(result));
++          DeveloperLoads().erase(key);
++        }, key));
++    DeveloperLoads().emplace(key, DeveloperLoad{owner->GetRequestContext(), installer});
++    installer->Load(path);
++    return ECHO_EXT_OK;
++  }
++  if (*operation == "update") {
++    if (DeveloperUpdates().contains(id)) {
++      DeveloperResult(id, request, "update", false, "Extensions are already updating.");
++      return ECHO_EXT_OK;
++    }
++    auto job = std::make_unique<DeveloperUpdate>(id, request, profile);
++    auto* job_ptr = job.get();
++    DeveloperUpdates().emplace(id, std::move(job));
++    job_ptr->Start();
++    return ECHO_EXT_OK;
++  }
++  if (*operation == "pack") {
++    base::FilePath path, pem;
++    if (!DeveloperPath(args->FindString("path"), &path) ||
++        !DeveloperPath(args->FindString("key_path"), &pem, true)) return ECHO_EXT_BAD_ARGUMENT;
++    if (DeveloperPacks().contains(key) || DeveloperPacks().size() >= 16) return ECHO_EXT_BAD_ARGUMENT;
++    auto job = std::make_unique<DeveloperPack>(key, path, pem, args->FindBool("overwrite").value_or(false),
++                                               Watchers().at(id)->generation());
++    auto* job_ptr = job.get();
++    DeveloperPacks().emplace(key, std::move(job));
++    job_ptr->Start();
++    return ECHO_EXT_OK;
++  }
++  return ECHO_EXT_BAD_ARGUMENT;
++}
++
++// Original worker targets use the same authenticated Alloy frontend as page
++// inspectors. No BrowserWindowInterface, remote port or Chrome window is used.
++class DeveloperWorker;
++using DeveloperWorkerMap = std::map<uint64_t, std::unique_ptr<DeveloperWorker>>;
++DeveloperWorkerMap& DeveloperWorkers();
++void CloseDeveloperWorker(uint64_t token);
++class DeveloperWorker : public content::WebContentsObserver,
++                        public extensions::ExtensionRegistryObserver,
++                        public content::DevToolsAgentHostClient {
++ public:
++  DeveloperWorker(uint64_t token, int owner, CefRefPtr<CefBrowserHostBase> browser,
++                    std::string extension_id, echo_ext_worker_callback_v4 callback,
++                    void* userdata)
++      : content::WebContentsObserver(browser->GetWebContents()), token_(token),
++        owner_(owner), context_(browser->GetRequestContext()),
++        profile_(Profile::FromBrowserContext(browser->GetWebContents()->GetBrowserContext())),
++        extension_id_(std::move(extension_id)), callback_(callback), userdata_(userdata),
++        registry_(extensions::ExtensionRegistry::Get(profile_)) {
++    registry_->AddObserver(this);
++  }
++  ~DeveloperWorker() override {
++    weak_.InvalidateWeakPtrs();
++    if (registry_) registry_->RemoveObserver(this);
++    if (agent_) agent_->DetachClient(this);
++    Emit(3, error_);
++  }
++  int owner() const { return owner_; }
++  void Start() {
++    const auto* extension = registry_->enabled_extensions().GetByID(extension_id_);
++    if (!extension || !extensions::BackgroundInfo::IsServiceWorkerBased(extension)) {
++      Fail("The extension has no enabled service worker.");
++      return;
++    }
++    const auto context_id = extensions::LazyContextId::ForExtension(profile_, extension);
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE, base::BindOnce(&DeveloperWorker::TimedOut, weak_.GetWeakPtr()),
++        base::Seconds(30));
++    auto* queue = context_id.GetTaskQueue();
++    if (!queue) { Fail("The extension worker queue is unavailable."); return; }
++    queue->AddPendingTask(context_id,
++        base::BindOnce(&DeveloperWorker::Started, weak_.GetWeakPtr()));
++  }
++  uint32_t Send(std::string_view bytes) {
++    auto browser = Owner(owner_);
++    if (!browser || browser->GetWebContents()->GetBrowserContext() != profile_ || !agent_)
++      return ECHO_EXT_NOT_FOUND;
++    if (!DevToolsWindow::AllowDevToolsFor(profile_, agent_.get())) return ECHO_EXT_UNSUPPORTED;
++    agent_->DispatchProtocolMessage(this, base::as_byte_span(bytes));
++    return ECHO_EXT_OK;
++  }
++  bool MayAttachToURL(const GURL& url, bool is_webui) override {
++    return !is_webui && url.SchemeIs("chrome-extension") && url.host() == extension_id_;
++  }
++  std::string GetTypeForMetrics() override { return "DevTools"; }
++  void DispatchProtocolMessage(content::DevToolsAgentHost*,
++                                base::span<const uint8_t> bytes) override {
++    if (bytes.size() > 8 * 1024 * 1024) {
++      Fail("The worker inspector message exceeded its size limit.");
++      return;
++    }
++    Emit(2, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
++  }
++  void AgentHostClosed(content::DevToolsAgentHost*) override {
++    agent_ = nullptr;
++    Fail("The extension worker closed.");
++  }
++  void WebContentsDestroyed() override { CloseDeveloperWorker(token_); }
++  void OnExtensionUnloaded(content::BrowserContext*, const extensions::Extension* extension,
++                            extensions::UnloadedExtensionReason) override {
++    if (extension->id() == extension_id_) Fail("The extension was unloaded.");
++  }
++  void OnShutdown(extensions::ExtensionRegistry*) override {
++    registry_ = nullptr;
++    CloseDeveloperWorker(token_);
++  }
++ private:
++  void Started(std::unique_ptr<extensions::LazyContextTaskQueue::ContextInfo> info) {
++    if (!info || info->browser_context != profile_ || !Owner(owner_)) {
++      Fail("The extension worker could not be started.");
++      return;
++    }
++    auto restriction = DeveloperRestriction(profile_, false);
++    if (!restriction.empty()) { Fail(std::move(restriction)); return; }
++    const auto* extension = registry_->enabled_extensions().GetByID(extension_id_);
++    if (!extension || !extensions::BackgroundInfo::IsServiceWorkerBased(extension)) {
++      Fail("The extension is no longer enabled.");
++      return;
++    }
++    const auto url = extensions::BackgroundInfo::GetBackgroundServiceWorkerScriptURL(extension);
++    for (auto& target : content::DevToolsAgentHost::GetOrCreateAll()) {
++      if (target->GetBrowserContext() != profile_ ||
++          target->GetType() != content::DevToolsAgentHost::kTypeServiceWorker ||
++          target->GetURL() != url) continue;
++      if (!DevToolsWindow::AllowDevToolsFor(profile_, target.get())) {
++        Fail("Worker inspection is blocked by policy.");
++        return;
++      }
++      agent_ = target;
++      auto alive = weak_.GetWeakPtr();
++      const bool attached = target->AttachClient(this);
++      if (!alive) return;
++      if (!attached) {
++        agent_ = nullptr;
++        Fail("The extension worker refused the inspector connection.");
++        return;
++      }
++      Emit(1, target->GetId());
++      return;
++    }
++    Fail("The extension worker target is unavailable.");
++  }
++  void TimedOut() {
++    if (!agent_) Fail("Starting the extension worker timed out.");
++  }
++  void Emit(uint32_t event, std::string_view bytes) {
++    base::AutoReset<bool> guard(&in_callback, true);
++    callback_(userdata_, event, token_, bytes.data(), static_cast<uint32_t>(bytes.size()));
++  }
++  void Fail(std::string error) {
++    error_ = std::move(error);
++    CloseDeveloperWorker(token_);
++  }
++  uint64_t token_;
++  int owner_;
++  CefRefPtr<CefRequestContext> context_;
++  raw_ptr<Profile> profile_;
++  std::string extension_id_;
++  echo_ext_worker_callback_v4 callback_;
++  void* userdata_;
++  raw_ptr<extensions::ExtensionRegistry> registry_;
++  scoped_refptr<content::DevToolsAgentHost> agent_;
++  std::string error_;
++  base::WeakPtrFactory<DeveloperWorker> weak_{this};
++};
++DeveloperWorkerMap& DeveloperWorkers() {
++  static base::NoDestructor<DeveloperWorkerMap> workers;
++  return *workers;
++}
++void CloseDeveloperWorker(uint64_t token) {
++  auto it = DeveloperWorkers().find(token);
++  if (it == DeveloperWorkers().end()) return;
++  auto worker = std::move(it->second);
++  DeveloperWorkers().erase(it);
++}
++void CloseDeveloperWorkers(int owner) {
++  std::vector<uint64_t> tokens;
++  for (const auto& [token, worker] : DeveloperWorkers())
++    if (worker->owner() == owner) tokens.push_back(token);
++  for (auto token : tokens) CloseDeveloperWorker(token);
++}
++uint32_t ECHO_EXT_CALL AttachDeveloperWorker(int owner_id, const char* extension_id,
++    echo_ext_worker_callback_v4 callback, void* userdata, uint64_t* token) {
++  if (auto status = Check()) return status;
++  if (!extension_id || !crx_file::id_util::IdIsValid(extension_id) || !callback || !token)
++    return ECHO_EXT_BAD_ARGUMENT;
++  auto owner = Owner(owner_id);
++  if (!owner) return ECHO_EXT_NOT_FOUND;
++  auto* profile = Profile::FromBrowserContext(owner->GetWebContents()->GetBrowserContext());
++  if (!DeveloperRestriction(profile, false).empty()) return ECHO_EXT_UNSUPPORTED;
++  if (DeveloperWorkers().size() >= 32) return ECHO_EXT_UNSUPPORTED;
++  static uint64_t next_token = 1;
++  if (next_token == std::numeric_limits<uint64_t>::max()) return ECHO_EXT_FAILED;
++  *token = next_token++;
++  auto worker = std::make_unique<DeveloperWorker>(*token, owner_id, owner,
++                                                  extension_id, callback, userdata);
++  auto* worker_ptr = worker.get();
++  DeveloperWorkers().emplace(*token, std::move(worker));
++  // From this point the callback owns userdata, including synchronous failure.
++  worker_ptr->Start();
++  return ECHO_EXT_OK;
++}
++uint32_t ECHO_EXT_CALL SendDeveloperWorker(int owner, uint64_t token,
++                                           const char* bytes, uint32_t length) {
++  if (auto status = Check()) return status;
++  if (!bytes || !length || length > 8 * 1024 * 1024) return ECHO_EXT_BAD_ARGUMENT;
++  auto it = DeveloperWorkers().find(token);
++  if (it == DeveloperWorkers().end()) return ECHO_EXT_NOT_FOUND;
++  if (it->second->owner() != owner) return ECHO_EXT_WRONG_OWNER;
++  return it->second->Send(std::string_view(bytes, length));
++}
++uint32_t ECHO_EXT_CALL CloseDeveloperWorkerApi(int owner, uint64_t token) {
++  if (auto status = Check()) return status;
++  auto it = DeveloperWorkers().find(token);
++  if (it == DeveloperWorkers().end()) return ECHO_EXT_NOT_FOUND;
++  if (it->second->owner() != owner) return ECHO_EXT_WRONG_OWNER;
++  CloseDeveloperWorker(token);
++  return ECHO_EXT_OK;
++}
++
 + }  // namespace
 +bool IsActionPopupContents(content::WebContents* contents) {
 +  if (!CefCurrentlyOn(TID_UI) || !contents) return false;
@@ -1434,13 +2076,19 @@ index 0000000..13e28ba
 +  *output = {sizeof(*output), 2, &Remove, &SetShortcut, &DispatchKey};
 +  return ECHO_EXT_OK;
 +}
++uint32_t GetApi4(uint32_t size, echo_ext_api_v4* output) {
++  if (!output || size != sizeof(*output)) return ECHO_EXT_BAD_ARGUMENT;
++  *output = {sizeof(*output), 4, 31, &DeveloperOperation, &AttachDeveloperWorker,
++             &SendDeveloperWorker, &CloseDeveloperWorkerApi};
++  return ECHO_EXT_OK;
++}
 +}  // namespace cef::extensions_bridge
 diff --git a/cef/libcef/browser/extensions_bridge.h b/cef/libcef/browser/extensions_bridge.h
 new file mode 100644
-index 0000000..dfd9aef
+index 0000000..0d86aa4
 --- /dev/null
 +++ b/cef/libcef/browser/extensions_bridge.h
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,19 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#ifndef CEF_LIBCEF_BROWSER_EXTENSIONS_BRIDGE_H_
@@ -1456,6 +2104,7 @@ index 0000000..dfd9aef
 +                                       const extensions::Extension* extension);
 +uint32_t GetApi(uint32_t size, echo_ext_api_v1* output);
 +uint32_t GetApi2(uint32_t size, echo_ext_api_v2* output);
++uint32_t GetApi4(uint32_t size, echo_ext_api_v4* output);
 +uintptr_t NativeView(content::WebContents* contents);
 +}  // namespace cef::extensions_bridge
 +#endif
@@ -2160,10 +2809,10 @@ index 0000000..33e2526
 +#endif
 diff --git a/cef/libcef_dll/echo_cef_extensions_v1.cc b/cef/libcef_dll/echo_cef_extensions_v1.cc
 new file mode 100644
-index 0000000..dfbe04b
+index 0000000..f1eb215
 --- /dev/null
 +++ b/cef/libcef_dll/echo_cef_extensions_v1.cc
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,26 @@
 +// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license in LICENSE.txt.
 +#define ECHO_EXT_IMPLEMENTATION
@@ -2184,6 +2833,11 @@ index 0000000..dfbe04b
 +extern "C" ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
 +cef_echo_extensions_get_api_v3(uint32_t size, echo_ext_api_v3* output) {
 +  return cef::extension_tabs::GetApi(size, output);
++}
++
++extern "C" ECHO_EXT_EXPORT uint32_t ECHO_EXT_CALL
++cef_echo_extensions_get_api_v4(uint32_t size, echo_ext_api_v4* output) {
++  return cef::extensions_bridge::GetApi4(size, output);
 +}
 diff --git a/cef/tests/cefclient/browser/client_handler.cc b/cef/tests/cefclient/browser/client_handler.cc
 index f7f8cb3..469c460 100644

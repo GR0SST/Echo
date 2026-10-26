@@ -10,10 +10,61 @@ const TWO: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 struct ServiceState {
     events: Vec<ExtensionEvent>,
     calls: Vec<String>,
+    developer: bool,
+    operations: Vec<(u64, serde_json::Value)>,
+    worker_drops: usize,
 }
 #[derive(Clone, Default)]
 struct Service(Rc<RefCell<ServiceState>>);
+struct WorkerLease(Rc<RefCell<ServiceState>>);
+impl Drop for WorkerLease {
+    fn drop(&mut self) {
+        self.0.borrow_mut().worker_drops += 1;
+    }
+}
+impl engine::ExtensionWorkerInspector for WorkerLease {
+    fn resize(&mut self, _: engine::Bounds) {}
+    fn focus(&mut self) {}
+    fn take_events(&mut self) -> Vec<engine::ExtensionWorkerEvent> {
+        Vec::new()
+    }
+    fn status(&self) -> Option<engine::InspectorStatus> {
+        None
+    }
+}
 impl ExtensionService for Service {
+    unsafe fn open_worker_inspector(
+        &self,
+        id: &str,
+        _: *mut std::ffi::c_void,
+        _: engine::Bounds,
+    ) -> Result<Box<dyn engine::ExtensionWorkerInspector>, String> {
+        self.0.borrow_mut().calls.push(format!("worker {id}"));
+        Ok(Box::new(WorkerLease(self.0.clone())))
+    }
+
+    fn developer_capabilities(&self) -> engine::ExtensionDeveloperCapabilities {
+        let available = self.0.borrow().developer;
+        engine::ExtensionDeveloperCapabilities {
+            load_unpacked: available,
+            update: available,
+            details: available,
+            inspect_worker: available,
+            pack: available,
+        }
+    }
+    fn developer_operation(
+        &self,
+        operation: &serde_json::Value,
+        request: u64,
+    ) -> Result<(), String> {
+        self.0
+            .borrow_mut()
+            .operations
+            .push((request, operation.clone()));
+        Ok(())
+    }
+
     fn take_events(&self) -> Vec<ExtensionEvent> {
         std::mem::take(&mut self.0.borrow_mut().events)
     }
@@ -669,8 +720,14 @@ fn extension_picker_keyboard_opens_scc_and_invokes_selected_action(cx: &mut Test
     let service = install(&view, cx);
     cx.simulate_keystrokes("cmd-e");
     cx.run_until_parked();
-    assert_eq!(view.read_with(cx, |view, _| view.extensions.picker_selection.clone()).as_deref(), Some(TWO));
-    let overlay = view.read_with(cx, |view, _| view.site_controls.as_ref().unwrap().overlay.unwrap());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.extensions.picker_selection.clone())
+            .as_deref(),
+        Some(TWO)
+    );
+    let overlay = view.read_with(cx, |view, _| {
+        view.site_controls.as_ref().unwrap().overlay.unwrap()
+    });
     let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
     panel.run_until_parked();
     panel.simulate_keystrokes("right enter");
@@ -685,18 +742,327 @@ fn extension_picker_escape_and_add_tile_preserve_keyboard_routing(cx: &mut TestA
     install(&view, cx);
     cx.simulate_keystrokes("cmd-e");
     cx.run_until_parked();
-    let overlay = view.read_with(cx, |view, _| view.site_controls.as_ref().unwrap().overlay.unwrap());
+    let overlay = view.read_with(cx, |view, _| {
+        view.site_controls.as_ref().unwrap().overlay.unwrap()
+    });
     let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
     panel.run_until_parked();
     panel.simulate_keystrokes("escape");
     panel.run_until_parked();
-    assert!(view.read_with(&panel, |view, _| view.site_controls.is_none() && view.extensions.picker_selection.is_none()));
+    assert!(
+        view.read_with(&panel, |view, _| view.site_controls.is_none()
+            && view.extensions.picker_selection.is_none())
+    );
     cx.simulate_keystrokes("cmd-e");
     cx.run_until_parked();
-    let overlay = view.read_with(cx, |view, _| view.site_controls.as_ref().unwrap().overlay.unwrap());
+    let overlay = view.read_with(cx, |view, _| {
+        view.site_controls.as_ref().unwrap().overlay.unwrap()
+    });
     let mut panel = VisualTestContext::from_window(overlay.into(), &cx.cx);
     panel.run_until_parked();
     panel.simulate_keystrokes("right right enter");
     panel.run_until_parked();
-    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::extensions::STORE));
+    assert_eq!(
+        active_url(&view, cx).as_deref(),
+        Some(crate::extensions::STORE)
+    );
+}
+
+fn developer_service(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Service {
+    let service = install(view, cx);
+    service.0.borrow_mut().developer = true;
+    service
+        .0
+        .borrow_mut()
+        .events
+        .push(ExtensionEvent::Catalog(json!({
+            "extensions":[{"id":ONE,"name":"Developer fixture","version":"1","enabled":true}],
+            "developer":{"enabled":true,"managed":false,"can_load_unpacked":true}
+        })));
+    view.update(cx, |view, cx| {
+        let profile = view.browser.active_user_profile_id();
+        view.edit_profile(|browser| {
+            browser
+                .user_profile_mut(profile)
+                .unwrap()
+                .extension_developer_mode = true
+        });
+        view.poll_extensions(cx);
+        view.open_extensions(cx);
+        view.poll_extensions(cx);
+    });
+    cx.run_until_parked();
+    service
+}
+fn developer_reply(
+    service: &Service,
+    view: &Entity<BrowserWindow>,
+    cx: &mut VisualTestContext,
+    operation: &str,
+    fields: serde_json::Value,
+) {
+    let request = service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .rev()
+        .find(|(_, data)| data["operation"] == operation)
+        .unwrap()
+        .0;
+    let mut result = fields;
+    result["developer_operation"] = operation.into();
+    service
+        .0
+        .borrow_mut()
+        .events
+        .push(ExtensionEvent::OperationComplete { request, result });
+    view.update(cx, |view, cx| view.poll_extensions(cx));
+    cx.run_until_parked();
+}
+#[gpui::test]
+fn extension_developer_load_waits_for_the_chooser_and_rejects_a_stale_service(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let service = developer_service(&view, cx);
+    click(cx, "extension-load-unpacked");
+    assert!(!service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .any(|(_, data)| data["operation"] == "load"));
+    cx.update(|_, cx| {
+        crate::native::extension_files::respond(cx, Some("/tmp/extension fixture".into()))
+    });
+    cx.run_until_parked();
+    assert!(service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .any(|(_, data)| data["operation"] == "load" && data["path"] == "/tmp/extension fixture"));
+    developer_reply(&service, &view, cx, "load", json!({"success":true}));
+    click(cx, "extension-load-unpacked");
+    view.update(cx, |view, cx| view.reset_extension_developer(false, cx));
+    cx.update(|_, cx| {
+        crate::native::extension_files::respond(cx, Some("/tmp/stale fixture".into()))
+    });
+    cx.run_until_parked();
+    assert!(!service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .any(|(_, data)| data["path"] == "/tmp/stale fixture"));
+}
+#[gpui::test]
+fn extension_developer_update_is_single_flight_and_uses_native_permission_details(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let service = developer_service(&view, cx);
+    let page = cx.debug_bounds("extensions-page").unwrap();
+    let load = cx.debug_bounds("extension-load-unpacked").unwrap();
+    assert_eq!(load.top() - page.top(), gpui::px(66.));
+    assert_eq!(load.size.height, gpui::px(36.));
+    let pack = cx.debug_bounds("extension-pack").unwrap();
+    assert_eq!(pack.left() - load.right(), gpui::px(20.));
+    click(cx, "extension-update");
+    click(cx, "extension-update");
+    assert_eq!(
+        service
+            .0
+            .borrow()
+            .operations
+            .iter()
+            .filter(|(_, data)| data["operation"] == "update")
+            .count(),
+        1
+    );
+    developer_reply(&service, &view, cx, "update", json!({"success":true}));
+    developer_reply(
+        &service,
+        &view,
+        cx,
+        "info",
+        json!({"success":true,"info":{"id":ONE,"version":"1","views":[{"type":"EXTENSION_SERVICE_WORKER_BACKGROUND","renderProcessId":-1}],"permissions":{"simplePermissions":[{"message":"Read your browsing history","submessages":[]}],"runtimeHostPermissions":{"hostAccess":"ON_CLICK","hosts":[]}}}}),
+    );
+    assert!(cx
+        .debug_bounds(selector(format!("extension-worker-{ONE}")))
+        .is_some());
+    click(cx, selector(format!("extension-details-{ONE}")));
+    assert!(cx.debug_bounds("extension-details").is_some());
+    // An event from the native worker tracker invalidates only the affected info.
+    let before = service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .filter(|(_, data)| data["operation"] == "info")
+        .count();
+    service
+        .0
+        .borrow_mut()
+        .events
+        .push(ExtensionEvent::DeveloperChanged { id: ONE.into() });
+    view.update(cx, |view, cx| {
+        view.poll_extensions(cx);
+        view.poll_extensions(cx);
+    });
+    assert_eq!(
+        service
+            .0
+            .borrow()
+            .operations
+            .iter()
+            .filter(|(_, data)| data["operation"] == "info")
+            .count(),
+        before + 1
+    );
+}
+#[gpui::test]
+fn extension_pack_requires_a_root_and_explicit_confirmation_before_overwrite(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let service = developer_service(&view, cx);
+    let page_center = cx.debug_bounds("extensions-page").unwrap().center().x;
+    click(cx, "extension-pack");
+    let overlay = view.read_with(cx, |view, _| view.extensions.overlay.unwrap());
+    let mut sheet = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    sheet.run_until_parked();
+    assert_eq!(
+        sheet
+            .debug_bounds("extension-pack-dialog")
+            .unwrap()
+            .size
+            .width,
+        gpui::px(512.)
+    );
+    assert_eq!(
+        sheet
+            .debug_bounds("extension-pack-dialog")
+            .unwrap()
+            .center()
+            .x,
+        page_center
+    );
+
+    click(&mut sheet, "extension-pack-confirm");
+    assert!(!service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .any(|(_, data)| data["operation"] == "pack"));
+    click(&mut sheet, "extension-pack-root");
+    sheet.simulate_input("/tmp/pack fixture");
+    click(&mut sheet, "extension-pack-confirm");
+    assert!(service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .any(|(_, data)| data["operation"] == "pack" && data["overwrite"] == false));
+    developer_reply(
+        &service,
+        &view,
+        cx,
+        "pack",
+        json!({"success":false,"can_overwrite":true,"error":"The CRX file already exists."}),
+    );
+    assert_eq!(
+        service
+            .0
+            .borrow()
+            .operations
+            .iter()
+            .filter(|(_, data)| data["operation"] == "pack")
+            .count(),
+        1
+    );
+    sheet.run_until_parked();
+    click(&mut sheet, "extension-pack-confirm");
+    assert!(service
+        .0
+        .borrow()
+        .operations
+        .iter()
+        .any(|(_, data)| data["operation"] == "pack" && data["overwrite"] == true));
+    sheet.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.extensions.overlay.is_none()));
+}
+
+#[gpui::test]
+fn extension_worker_inspector_cmd_w_closes_only_its_profile_owned_window(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let service = developer_service(&view, cx);
+    developer_reply(
+        &service,
+        &view,
+        cx,
+        "info",
+        json!({"success":true,"info":{"id":ONE,"version":"1","views":[{"type":"EXTENSION_SERVICE_WORKER_BACKGROUND","renderProcessId":-1}]}}),
+    );
+    let original = active_url(&view, cx);
+    click(cx, selector(format!("extension-worker-{ONE}")));
+    cx.run_until_parked();
+    assert_eq!(service.0.borrow().calls, vec![format!("worker {ONE}")]);
+    let worker = view.read_with(cx, |view, _| view.extension_worker_window().unwrap());
+    let mut inspector = VisualTestContext::from_window(worker, &cx.cx);
+    inspector.run_until_parked();
+    inspector.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.extension_worker_window().is_none()));
+    assert_eq!(service.0.borrow().worker_drops, 1);
+    assert_eq!(active_url(&view, cx), original);
+}
+
+#[gpui::test]
+fn extension_pack_errors_keep_the_form_and_old_dialog_results_cannot_replace_a_new_one(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let service = developer_service(&view, cx);
+    click(cx, "extension-pack");
+    let overlay = view.read_with(cx, |view, _| view.extensions.overlay.unwrap());
+    let mut sheet = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    sheet.run_until_parked();
+    click(&mut sheet, "extension-pack-root");
+    sheet.simulate_input("/tmp/fixture");
+    sheet.simulate_keystrokes("enter");
+    developer_reply(
+        &service,
+        &view,
+        cx,
+        "pack",
+        json!({"success":false,"status":"error","error":"Choose the private key file."}),
+    );
+    sheet.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.extension_pack_result().cloned()).unwrap()["status"], "error");
+    sheet.simulate_keystrokes("enter");
+    sheet.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.extension_pack_result().is_none()));
+    assert!(sheet.debug_bounds("extension-pack-root").is_some());
+    sheet.simulate_keystrokes("enter");
+    sheet.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    click(cx, "extension-pack");
+    let overlay = view.read_with(cx, |view, _| view.extensions.overlay.unwrap());
+    let mut replacement = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    replacement.run_until_parked();
+    developer_reply(
+        &service,
+        &view,
+        cx,
+        "pack",
+        json!({"success":true,"status":"success","message":"The old packing job completed."}),
+    );
+    replacement.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.extension_pack_result().is_none()));
+    assert!(replacement.debug_bounds("extension-pack-root").is_some());
+    replacement.simulate_keystrokes("escape");
 }

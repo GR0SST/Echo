@@ -37,6 +37,12 @@ def elevated_arc_windows():
 
 before = elevated_arc_windows()
 print(json.dumps({'arc_elevated_before': before}), flush=True)
+for attempt in range(2):
+    if not before:
+        break
+    time.sleep(3)
+    before = elevated_arc_windows()
+    print(json.dumps({'arc_retry': attempt + 1, 'arc_elevated': before}), flush=True)
 if before:
     subprocess.run(['pkill', '-x', 'Arc'], check=True)
     time.sleep(3)

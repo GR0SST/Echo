@@ -28,7 +28,7 @@ evidence=Path(tempfile.mkdtemp(prefix='recovery-',dir=output));runtime=evidence/
 profile=runtime/'browser-drive-profile';profile.mkdir()
 root=profile/'Chromium'
 (profile/'session.json').write_text(json.dumps({'format_version':2,'next_id':4,'default_user_profile_id':1,'next_user_profile_id':2,'active_space':0,'archive':[],
- 'profiles':{'1':{'id':1,'name':'Echo Test','archive_after':None}},'settings':{'theme_appearance':'Dark'},
+ 'profiles':{'1':{'id':1,'name':'Echo Test','archive_after':None}},'settings':{'theme_appearance':'Dark','toggles':{'warn_before_quitting':False}},
  'spaces':[{'id':1,'user_profile_id':1,'name':'Echo Test','hue':250.0,'pinned':[],'today':[{'id':2,'title':'Fixture','url':'about:blank','last_active':{'secs_since_epoch':int(time.time()),'nanos_since_epoch':0}}],'active_tab':2}]}))
 app=evidence/'source.app';S.run(['cp','-cR',str(Path(a.bundle).resolve()),str(app)],check=True)
 framework='Chromium Embedded Framework.framework/Chromium Embedded Framework'
@@ -58,7 +58,8 @@ def drive(phase,script,extra=None):
     assert result.returncode==0,f'{phase} exited {result.returncode}'
     text=(evidence/f'{phase}-engine.log').read_text();assert '[quit] CEF Complete' in text,phase
     return text
-report={'passed':False,'framework_sha256':expected,'cef_dist':str(Path(a.cef_dist).resolve()),'evidence':str(evidence)}
+report={'passed':False,'framework_sha256':expected,'cef_dist':str(Path(a.cef_dist).resolve()),'evidence':str(evidence),
+        'bundle':str(Path(a.bundle).resolve()),'executable_sha256':hashlib.sha256((app/'Contents/MacOS/Echo').read_bytes()).hexdigest()}
 try:
     drive('forced',f'wait 2; activate; resize 1000 760; position 100 100; require-focus; key cmd-t; type {origin}/seed; key enter; wait 3; shot {evidence}/seeded.png; dump; quit',
           {'ECHO_CEF_TEST_MODE':'1','ECHO_TEST_NETWORK_WAIT_MS':'500','ECHO_TEST_NETWORK_DELAY_MS':'5000'})

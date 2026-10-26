@@ -75,7 +75,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 url = f'http://127.0.0.1:{server.server_port}'
-script = f'wait 2; resize 1000 760; position 100 100; wait 1; key cmd-t; type {url}/video; key enter; wait 6; click 298 50; wait 3; dump; key cmd-t; type {url}/other; key enter; wait 5; dump; pointer 114 694; wait .8; shot {evidence}/mini.png; wait 32; dump; windows; click 538 50; wait 4; dump; wait 22; dump; quit'
+# PiP intentionally becomes key outside GPUI; its own CGWindow guard below
+# validates every interaction instead of requiring the browser root to stay key.
+script = f'wait 2; activate; resize 1000 760; position 100 100; wait 1; key cmd-t; type {url}/video; key enter; wait 6; click 298 50; wait 3; dump; key cmd-t; type {url}/other; key enter; wait 5; dump; pointer 114 694; wait .8; shot {evidence}/mini.png; wait 32; dump; windows; click 538 50; wait 4; dump; wait 22; dump; quit'
 env = dict(os.environ, TMPDIR=str(runtime), BROWSER_DRIVE_BUNDLE_PATH=str(app), BROWSER_DRIVE_STRICT_EXIT='1', ECHO_SHUTDOWN_TRACE='1', BROWSER_DRIVE_LOG_PATH=str(evidence/'engine.log'), BROWSER_DRIVE_CEF_LOG_PATH=str(evidence/'cef.log'))
 log = (evidence/'driver.log').open('w')
 driver = S.Popen(['scripts/drive.sh', script, '160'], cwd=ROOT, env=env, stdout=log, stderr=S.STDOUT)
@@ -131,6 +133,20 @@ try:
     def shot(name):
         check(); S.run(['screencapture','-x',f'-R{x},{y},224,126',str(evidence/name)],check=True,timeout=10)
     def key(code):
+        focused=S.check_output(['osascript','-e','with timeout of 5 seconds','-e','tell application "System Events"',
+            '-e',f'set owned to first process whose unix id is {pid}',
+            '-e','set frontmost of owned to true',
+            '-e','perform action "AXRaise" of (first window of owned whose name is "Picture in Picture")',
+            '-e','return name of (value of attribute "AXFocusedWindow" of owned)',
+            '-e','end tell','-e','end timeout'],text=True,timeout=8).strip()
+        result.setdefault('keyboard_focused_windows',[]).append(focused)
+        assert focused=='Picture in Picture',f'Owned PiP is not the keyboard target: {focused}'
+        # AXRaise updates NSWindow key state before Views' activation callback
+        # necessarily runs. Let its focus manager receive that activation.
+        time.sleep(.3)
+        foreground=int(S.check_output(['osascript','-e','tell application "System Events" to get unix id of first process whose frontmost is true'],text=True,timeout=5).strip())
+        result.setdefault('keyboard_foreground_pids',[]).append(foreground)
+        assert foreground==pid,f'PiP keyboard precondition failed: foreground PID {foreground}, expected owned Echo {pid}'
         check(); S.run(['osascript','-e','with timeout of 5 seconds','-e',f'tell application "System Events" to tell (first process whose unix id is {pid}) to key code {code}','-e','end timeout'],check=True,timeout=8)
     result['automatic_bounds']=window['kCGWindowBounds']; shot('idle.png')
     check(); mouse(f'm:{center[0]},{center[1]}'); time.sleep(.8); shot('hover.png')
@@ -145,9 +161,11 @@ try:
         point=(x+offset,y+17); check(point); mouse(f'm:{point[0]},{point[1]}'); time.sleep(.3); shot(f'before-{name}.png')
         # Capturing a screenshot can outlast Chromium's controls idle timer on
         # a busy machine. Move immediately before the click so the photographed
-        # control is still revealed when the actual input arrives. Use the
-        # project's 300 ms hold for native window buttons.
-        check(point); mouse(f'm:{point[0]},{point[1]}',f'dd:{point[0]},{point[1]}','w:300',f'du:{point[0]},{point[1]}')
+        # control is still revealed when the actual input arrives. These are
+        # Chromium Views buttons, so send a normal click rather than a drag.
+        # A move to the unchanged coordinate need not produce MouseMoved.
+        # Stay inside PiP and give Chromium one event-loop turn to reveal again.
+        check(point); mouse(f'm:{point[0]+2},{point[1]+2}','w:50',f'm:{point[0]},{point[1]}',f'c:{point[0]},{point[1]}')
         until(lambda:not any(w.get('kCGWindowNumber')==window['kCGWindowNumber'] for w in windows()),3,f'{name} did not close owned PiP')
     reveal(); press(184,'return'); result['return_passed']=True
     manual=until(pip_windows,40,'Manual HTML PiP did not reopen'); assert len(manual)==1,manual

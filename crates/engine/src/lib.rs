@@ -28,7 +28,7 @@ mod extensions;
 mod extension_tabs;
 pub use extension_tabs::{ExtensionWindow, ExtensionWindowKind, ExtensionWindowState,
     ExtensionTab, ExtensionTabStatus, ExtensionTabsSnapshot};
-pub use extensions::{ExtensionService, ExtensionBridge, ExtensionEvent, ExtensionPopup, ExtensionPopupEvent, ExtensionModelRequest};
+pub use extensions::{ExtensionService, ExtensionBridge, ExtensionEvent, ExtensionPopup, ExtensionPopupEvent, ExtensionModelRequest, ExtensionDeveloperCapabilities, ExtensionWorkerInspector, ExtensionWorkerEvent};
 mod downloads;
 mod retirement;
 #[cfg(any(target_os = "linux", test))]
@@ -1381,7 +1381,7 @@ impl Engine {
             self.close(frontend);
             return Err("Inspector context differs from the inspected page; probe closed".into());
         }
-        self.inspectors.insert(id, inspected, frontend, panel, devtools::NativeBinding { _context: context.as_ref().clone(), _registration: registration });
+        self.inspectors.insert(id, inspected, frontend, panel, devtools::NativeBinding::Page { _context: context.as_ref().clone(), _registration: registration });
         Ok(id)
     }
 
@@ -1400,10 +1400,9 @@ impl Engine {
     /// Trusted native diagnostic API, correlated separately from the renderer
     /// connection. Its replies only appear as InspectorEvent::Protocol.
     pub fn send_inspector_probe_message(&mut self, inspector: InspectorId, message: &str) -> bool {
-        let Some(session) = self.inspectors.sessions.get(&inspector) else { return false; };
-        let Some(host) = self.views.get(&session.status.inspected).and_then(|view| view.browser.host()) else { return false; };
+        if !self.inspectors.sessions.contains_key(&inspector) { return false; }
         let Some((id, bytes)) = self.inspectors.submit(inspector, &self.message_ids, message) else { return false; };
-        if host.send_dev_tools_message(Some(&bytes)) == 0 {
+        if !self.send_inspector_backend(inspector, &bytes) {
             self.inspectors.failed(inspector, id);
             return false;
         }
@@ -1412,7 +1411,18 @@ impl Engine {
 
     /// Call take_events or take_browser_events first to process load callbacks, then drain this queue.
     /// Opening/FrontendLoaded do not assert that frontend JS or the host booted.
+    fn send_inspector_backend(&self, inspector: InspectorId, bytes: &[u8]) -> bool {
+        let Some(session) = self.inspectors.sessions.get(&inspector) else { return false; };
+        match &session._binding {
+            devtools::NativeBinding::Worker(worker) => worker.send(bytes),
+            devtools::NativeBinding::Page { .. } => self.views.get(&session.status.inspected)
+                .and_then(|view| view.browser.host()).is_some_and(|host| host.send_dev_tools_message(Some(bytes)) != 0),
+        }
+    }
     pub fn take_inspector_events(&mut self) -> Vec<InspectorEvent> {
+        for session in self.inspectors.sessions.values() {
+            if let devtools::NativeBinding::Worker(worker) = &session._binding { worker.flush(); }
+        }
         let events = self.inspectors.take();
         let actions = std::mem::take(&mut self.inspectors.actions);
         for (id, epoch, action) in actions {
@@ -1421,9 +1431,13 @@ impl Engine {
             match action {
                 devtools::BridgeAction::Submit(message) => {
                     if !session.bridge.active { continue; }
-                    let Some(host) = self.views.get(&session.status.inspected).and_then(|v| v.browser.host()) else { continue; };
                     if let Some((wire, bytes)) = session.renderer_protocol.submit(&self.message_ids, &message) {
-                        if host.send_dev_tools_message(Some(&bytes)) == 0 {
+                        let sent = match &session._binding {
+                            devtools::NativeBinding::Worker(worker) => worker.send(&bytes),
+                            devtools::NativeBinding::Page { .. } => self.views.get(&session.status.inspected)
+                                .and_then(|view| view.browser.host()).is_some_and(|host| host.send_dev_tools_message(Some(&bytes)) != 0),
+                        };
+                        if !sent {
                             session.renderer_protocol.pending.remove(&wire);
                             self.inspectors.queue.lock().unwrap().push((id, devtools::Backend::Detached));
                         }
