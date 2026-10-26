@@ -1,6 +1,9 @@
 //! Drives the real window through gpui's test platform: keystrokes and
 //! clicks go through the same key bindings, focus and hit-testing as the app.
 
+#[path = "split_pip_tests.rs"]
+mod split_pip_tests;
+
 #[path = "folder_scroll_tests.rs"]
 mod folder_scroll_tests;
 

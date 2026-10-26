@@ -1329,19 +1329,6 @@ impl Pages {
         self.reconcile_inventory(browser);
         self.store.borrow_mut().prune();
         let selected=browser.active_tab().map(|tab|tab.id);
-        if selected!=self.pip_selected {
-            let mut store=self.store.borrow_mut();
-            let PageStore { engine,pages,.. }=&mut *store;
-            if !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture) {
-                if let Some(page)=self.pip_selected.and_then(|tab|pages.get(&tab)).filter(|page|page.owner==self.host && page.visible && page.state.media.playing && page.state.media.video && !page.state.media.picture_in_picture) {
-                    engine.set_picture_in_picture(page.view,true);
-                }
-            }
-            if let Some(page)=selected.and_then(|tab|pages.get(&tab)).filter(|page|page.owner==self.host && page.state.media.picture_in_picture) {
-                engine.set_picture_in_picture(page.view,false);
-            }
-            self.pip_selected=selected;
-        }
         self.wanted.clear();
         self.wanted_focus = None;
         self.split = false;
@@ -1363,6 +1350,34 @@ impl Pages {
                     self.wanted.push(PageIntent { identity, source_space: browser.space().id, storage: if browser.is_private() { StorageSelection::Current } else { StorageSelection::for_profile(identity.profile) }, tab: active.id, url: active.url.clone(), muted: active.muted, weight: 1., internal: false });
                 }
             }
+        }
+        if selected != self.pip_selected {
+            let mut store = self.store.borrow_mut();
+            let PageStore { engine, pages, .. } = &mut *store;
+            let remains_visible = |id: TabId| self.wanted.iter().any(|intent| intent.tab == id);
+            if !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture) {
+                let eligible = |id: TabId, page: &Page| page.owner == self.host && page.visible
+                    && !remains_visible(id) && page.state.media.playing && page.state.media.video
+                    && !page.state.media.picture_in_picture;
+                // Prefer the previous focused source. When a non-video Split
+                // pane was focused, its unique visible playing sibling is the
+                // source being left. Multiple unselected videos are ambiguous.
+                let focused = self.pip_selected.and_then(|id| pages.get(&id).filter(|page| eligible(id, page)));
+                let mut candidates = pages.iter().filter(|(id, page)| eligible(**id, page));
+                let unique = candidates.next().filter(|_| candidates.next().is_none()).map(|(_, page)| page);
+                if let Some(page) = focused.or(unique) {
+                    engine.set_picture_in_picture(page.view, true);
+                }
+            }
+            // Returning to a Split also returns its non-focused video pane.
+            // Preserve manually opened PiP while that pane was already visible.
+            for intent in &self.wanted {
+                if let Some(page) = pages.get(&intent.tab).filter(|page| page.owner == self.host
+                    && page.state.media.picture_in_picture && (!page.visible || selected == Some(intent.tab))) {
+                    engine.set_picture_in_picture(page.view, false);
+                }
+            }
+            self.pip_selected = selected;
         }
         self.apply_with_navigation(true);
         self.sync_audio(browser);

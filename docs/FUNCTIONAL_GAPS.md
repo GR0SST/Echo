@@ -2,7 +2,7 @@
 
 ## Active code/test-only claims (2026-10-26)
 
-- `t3-71384893` claims **#89 automatic PiP visible-Split eligibility**. Verifiable-by-tests: changing focus between still-visible Split panes must not open PiP; leaving/returning to the group must track the unique previously-visible playing video even when another pane is focused. Existing engine commands only; iframe/native-window/ambiguous-multiple-video policy excluded.
+- `t3-71384893` owns **#89 automatic PiP visible-Split eligibility** (implemented and tested). Verifiable-by-tests: changing focus between still-visible Split panes must not open PiP; leaving/returning to the group must track the unique previously-visible playing video even when another pane is focused. Existing engine commands only; iframe/native-window/ambiguous-multiple-video policy excluded.
 
 - `t3-71384893` owns **#80 Little lookup retention during app/final-window quit** (implemented and tested). Verifiable-by-tests: collect open lookup archives before canonical writers flush, exactly once, with promotion/empty/private exclusions and synthetic session files. Restore-destination policy and native quit qualification are excluded.
 
@@ -116,7 +116,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 86 | L498: Chrome extensions (icons, "Open pinned extensions picker") | L | Connect the extension picker/action host to the qualified engine bridge; replace the stale approval-gated note. |
 | 87 | L500: Quietly creating a tab while the sidebar is hidden ("New Tab Created in %@") | S | **Stale missing-feature note corrected; integration gate open:** existing background Command Bar and renderer routes retain source focus, notify only with the sidebar hidden and reveal the captured target. Native UI steps pass, but repeated separate-GPU quits reach CEF’s teardown watchdog. Keep F until the clean-quit gate is repeatable; visual qualification remains separate. See [evidence](BACKGROUND_TAB_NOTIFICATION.md). |
 | 88 | L506: Mini player in the sidebar: Back to Tab, Open Picture in Picture, Previous/Next Track, Adjust Tab Volume, Toggle Microphone/Camera, Close Mini Player | M | Handle paused-video PiP, active PiP state and supported iframe media/microphone/camera controls. |
-| 89 | L507: Automatic PiP when leaving a tab with video (option) | M | Qualify automatic PiP eligibility for split panes and iframe/unmanaged videos across platforms. |
+| 89 | L507: Automatic PiP when leaving a tab with video (option) | M | **Test-verifiable Split sub-gap fixed:** still-visible pane focus changes do not trigger PiP; leaving a group can use its unique playing video, and returning closes PiP for a non-focused source. Existing preference/focused-source priority and retained identities are covered. Iframe/unmanaged media, ambiguous sibling priority and native platform qualification remain partial. |
 | 90 | L508: PiP window: Back to Tab, ±15 seconds, seeking by dragging up, Keep Window on Top, minimize or close, remembered position | L | Complete PiP context controls, drag-up seeking and cross-run bounds while retaining the live source. |
 | 91 | L509: PiP for Google Meet (with chat) and Document PiP | L | Host Document PiP through a scoped GPUI surface; Meet/chat acceptance requires a separate authenticated fixture. |
 | 92 | L548: Translation: Translated to %@ / back to %@ / error | M | **Out of scope with the Google translation backend:** no provider supplied; see [translation feasibility](TRANSLATION_FEASIBILITY.md). |
@@ -510,3 +510,22 @@ Little root after its normal/global removal, and empty/promoted/Peek exclusions.
 All six Little archive tests pass. Native last-window/app-quit acceptance and
 Little-specific restore destination remain unqualified. Focused log:
 `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/little-quit-focused.log`.
+
+
+### Automatic PiP and visible Split panes — code/test-only delivery
+
+PiP selection now uses the next visible pane set before changing native page
+visibility. Focus changes inside a Split leave the same video visible, so they
+do not request automatic PiP. Leaving a Split uses its previous focused eligible
+video or, when that pane was not a video, its unique eligible visible sibling.
+No priority is invented between multiple unselected playing videos. Returning
+to a Split closes PiP for a newly visible source even when its sibling retains
+focus; manually opened PiP is preserved while that source remains visible.
+
+Three GPUI regressions use synthetic media callbacks and actual pane/sidebar
+clicks and typed navigation. They cover focus-only changes, manual PiP retention,
+unique non-focused sources, return without page creation/reload, preference-off,
+ambiguous siblings and retained focused-source priority. All pass. No engine or
+native PiP window changes were made; iframe/unmanaged and platform qualification
+remain partial. Focused log:
+`~/Library/Caches/EchoBuildHealth/t3-71384893/logs/split-pip-focused-final.log`.
