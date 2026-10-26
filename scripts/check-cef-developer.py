@@ -28,17 +28,16 @@ signal.signal(signal.SIGINT, interrupted)
 ROOT = Path(__file__).resolve().parents[1]
 DIST = Path(os.environ['ECHO_CEF_DIST']).resolve()
 BUNDLE = Path(os.environ['ECHO_CEF_TEST_BUNDLE']).resolve()
-SOURCE = Path(os.environ.get('ECHO_CEF_SOURCE', Path.home() / 'Documents/Bot/cef-src'))
 assert os.environ.get('ECHO_CEF_NATIVE_SESSION') == '1'
 assert Path('/tmp/echo-screen-long').exists(), 'The caller must hold the long screen lock'
-OUT = SOURCE / 'qualification' / time.strftime('developer-final-%Y%m%dT%H%M%SZ', time.gmtime())
+OUT = Path.home() / 'Library/Caches/EchoCEFQualification' / time.strftime('developer-final-%Y%m%dT%H%M%SZ', time.gmtime())
 OUT.mkdir()
-RUNTIME = ROOT / 'target/parity/extensions-ui/qualify/runtime' / OUT.name
+RUNTIME = OUT / 'runtime'
 RUNTIME.mkdir()
 # A LaunchServices app has its own macOS privacy identity. Keep its session in
 # the same unprotected test area as drive.sh; never require Documents access.
-FIXTURE = Path.home() / 'Library/Caches/EchoQualification' / OUT.name / 'fixture'
-FIXTURE.parent.mkdir(parents=True)
+FIXTURE = OUT / 'fixture'
+FIXTURE.parent.mkdir(parents=True, exist_ok=True)
 FRAMEWORK = 'Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework'
 
 

@@ -9,8 +9,7 @@ if (!Bun.argv.includes('--locked')) {
 }
 const root=resolve(import.meta.dir,'..');
 const dist=await validate(process.env.ECHO_CEF_DIST ?? '');
-const source=process.env.ECHO_CEF_SOURCE ?? join(process.env.HOME!,'Documents/Bot/cef-src');
-const evidence=join(source,'qualification',`extension-model-${new Date().toISOString().replaceAll(':','-')}`);
+const evidence=join(process.env.HOME!,'Library/Caches/EchoCEFQualification',`extension-model-${new Date().toISOString().replaceAll(':','-')}`);
 await mkdir(evidence,{recursive:true});
 const owned=await realpath(await mkdtemp(join(tmpdir(),'echo-model-check-')));
 const profile=join(owned,'profile');await mkdir(profile);

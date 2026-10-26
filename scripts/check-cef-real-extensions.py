@@ -13,16 +13,15 @@ import subprocess as sp
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path(os.environ.get('ECHO_CEF_SOURCE', Path.home() / 'Documents/Bot/cef-src'))
 DIST = Path(os.environ['ECHO_CEF_DIST']).resolve()
 BUNDLE = Path(os.environ['ECHO_CEF_TEST_BUNDLE']).resolve()
 PROFILE = Path(os.environ['ECHO_CEF_REAL_EXTENSION_PROFILE']).resolve()
 assert os.environ.get('ECHO_CEF_NATIVE_SESSION') == '1' and Path('/tmp/echo-screen-long').exists()
 assert (PROFILE / 'session.json').is_file()
 name = time.strftime('real-extensions-%Y%m%dT%H%M%SZ', time.gmtime())
-OUT = SOURCE / 'qualification' / name
+OUT = Path.home() / 'Library/Caches/EchoCEFQualification' / name
 OUT.mkdir()
-RUNTIME = ROOT / 'target/parity/extensions-ui/qualify/runtime' / name
+RUNTIME = OUT / 'runtime'
 RUNTIME.mkdir()
 app = RUNTIME / 'Echo-real-native.app'
 sp.run(['cp', '-cR', str(BUNDLE), str(app)], check=True)

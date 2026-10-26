@@ -21,10 +21,9 @@ hardTimeout.unref();
 
 const dist = await validate(process.env.ECHO_CEF_DIST ?? "");
 const root = resolve(import.meta.dir, "..");
-const sourceRoot = process.env.ECHO_CEF_SOURCE ?? join(process.env.HOME!, "Documents/Bot/cef-src");
-const fixture = join(sourceRoot, "fixtures/sintel-trailer.mp4");
+const fixture = join(process.env.HOME!, "Library/Caches/EchoCEFQualification/fixtures/sintel-trailer.mp4");
 if (!await Bun.file(fixture).exists()) throw new Error(`Download the documented W3C fixture first: ${fixture}`);
-const evidence = join(sourceRoot, "qualification", new Date().toISOString().replaceAll(":", "-"));
+const evidence = join(process.env.HOME!, "Library/Caches/EchoCEFQualification", new Date().toISOString().replaceAll(":", "-"));
 await mkdir(evidence, { recursive: true });
 const privateRoot = await mkdtemp(join(tmpdir(), "echo-codec-check-"));
 await mkdir(join(privateRoot, "profile"));

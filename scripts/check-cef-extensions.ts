@@ -20,7 +20,7 @@ const source = process.env.ECHO_CEF_SOURCE ?? join(process.env.HOME!, "Documents
 const out = join(source, "chromium/src/out/Release_GN_arm64");
 const dist = await validate(process.env.ECHO_CEF_DIST ?? join(source, "echo-extensions-dist"));
 const profiles = await realpath(await mkdtemp(join(tmpdir(), "echo-mv3-gate-")));
-const evidence = join(source, "qualification", `extensions-${new Date().toISOString().replaceAll(":", "-")}`);
+const evidence = join(process.env.HOME!, "Library/Caches/EchoCEFQualification", `extensions-${new Date().toISOString().replaceAll(":", "-")}`);
 await mkdir(evidence, { recursive: true });
 const privateApp = join(profiles, "cefclient.app");
 const bundle = join(privateApp, "Contents");

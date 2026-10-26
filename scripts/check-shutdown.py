@@ -45,7 +45,7 @@ def main():
         raise SystemExit("Run acceptance without -O or PYTHONOPTIMIZE; cookie assertions must be enabled")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="target/parity/shutdown-watchdog/acceptance")
-    parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived", "library-media"], action="append")
+    parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived", "library-media", "background-in-process", "background-separate"], action="append")
     parser.add_argument("--keep-going", action="store_true", help="collect all scenarios even after a failing quit")
     parser.add_argument("--quit-command", choices=["quit", "native-quit"], default="quit",
                         help="exercise the coordinator or native application termination entry point")
@@ -61,6 +61,9 @@ def main():
     assert 1 <= args.repeat <= 20
     assert 1 <= args.profiles <= 8
     output = pathlib.Path(args.output).resolve()
+    for path in (output, pathlib.Path(args.bundle).resolve()):
+        if path.is_relative_to(pathlib.Path.home() / "Documents"):
+            parser.error("Keep qualification apps, profiles and fixtures outside ~/Documents; use ~/Library/Caches/EchoCEFQualification")
     output.mkdir(parents=True, exist_ok=True)
     evidence = pathlib.Path(tempfile.mkdtemp(prefix="run-", dir=output))
     media = evidence / "video.webm"
@@ -140,7 +143,7 @@ def main():
 
     native_failures = []
 
-    def drive(directory, phase, script, gpu, library_media=False):
+    def drive(directory, phase, script, gpu, library_media=False, background=False):
         directory.mkdir(parents=True, exist_ok=True)
         log = directory / f"{phase}.log"
         command = ["zsh",
@@ -158,6 +161,10 @@ def main():
         try:
             with log.open("w") as stream:
                 environment = dict(os.environ, BROWSER_DRIVE_BUNDLE_PATH=str(frozen_bundle))
+                # Watchdog dumps stay local (the driver config has no upload URL).
+                # Preserve stack evidence for intermittent failures without attaching.
+                environment.setdefault("BROWSER_DRIVE_LOCAL_CRASH_DUMPS", "1")
+                environment["BREAKPAD_DUMP_LOCATION"] = str(directory / f"{phase}-crashpad")
                 result = subprocess.run(command, cwd=ROOT, env=environment, stdout=stream, stderr=subprocess.STDOUT)
         finally:
             stop.set()
@@ -176,6 +183,16 @@ def main():
         if args.quit_command == "native-quit":
             checks["native termination requested"] = "[automation] native-quit sending terminate:nil" in text
             checks["native termination captured"] = "[quit-native] terminate captured;" in text
+        if background:
+            dumps = text.split("[dump] space=")[1:]
+            checks["background source retained before reveal"] = any(
+                "sidebar=false" in dump.splitlines()[0] and "New Tab Created in" in dump
+                and any("*" in line and ("/verify?" in line or "/set?" in line) for line in dump.splitlines())
+                and any("/background?" in line and "visible=false" in line for line in dump.splitlines())
+                for dump in dumps)
+            checks["notification reveals initialized target"] = any(
+                any("*" in line and "/background?" in line and "engine_muted=Some(false)" in line for line in dump.splitlines())
+                for dump in dumps)
         if library_media:
             retired = re.search(r"\[media-shutdown\] producers-cancelled discovery=true thumbnails=true ready_images=(\d+)", text)
             checks["populated Media retired before CEF"] = bool(retired and int(retired[1]) > 0 and retired.start() < text.find("cef-shutdown-enter"))
@@ -206,7 +223,11 @@ def main():
                     profile = directory / "browser-drive-profile"
                     profile.mkdir(parents=True)
                     count = args.profiles if case in ("profiles", "combined") else 1
+                    prefix = f"r{repeat + 1}-{case}"
                     seed = workspace(count)
+                    if case.startswith("background-"):
+                        seed["spaces"][0]["today"][0].update(
+                            title="Shutdown control", url=f"{origin}/set?label={prefix}-p1")
                     # Measure accepted quit; confirmation has its own native suite.
                     seed["settings"] = {"theme_appearance": args.appearance,
                                         "toggles": {"warn_before_quitting": False}}
@@ -218,14 +239,15 @@ def main():
                         seed["profiles"]["1"]["settings"] = {"media": {"folders": {
                             "Documents": "Denied", "Desktop": "Denied", "Downloads": {"Granted": str(fixtures)}}, "revision": 1}}
                     (profile / "session.json").write_text(json.dumps(seed))
-                    gpu = "separate" if case in ("gpu", "combined", "media-pip", "media-archived") else "in-process"
-                    prefix = f"r{repeat + 1}-{case}"
+                    background = case in ("normal", "gpu", "background-in-process", "background-separate")
+                    gpu = "separate" if case in ("gpu", "combined", "media-pip", "media-archived", "background-separate") else "in-process"
                     start = len(observations)
                     script = f"wait 2; activate; resize 1000 760; position 100 100; require-focus; shot {directory}/initial.png; "
                     for i in range(1, count + 1):
                         if i > 1:
                             script += "menu Spaces > Next Space; wait 2; "
-                        script += navigate("set", f"{prefix}-p{i}")
+                        if not case.startswith("background-"):
+                            script += navigate("set", f"{prefix}-p{i}")
                     if case == "reset":
                         script += navigate("verify", f"{prefix}-reset")
                         script += "key cmd-t; type Clear Cookies and Refresh; key enter; wait 3; dump; "
@@ -243,7 +265,13 @@ def main():
                             script += "wait 1; dump; "
                     if library_media:
                         script += f"menu Window > View Downloads…; wait .3; click 50 125 150; wait 2; shot {directory}/library-write.png; dump; "
-                    text = drive(directory, "write", script + args.quit_command, gpu, library_media)
+                    if background:
+                        if not case.startswith("background-"):
+                            script += navigate("verify", f"{prefix}-source")
+                        script += (f"key cmd-s; key cmd-t; type {origin}/background?label={prefix}; key cmd-enter; "
+                                   f"wait .8; dump; shotstack {directory}/background-write.png; wait 1; "
+                                   f"click 900 25; wait 1.5; dump; shotstack {directory}/revealed-write.png; wait 1; ")
+                    text = drive(directory, "write", script + args.quit_command, gpu, library_media, background)
                     if case.startswith("media-"):
                         assert any(r["path"] == "/playing" and r["label"] == prefix for r in observations[start:]), directory
                         assert any(r["path"] == "/pip-enter" and r["label"] == prefix for r in observations[start:]), directory
@@ -268,16 +296,25 @@ def main():
                         script += navigate("verify", f"{prefix}-private-empty")
                     if library_media:
                         script += f"menu Window > View Downloads…; wait .3; click 50 125 150; wait 2; shot {directory}/library-read.png; dump; "
-                    drive(directory, "read", script + args.quit_command, gpu, library_media)
+                    if background:
+                        # The hidden-sidebar state is restored from the write run.
+                        script += (f"key cmd-t; type {origin}/background?label={prefix}-read; key cmd-enter; "
+                                   f"wait .8; dump; shotstack {directory}/background-read.png; wait 1; "
+                                   f"click 900 25; wait 1.5; dump; shotstack {directory}/revealed-read.png; wait 1; ")
+                    drive(directory, "read", script + args.quit_command, gpu, library_media, background)
                     for i in range(1, count + 1):
                         records = [r for r in observations[start:] if r["label"] == f"{prefix}-verify{i}"]
                         assert records and all(r["cookie"] == f"{prefix}-p{i}" for r in records), (directory, records)
                     if case in ("private", "combined"):
                         records = [r for r in observations[start:] if r["label"] == f"{prefix}-private-empty"]
                         assert records and all(r["cookie"] == "" for r in records), (directory, records)
+                    if background:
+                        for label in (prefix, f"{prefix}-read"):
+                            records = [r for r in observations[start:] if r["path"] == "/background" and r["label"] == label]
+                            assert records and all(r["cookie"] == f"{prefix}-p1" for r in records), (directory, records)
                     cookies_verified = True
                     assert len(native_failures) == failure_start, native_failures[failure_start:]
-                    results.append({"case": case, "repeat": repeat + 1, "contexts": count, "gpu": gpu, "cookies_verified": True, "passed": True})
+                    results.append({"case": case, "repeat": repeat + 1, "contexts": count, "gpu": gpu, "cookies_verified": True, "background_notification_revealed": background, "library_media_active": library_media, "passed": True})
                     print(f"{case} #{repeat + 1}: clean write/restart, {count} profile cookie(s) persisted", flush=True)
                 except (AssertionError, OSError, subprocess.SubprocessError) as error:
                     results.append({"case": case, "repeat": repeat + 1, "passed": False, "cookies_verified": cookies_verified, "error": str(error)})

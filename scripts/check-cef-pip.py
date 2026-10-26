@@ -20,14 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--bundle', default=str(ROOT / 'target/bundle/Echo.app'))
 p.add_argument('--cef-dist', default=str(Path.home() / 'Documents/Bot/cef-src/echo-extensions-dist'))
-p.add_argument('--output', default=str(Path.home() / 'Documents/Bot/cef-src/qualification'))
+p.add_argument('--output', default=str(Path.home() / 'Library/Caches/EchoCEFQualification'))
 p.add_argument('--locked', action='store_true')
 a = p.parse_args()
 if not a.locked:
     raise SystemExit(S.run(['lockf', '-k', '-t', '120', '/tmp/echo-screen.lock', 'gtimeout', '-k', '3', '180', sys.executable, __file__, *sys.argv[1:], '--locked']).returncode)
 if sys.platform != 'darwin':
     raise SystemExit('This native acceptance runner requires macOS')
-output = Path(a.output).resolve(); output.mkdir(parents=True, exist_ok=True)
+output = Path(a.output).resolve()
+if output.is_relative_to(Path.home() / 'Documents'):
+    p.error('Keep qualification outside ~/Documents; use ~/Library/Caches/EchoCEFQualification')
+output.mkdir(parents=True, exist_ok=True)
 evidence = Path(tempfile.mkdtemp(prefix='pip-', dir=output))
 runtime = evidence / 'runtime'; runtime.mkdir()
 profile = runtime / 'browser-drive-profile'; profile.mkdir()

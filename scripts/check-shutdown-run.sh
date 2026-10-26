@@ -2,6 +2,17 @@
 # Called only under the screen lock by check-shutdown.py. Bound the entire holder.
 set -eu
 cd "${0:A:h:h}"
+# Native copies and profiles must not trigger macOS Documents privacy prompts.
+python3 - "$1" <<'PYTHON'
+from pathlib import Path
+import sys
+try:
+    Path(sys.argv[1]).resolve().relative_to(Path.home() / "Documents")
+except ValueError:
+    pass
+else:
+    raise SystemExit("Place shutdown qualification outside ~/Documents (use ~/Library/Caches/EchoCEFQualification)")
+PYTHON
 export TMPDIR="$1/"
 export ECHO_SHUTDOWN_TRACE=1
 export BROWSER_DRIVE_STRICT_EXIT=1

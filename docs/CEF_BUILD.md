@@ -13,6 +13,26 @@ the selection, and an explicit `CEF_PATH` overrides automatic detection.
 after changing or removing a distribution. Direct `cargo test` keeps Cargo's
 portable prebuilt default unless wrapped or given an explicit `CEF_PATH`.
 
+Transient qualification apps, sessions and fixtures live under
+`~/Library/Caches/EchoCEFQualification`, outside macOS privacy-protected
+Documents. Native harnesses use this location automatically; shutdown acceptance
+rejects Documents paths instead of requesting file access. Durable receipts,
+logs and screenshot/recording pairs live in
+`~/Library/Application Support/EchoCEFQualification`, since cache cleaners can
+purge Library/Caches. Old app bundles, framework copies, profiles and build
+caches are disposable after their hashes are recorded in
+`pruned-artifact-hashes.json`. The 2026-10-26 cleanup removed 418 disposable
+artifacts (121,899,588,557 logical bytes); durable evidence is approximately
+711 MiB on disk.
+
+On 2026-10-26 the earlier `~/Documents/Bot/cef-src/qualification` archive moved to
+`~/Library/Application Support/EchoCEFQualification/archive-documents-20261026`.
+Historical paths in the records below resolve through that prefix replacement;
+evidence contents are preserved. The canonical adapter's
+`qualification-relocation.json` records the move and its receipts link the new
+paths. The CEF source and canonical distribution remain under their documented
+`~/Documents/Bot/cef-src` paths; native fixture bundles copy the framework out.
+
 ## Canonical distribution
 
 ### Developer/API v4 build record
@@ -597,11 +617,12 @@ decoded video frames and audio decoding in the bundled Echo. A successful
 
 ```sh
 src_root=/Users/grosstgrosst/Documents/Bot/cef-src
-mkdir -p "$src_root/fixtures"
+qualification_root="$HOME/Library/Caches/EchoCEFQualification"
+mkdir -p "$qualification_root/fixtures"
 curl -fL --retry 3 https://media.w3.org/2010/05/sintel/trailer.mp4 \
-  -o "$src_root/fixtures/sintel-trailer.mp4"
+  -o "$qualification_root/fixtures/sintel-trailer.mp4"
 ffprobe -v error -show_entries stream=codec_name,codec_type,profile,width,height,sample_rate \
-  -of json "$src_root/fixtures/sintel-trailer.mp4"
+  -of json "$qualification_root/fixtures/sintel-trailer.mp4"
 # Run only after custom-distribution cargo test and bundling have passed.
 ECHO_CEF_DIST="$src_root/echo-extensions-dist" bun scripts/check-cef-codecs.ts
 ```

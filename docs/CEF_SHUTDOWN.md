@@ -91,6 +91,77 @@ session, with the unchanged visibility guard and no debugger. Evidence:
 `native-quit-qualification.json` links the follow-up evidence. No CEF rebuild or
 new generation was required; no new SIGTRAP was reproduced on the fixed build.
 
+## Background-tab notification/reveal follow-up
+
+New qualification apps, sessions and fixtures must live outside `~/Documents`:
+use `~/Library/Caches/EchoCEFQualification`. Both the coordinator and per-drive
+runner reject Documents paths. The canonical CEF harness now defaults to Caches.
+Durable evidence was moved from `cef-src/qualification` to
+`~/Library/Application Support/EchoCEFQualification/archive-documents-20261026`;
+canonical receipt links were updated and original receipt copies retained.
+Disposable bundles, framework copies, profiles and caches are pruned only after
+recording their hashes; logs, receipts and native captures remain. An interrupted matrix during this move is
+not a qualification run. The CEF source/distribution locations are unchanged.
+
+The background-tab agent recorded watchdog exits in both GPU modes under
+`target/parity/background-tab/` in worktree `t3-9e64e52b`. Its retained framework
+is SHA-256 `55a60b71fd32579a392ee53f337a908cecb7b0f012971d6ad3317b4a32ec82aa`.
+In the separate-GPU log, CEF reached global shutdown, stopped network helper
+55064 after the 60-second grace period, and then hit the outer teardown watchdog.
+The in-process log also reached global CEF shutdown before the watchdog.
+Neither capture includes a blocking stack. The second wait after stopping the
+helper is therefore **unresolved**, rather than evidence for a Rust watcher join
+or proof that extending the network grace period fixes this scenario.
+
+The default matrix now exercises hidden-sidebar background creation and clicking
+its notification to reveal the target in both `normal` (in-process GPU) and
+`gpu` (separate GPU), on write and restart. It verifies that the source remains
+active before reveal, the target is hidden, the notification exists, and the
+click activates the initialized target. HTTP requests verify the target receives
+the persistent profile cookie. Background tabs can already be loaded before
+reveal; an unloaded-engine assertion would incorrectly reject valid behavior.
+The populated-Media case remains in the same eight-pair, sixteen-exit matrix.
+Standalone `background-in-process` and `background-separate` cases instead seed
+the initial control page directly, matching the reported startup flow more
+closely. They can be repeated with `--repeat`.
+
+The expanded matrix passed **16/16 native exits** on the frozen `ca0fe45` bundle,
+with the unchanged canonical `c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`
+framework, cookie restart checks and graceful network exits. Evidence:
+`~/Library/Application Support/EchoCEFQualification/archive-documents-20261026/background-media-matrix-20261026/run-gxanz777/`.
+Tracing was enabled; global CEF calls ranged from 157 to 19,550 ms, including
+tracing teardown overhead. These successful runs do not establish the cause of
+the historical stalls. Full `cargo test` passed: **1,970 passed, zero failures,
+one ignored**. No CEF source change, timeout increase or new generation is
+claimed by this follow-up.
+
+The final run from Caches, without tracing, also passed **16/16**, including
+both background GPU modes and populated Media. Global CEF calls took
+**62–116 ms (median 70.5 ms)**. Its executable is
+`73bae9fbef0f717e931eb2b145171203d4ff0ff0d62b0cedad66232a3917ce74`.
+Durable results are in
+`~/Library/Application Support/EchoCEFQualification/background-final-matrix-20261026/run-l0rze28a/`.
+Isolated comparisons passed **8/8 exits on each framework**. A direct copy of the
+reporting agent's fixture, including its additional activation sequence, passed
+all **4/4 old/current × GPU-mode combinations**. Those records are under the
+archive's `background-{old55,current}-comparison-20261026` and
+`background-exact-20261026` directories. No historical watchdog reproduced;
+the current adapter's `background-quit-qualification.json` explicitly records
+`historical_stall_resolved: false`.
+
+After the last native run, 418 disposable archived artifacts were hashed and
+pruned (121,899,588,557 logical bytes). Durable evidence occupies approximately
+**711 MiB on disk**, retaining receipts, logs, PNG/MOV captures and the hash
+manifest under Application Support. No app bundle, framework directory or
+session manifest remains in that archive. The original receipt snapshots and
+relocation record preserve the path history. Transient fixtures remain in
+Caches; the canonical generation and framework were not replaced.
+
+The harness now enables local-only watchdog dumps by default (empty upload URL),
+with `BREAKPAD_DUMP_LOCATION` inside each case's evidence directory, so a
+recurrence can retain stack evidence without attaching a debugger. Set
+`BROWSER_DRIVE_LOCAL_CRASH_DUMPS=0` to opt out.
+
 ## Library Media producers and the old native harness
 
 The populated-Media agent's `media-populated/actions-Dark/app.log` already
@@ -428,7 +499,8 @@ and final native terminate, and absence of watchdog/automation failures are all
 required. `--keep-going` records all failures and exits nonzero at the end.
 The actions are deterministic; watchdog occurrence remains intermittent.
 
-Set `BROWSER_DRIVE_LOCAL_CRASH_DUMPS=1` for local-only CEF watchdog reports.
+The matrix enables local-only CEF watchdog reports by default; other driver
+invocations can enable them with `BROWSER_DRIVE_LOCAL_CRASH_DUMPS=1`.
 Set `ECHO_SHUTDOWN_PERFETTO=1` for Chromium shutdown tracing. Crashpad can capture
 its own watchdog failure without an external debugger. Chromium stops its normal
 startup trace before the relevant service teardown, so a completed trace file

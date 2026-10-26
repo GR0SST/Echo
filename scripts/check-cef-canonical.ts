@@ -10,7 +10,7 @@ const candidateFile = Bun.file(join(source, 'candidate-path'));
 const dist = await validate(process.env.ECHO_CEF_CANDIDATE ??
   (await candidateFile.exists() ? (await candidateFile.text()).trim() : join(source, 'echo-extensions-dist')));
 const record = await Bun.file(join(dist, 'build.json')).json();
-const evidence = join(source, 'qualification', `canonical-${new Date().toISOString().replaceAll(':', '-')}`);
+const evidence = join(homedir(), 'Library/Caches/EchoCEFQualification', `canonical-${new Date().toISOString().replaceAll(':', '-')}`);
 await mkdir(evidence, { recursive: true });
 const expected = record.framework_sha256;
 if (record.schema !== 1 || !/^[a-f0-9]{64}$/.test(expected ?? '')) throw Error('Canonical CEF has no build provenance');
