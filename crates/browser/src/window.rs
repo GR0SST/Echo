@@ -4061,6 +4061,12 @@ impl BrowserWindow {
                         this.update_sidebar_drag_scroll(&drag, space_id, event.event.position, cx);
                     }
                 }))
+                .on_drag_move::<crate::folder_drag::FolderDrag>(cx.listener(move |this, event: &gpui::DragMoveEvent<crate::folder_drag::FolderDrag>, _, cx| {
+                    if current && interactive {
+                        let drag = event.drag(cx).clone();
+                        this.update_sidebar_folder_scroll(&drag, space_id, event.event.position, cx);
+                    }
+                }))
             .when(!pinned.is_empty(), |this| this.child(
                 div().id(("pinned-reveal", index)).when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "pinned-reveal".into())())))
                     .flex_none().h(px(pinned_height * reveal))

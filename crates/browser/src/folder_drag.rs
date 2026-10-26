@@ -16,6 +16,19 @@ pub(crate) struct FolderDrag {
 }
 
 impl FolderDrag {
+    pub(crate) fn start(&self, owner: gpui::WeakEntity<BrowserWindow>, cx: &mut gpui::App) -> gpui::Entity<Self> {
+        cx.new(|cx| {
+            cx.on_release(move |_, cx| {
+                let _ = owner.update(cx, |this, cx| {
+                    this.cancel_sidebar_drag_scroll();
+                    this.cancel_space_drag_hover();
+                    cx.notify();
+                });
+            }).detach();
+            self.clone()
+        })
+    }
+
     pub(crate) fn new(folder: &Folder, focus: Option<TabId>, workspace: crate::profile::ProfileHandle, profile: browser_core::UserProfileId) -> Self {
         Self {
             id: folder.id,
@@ -29,6 +42,14 @@ impl FolderDrag {
 }
 
 impl BrowserWindow {
+    pub(crate) fn accepts_folder_drag(&self, drag: &FolderDrag, space: SpaceId) -> bool {
+        self.profile.handle.same_workspace(&drag.workspace)
+            && self.browser.spaces.iter().any(|entry| entry.id == space && entry.user_profile_id == drag.profile)
+            && self.browser.folder_space(drag.id)
+                .and_then(|id| self.browser.spaces.iter().find(|space| space.id == id))
+                .is_some_and(|space| space.user_profile_id == drag.profile)
+    }
+
     pub(crate) fn drop_folder_on_space(
         &mut self,
         drag: &FolderDrag,
@@ -57,9 +78,8 @@ impl BrowserWindow {
         parent: Option<FolderId>,
         cx: &mut Context<Self>,
     ) {
-        if !self.profile.handle.same_workspace(&drag.workspace)
-            || !self.browser.spaces.iter().any(|entry| entry.id == space && entry.user_profile_id == drag.profile)
-            || self.browser.folder_space(drag.id).and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).map(|space| space.user_profile_id) != Some(drag.profile) { return; }
+        self.cancel_sidebar_drag_scroll();
+        if !self.accepts_folder_drag(drag, space) { return; }
         if self.confirm_folder_destination(Target::MoveFolder(drag.id), space, parent, cx) {
             if let Some(focus) = drag
                 .focus

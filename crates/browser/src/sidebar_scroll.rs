@@ -3,10 +3,38 @@ use super::*;
 
 pub(super) struct DragScroll {
     space: SpaceId,
-    tab: TabId,
+    item: DragIdentity,
     pointer: Rc<Cell<gpui::Point<gpui::Pixels>>>,
     running: Rc<Cell<bool>>,
     _task: Task<()>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DragIdentity {
+    Tab(TabId),
+    Folder(browser_core::folders::FolderId),
+}
+
+#[derive(Clone)]
+enum ScrollPayload {
+    Tab(crate::tab_drag::TabDrag),
+    Folder(crate::folder_drag::FolderDrag),
+}
+
+impl ScrollPayload {
+    fn identity(&self) -> DragIdentity {
+        match self {
+            Self::Tab(drag) => DragIdentity::Tab(drag.id),
+            Self::Folder(drag) => DragIdentity::Folder(drag.id),
+        }
+    }
+
+    fn accepted_by(&self, window: &BrowserWindow, space: SpaceId) -> bool {
+        match self {
+            Self::Tab(drag) => window.accepts_tab_drag(drag),
+            Self::Folder(drag) => window.accepts_folder_drag(drag, space),
+        }
+    }
 }
 
 // Native reference: a held row starts scrolling within approximately 20 px
@@ -29,9 +57,33 @@ fn velocity(bounds: Bounds<gpui::Pixels>, pointer: gpui::Point<gpui::Pixels>) ->
 }
 
 impl BrowserWindow {
+    pub(crate) fn cancel_sidebar_drag_scroll(&mut self) {
+        self.sidebar_drag_scroll = None;
+    }
+
     pub(super) fn update_sidebar_drag_scroll(
         &mut self,
         drag: &crate::tab_drag::TabDrag,
+        space: SpaceId,
+        pointer: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_sidebar_payload_scroll(ScrollPayload::Tab(drag.clone()), space, pointer, cx);
+    }
+
+    pub(super) fn update_sidebar_folder_scroll(
+        &mut self,
+        drag: &crate::folder_drag::FolderDrag,
+        space: SpaceId,
+        pointer: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_sidebar_payload_scroll(ScrollPayload::Folder(drag.clone()), space, pointer, cx);
+    }
+
+    fn update_sidebar_payload_scroll(
+        &mut self,
+        drag: ScrollPayload,
         space: SpaceId,
         pointer: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
@@ -41,20 +93,23 @@ impl BrowserWindow {
         };
         #[cfg(debug_assertions)]
         if std::env::var_os("ECHO_TRACE_SIDEBAR_DRAG").is_some() {
-            eprintln!("[sidebar-drag] pointer={pointer:?} bounds={:?} velocity={} offset={:?}", scrolls.list.bounds(), velocity(scrolls.list.bounds(), pointer), scrolls.list.offset());
+            eprintln!(
+                "[sidebar-drag] pointer={pointer:?} bounds={:?} velocity={} offset={:?}",
+                scrolls.list.bounds(),
+                velocity(scrolls.list.bounds(), pointer),
+                scrolls.list.offset()
+            );
         }
         if self.browser.space().id != space
-            || !self.accepts_tab_drag(drag)
+            || !drag.accepted_by(self, space)
             || velocity(scrolls.list.bounds(), pointer) == 0.
         {
             self.sidebar_drag_scroll = None;
             return;
         }
-        if let Some(active) = self
-            .sidebar_drag_scroll
-            .as_ref()
-            .filter(|active| active.space == space && active.tab == drag.id && active.running.get())
-        {
+        if let Some(active) = self.sidebar_drag_scroll.as_ref().filter(|active| {
+            active.space == space && active.item == drag.identity() && active.running.get()
+        }) {
             active.pointer.set(pointer);
             return;
         }
@@ -62,7 +117,7 @@ impl BrowserWindow {
         let pointer = Rc::new(Cell::new(pointer));
         let held_pointer = pointer.clone();
         let drag = drag.clone();
-        let tab = drag.id;
+        let item = drag.identity();
         let running = Rc::new(Cell::new(true));
         let task_running = running.clone();
         let task = cx.spawn(async move |this, cx| {
@@ -85,7 +140,7 @@ impl BrowserWindow {
                     .update(cx, |this, cx| {
                         if !cx.has_active_drag()
                             || this.browser.space().id != space
-                            || !this.accepts_tab_drag(&drag)
+                            || !drag.accepted_by(this, space)
                         {
                             return false;
                         }
@@ -112,7 +167,7 @@ impl BrowserWindow {
         });
         self.sidebar_drag_scroll = Some(DragScroll {
             space,
-            tab,
+            item,
             pointer,
             running,
             _task: task,

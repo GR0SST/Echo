@@ -2,9 +2,11 @@
 
 ## Active code/test-only claims (2026-10-26)
 
+- `t3-71384893` claims **#89 automatic PiP visible-Split eligibility**. Verifiable-by-tests: changing focus between still-visible Split panes must not open PiP; leaving/returning to the group must track the unique previously-visible playing video even when another pane is focused. Existing engine commands only; iframe/native-window/ambiguous-multiple-video policy excluded.
+
 - `t3-71384893` claims **#80 Little lookup retention during app/final-window quit**. Verifiable-by-tests: collect open lookup archives before canonical writers flush, exactly once, with promotion/empty/private exclusions and synthetic session files. Restore-destination policy and native quit qualification are excluded.
 
-- `t3-71384893` claims **#65 held folder-drag auto-scroll**. Verifiable-by-tests: reuse the existing tab edge-scroll timer/physics for a validated folder payload, including hold, cancellation, Space/profile/workspace changes and drop cleanup. No new native gesture or visual policy.
+- `t3-71384893` owns **#65 held folder-drag auto-scroll** (implemented and tested). Verifiable-by-tests: reuse the existing tab edge-scroll timer/physics for a validated folder payload, including hold, cancellation, Space/profile/workspace changes and drop cleanup. No new native gesture or visual policy.
 
 - `t3-71384893` owns **#71 missing Check for Updates Command Bar route** (implemented and tested). Verifiable-by-tests: route to the existing app-owned update action/window, typed aliases, source retention and cancellation. No transport, installer or presentation changes.
 
@@ -90,7 +92,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 62 | L152: Change Profile | M | Complete the empty-window warning policy for captured-Space profile reassignment. |
 | 63 | L214: Resize sidebar | S | **Test-verifiable sub-gap fixed:** fresh normal windows inherit the committed source width; app-level creation uses the latest normal checkpoint, with the existing default if none exists. Window-local widths are checkpointed and restored independently; restored width wins over inheritance. Root/overlay/renderer, retained-document and session regressions cover the change. Native drag/visual/platform qualification remains partial. |
 | 64 | L220: **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | M | Complete unread/calendar/profile behavior separately from the already-working Favorites dock. |
-| 65 | L229: Dragging tabs (between sections, into folders, into Favorites, into another Space) | M | Extend held-drag auto-scroll to folder drags and qualify edge cancellation across target types. |
+| 65 | L229: Dragging tabs (between sections, into folders, into Favorites, into another Space) | M | **Test-verifiable folder sub-gap fixed:** held folder drags use the existing tab dwell/edge speed and shared viewport; Escape, release, viewport exit, bounds and live payload identity are covered by GPUI tests. Native visual/motion and target-type acceptance remain partial. |
 | 66 | L233: Custom tab icon ("Customize Tab") | M | Support uploaded custom tab images with bounded local decoding and persisted identity. |
 | 67 | L244: Incognito window sidebar ("Incognito Tabs") | M | Complete private New/context-menu availability without exposing regular-profile operations. |
 | 68 | L246: Media controls in the sidebar | M | Complete the media-control behaviors tracked in the detailed mini-player row. |
@@ -473,3 +475,20 @@ Tests make no network request or native app/window interaction.
 Validation for #71: two focused GPUI regressions and the full workspace suite
 pass (1,380 browser, 287 core and all remaining enabled suites; one existing
 AI test ignored). Logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/update-command-{focused,full}.log`.
+
+
+### Held folder-drag auto-scroll — code/test-only delivery
+
+Folder payloads now share the existing tab edge-scroll task, 200 ms dwell,
+velocity curve and bounded Pinned/Today viewport. The task checks the current
+Space, canonical workspace and live source/target profiles on every tick.
+Folder drop and drag release retire scrolling, including outside cancellation;
+renderer Escape uses the existing typed-drag escape policy. Drop validation is
+shared with the existing folder move action rather than duplicated.
+
+Three GPUI regressions hold the real rendered folder row at both edges using
+the test executor clock, verify dwell/rate/clamping/reversal, cancel via renderer
+Escape or outside release, preserve the fixed header/document/inventory, reject
+foreign workspace/profile payloads and retire the source while scrolling.
+No Arc interaction or native/visual claim was made. Focused log:
+`~/Library/Caches/EchoBuildHealth/t3-71384893/logs/folder-scroll-focused.log`.
