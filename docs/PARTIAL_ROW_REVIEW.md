@@ -173,7 +173,7 @@ account consent or owner profile mutation was used to make a row look complete.
 | 16 — page card | Fresh empty/loaded corner crops retain 10 px insets and 6 px radius. Cosmetic: opacity, shadow and border calibration are deferred. Sidebar width is owned by another section. |
 | 16 — loading glow | Prior measured pulse evidence remains valid for the implemented phase; exact finishing curve and split/other-platform variants are not newly qualified. |
 | 16 — zoom badge | Fresh 110% geometry agrees; click/dismissal motion, material/theme and other-platform input behavior remain unqualified. |
-| 16 — Site Control Center | The camera tile now enters the existing scoped region capture; native Escape preserves browser/Command Bar input. Full Page/Portrait, extension management, usage/media counts, main-panel keyboard traversal and embedded cross-origin permission coverage remain missing/unqualified. Remaining visual differences are cosmetic. |
+| 16 — Site Control Center | The camera tile now enters the existing scoped region capture; native Escape preserves browser/Command Bar input. Full Page is implemented and qualified against Arc’s 1840 px document capture (see FULL_PAGE_CAPTURE_REFERENCE.md). Portrait, extension management, usage/media counts, main-panel keyboard traversal and embedded cross-origin permission coverage remain missing/unqualified. Remaining visual differences are cosmetic. |
 | 16 — hovered URL | Fresh Dark capsule geometry/colors/font are corrected. Shadow/transition curves, Light and remaining elision/host variants are not accepted. |
 | 16 — Find | The fresh NOT FOUND panel now clears the developer toolbar. Arc disables Find and Replace on this ordinary document; editable-context replacement remains unqualified. |
 | 16 — Developer Mode | Fresh localhost default/disable/reload/restoration is implemented and tested. Toolbar glyph/material polish, split variants and other loopback-address defaults remain unqualified. |
@@ -237,7 +237,8 @@ rule. The shared source Space is nonempty and contains other agents' tabs, so
 an empty-Space profile-warning condition cannot be manufactured by clearing it.
 No owner profile or assignment was changed for this review.
 
-SCC full-page/Portrait capture, extension management, counters/media indicators,
+SCC Full Page capture now has a qualified document PNG and implementation; Portrait,
+extension management, counters/media indicators,
 main-panel keyboard traversal and embedded permission qualification remain
 separate functional gaps. The ordinary region capture entry is handled below.
 The source full-page action was observed copying a screenshot and showing

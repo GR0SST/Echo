@@ -157,6 +157,7 @@ pub trait WebEngine {
     /// Whether transfers should wait briefly for an owner-viewport photograph.
     fn supports_snapshots(&self) -> bool { false }
     fn request_snapshot(&mut self, _view: ViewId, _request: u64) -> bool { false }
+    fn request_document_snapshot(&mut self, _view: ViewId, _request: u64, _size: engine::DocumentSnapshotSize) -> bool { false }
     fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { Vec::new() }
     fn create_in_host(&mut self, _parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> { self.create(url, bounds) }
     fn focus_ui_in_host(&mut self, _parent: *mut c_void) { self.focus_ui(); }
@@ -427,6 +428,7 @@ impl WebEngine for Chromium {
     fn close_inspector(&mut self, id: engine::InspectorId) { self.engine.close_inspector(id); }
     fn supports_snapshots(&self) -> bool { true }
     fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool { self.engine.request_snapshot(view, request) }
+    fn request_document_snapshot(&mut self, view: ViewId, request: u64, size: engine::DocumentSnapshotSize) -> bool { self.engine.request_document_snapshot(view,request,size) }
     fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { self.engine.take_snapshots() }
     fn create_in_host(&mut self, parent: *mut c_void, url: &str, bounds: Bounds) -> Option<ViewId> {
         let parent = if parent.is_null() { self.parent } else { parent };
@@ -1995,6 +1997,21 @@ impl Pages {
         let page = store.pages.get_mut(&tab)?;
         page.snapshot_pending = Some(request);
         page.snapshot_origin = Some(origin);
+        Some(request)
+    }
+
+    pub(crate) fn request_document_snapshot(&mut self, tab: TabId, size: engine::DocumentSnapshotSize) -> Option<u64> {
+        let mut store=self.store.borrow_mut();
+        let page=store.pages.get(&tab)?;
+        if page.snapshot_pending.is_some() { return None; }
+        let view=page.view;
+        store.next_snapshot=store.next_snapshot.checked_add(1)?;
+        let request=store.next_snapshot;
+        if !store.engine.request_document_snapshot(view,request,size) { return None; }
+        let page=store.pages.get_mut(&tab)?;
+        page.snapshot_pending=Some(request);
+        // Document images must never become a viewport handoff photograph.
+        page.snapshot_origin=None;
         Some(request)
     }
 

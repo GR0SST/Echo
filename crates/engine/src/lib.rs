@@ -96,7 +96,7 @@ pub use shutdown_recovery::run_verifier_process as run_storage_verifier_process;
 pub use shutdown::{ShutdownPhase, ShutdownStatus};
 pub use storage::StorageKey;
 pub use editing::subprocess_app;
-pub use snapshot::PageSnapshot;
+pub use snapshot::{PageSnapshot, DocumentSnapshotSize};
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -1316,6 +1316,15 @@ impl Engine {
         let Some(page) = self.views.get(&view) else { return false };
         if page.role != ViewRole::Page { return false; }
         self.snapshots.request(view, request, &page.browser, &self.message_ids)
+    }
+
+    /// Captures a measured full document without navigation, viewport changes,
+    /// scroll changes or device-emulation overrides. Completion uses take_snapshots.
+    pub fn request_document_snapshot(&mut self, view: ViewId, request: u64, size: DocumentSnapshotSize) -> bool {
+        if self._runtime.lifecycle.require_running().is_err() { return false; }
+        let Some(page) = self.views.get(&view) else { return false; };
+        if page.role != ViewRole::Page { return false; }
+        self.snapshots.request_document(view, request, &page.browser, &self.message_ids, size)
     }
 
     /// Drains screenshot completions and expires requests after five seconds.

@@ -167,8 +167,12 @@ that inventory entry describes background creation, which Echo does not yet
 expose. Populated ordinary folders now have durable archive/restore, exact Undo and
 click-to-reveal feedback using lines 47523–47525 (`Folder restored to ` /
 `. Click to view.`). Reference unqualified; see [folder archive](FOLDER_ARCHIVE_REFERENCE.md). Import,
-translation, capture, battery saver and shortcut education await their owning
-features. “We cleaned up!” remains partial with no reference or guessed UI.
+translation, battery saver and shortcut education await their owning
+features. Full-page capture now uses the exact `Screenshot Copied to Clipboard`
+feedback and measured Save / Share accessories; Save exports the captured PNG,
+and image sharing retains those bytes rather than reading the later clipboard.
+Source lines 47578–47580 identify the copy message and file-save action.
+See [full-page qualification](FULL_PAGE_CAPTURE_REFERENCE.md). “We cleaned up!” remains partial with no reference or guessed UI.
 
 Validation: five additional GPUI interaction regressions cover archive Undo
 transaction safety, background opening from the Command Bar and CEF, move

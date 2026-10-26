@@ -14,6 +14,7 @@ pub(crate) struct Toast {
     undo_hint: bool,
     download_undo: bool,
     compact: bool,
+    screenshot: bool,
     generation: u64,
     started: Instant,
     dismissed: Option<(Instant, f32)>,
@@ -21,9 +22,13 @@ pub(crate) struct Toast {
     action: Option<ToastAction>,
 }
 
+#[derive(Clone,Copy)]
+enum Style { Regular, Compact, Screenshot }
+
 #[derive(Clone)]
 enum ToastAction {
     ShareLinks(Vec<String>),
+    Screenshot(std::sync::Arc<Vec<u8>>, browser_core::UserProfileId),
     UndoDownload(crate::max_downloads::Receipt),
     UndoMedia(gpui::WeakEntity<crate::library::media::MediaView>,browser_core::UserProfileId),
     RevealTab(browser_core::TabId, browser_core::UserProfileId),
@@ -185,6 +190,18 @@ impl BrowserWindow {
         let Some(toast) = self.toast.as_ref().filter(|toast| toast.generation == generation && toast.dismissed.is_none()) else { return; };
         let Some(action) = toast.action.clone() else { return; };
         let urls = match action {
+            ToastAction::Screenshot(png,profile) => {
+                if profile!=self.browser.active_user_profile_id() {return;}
+                let main=self.main_window;
+                cx.spawn(async move |owner,cx| {
+                    let Ok((view,width))=main.update(cx,|_,window,_|(crate::native::view_of(window),f32::from(window.viewport_size().width))) else{return;};
+                    let mut picker=crate::native::sharing::show_image(view,[width-48.,14.,32.,28.],&png);
+                    if std::env::var_os("BROWSER_SCRIPT").is_some(){eprintln!("[screenshot-share] presented={} png_bytes={}",picker.is_some(),png.len());}
+                    let previous=owner.update(cx,|this,_|std::mem::replace(&mut this.share_picker,picker.take())).ok().flatten();
+                    drop(previous);drop(picker);
+                }).detach();
+                return;
+            }
             ToastAction::ShareLinks(urls) => urls,
             ToastAction::UndoMedia(media,profile)=>{if self.browser.active_user_profile_id()==profile {let _=media.update(cx,|media,cx|media.undo_trash(profile,cx));}return;},
             ToastAction::UndoDownload(receipt) => {
@@ -243,14 +260,42 @@ impl BrowserWindow {
     }
 
     fn present_toast(&mut self, message: String, receipt: Option<crate::max_downloads::Receipt>, cx: &mut Context<Self>) {
-        self.present_toast_style(message, receipt, false, cx);
+        self.present_toast_style(message, receipt, Style::Regular, cx);
+    }
+
+    pub(crate) fn show_screenshot(&mut self, png: std::sync::Arc<Vec<u8>>, profile: browser_core::UserProfileId, cx: &mut Context<Self>) {
+        self.present_toast_style("Screenshot Copied to Clipboard".into(),None,Style::Screenshot,cx);
+        if let Some(toast)=&mut self.toast {toast.action=Some(ToastAction::Screenshot(png,profile));}
+    }
+    fn save_screenshot_toast(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if self.save_prompt_active || crate::quit::is_quitting() {return;}
+        let Some(toast)=self.toast.as_ref().filter(|t|t.generation==generation && t.dismissed.is_none()) else{return;};
+        let Some(ToastAction::Screenshot(png,profile))=toast.action.clone() else{return;};
+        if profile!=self.browser.active_user_profile_id() {return;}
+        self.close_popups_for_window_operation(false,cx);
+        self.save_prompt_active=true;
+        self.retire_toast(cx);
+        let owner=cx.weak_entity();let main=self.main_window;
+        cx.defer(move |cx| {
+            let _=main.update(cx,|_,window,_|window.activate_window());
+            let directory=dirs::download_dir().unwrap_or_else(crate::profile_dir);
+            let name=format!("{}.png",chrono::Local::now().format("%Y-%m-%d-%H%M%S"));
+            let choice=cx.prompt_for_new_path(&directory,Some(&name));
+            cx.spawn(async move |cx| {
+                let chosen=choice.await;
+                let _=owner.update(cx,|view,cx| {view.save_prompt_active=false;cx.notify();});
+                if let Ok(Ok(Some(path)))=chosen {let _=std::fs::write(path,png.as_ref());}
+            }).detach();
+        });
     }
 
     pub(crate) fn show_compact_toast(&mut self, message: String, cx: &mut Context<Self>) {
-        self.present_toast_style(message, None, true, cx);
+        self.present_toast_style(message, None, Style::Compact, cx);
     }
 
-    fn present_toast_style(&mut self, message: String, receipt: Option<crate::max_downloads::Receipt>, compact: bool, cx: &mut Context<Self>) {
+    fn present_toast_style(&mut self, message: String, receipt: Option<crate::max_downloads::Receipt>, style: Style, cx: &mut Context<Self>) {
+        let compact=matches!(style,Style::Compact);
+        let screenshot=matches!(style,Style::Screenshot);
         let download_undo = receipt.is_some();
         self.retire_toast(cx);
         self.toast_generation += 1;
@@ -258,6 +303,7 @@ impl BrowserWindow {
         self.toast = Some(Toast {
             copied_link: !compact && message.starts_with("Copied"),
             compact,
+            screenshot,
             undo_hint: message.contains("⌘Z"),
             download_undo,
             message,
@@ -297,13 +343,13 @@ impl BrowserWindow {
             };
             // Arc's copy toast is content-sized (203 × 48 for the English
             // current-URL message), 16 px from the right and 19 px from the top.
-            let width = (text_width.ceil() + px(if copied_link { 68. } else if undo_hint { 41. } else { 24. })).min(main.size.width - px(32.));
+            let width = (text_width.ceil() + px(if screenshot {120.} else if copied_link { 68. } else if undo_hint { 41. } else { 24. })).min(main.size.width - px(32.));
             let bounds = Bounds::new(
                 point(
                     main.origin.x + main.size.width - width - px(if compact { 19. } else if copied_link { 16. } else { 4. }) - px(PAD_X),
                     main.origin.y + px(if compact || copied_link { 19. } else { 4. }) - px(PAD_Y),
                 ),
-                size(width + px(PAD_X * 2.), px(if compact { 40. } else if copied_link || undo_hint { 48. } else { 42. }) + px(PAD_Y * 2.)),
+                size(width + px(PAD_X * 2.), px(if compact { 40. } else if copied_link || undo_hint || screenshot { 48. } else { 42. }) + px(PAD_Y * 2.)),
             );
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -319,7 +365,7 @@ impl BrowserWindow {
             if let Ok(overlay) = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
-                    if !(copied_link || undo_hint || message.contains("Click to") || message.starts_with("New Tab Created")) { crate::native::set_overlay_passthrough(child); }
+                    if !(screenshot || copied_link || undo_hint || message.contains("Click to") || message.starts_with("New Tab Created")) { crate::native::set_overlay_passthrough(child); }
                     crate::native::prepare_toast_window(child);
                 }
                 cx.new(|cx| Overlay::new(browser.clone(), OverlayKind::Toast(generation), window, cx))
@@ -404,6 +450,7 @@ impl BrowserWindow {
             return div().into_any_element();
         };
         let message = toast.message.clone();
+        let screenshot=toast.screenshot;
         let copied_link = toast.copied_link || toast.download_undo;
         let download_undo = toast.download_undo;
         let compact = toast.compact;
@@ -412,15 +459,16 @@ impl BrowserWindow {
         if scale < 0.001 { return div().size_full().into_any_element(); }
         let actionable = toast.action.is_some();
         let body_owner = owner.clone();
+        let save_owner=owner.clone();
         let (undo_before, undo_after) = message.split_once("⌘Z").unwrap_or(("", ""));
         let surface = div()
             .id("toast")
-            .when(actionable && !copied_link, |this| this.cursor_pointer().on_click(move |_, _, cx| {
+            .when(actionable && !copied_link && !screenshot, |this| this.cursor_pointer().on_click(move |_, _, cx| {
                 let _ = body_owner.update(cx, |this, cx| this.activate_toast_action(generation, cx));
             }))
             .debug_selector(|| "toast".into())
             .w(px((width - PAD_X * 2.) * scale))
-            .h(px(if compact { 40. } else if copied_link || undo_hint { 48. } else { 42. } * scale))
+            .h(px(if compact { 40. } else if copied_link || undo_hint || screenshot { 48. } else { 42. } * scale))
             .flex()
             .items_center()
             .justify_between()
@@ -443,8 +491,12 @@ impl BrowserWindow {
                 .child(div().debug_selector(|| "toast-undo-shortcut".into()).px(px(6. * scale)).h(px(28. * scale))
                     .flex().items_center().rounded(px(4. * scale)).bg(hsla(0., 0., 1., 0.1)).child("⌘Z"))
                 .child(undo_after.trim_start().to_string())))
-            .when(copied_link, |this| this.child(
-                div().id("toast-share").debug_selector(move || if download_undo { "toast-download-undo".into() } else { "toast-share".into() }).cursor_pointer()
+            .when(screenshot,|this|this.child(div().id("toast-screenshot-save").debug_selector(||"toast-screenshot-save".into())
+                .cursor_pointer().w(px(48.*scale)).h(px(28.*scale)).flex_none().rounded(px(6.*scale))
+                .bg(hsla(0.,0.,1.,0.2)).flex().items_center().justify_center().child("Save")
+                .on_click(move |_,_,cx| {let _=save_owner.update(cx,|this,cx|this.save_screenshot_toast(generation,cx));})))
+            .when(copied_link || screenshot, |this| this.child(
+                div().id("toast-share").debug_selector(move || if download_undo { "toast-download-undo".into() } else if screenshot {"toast-screenshot-share".into()} else { "toast-share".into() }).cursor_pointer()
                     .on_click(move |_, _, cx| { let _ = owner.update(cx, |this, cx| this.activate_toast_action(generation, cx)); })
                     .w(px(32. * scale)).h(px(28. * scale)).flex_none().rounded(px(6. * scale))
                     .bg(hsla(0., 0., 1., 0.2)).flex().items_center().justify_center()

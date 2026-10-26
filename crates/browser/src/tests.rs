@@ -299,6 +299,7 @@ enum Call {
     InspectorPasteStyle(engine::InspectorId),
     Close(u64),
     Snapshot(u64, u64),
+    DocumentSnapshot(u64,u64,engine::DocumentSnapshotSize),
     Transfer(u64, u64),
     InspectorOpen(u64, usize, Bounds, engine::InspectorPanel, bool),
     InspectorFocus(engine::InspectorId),
@@ -357,6 +358,7 @@ struct FakeState {
     profile_settings: Rc<RefCell<std::collections::HashMap<(crate::pages::StorageSelection,String),Vec<engine::SiteSetting>>>>,
     permission_requests: std::collections::HashSet<(u64,engine::PermissionRequestId)>,
     script_calls: Vec<(ViewId,String)>,
+    script_value: Option<String>,
     extension_model_enabled: bool,
     extension_model_requests: Vec<engine::ExtensionModelRequest>,
     extension_model_expired: std::collections::HashSet<u64>,
@@ -417,7 +419,7 @@ impl WebEngine for FakeEngine {
     fn clear_browsing_data(&mut self,storage:&crate::pages::StorageSelection,mask:u32,since:i64)->Result<crate::pages::NativeDataClear,String>{self.call(Call::ClearBrowsingData(storage.clone(),mask,since));let reply=self.0.borrow().data_clear_reply.clone().unwrap_or_else(||Rc::new(RefCell::new(Some(Ok(())))));Ok(Box::new(move||reply.borrow_mut().take()))}
 
     fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.call(Call::PasswordFill(raw(view),token,origin.into(),credential.clone()));true}
-    fn evaluate_script(&mut self,view:ViewId,_url:&str,source:&str)->Result<engine::ScriptTicket,String>{self.0.borrow_mut().script_calls.push((view,source.into()));Ok(engine::ScriptTicket::completed(Ok("3".into())))}
+    fn evaluate_script(&mut self,view:ViewId,_url:&str,source:&str)->Result<engine::ScriptTicket,String>{let mut s=self.0.borrow_mut();s.script_calls.push((view,source.into()));Ok(engine::ScriptTicket::completed(Ok(s.script_value.clone().unwrap_or_else(||"3".into()))))}
     fn apply_context_media(&mut self, view:ViewId, epoch:u64, target:&engine::page_context::MediaTarget, operation:engine::page_context::MediaOperation)->bool {self.0.borrow_mut().context_media.push((raw(view),epoch,target.clone(),operation));true}
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.0.borrow_mut().context_images.push((raw(view),request,page_url.into(),url.into()));true}
     fn permission_pending(&self,view:ViewId,request:engine::PermissionRequestId)->bool {self.0.borrow().permission_requests.contains(&(raw(view),request))}
@@ -583,6 +585,9 @@ impl WebEngine for FakeEngine {
     fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
         self.call(Call::Snapshot(raw(view), request));
         !self.0.borrow().reject_snapshot
+    }
+    fn request_document_snapshot(&mut self,view:ViewId,request:u64,size:engine::DocumentSnapshotSize)->bool {
+        self.call(Call::DocumentSnapshot(raw(view),request,size));!self.0.borrow().reject_snapshot
     }
     fn take_snapshots(&mut self) -> Vec<engine::PageSnapshot> { std::mem::take(&mut self.0.borrow_mut().snapshots) }
     fn move_view(&mut self, view: ViewId, parent: *mut std::ffi::c_void, bounds: Bounds) -> bool {

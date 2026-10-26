@@ -11,6 +11,8 @@ pub(crate) struct SharePicker {
     pub(crate) urls: Vec<String>,
     #[cfg(test)]
     pub(crate) anchor: [f32; 4],
+    #[cfg(test)]
+    pub(crate) png: Option<Vec<u8>>,
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
@@ -47,6 +49,7 @@ pub(crate) fn show(
         return Some(SharePicker {
             selected: false,
             urls: urls.to_vec(),
+            png: None,
             anchor,
         });
     }
@@ -185,6 +188,7 @@ pub(crate) fn show_page(
         return Some(SharePicker {
             selected: false,
             urls: vec![url.to_owned()],
+            png: None,
             anchor,
         });
     }
@@ -250,4 +254,27 @@ impl Drop for SharePicker {
             }
         }
     }
+}
+
+/// Image services receive the captured bytes, never the current page URL.
+/// Called outside application/entity borrows, like the URL service picker.
+pub(crate) fn show_image(view: Option<*mut c_void>,anchor:[f32;4],png:&[u8])->Option<SharePicker> {
+    #[cfg(test)] {let _=view;return Some(SharePicker {selected:false,urls:Vec::new(),anchor,png:Some(png.to_vec())});}
+    #[cfg(all(target_os="macos",not(test)))] unsafe {
+        use objc2::{msg_send,rc::Retained,runtime::AnyObject};
+        use objc2_foundation::{NSRect,NSPoint,NSSize};
+        let view=view? as *mut AnyObject;
+        let data:Retained<AnyObject>=Retained::retain(msg_send![objc2::class!(NSData),dataWithBytes:png.as_ptr().cast::<std::ffi::c_void>() length:png.len()])?;
+        let image:*mut AnyObject=msg_send![objc2::class!(NSImage),alloc];
+        let image:Retained<AnyObject>=Retained::from_raw(msg_send![image,initWithData:&*data])?;
+        let items:Retained<AnyObject>=Retained::retain(msg_send![objc2::class!(NSArray),arrayWithObject:&*image])?;
+        let picker:*mut AnyObject=msg_send![objc2::class!(NSSharingServicePicker),alloc];
+        let picker:Retained<AnyObject>=Retained::from_raw(msg_send![picker,initWithItems:&*items])?;
+        let [x,y,width,height]=anchor.map(f64::from);let bounds:NSRect=msg_send![view,bounds];
+        let flipped:objc2::runtime::Bool=msg_send![view,isFlipped];
+        let rect=NSRect::new(NSPoint::new(x,if flipped.as_bool(){y}else{bounds.size.height-y-height}),NSSize::new(width,height));
+        let _:()=msg_send![&*picker,showRelativeToRect:rect,ofView:view,preferredEdge:if flipped.as_bool(){3usize}else{1usize}];
+        Some(SharePicker {selected:false,_menu:picker,close_on_drop:true})
+    }
+    #[cfg(all(not(target_os="macos"),not(test)))] {let _=(view,anchor,png);None}
 }

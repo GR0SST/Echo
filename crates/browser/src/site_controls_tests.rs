@@ -550,3 +550,50 @@ fn site_camera_does_not_open_an_unavailable_capture_backend(cx: &mut TestAppCont
     assert!(view.read_with(cx, |view, _| view.capture.is_none()));
     assert!(view.read_with(cx, |view, _| view.site_controls.is_some()));
 }
+
+fn start_full_page(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext,fake:&FakeEngine)->u64 {
+    fake.0.borrow_mut().capture_supported=true;
+    fake.0.borrow_mut().script_value=Some("[762,1840]".into());
+    click(cx,"address-site-controls");let mut controls=panel(view,cx);
+    fake.take_calls();click(&mut controls,"site-screenshot");
+    cx.executor().advance_clock(Duration::from_millis(40));cx.run_until_parked();
+    assert!(view.read_with(cx,|v,_|v.site_controls.is_none() && v.capture.as_ref().is_some_and(|c|c.overlay.is_none())));
+    fake.take_calls().into_iter().find_map(|call|match call {
+        Call::DocumentSnapshot(1,request,size)=>{assert_eq!((size.width(),size.height()),(762,1840));Some(request)},_=>None,
+    }).expect("Full page uses an explicit document capture rather than a viewport photograph")
+}
+fn full_page_png()->Vec<u8> {
+    let image=image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(762,1840,image::Rgba([10,20,30,255])));
+    let mut out=std::io::Cursor::new(Vec::new());image.write_to(&mut out,image::ImageFormat::Png).unwrap();out.into_inner()
+}
+fn finish_full_page(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext,fake:&FakeEngine,request:u64,png:Vec<u8>) {
+    fake.0.borrow_mut().snapshots.push(engine::PageSnapshot{view:page(1),request,png:Some(png)});
+    view.update(cx,|view,_|{view.pages.as_ref().unwrap().borrow_mut().take_events();});
+    cx.executor().advance_clock(Duration::from_millis(40));cx.run_until_parked();
+}
+#[gpui::test]
+fn full_page_capture_copies_the_whole_document_and_accessories_use_the_captured_image(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let request=start_full_page(&view,cx,&fake);let png=full_page_png();
+    finish_full_page(&view,cx,&fake,request,png.clone());
+    assert!(view.read_with(cx,|v,_|v.capture.is_none()));
+    let copied=cx.update(|_,cx|cx.read_from_clipboard()).unwrap();
+    assert!(copied.entries().iter().any(|entry|matches!(entry,gpui::ClipboardEntry::Image(image) if image.bytes()==png.as_slice())));
+    let handle=view.read_with(cx,|v,_|{assert_eq!(v.toast.as_ref().unwrap().message,"Screenshot Copied to Clipboard");v.toast.as_ref().unwrap().overlay.unwrap()});
+    let _=handle;let mut toast=current_toast(&view,cx);
+    cx.update(|_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string("Later clipboard contents".into())));
+    click(&mut toast,"toast-screenshot-share");cx.run_until_parked();
+    view.read_with(cx,|v,_|{let picker=v.share_picker.as_ref().unwrap();assert_eq!(picker.png.as_deref(),Some(png.as_slice()));assert!(picker.urls.is_empty());});
+    click(&mut toast,"toast-screenshot-save");cx.run_until_parked();assert!(cx.did_prompt_for_new_path());
+    let directory=tempfile::tempdir().unwrap();let path=directory.path().join("full-page.png");
+    cx.simulate_new_path_selection(|_|Some(path.clone()));cx.run_until_parked();
+    assert_eq!(std::fs::read(path).unwrap(),png);assert!(!view.read_with(cx,|v,_|v.save_prompt_active));
+}
+#[gpui::test]
+fn full_page_capture_rejects_a_same_url_document_replacement_before_completion(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let request=start_full_page(&view,cx,&fake);
+    cx.update(|_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string("Unchanged".into())));
+    *fake.0.borrow_mut().document_epochs.entry(1).or_default()+=1;
+    finish_full_page(&view,cx,&fake,request,full_page_png());
+    assert!(view.read_with(cx,|v,_|v.capture.is_none() && v.toast.is_none()));
+    assert_eq!(cx.update(|_,cx|cx.read_from_clipboard()).unwrap().text(),Some("Unchanged".into()));
+}

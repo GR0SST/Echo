@@ -13,7 +13,7 @@ use gpui::{
 use std::{
     io::{Cursor, Write},
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, Instant},
 };
 actions!(capture, [DismissCapture]);
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -32,6 +32,8 @@ struct Scope {
 }
 pub(crate) struct Capture {
     scope: Scope,
+    full_page: bool,
+    started: Instant,
     pub overlay: Option<WindowHandle<Overlay>>,
     focus: FocusHandle,
     pointer: Point<Pixels>,
@@ -138,7 +140,9 @@ impl BrowserWindow {
                 .as_ref()
                 .is_some_and(|pages| pages.borrow().supports_snapshots())
     }
-    pub(crate) fn capture_page(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn capture_page(&mut self, cx: &mut Context<Self>) { self.capture_with_mode(false,cx); }
+    pub(crate) fn capture_full_page(&mut self, cx: &mut Context<Self>) { self.capture_with_mode(true,cx); }
+    fn capture_with_mode(&mut self, full_page: bool, cx: &mut Context<Self>) {
         if self.capture.is_some() || self.save_prompt_active {
             return;
         }
@@ -153,19 +157,26 @@ impl BrowserWindow {
             return;
         }
         self.close_popups_for_window_operation(false, cx);
-        self.suspend_popup_focus_for_utility();
+        if !full_page { self.suspend_popup_focus_for_utility(); }
         let frame = viewport(scope.frame);
         let focus = cx.focus_handle();
         let destination = cx.new(|cx| TextInput::new("Send To...", cx));
+        let query=if full_page {
+            self.pages.as_ref().and_then(|pages| pages.borrow_mut().evaluate_script(scope.identity.tab,scope.identity.profile,&scope.url,
+                "JSON.stringify([Math.max(document.documentElement.scrollWidth,document.body?.scrollWidth||0,innerWidth),Math.max(document.documentElement.scrollHeight,document.body?.scrollHeight||0,innerHeight)])").ok())
+        } else {None};
+        if full_page && query.is_none() {return;}
         self.capture = Some(Capture {
             scope,
+            full_page,
+            started: cx.background_executor().now(),
             overlay: None,
             focus,
             pointer: frame.center(),
             anchor: None,
             hover: None,
-            selected: None,
-            query: None,
+            selected: full_page.then_some(frame),
+            query,
             queried: None,
             request: None,
             png: None,
@@ -173,9 +184,8 @@ impl BrowserWindow {
             saved: false,
             destination,
         });
-        if let Some(pages) = &self.pages {
-            pages.borrow_mut().focus_ui();
-        }
+        if !full_page {
+        if let Some(pages) = &self.pages { pages.borrow_mut().focus_ui(); }
         let browser = cx.entity();
         let main = self.main_window;
         let parent = self.native_view;
@@ -219,6 +229,7 @@ impl BrowserWindow {
                 });
             }
         });
+        }
         cx.spawn(async move |view, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(30))
@@ -250,9 +261,14 @@ impl BrowserWindow {
             self.close_capture(PopupFocus::OnActivation, cx);
             return false;
         }
+        if capture.full_page && cx.background_executor().now().saturating_duration_since(capture.started)>Duration::from_secs(12) {return false;}
         if let Some(result) = capture.query.as_ref().and_then(|ticket| ticket.take()) {
             capture.query = None;
-            if let Ok(json) = result {
+            if capture.full_page {
+                let Some(size)=result.ok().and_then(|json| full_page_dimensions(&json)) else {return false;};
+                capture.request=self.pages.as_ref().and_then(|pages| pages.borrow_mut().request_document_snapshot(capture.scope.identity.tab,size));
+                if capture.request.is_none() {return false;}
+            } else if let Ok(json) = result {
                 if let Ok(values) = serde_json::from_str::<[f32; 4]>(&json) {
                     if values.iter().all(|v| v.is_finite()) && values[2] > 0. && values[3] > 0. {
                         let frame = viewport(capture.scope.frame);
@@ -294,6 +310,15 @@ impl BrowserWindow {
             {
                 let _ = got;
                 capture.request = None;
+                if capture.full_page {
+                    drop(pages);
+                    if image::load_from_memory_with_format(&png,image::ImageFormat::Png).is_err() {return false;}
+                    cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(gpui::ImageFormat::Png,png.as_ref().clone())));
+                    crate::feedback::capture(self,cx);
+                    self.show_screenshot(png.clone(),capture.scope.identity.profile,cx);
+                    if std::env::var_os("BROWSER_SCRIPT").is_some() {eprintln!("[full-page-capture] copied request={request}");}
+                    return false;
+                }
                 if let Some((png, width, height)) = capture
                     .selected
                     .and_then(|rect| crop_png(&png, rect, capture.scope.frame))
@@ -866,4 +891,18 @@ fn camera() -> AnyElement {
     )
     .size(px(22.))
     .into_any_element()
+}
+
+fn full_page_dimensions(json: &str) -> Option<engine::DocumentSnapshotSize> {
+    let [width,height]=serde_json::from_str::<[f64;2]>(json).ok()?;
+    if !width.is_finite() || !height.is_finite() || width<=0. || height<=0. {return None;}
+    engine::DocumentSnapshotSize::new(width.ceil() as u32,height.ceil() as u32)
+}
+#[cfg(test)]
+mod full_page_dimension_tests {
+    use super::*;
+    #[test] fn validates_dimensions_without_truncating_large_or_malformed_documents() {
+        assert_eq!(full_page_dimensions("[762,1840]").map(|s|(s.width(),s.height())),Some((762,1840)));
+        for json in ["[0,3]","[-1,3]","[9000,3]","[8000,32000]","[2,40000]","[null,2]","3","[1,2,3]"] {assert!(full_page_dimensions(json).is_none(),"{json}");}
+    }
 }

@@ -958,6 +958,7 @@ impl BrowserWindow {
                             )
                             .child(
                                 top_tile("site-screenshot")
+                                    .on_click(cx.listener(|this, _, _, cx| this.capture_full_page(cx)))
                                     .child(crate::icons::control_sized(Icon::Screenshot, 22.)),
                             ),
                     )

@@ -12,6 +12,19 @@ use crate::ViewId;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Bounded document dimensions in CSS pixels, without resizing/emulating a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DocumentSnapshotSize { width: u32, height: u32 }
+impl DocumentSnapshotSize {
+    pub fn new(width: u32, height: u32) -> Option<Self> {
+        (width > 0 && height > 0 && width <= 8192 && height <= 32768
+            && u64::from(width) * u64::from(height) <= 32 * 1024 * 1024)
+            .then_some(Self { width, height })
+    }
+    pub fn width(self) -> u32 { self.width }
+    pub fn height(self) -> u32 { self.height }
+}
+
 /// Completion of an accepted screenshot request. `None` means capture failed,
 /// the DevTools agent detached, or the request timed out.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +62,14 @@ pub(crate) struct Snapshots {
 
 impl Snapshots {
     pub(crate) fn request(&mut self, view: ViewId, request: u64, browser: &Browser, ids: &crate::devtools::MessageIds) -> bool {
+        self.request_size(view, request, browser, ids, None)
+    }
+
+    pub(crate) fn request_document(&mut self, view: ViewId, request: u64, browser: &Browser, ids: &crate::devtools::MessageIds, size: DocumentSnapshotSize) -> bool {
+        self.request_size(view, request, browser, ids, Some(size))
+    }
+
+    fn request_size(&mut self, view: ViewId, request: u64, browser: &Browser, ids: &crate::devtools::MessageIds, size: Option<DocumentSnapshotSize>) -> bool {
         self.message_ids = ids.clone();
         self.collect(Instant::now());
         if self.pending.contains_key(&view) {
@@ -62,9 +83,16 @@ impl Snapshots {
         };
         if params.set_string(Some(&"format".into()), Some(&"png".into())) == 0
             || params.set_bool(Some(&"fromSurface".into()), 1) == 0
-            || params.set_bool(Some(&"captureBeyondViewport".into()), 0) == 0
+            || params.set_bool(Some(&"captureBeyondViewport".into()), i32::from(size.is_some())) == 0
         {
             return false;
+        }
+        if let Some(size) = size {
+            let Some(mut clip) = dictionary_value_create() else { return false; };
+            for (name, value) in [("x",0.),("y",0.),("width",f64::from(size.width)),("height",f64::from(size.height)),("scale",1.)] {
+                if clip.set_double(Some(&name.into()),value)==0 { return false; }
+            }
+            if params.set_dictionary(Some(&"clip".into()),Some(&mut clip))==0 { return false; }
         }
         let Some(message_id) = self.begin(view, request, Instant::now()) else {
             return false;
