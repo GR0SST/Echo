@@ -488,3 +488,48 @@ fn save_link_keeps_the_source_and_rejects_stale_document_requests(cx: &mut TestA
     cx.executor().advance_clock(Duration::from_millis(20));cx.run_until_parked();
     assert!(!fake.take_calls().iter().any(|c|matches!(c,Call::SaveFile(..))));
 }
+
+#[gpui::test]
+fn page_context_save_as_uses_the_existing_document_export_and_cancel_preserves_the_page(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.update(|window, _| window.activate_window());
+    fake.0.borrow_mut().archive_data = Some(include_bytes!("save_page_test_fixture.mhtml").to_vec());
+    cx.run_until_parked();
+    fake.take_calls();
+    choose(&fake, &view, cx, Action::SavePage);
+    cx.executor().advance_clock(Duration::from_millis(30));
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |view, _| view.is_saving_page()));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::ArchivePage(..) | Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn video_context_actions_keep_the_captured_element_and_reject_reloaded_documents(cx: &mut TestAppContext) {
+    use engine::page_context::{MediaTarget,MediaOperation};
+    let (view,cx,fake)=open_pages(cx);
+    let target=MediaTarget{token:"fixture-token".into(),source:"https://fixture.invalid/video.webm".into()};
+    choose(&fake,&view,cx,Action::Media{target:target.clone(),operation:MediaOperation::Loop(false)});
+    assert_eq!(fake.0.borrow().context_media,[(1,0,target.clone(),MediaOperation::Loop(false))]);
+    let url=active_url(&view,cx).unwrap();fake.0.borrow_mut().document_epochs.insert(1,1);
+    fake.send(cx,Event::PageContext{view:page(1),request:Request{page_url:url,document_epoch:0,action:Action::Media{target,operation:MediaOperation::Controls(false)}}});
+    assert_eq!(fake.0.borrow().context_media.len(),1);
+}
+
+#[gpui::test]
+fn contextual_selected_text_search_uses_the_exact_profile_custom_provider(cx: &mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    let original=active_url(&view,cx).unwrap();
+    view.update(cx, |view,_| view.edit_browser(|browser| {
+        let settings=&mut browser.active_user_profile_mut().settings.search;
+        let id=settings.add_provider("Fixture Search","fixture","https://search.fixture.invalid/find?q=%s").unwrap();
+        settings.make_default(id).unwrap();
+    }));
+    choose(&fake,&view,cx,Action::Search("text & λ".into()));
+    let url=active_url(&view,cx).unwrap();let parsed=url::Url::parse(&url).unwrap();
+    assert_eq!(parsed.host_str(),Some("search.fixture.invalid"));
+    assert_eq!(parsed.query_pairs().find(|(key,_)| key=="q").unwrap().1,"text & λ");
+    assert!(view.read_with(cx,|view,_|view.browser.all_tabs().any(|tab|tab.url==original)));
+}

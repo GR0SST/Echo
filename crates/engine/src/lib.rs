@@ -1056,6 +1056,9 @@ impl Engine {
     pub fn copy_context_image(&mut self, id:ViewId, request:u64, page_url:&str, url:&str)->bool {
         self.views.get(&id).is_some_and(|view| page_context::copy_image(self.events.clone(),view,request,page_url,url))
     }
+    pub fn apply_context_media(&mut self, id: ViewId, epoch: u64, target: &page_context::MediaTarget, operation: page_context::MediaOperation) -> bool {
+        self.views.get(&id).is_some_and(|view| page_context::apply_media(view, epoch, target, operation, &self.message_ids))
+    }
     pub fn set_page_context_policy(&mut self, id: ViewId, policy: page_context::Policy) {
         if let Some(view) = self.views.get(&id).filter(|view| view.role == ViewRole::Page) { page_context::set_policy(view.browser.identifier(), policy); }
     }

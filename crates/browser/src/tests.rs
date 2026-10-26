@@ -318,6 +318,7 @@ struct FakeState {
     document_epochs: std::collections::HashMap<u64,u64>,
     retired_storage: Vec<String>,
     context_images: Vec<(u64,u64,String,String)>,
+    context_media: Vec<(u64,u64,engine::page_context::MediaTarget,engine::page_context::MediaOperation)>,
     peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
     boosts: std::collections::HashMap<crate::pages::StorageSelection, Vec<engine::SiteBoost>>,
     paste_busy: usize,
@@ -417,6 +418,7 @@ impl WebEngine for FakeEngine {
 
     fn fill_password(&mut self,view:ViewId,token:engine::PasswordToken,origin:&str,credential:&engine::LoginCredential)->bool {self.call(Call::PasswordFill(raw(view),token,origin.into(),credential.clone()));true}
     fn evaluate_script(&mut self,view:ViewId,_url:&str,source:&str)->Result<engine::ScriptTicket,String>{self.0.borrow_mut().script_calls.push((view,source.into()));Ok(engine::ScriptTicket::completed(Ok("3".into())))}
+    fn apply_context_media(&mut self, view:ViewId, epoch:u64, target:&engine::page_context::MediaTarget, operation:engine::page_context::MediaOperation)->bool {self.0.borrow_mut().context_media.push((raw(view),epoch,target.clone(),operation));true}
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.0.borrow_mut().context_images.push((raw(view),request,page_url.into(),url.into()));true}
     fn permission_pending(&self,view:ViewId,request:engine::PermissionRequestId)->bool {self.0.borrow().permission_requests.contains(&(raw(view),request))}
     fn respond_permission(&mut self,view:ViewId,request:engine::PermissionRequestId,decision:engine::PermissionDecision)->bool {

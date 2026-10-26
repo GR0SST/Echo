@@ -56,6 +56,9 @@ impl BrowserWindow {
             return;
         }
         match request.action {
+            Action::Media { target, operation } => {
+                if let Some(pages) = &self.pages { pages.borrow_mut().apply_context_media(identity, request.document_epoch, &target, operation); }
+            }
             Action::SaveAs(url) => self.request_save_download(identity, request.document_epoch, url, cx),
             Action::Speak(text) => self.queue_context_speech(identity, request.document_epoch, request.page_url, Some(text), cx),
             Action::StopSpeaking => self.queue_context_speech(identity, request.document_epoch, request.page_url, None, cx),
@@ -94,7 +97,6 @@ impl BrowserWindow {
                     .active_user_profile()
                     .settings
                     .search
-                    .engine
                     .search(&text)
                     .url()
                     .to_owned();
@@ -155,6 +157,7 @@ impl BrowserWindow {
                 cx.defer(move |cx| crate::open_incognito_url(url, cx));
             }
             Action::Print => self.print_page(cx),
+            Action::SavePage => self.save_page(cx),
             Action::ViewSource => self.view_source(cx),
             // The existing Elements command opens the authenticated local
             // frontend and its picker. Revealing the original clicked node,

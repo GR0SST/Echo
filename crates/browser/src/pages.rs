@@ -166,6 +166,7 @@ pub trait WebEngine {
     fn set_viewport_clip(&mut self, _view: ViewId, _clip: Option<Bounds>) {}
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
+    fn apply_context_media(&mut self, _view:ViewId, _epoch:u64, _target:&engine::page_context::MediaTarget, _operation:engine::page_context::MediaOperation)->bool {false}
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
     fn set_link_preview(&mut self, _view: ViewId, _token: u64) {}
     fn set_shortcuts(&mut self, _shortcuts: Vec<engine::Shortcut>) {}
@@ -313,6 +314,7 @@ impl WebEngine for Chromium {
     }
     fn set_corner_radius(&mut self, view: ViewId, radius: f64) { self.engine.set_corner_radius(view, radius); }
     fn copy_context_image(&mut self, view:ViewId, request:u64, page_url:&str, url:&str)->bool {self.engine.copy_context_image(view,request,page_url,url)}
+    fn apply_context_media(&mut self, view:ViewId, epoch:u64, target:&engine::page_context::MediaTarget, operation:engine::page_context::MediaOperation)->bool {self.engine.apply_context_media(view,epoch,target,operation)}
     fn set_page_context_policy(&mut self, view: ViewId, policy: engine::page_context::Policy) { self.engine.set_page_context_policy(view, policy); }
     fn set_link_preview(&mut self, view: ViewId, token: u64) { self.engine.set_link_preview(view, token); }
     fn set_shortcuts(&mut self, shortcuts: Vec<engine::Shortcut>) { self.engine.set_shortcuts(shortcuts); }
@@ -1003,6 +1005,11 @@ impl Pages {
     pub(crate) fn reclaim_retired_profiles(&self, keys: &[String]) -> Vec<(String, Option<std::path::PathBuf>)> {
         self.store.borrow_mut().engine.reclaim_retired_profiles(keys)
     }
+    pub(crate) fn apply_context_media(&mut self, identity:PageIdentity, epoch:u64, target:&engine::page_context::MediaTarget, operation:engine::page_context::MediaOperation)->bool {
+        let mut store=self.store.borrow_mut();
+        let Some(view)=store.pages.get(&identity.tab).filter(|page| page.owner==self.host && page.visible && page.identity==identity).map(|page|page.view) else {return false;};
+        store.engine.apply_context_media(view,epoch,target,operation)
+    }
     pub(crate) fn copy_context_image(&mut self, tab:TabId, request:u64, page_url:&str, url:&str)->bool {
         let mut store=self.store.borrow_mut();
         let Some(view)=store.pages.get(&tab).filter(|page| page.owner==self.host && page.visible).map(|page|page.view) else{return false;};
@@ -1355,9 +1362,10 @@ impl Pages {
         let policies: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(id, page)|
             (page.view, !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::PeekPinned) && (browser.is_favorite(*id) || browser.spaces.iter().any(|space| space.pinned.iter().any(|tab| tab.id == *id))))).collect();
         let contexts: Vec<_> = store.pages.iter().filter(|(_, page)| page.owner == self.host).map(|(id, page)| (page.view, engine::page_context::Policy {
-            search_name: browser.user_profile(page.identity.profile).map_or("Google", |profile| profile.settings.search.engine.label()).into(),
+            search_name: browser.user_profile(page.identity.profile).map_or("Google", |profile| profile.settings.search.default_name()).into(),
             can_split: browser.related_tabs(*id).len() < browser_core::splits::MAX_SPLIT_PANES,
             can_save: !browser.is_private() && !browser.is_blank() && crate::ordinary_downloads::registered(self.parent),
+            can_save_page: store.engine.supports_page_archiving() && browser.all_tabs().find(|tab| tab.id == *id).is_some_and(|tab| !browser_core::omnibox::is_internal_url(&tab.url)),
             allow_little: !browser.is_private(), can_print: store.engine.supports_printing(),
         })).collect();
         for (view, policy) in contexts { store.engine.set_page_context_policy(view, policy); }
