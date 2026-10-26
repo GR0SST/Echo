@@ -54,6 +54,21 @@ pub(crate) fn chevron(up: bool) -> AnyElement {
     }).size(px(18.)).flex_none().into_any_element()
 }
 
+/// Escape's broken circle/arrow, on the same fixed 18 px control grid.
+pub(crate) fn escape(size: f32) -> AnyElement {
+    gpui::canvas(|_,_,_|(),move|bounds,_,window,_| {
+        let scale=size/18.;let at=|x,y|bounds.origin+gpui::point(px(x*scale),px(y*scale));
+        let mut path=gpui::PathBuilder::stroke(px(1.65*scale));
+        let points=arc(9.,9.,5.5,-2.5,2.9);
+        path.move_to(at(points[0].0,points[0].1));
+        for (x,y) in points.into_iter().skip(1) {path.line_to(at(x,y));}
+        path.move_to(at(3.5,3.5));path.line_to(at(7.5,3.5));
+        path.move_to(at(3.5,3.5));path.line_to(at(3.5,7.5));
+        path.move_to(at(3.5,3.5));path.line_to(at(9.,9.));
+        if let Ok(path)=path.build(){window.paint_path(path,window.text_style().color);}
+    }).size(px(size)).flex_none().into_any_element()
+}
+
 /// The Settings toolbar's keyboard, measured in its 22 px control slot.
 pub(crate) fn keyboard(size: f32) -> AnyElement {
     div().debug_selector(|| "settings-keyboard-icon".into()).size(px(size)).flex_none()

@@ -42,7 +42,7 @@ pub(crate) fn event_view(event: &Event) -> Option<ViewId> {
         Event::ContextImage { view, .. } | Event::PageContext { view, .. } | Event::QuoteSelection { view, .. } | Event::BoostZap { view, .. } | Event::DocumentColor { view, .. } | Event::TitleChanged { view, .. } | Event::Favicon { view, .. } | Event::PictureInPictureReturnRequested { view } | Event::Focused { view }
         | Event::EditFocusChanged { view, .. } | Event::FindResult { view, .. } | Event::UrlChanged { view, .. }
         | Event::PageSwipe { view,.. } | Event::MediaCaptureChanged { view, .. } | Event::LinkPreviewHover { view, .. } | Event::PreviewModifiers { view, .. } | Event::MediaStateChanged { view, .. } | Event::AudioStateChanged { view, .. } | Event::StatusChanged { view, .. } | Event::RendererStateChanged { view, .. } | Event::LoadingProgress { view, .. } | Event::LoadingChanged { view, .. } => Some(*view),
-        Event::Password {view,..} | Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
+        Event::FullscreenChanged {view,..} | Event::Password {view,..} | Event::PermissionRequested { view, .. } | Event::PermissionDismissed { view, .. } | Event::Shortcut { view, .. } => Some(*view),
         Event::InspectorInput(_) => None,
     }
 }
@@ -164,6 +164,7 @@ pub trait WebEngine {
     /// Transfer an existing native page. Engines without native hosting reject it.
     fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
+    fn exit_fullscreen(&mut self, _view: ViewId) {}
     fn set_viewport_clip(&mut self, _view: ViewId, _clip: Option<Bounds>) {}
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
@@ -439,6 +440,7 @@ impl WebEngine for Chromium {
         self.engine
             .create_view(self.parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS))
     }
+    fn exit_fullscreen(&mut self, view: ViewId) { self.engine.exit_fullscreen(view); }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.engine.set_frame(view, bounds)
     }
@@ -689,6 +691,7 @@ pub struct Pages {
     split: bool,
     square_top: bool,
     top_toolbar: bool,
+    fullscreen_tab: Option<TabId>,
     top_toolbar_height: f32,
     pub(crate) peek_mode: bool,
     pub(crate) overlay_escape: bool,
@@ -884,7 +887,7 @@ impl Pages {
             pip_selected: None,
             axis: browser_core::splits::Axis::Horizontal,
             split: false,
-            square_top: false, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false,
+            square_top: false, fullscreen_tab: None, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false,
             visible: HashSet::new(),
             shown: None,
             bounds: None,
@@ -1092,7 +1095,7 @@ impl Pages {
         let host = store.next_host;
         store.hosts.insert(host, parent);
         Self { extension_namespace: self.extension_namespace, extension_hosts: HashMap::new(), applied_shortcuts: None, viewport: PageViewport::Content, viewport_generation: 0, viewport_clip: None, store: self.store.clone(), host, parent, page_focus: true, page_has_focus: false, devtools_focused: false, preserve_ui_focus: false, resize_focus_suppressed: false, wanted: Vec::new(), wanted_focus: None, pip_selected: None,
-            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false, background_pending: HashMap::new() }
+            axis: browser_core::splits::Axis::Horizontal, split: false, square_top: self.square_top, fullscreen_tab: None, top_toolbar: false, top_toolbar_height: crate::window::TOP_TOOLBAR_HEIGHT, peek_mode: false, overlay_escape: false, visible: HashSet::new(), shown: None, bounds: None, seen_revision: 0, creation_pending: false, background_pending: HashMap::new() }
     }
 
     pub fn set_parent(&mut self, parent: *mut c_void) {
@@ -1470,6 +1473,19 @@ impl Pages {
         }
     }
 
+    pub(crate) fn set_fullscreen_tab(&mut self, tab: Option<TabId>) {
+        if self.fullscreen_tab != tab {
+            self.fullscreen_tab = tab;
+            self.viewport_generation = self.viewport_generation.wrapping_add(1);
+            self.apply();
+        }
+    }
+    pub(crate) fn exit_fullscreen(&mut self, identity: PageIdentity) {
+        if self.accepts_identity(identity) {
+            if let Some(view) = self.view(identity.tab) { self.store.borrow_mut().engine.exit_fullscreen(view); }
+        }
+    }
+
     pub(crate) fn set_top_toolbar_height(&mut self, height: f32) { self.top_toolbar_height = height; }
     pub(crate) fn set_top_toolbar(&mut self, shown: bool) { self.top_toolbar = shown; }
 
@@ -1639,6 +1655,13 @@ impl Pages {
 
     fn pane_bounds(&self) -> Vec<crate::split_layout::PaneBounds> {
         let Some(bounds) = self.bounds else { return Vec::new(); };
+        if let Some(tab) = self.fullscreen_tab {
+            let empty = Bounds { x: 0., y: 0., width: 0., height: 0. };
+            return self.wanted.iter().map(|intent| {
+                let page = if intent.tab == tab { bounds } else { empty };
+                crate::split_layout::PaneBounds { frame: page, header: empty, page }
+            }).collect();
+        }
         let weights: Vec<_> = self.wanted.iter().map(|intent| intent.weight).collect();
         crate::split_layout::layout(bounds, self.axis, &weights, self.split)
     }
@@ -2257,7 +2280,7 @@ impl Pages {
                     if *loading { page.state.status.clear(); }
                 }
             }
-            Event::Password {..} | Event::LinkPreviewHover { .. } | Event::PreviewModifiers { .. } | Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::PictureInPictureReturnRequested { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
+            Event::FullscreenChanged {..} | Event::Password {..} | Event::LinkPreviewHover { .. } | Event::PreviewModifiers { .. } | Event::PermissionRequested { .. } | Event::PermissionDismissed { .. } | Event::ContextImage { .. } | Event::PageContext { .. } | Event::PictureInPictureReturnRequested { .. } | Event::QuoteSelection { .. } | Event::OpenInBackgroundTab { .. } | Event::BoostZap { .. } | Event::Focused { .. } | Event::TitleChanged { .. } | Event::Favicon { .. } | Event::OpenInNewTab { .. } | Event::OpenPeek { .. } | Event::Shortcut { .. } | Event::InspectorInput(_) | Event::FindResult { .. } => {}
         }
     }
 }

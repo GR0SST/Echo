@@ -781,6 +781,7 @@ pub struct BrowserWindow {
     pub(crate) tab_rename_generation: u64,
     pub(crate) find_bar: Option<crate::find::FindBar>,
     pub(crate) toast: Option<crate::toast::Toast>,
+    pub(crate) page_fullscreen: Option<crate::page_fullscreen::State>,
     pub(crate) toast_generation: u64,
     pub(crate) quote_request: u64,
     pub(crate) pending_context_image: Option<(u64, crate::pages::PageIdentity, String, std::time::Instant)>,
@@ -1131,6 +1132,7 @@ impl BrowserWindow {
             tab_rename_generation: 0,
             find_bar: None,
             toast: None,
+            page_fullscreen: None,
             toast_generation: 0,
             quote_request: 0,
             pending_context_image: None,
@@ -1412,6 +1414,7 @@ impl BrowserWindow {
                 Event::UrlChanged { .. } | Event::AudioStateChanged { .. });
             pages.borrow_mut().record(&event);
             match event {
+                Event::FullscreenChanged { fullscreen, .. } => { if let Some(identity)=identity { self.page_fullscreen_changed(identity, fullscreen, window, cx); } },
                 Event::Password { event, .. } => { if let Some(identity)=identity {self.password_event(identity,event,cx);} },
                 Event::LinkPreviewHover { view, token, source_url, hover } => self.max_preview_hover(view,token,source_url,hover,window,cx),
                 Event::PreviewModifiers { view, shift } => self.max_preview_modifiers(view,shift,window,cx),
@@ -4239,6 +4242,10 @@ impl BrowserWindow {
     /// Both normal content and Library mount this canvas inside their actual
     /// GPUI surface. Generation guards also cover deferred tracking updates.
     pub(crate) fn render_page_viewport_canvas(&self) -> Option<AnyElement> {
+        if self.page_fullscreen.is_some() { return None; }
+        self.render_document_viewport_canvas()
+    }
+    fn render_document_viewport_canvas(&self) -> Option<AnyElement> {
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
         self.pages.clone().and_then(|pages| {
@@ -4922,6 +4929,7 @@ impl Render for BrowserWindow {
         if self.find_bar.as_ref().is_some_and(|bar| Some(bar.tab) != self.browser.space().active_tab) {
             self.close_find(cx);
         }
+        self.sync_page_fullscreen(window, cx);
         self.sync_page_viewport();
         self.sync_extension_model(window, cx);
         if let Some(pages) = &self.pages {
@@ -5127,6 +5135,7 @@ impl Render for BrowserWindow {
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))
             .child(self.render_page_loading(cx))
+            .when(self.page_fullscreen.is_some(), |this| this.children(self.render_document_viewport_canvas()))
             .child(release_hover_on_exit())
             .into_any_element()
 

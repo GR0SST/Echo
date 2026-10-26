@@ -307,6 +307,7 @@ enum Call {
     Close(u64),
     Snapshot(u64, u64),
     DocumentSnapshot(u64,u64,engine::DocumentSnapshotSize),
+    ExitFullscreen(u64),
     Transfer(u64, u64),
     InspectorOpen(u64, usize, Bounds, engine::InspectorPanel, bool),
     InspectorFocus(engine::InspectorId),
@@ -593,6 +594,7 @@ impl WebEngine for FakeEngine {
         self.call(Call::Snapshot(raw(view), request));
         !self.0.borrow().reject_snapshot
     }
+    fn exit_fullscreen(&mut self, view: ViewId) { self.call(Call::ExitFullscreen(raw(view))); }
     fn request_document_snapshot(&mut self,view:ViewId,request:u64,size:engine::DocumentSnapshotSize)->bool {
         self.call(Call::DocumentSnapshot(raw(view),request,size));!self.0.borrow().reject_snapshot
     }
@@ -11847,4 +11849,82 @@ fn favorite_modifier_clicks_activate_instead_of_extending_sidebar_selection(cx:&
         view.read_with(cx,|w,_| {assert_eq!(w.browser.space().active_tab,Some(b));assert!(w.sidebar_selection_items().is_empty());});
     }
     assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..)|Call::Close(..))));
+}
+
+
+#[gpui::test]
+fn page_fullscreen_instruction_tracks_actual_document_entry_exit_and_preserves_window_mode(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    let before=active_url(&view,cx);
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:true});
+    assert!(cx.update(|window,_|window.is_fullscreen()));
+    assert!(view.read_with(cx,|view,_|view.page_fullscreen.is_some()));
+    cx.executor().advance_clock(Duration::from_millis(1700));cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|view,_|view.toast.as_ref().map(|toast|toast.message.clone())),Some(crate::page_fullscreen::INSTRUCTION.to_string()));
+    let frame=view.read_with(cx,|view,_|view.pages.as_ref().unwrap().borrow().surface_layout()[0].1);
+    let size=cx.update(|window,_|window.viewport_size());
+    assert_eq!((frame.x,frame.y,frame.width,frame.height),(0.,0.,f64::from(f32::from(size.width)),f64::from(f32::from(size.height))));
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:false});
+    assert!(!cx.update(|window,_|window.is_fullscreen()));
+    assert!(view.read_with(cx,|view,_|view.page_fullscreen.is_none()));
+    cx.executor().advance_clock(Duration::from_millis(300));cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.toast.is_none()));
+    assert_eq!(active_url(&view,cx),before);
+    cx.simulate_keystrokes("ctrl-cmd-f");
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:true});
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:false});
+    assert!(cx.update(|window,_|window.is_fullscreen()),"A pre-existing browser fullscreen survives document exit");
+}
+
+#[gpui::test]
+fn page_fullscreen_rejects_background_requests_and_cancels_delayed_instructions(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:true});
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:false});
+    cx.executor().advance_clock(Duration::from_secs(2));cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.toast.is_none()));
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("https://fullscreen-background.example");bar(&view,cx).simulate_keystrokes("enter");
+    fake.take_calls();fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:true});
+    assert!(view.read_with(cx,|view,_|view.page_fullscreen.is_none()));
+    assert!(fake.take_calls().contains(&Call::ExitFullscreen(1)));
+    assert!(!cx.update(|window,_|window.is_fullscreen()));
+}
+
+#[gpui::test]
+fn page_fullscreen_exit_keeps_a_later_toast_and_native_window_exit_releases_document(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:true});
+    cx.executor().advance_clock(Duration::from_millis(1700));cx.run_until_parked();
+    view.update(cx,|view,cx|view.show_toast("Copied Current URL".into(),cx));cx.run_until_parked();
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:false});
+    assert_eq!(view.read_with(cx,|view,_|view.toast.as_ref().map(|toast|toast.message.clone())),Some("Copied Current URL".to_string()));
+    fake.send(cx,Event::FullscreenChanged {view:page(1),fullscreen:true});
+    fake.take_calls();cx.simulate_keystrokes("ctrl-cmd-f");
+    view.update(cx,|_,cx|cx.notify());cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.page_fullscreen.is_none()));
+    assert!(fake.take_calls().contains(&Call::ExitFullscreen(1)));
+}
+
+
+#[gpui::test]
+fn page_fullscreen_preserves_split_members_and_releases_on_renderer_failure(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_split_pages(cx,2);
+    let (target,before)=view.read_with(cx,|view,_| {
+        let tab=view.browser.space().active_tab.unwrap();
+        (fake.0.borrow().focused_page.unwrap(),serde_json::to_value(view.browser.active_split().unwrap()).unwrap())
+    });
+    fake.take_calls();fake.send(cx,Event::FullscreenChanged {view:target,fullscreen:true});
+    let layout=view.read_with(cx,|view,_|view.pages.as_ref().unwrap().borrow().surface_layout());
+    assert_eq!(layout.len(),1);
+    assert!(fake.take_calls().iter().any(|call|matches!(call,Call::Visible(_,false))));
+    fake.send(cx,Event::FullscreenChanged {view:target,fullscreen:false});
+    assert_eq!(view.read_with(cx,|view,_|view.pages.as_ref().unwrap().borrow().surface_layout().len()),2);
+    assert_eq!(view.read_with(cx,|view,_|serde_json::to_value(view.browser.active_split().unwrap()).unwrap()),before);
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(..)|Call::Close(..)|Call::Navigate(..))));
+    fake.send(cx,Event::FullscreenChanged {view:target,fullscreen:true});
+    fake.send(cx,Event::RendererStateChanged {view:target,error:Some(-102)});
+    assert!(view.read_with(cx,|view,_|view.page_fullscreen.is_none()));
+    assert!(!cx.update(|window,_|window.is_fullscreen()));
+    cx.executor().advance_clock(Duration::from_secs(2));cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.toast.is_none()));
 }

@@ -84,6 +84,7 @@ mod link_status;
 mod page_zoom;
 mod navigation_history;
 mod page_loading;
+mod page_fullscreen;
 mod status_url;
 mod private;
 mod profile;

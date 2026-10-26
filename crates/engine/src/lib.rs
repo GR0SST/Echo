@@ -137,6 +137,7 @@ pub struct Shortcut {
 pub enum Event {
     /// None means a replacement renderer is ready after reload.
     RendererStateChanged { view: ViewId, error: Option<i32> },
+    FullscreenChanged { view: ViewId, fullscreen: bool },
     Password { view: ViewId, event: PasswordEvent },
     ContextImage { view: ViewId, request: u64, page_url: String, png: Vec<u8> },
     PageContext { view: ViewId, request: page_context::Request },
@@ -183,6 +184,7 @@ pub enum Event {
 #[derive(Debug)]
 enum RawEvent {
     RendererState(Option<i32>),
+    Fullscreen(bool),
     Password(PasswordEvent),
     Context(page_context::Request),
     ContextImage(u64, String, Vec<u8>),
@@ -1307,6 +1309,13 @@ impl Engine {
         self.site_data.request(id, origin, kind, &page.browser, &self.message_ids)
     }
 
+    /// Releases document fullscreen in its existing native host.
+    pub fn exit_fullscreen(&mut self, view: ViewId) {
+        if let Some(host) = self.views.get(&view).and_then(|page| page.browser.host()) {
+            if host.is_fullscreen() != 0 { host.exit_fullscreen(1); }
+        }
+    }
+
     /// Captures the visible viewport of the same existing CEF browser without
     /// navigation or emulation overrides. Returns false for an unknown/busy
     /// view or submission failure; accepted requests complete via
@@ -1540,6 +1549,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
     }
     Some(match event {
         RawEvent::RendererState(error) => Event::RendererStateChanged { view, error },
+        RawEvent::Fullscreen(fullscreen) => Event::FullscreenChanged { view, fullscreen },
         RawEvent::Password(event) => Event::Password { view, event },
         RawEvent::ContextImage(request, page_url, png) => Event::ContextImage { view, request, page_url, png },
         RawEvent::Context(request) => Event::PageContext { view, request },
@@ -1780,6 +1790,9 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_fullscreen_mode_change(&self, browser: Option<&mut Browser>, fullscreen: i32) {
+            push(&self.events, browser, RawEvent::Fullscreen(fullscreen != 0));
+        }
         fn on_media_access_change(&self, browser: Option<&mut Browser>, has_video_access: i32, has_audio_access: i32) {
             if let Some(browser) = browser {
                 report_media_capture(&self.events, browser.identifier(), MediaCaptureState { video: has_video_access != 0, audio: has_audio_access != 0 });
@@ -2093,6 +2106,13 @@ wrap_keyboard_handler! {
                 if let Some(browser)=browser.as_ref(){self.events.push((browser.identifier(),RawEvent::PreviewModifiers(shift)));}
             }
             let escape = shortcut_for(event);
+            if shortcut_key_down(event.type_) && escape.key == "escape"
+                && !escape.cmd && !escape.ctrl && !escape.alt && !escape.shift {
+                if let Some(host) = browser.as_ref().and_then(|browser| browser.host()).filter(|host| host.is_fullscreen() != 0) {
+                    host.exit_fullscreen(1);
+                    return 1;
+                }
+            }
             // Field-local popup navigation; ordinary page keys and every other
             // browser keep their existing routing while the picker is absent.
             let password_key = browser.as_ref().is_some_and(|b| passwords::selection_active(b.identifier()))
