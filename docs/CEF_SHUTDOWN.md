@@ -91,6 +91,59 @@ session, with the unchanged visibility guard and no debugger. Evidence:
 `native-quit-qualification.json` links the follow-up evidence. No CEF rebuild or
 new generation was required; no new SIGTRAP was reproduced on the fixed build.
 
+## Library Media producers and the old native harness
+
+The populated-Media agent's `media-populated/actions-Dark/app.log` already
+reached the ungated `ShuttingDown` line immediately before synchronous
+`cef_shutdown()`. Its `final-actions-native.log` instead ends in Python's
+`job.wait(timeout=30)`, followed by termination of the driver. The inner drive
+allowed 70 seconds. Neither bound accommodates the full documented 60-second
+CEF background grace period plus setup and teardown. Those artifacts establish
+a harness cutoff during CEF shutdown; they do not identify an internal blocking
+stack or prove that a Rust watcher joined on the UI thread. The nearby
+`accepted.json` belongs to a different PID and cannot qualify that timed-out run.
+
+`Discovery::drop` sets a cancellation flag and wakes its bounded receiver;
+`Thumbnails::drop` cancels queued work. Neither joins a worker. However, the
+Library's retained GPUI entity previously kept these producers and its 150 ms
+poll task alive until process exit. Accepted quit now explicitly retires this
+read-only Media runtime in `prepare_quit`, before extracting CEF owners:
+cancel the poll and profile subscription, release discovery and thumbnails, and
+seal the view against late settings notifications recreating them. An in-flight
+decode finishes on its worker; the UI never waits on a thread join. This closes
+the producer-lifetime gap without changing CEF's durable shutdown policy.
+
+The matrix's standalone `--case library-media` seeds eight PNG files in its own
+approved fixture directory, continually writes a watched PNG while the app runs,
+and leaves Library → Media open at quit. The existing `media-archived` case now
+also leaves this populated view active, so the canonical eight-pair matrix keeps
+its sixteen exits while covering the new state. Every such drive requires
+decoded images and live discovery/thumbnail handles at retirement, with
+`[media-shutdown] producers-cancelled` preceding `cef-shutdown-enter`. Cookie,
+actual-zero-exit, native termination and graceful network checks remain intact.
+Each drive retains its 110-second app and 120-second hard bounds.
+
+Qualification passed **16/16 full-matrix exits plus 2/2 isolated Media exits**,
+all through native `terminate:nil`, with cookie restart verification, graceful
+network cleanup and no surviving owned process. In the four populated-Media
+exits, 8–9 decoded images and both producer handles were present at retirement;
+the CEF calls took **195, 159, 160 and 171 ms**. All screenshots were inspected.
+The one long screen holder covered both runs and removed its marker on exit.
+No long CEF wait reproduced in this run, so the precise internal wait in the
+original untraced CEF call remains unestablished. The recorded failure was its
+30-second harness cutoff; Rust thread joins are absent from this path.
+
+Full `cargo test`: **1,951 passed, zero failed, one ignored**. Linux GNU and
+Windows MSVC checks passed; a stale Windows engine metadata artifact was rebuilt
+in an isolated target cache. The frozen app is based on `f8933b3` plus the Rust
+retirement change, executable SHA-256
+`7da6c8bbeb474b05b0dfdcb6fee3da05d5ab1247623f3824e18623ed5176a169`.
+The canonical framework remains `c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`;
+no CEF rebuild was needed. Evidence under
+`~/Documents/Bot/cef-src/qualification/library-media-shutdown-20261026/`:
+`isolated/run-f8ngwmqg/`, `matrix/run-zjl__rig/` and `result.json`. The current
+distribution also links it from `library-media-qualification.json`.
+
 ## What the old log concealed
 
 `FlushingCookies browsers=[] cookie_flushes=1` was the last coordinator status

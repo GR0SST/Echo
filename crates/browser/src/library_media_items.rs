@@ -54,6 +54,7 @@ pub(super) struct Runtime {
     undo: Option<(UserProfileId, Arc<dyn UndoFile>, MediaItem)>,
     trash: Arc<dyn MediaTrash>,
     busy: bool,
+    retired: bool,
     #[cfg(test)]
     pub effects: Vec<(MediaAction, MediaStamp)>,
 }
@@ -140,12 +141,25 @@ impl Runtime {
             #[cfg(not(test))]
             trash: Arc::new(NativeTrash),
             busy: false,
+            retired: false,
             #[cfg(test)]
             effects: vec![],
         }
     }
 }
 impl MediaView {
+    /// Retained windows outlive CEF shutdown; retire read-only producers first.
+    pub(crate) fn retire_media_for_quit(&mut self) {
+        if self.runtime.retired { return; }
+        self.runtime.retired = true;
+        let discovery = self.runtime.service.is_some();
+        let thumbnails = self.runtime.thumbs.is_some();
+        let ready_images = self.runtime.images.len();
+        self.runtime._poll = None;
+        self.runtime._profile = None;
+        self.invalidate_media();
+        eprintln!("[media-shutdown] producers-cancelled discovery={discovery} thumbnails={thumbnails} ready_images={ready_images}");
+    }
     pub(crate) fn configure_media(
         &mut self,
         profile: UserProfileId,
@@ -156,6 +170,7 @@ impl MediaView {
         left: f32,
         cx: &mut Context<Self>,
     ) {
+        if self.runtime.retired { return; }
         self.runtime.preview_left = left;
         let key = serde_json::to_string(&captures).unwrap_or_default();
         if self.runtime.scope.as_ref().is_some_and(|s| {
@@ -583,6 +598,11 @@ impl MediaView {
     #[cfg(test)]
     pub(crate) fn test_media_scanning(&self) -> bool {
         self.runtime.service.is_some()
+    }
+    #[cfg(test)]
+    pub(crate) fn test_media_retired(&self) -> bool {
+        self.runtime.retired && self.runtime.service.is_none() && self.runtime.thumbs.is_none()
+            && self.runtime._poll.is_none() && self.runtime._profile.is_none()
     }
     #[cfg(test)]
     pub(crate) fn test_media_names(&self) -> Vec<String> {

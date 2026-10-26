@@ -9,12 +9,15 @@ import http.cookies
 import http.server
 import json
 import os
+import re
 import pathlib
 import shutil
 import hashlib
 import subprocess
 import tempfile
 import threading
+import struct
+import zlib
 import time
 import urllib.parse
 
@@ -42,7 +45,7 @@ def main():
         raise SystemExit("Run acceptance without -O or PYTHONOPTIMIZE; cookie assertions must be enabled")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="target/parity/shutdown-watchdog/acceptance")
-    parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived"], action="append")
+    parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived", "library-media"], action="append")
     parser.add_argument("--keep-going", action="store_true", help="collect all scenarios even after a failing quit")
     parser.add_argument("--quit-command", choices=["quit", "native-quit"], default="quit",
                         help="exercise the coordinator or native application termination entry point")
@@ -84,6 +87,11 @@ def main():
     }, indent=2))
     observations = []
     observations_lock = threading.Lock()
+    def png_chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    pixels = b''.join(b'\0' + bytes((y % 256, 90, 180)) * 512 for y in range(512))
+    png = (b'\x89PNG\r\n\x1a\n' + png_chunk(b'IHDR', struct.pack('>IIBBBBB', 512, 512, 8, 2, 0, 0, 0))
+           + png_chunk(b'IDAT', zlib.compress(pixels)) + png_chunk(b'IEND', b''))
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -132,16 +140,28 @@ def main():
 
     native_failures = []
 
-    def drive(directory, phase, script, gpu):
+    def drive(directory, phase, script, gpu, library_media=False):
         directory.mkdir(parents=True, exist_ok=True)
         log = directory / f"{phase}.log"
         command = ["zsh",
                    str(ROOT / "scripts/check-shutdown-run.sh"), str(directory), phase, gpu, script]
         if not args.screen_locked:
             command = ["lockf", "-k", "/tmp/echo-screen.lock", *command]
-        with log.open("w") as stream:
-            environment = dict(os.environ, BROWSER_DRIVE_BUNDLE_PATH=str(frozen_bundle))
-            result = subprocess.run(command, cwd=ROOT, env=environment, stdout=stream, stderr=subprocess.STDOUT)
+        stop = threading.Event()
+        writes = []
+        def write_watched_fixture():
+            while not stop.wait(.3):
+                (directory / "media-fixtures/Watcher added.png").write_bytes(png)
+                writes.append(time.monotonic())
+        writer = threading.Thread(target=write_watched_fixture, daemon=True) if library_media else None
+        if writer: writer.start()
+        try:
+            with log.open("w") as stream:
+                environment = dict(os.environ, BROWSER_DRIVE_BUNDLE_PATH=str(frozen_bundle))
+                result = subprocess.run(command, cwd=ROOT, env=environment, stdout=stream, stderr=subprocess.STDOUT)
+        finally:
+            stop.set()
+            if writer: writer.join(timeout=1)
         text = log.read_text()
         checks = {
             "zero exit": result.returncode == 0,
@@ -156,6 +176,10 @@ def main():
         if args.quit_command == "native-quit":
             checks["native termination requested"] = "[automation] native-quit sending terminate:nil" in text
             checks["native termination captured"] = "[quit-native] terminate captured;" in text
+        if library_media:
+            retired = re.search(r"\[media-shutdown\] producers-cancelled discovery=true thumbnails=true ready_images=(\d+)", text)
+            checks["populated Media retired before CEF"] = bool(retired and int(retired[1]) > 0 and retired.start() < text.find("cef-shutdown-enter"))
+            checks["external folder changes during run"] = bool(writes)
         if args.require_network_exit:
             cef_log = directory / f"{phase}-cef.log"
             cef_text = cef_log.read_text(errors="replace") if cef_log.exists() else ""
@@ -186,6 +210,13 @@ def main():
                     # Measure accepted quit; confirmation has its own native suite.
                     seed["settings"] = {"theme_appearance": args.appearance,
                                         "toggles": {"warn_before_quitting": False}}
+                    library_media = case in ("library-media", "media-archived")
+                    if library_media:
+                        fixtures = directory / "media-fixtures"
+                        fixtures.mkdir()
+                        for i in range(8): (fixtures / f"Fixture {i}.png").write_bytes(png)
+                        seed["profiles"]["1"]["settings"] = {"media": {"folders": {
+                            "Documents": "Denied", "Desktop": "Denied", "Downloads": {"Granted": str(fixtures)}}, "revision": 1}}
                     (profile / "session.json").write_text(json.dumps(seed))
                     gpu = "separate" if case in ("gpu", "combined", "media-pip", "media-archived") else "in-process"
                     prefix = f"r{repeat + 1}-{case}"
@@ -210,7 +241,9 @@ def main():
                         else:
                             script += navigate("verify", f"{prefix}-background")
                             script += "wait 1; dump; "
-                    text = drive(directory, "write", script + args.quit_command, gpu)
+                    if library_media:
+                        script += f"menu Window > View Downloads…; wait .3; click 50 125 150; wait 2; shot {directory}/library-write.png; dump; "
+                    text = drive(directory, "write", script + args.quit_command, gpu, library_media)
                     if case.startswith("media-"):
                         assert any(r["path"] == "/playing" and r["label"] == prefix for r in observations[start:]), directory
                         assert any(r["path"] == "/pip-enter" and r["label"] == prefix for r in observations[start:]), directory
@@ -233,7 +266,9 @@ def main():
                     if case in ("private", "combined"):
                         script += "key cmd-shift-n; wait 2; window last; key escape; "
                         script += navigate("verify", f"{prefix}-private-empty")
-                    drive(directory, "read", script + args.quit_command, gpu)
+                    if library_media:
+                        script += f"menu Window > View Downloads…; wait .3; click 50 125 150; wait 2; shot {directory}/library-read.png; dump; "
+                    drive(directory, "read", script + args.quit_command, gpu, library_media)
                     for i in range(1, count + 1):
                         records = [r for r in observations[start:] if r["label"] == f"{prefix}-verify{i}"]
                         assert records and all(r["cookie"] == f"{prefix}-p{i}" for r in records), (directory, records)

@@ -1199,6 +1199,9 @@ impl BrowserWindow {
     }
 
     pub(crate) fn prepare_quit(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if let Some(media) = &self.sidebar_navigation.media {
+            media.update(cx, |view, _| view.retire_media_for_quit());
+        }
         self.commit_theme_editor();
         self.checkpoint_window(false);
         self.profile.handle.flush_for_quit(cx)

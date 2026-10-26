@@ -19,6 +19,37 @@ fn open_media_pages(
 fn media(view: &Entity<BrowserWindow>, cx: &VisualTestContext) -> Entity<MediaView> {
     view.read_with(cx, |v, _| v.sidebar_navigation.media.clone().unwrap())
 }
+
+#[gpui::test]
+fn accepted_quit_retires_media_producers_before_cef_and_late_grants_cannot_restart_them(cx: &mut TestAppContext) {
+    let (view, visual, _) = open_media_pages(cx);
+    let directory = tempfile::tempdir().unwrap();
+    view.update(visual, |v, cx| {
+        let profile = v.browser.active_user_profile_id();
+        v.profile.handle.edit_settings(|b| {
+            let media = &mut b.user_profile_mut(profile).unwrap().settings.media;
+            for folder in MediaFolder::ALL {
+                let token = media.begin(folder, true).unwrap();
+                media.complete(folder, token, Some(directory.path().into()));
+            }
+        });
+        v.refresh_profile_projection();
+        v.open_library_media(cx);
+    });
+    visual.run_until_parked();
+    let entity = media(&view, visual);
+    assert!(entity.read_with(visual, |v, _| v.test_media_scanning()));
+    view.update(visual, |v, cx| v.prepare_quit(cx).unwrap());
+    assert!(entity.read_with(visual, |v, _| v.test_media_retired()));
+    view.update(visual, |v, _| {
+        let profile = v.browser.active_user_profile_id();
+        v.profile.handle.edit_settings(|b| b.user_profile_mut(profile).unwrap().settings.media.revoke(MediaFolder::Downloads));
+        v.refresh_profile_projection();
+    });
+    visual.executor().advance_clock(Duration::from_millis(400));
+    visual.run_until_parked();
+    assert!(entity.read_with(visual, |v, _| v.test_media_retired()));
+}
 fn answer(cx: &mut VisualTestContext, folder: MediaFolder, path: Option<std::path::PathBuf>) {
     cx.cx.update(|app| {
         let pending = &mut app.global_mut::<crate::media_access::TestPicker>().pending;
