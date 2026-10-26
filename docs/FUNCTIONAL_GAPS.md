@@ -2,6 +2,8 @@
 
 ## Active code/test-only claims (2026-10-26)
 
+- `t3-71384893` owns **#73 four-pane overflow hit-testing acceptance** (verified by tests; no app change required). Verifiable-by-tests: drive visible divider drags/cancellation in constrained horizontal and vertical GPUI windows, compare retained fake-native surfaces, and verify clipped targets cannot capture input. Existing minimum/overflow policy only; native platform/pixel qualification excluded.
+
 - `t3-71384893` owns **#89 automatic PiP visible-Split eligibility** (implemented and tested). Verifiable-by-tests: changing focus between still-visible Split panes must not open PiP; leaving/returning to the group must track the unique previously-visible playing video even when another pane is focused. Existing engine commands only; iframe/native-window/ambiguous-multiple-video policy excluded.
 
 - `t3-71384893` owns **#80 Little lookup retention during app/final-window quit** (implemented and tested). Verifiable-by-tests: collect open lookup archives before canonical writers flush, exactly once, with promotion/empty/private exclusions and synthetic session files. Restore-destination policy and native quit qualification are excluded.
@@ -100,7 +102,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 70 | L272: Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | S | Clamp the theme picker to the work area and anchor Library entry to the clicked card so controls stay reachable. |
 | 71 | L305: Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo | S | **Missing route implemented:** Check for Updates… and its aliases call the existing Echo updater action, reusing its utility window and in-flight check. Existing sidebar/password/search/ATC/shortcut/Undo/Redo routes remain. GPUI tests cover invocation, cancellation, deduplication, retry and source-page retention. Arc’s feed is excluded; native presentation remains unqualified. |
 | 72 | L348: Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | M | Reconcile the stale Library/Little archive note with the implemented cross-profile inventory and remaining restoration gaps. |
-| 73 | L374: Resize Split View panes | M | Verify and fix overflow hit testing for four-pane horizontal/vertical splits. |
+| 73 | L374: Resize Split View panes | M | **GPUI acceptance verified:** constrained four-pane horizontal/vertical windows retain 220 px panes and matching fake-native surfaces; visible dividers capture/cancel typed drags, clipped targets do not, and minimum-size no-op drags preserve inventory/focus/geometry. No implementation defect was reproduced. Native four-pane interaction qualification remains B and animation is C. |
 | 74 | L375: Create by dragging a tab to the middle of the window | M | Qualify and implement initially-unarmed center-drop semantics without changing retained-page identities. |
 | 75 | L386: Small window for quick lookups | M | Open the initial Little lookup prompt and persist its placement instead of immediately showing a full window. |
 | 76 | L408: "New Route" rules: URL or domain "Is equal to" … → Space / Most Recent Space / Little Arc | M | Close remaining rule matching/destination limitations documented in ATC_REFERENCE without touching user rules. |
@@ -529,3 +531,29 @@ ambiguous siblings and retained focused-source priority. All pass. No engine or
 native PiP window changes were made; iframe/unmanaged and platform qualification
 remain partial. Focused log:
 `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/split-pip-focused-final.log`.
+
+
+### Four-pane overflow hit testing — code/test-only acceptance
+
+The stale functional acceptance note is now covered by two GPUI regressions.
+Each resizes a four-pane window to 800 × 600, checks the existing 220 px minimum,
+rightward/bottom-aligned overflow and every fake-native page rectangle against
+its rendered pane. Real pointer events capture a visible divider at minimum
+size, Escape ends its typed drag, and an off-window clipped divider cannot
+capture input. Mouse-up and later movement preserve pane identities, weights,
+selection and page surfaces, with no renderer creation/reload/navigation.
+
+Both axes pass without an application change. This qualifies shared GPUI hit
+testing only; native child-view interception and four-pane OS interaction remain
+B, while resize motion remains C. Focused log:
+`~/Library/Caches/EchoBuildHealth/t3-71384893/logs/split-overflow-focused.log`.
+
+
+Code/test-only round validation: native full workspace runs pass after each
+change (#65: 1,389 browser; #80: 1,392; #89: 1,395; #73: 1,397), with 294
+core tests and all other enabled suites green; one existing AI test is ignored.
+Both Linux GNU and Windows MSVC workspace checks pass. A stale Windows engine
+artifact was cleaned before the successful rerun; no source change was needed.
+Native tests resolve the current canonical CEF with no generation pin in the
+shell/environment files. Full logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/{folder-scroll,little-quit,split-pip,split-overflow}-full.log`;
+foreign log: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/code-only-round2-targets-clean.log`.
