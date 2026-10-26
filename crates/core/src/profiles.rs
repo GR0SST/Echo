@@ -220,8 +220,9 @@ impl Browser {
             return Err(UserProfileError::AssignedProfile);
         }
         self.profiles.remove(&id);
+        self.retired_user_profiles.insert(id);
         self.clear_sidebar_history();
-        // Disk cleanup belongs to the future storage adapter. Never decrement the allocator.
+        // Retain a durable reclamation request; never decrement the allocator.
         Ok(())
     }
     /// Delete only the captured unused inventory. A newly assigned, missing or
@@ -235,8 +236,16 @@ impl Browser {
             if self.spaces.iter().any(|space| space.user_profile_id == *id) { return Err(UserProfileError::AssignedProfile); }
         }
         for id in &ids { self.profiles.remove(id); }
+        self.retired_user_profiles.extend(ids.iter().copied());
         if !ids.is_empty() { self.clear_sidebar_history(); }
         Ok(ids.len())
+    }
+
+    /// Only explicit, persisted deletions may reclaim named engine storage.
+    /// Live contexts refuse reclamation until a later process starts.
+    pub fn retired_profile_storage_keys(&self) -> Vec<String> {
+        if self.is_private() || self.is_blank() { return Vec::new(); }
+        self.retired_user_profiles.iter().filter_map(|id| id.storage_key()).collect()
     }
 
     pub fn assign_space_user_profile(

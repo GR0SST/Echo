@@ -87,6 +87,7 @@ mod page_loading;
 mod status_url;
 mod private;
 mod profile;
+mod profile_retirement;
 mod sidebar_pages;
 mod sidebar_resize_state;
 mod space_creation;

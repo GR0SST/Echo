@@ -608,3 +608,20 @@ fn localhost_developer_choices_are_profile_owned_and_survive_sessions() {
     assert!(!blank.active_user_profile().developer_mode_for_host("fixture.localhost"));
     assert!(blank.active_user_profile().developer_mode_for_host("web.example"));
 }
+
+#[test]
+fn retired_profile_storage_is_explicit_persistent_and_never_reuses_a_deleted_identity() {
+    let mut browser = Browser::new();
+    let keep = browser.create_user_profile("keep").unwrap();
+    let delete = browser.create_user_profile("delete").unwrap();
+    assert!(browser.retired_profile_storage_keys().is_empty());
+    browser.delete_user_profile(delete).unwrap();
+    let restored = crate::session::from_json(&crate::session::to_json(&browser)).unwrap();
+    assert_eq!(restored.retired_profile_storage_keys(), vec![delete.storage_key().unwrap()]);
+    assert!(restored.user_profile(keep).is_some());
+    for id in [restored.default_user_profile_id(), keep] {
+        let mut value: serde_json::Value = serde_json::from_str(&crate::session::to_json(&restored)).unwrap();
+        value["retired_user_profiles"] = serde_json::json!([id]);
+        assert!(crate::session::from_json(&value.to_string()).is_err());
+    }
+}

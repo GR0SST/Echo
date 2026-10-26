@@ -217,6 +217,9 @@ pub struct Browser {
     profiles: std::collections::BTreeMap<profiles::UserProfileId, profiles::UserProfile>,
     default_user_profile_id: profiles::UserProfileId,
     next_user_profile_id: u64,
+    /// Explicitly deleted identities; never infer retirement from missing directories.
+    #[serde(default)]
+    retired_user_profiles: std::collections::BTreeSet<profiles::UserProfileId>,
     #[serde(skip)]
     blank_source_user_profile_id: Option<profiles::UserProfileId>,
     #[serde(skip)]
@@ -258,6 +261,7 @@ impl Browser {
             profiles: std::collections::BTreeMap::from([(UserProfileId::DEFAULT, profiles::UserProfile::default_profile())]),
             default_user_profile_id: UserProfileId::DEFAULT,
             next_user_profile_id: 2,
+            retired_user_profiles: Default::default(),
             blank_source_user_profile_id: blank.then_some(UserProfileId::DEFAULT),
             sidebar_history: undo::SidebarHistory::default(),
             private: false,

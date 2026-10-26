@@ -15,6 +15,8 @@ pub(crate) struct Profile {
     revision: Rc<Cell<u64>>,
     path: Option<PathBuf>,
     saved: Option<String>,
+    /// Captured on session load, never expanded by an unsaved live deletion.
+    reclaimable_storage: Vec<String>,
     _save_on_quit: Option<Subscription>,
     _observe_history: Option<Subscription>,
 }
@@ -77,7 +79,22 @@ impl ProfileHandle {
         self.owner.read(cx).path.as_ref()?.parent().map(|path|path.to_path_buf())
     }
 
+    pub(crate) fn reclaimable_profile_storage_keys(&self, cx: &App) -> Vec<String> {
+        let owner = self.owner.read(cx);
+        if owner.path.is_none() { return Vec::new(); }
+        owner.reclaimable_storage.clone()
+    }
+
     pub(crate) fn new(browser: Browser, cx: &mut App) -> Self {
+        Self::with_retirements(browser, Vec::new(), cx)
+    }
+    /// Called only after canonical session loading succeeds. New/live models
+    /// cannot nominate cleanup by merely acquiring a session writer path.
+    pub(crate) fn from_loaded_session(browser: Browser, cx: &mut App) -> Self {
+        let retired = browser.retired_profile_storage_keys();
+        Self::with_retirements(browser, retired, cx)
+    }
+    fn with_retirements(browser: Browser, reclaimable_storage: Vec<String>, cx: &mut App) -> Self {
         let data = Rc::new(RefCell::new(browser));
         let drafts = Drafts::default();
         let selections = Selections::default();
@@ -94,7 +111,7 @@ impl ProfileHandle {
                 }).is_err() { break; }
             }).detach();
             Profile { data: data.clone(), drafts: drafts.clone(), selections: selections.clone(), revision: revision.clone(),
-                path: None, saved: None, _save_on_quit: None, _observe_history: None }
+                path: None, saved: None, reclaimable_storage, _save_on_quit: None, _observe_history: None }
         });
         Self { owner, data, drafts, selections, revision, pending: Rc::default(),
             executor: cx.foreground_executor().clone(), app: cx.to_async(), history_source: None, ai_title_claims: Rc::default() }

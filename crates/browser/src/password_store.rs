@@ -26,9 +26,22 @@ type Result<T> = std::result::Result<T, String>;
 pub(crate) trait Keys {
     fn get(&self, account: &str) -> Result<Option<Zeroizing<Vec<u8>>>>;
     fn set(&self, account: &str, key: &[u8]) -> Result<()>;
+    fn delete(&self, account: &str) -> Result<()>;
 }
 pub(crate) struct NativeKeys;
 impl Keys for NativeKeys {
+    fn delete(&self, account: &str) -> Result<()> {
+        #[cfg(target_os="macos")]
+        { crate::import_credentials::delete_vault_key(account) }
+        #[cfg(not(target_os="macos"))]
+        {
+            let entry = keyring::Entry::new("dev.echo.browser.password-vault", account).map_err(|_| ERROR)?;
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(_) => Err(ERROR.into()),
+            }
+        }
+    }
     fn get(&self, account: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
         let entry =
             keyring::Entry::new("dev.echo.browser.password-vault", account).map_err(|_| ERROR)?;
@@ -67,6 +80,19 @@ impl Vault {
     }
 }
 impl<K: Keys> Vault<K> {
+    /// Only call for a persisted retirement captured before this process opened
+    /// any profile UI. Never expose this as a way to clear the Default vault.
+    pub(crate) fn destroy_retired(&self) -> Result<()> {
+        let _lock = ACCESS.lock().map_err(|_| ERROR)?;
+        if self.file.file_name().is_some_and(|name| name == "default.vault") { return Err(ERROR.into()); }
+        match std::fs::symlink_metadata(&self.file) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => std::fs::remove_file(&self.file).map_err(|_| ERROR)?,
+            Ok(_) => return Err(ERROR.into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(_) => return Err(ERROR.into()),
+        }
+        self.keys.delete(&self.account)
+    }
     /// Retain passwords imported by older Echo builds. The caller reads only
     /// Echo's previous credential service; Arc's store is never queried.
     pub(crate) fn migrate_if_absent(
@@ -497,6 +523,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct MemoryKeys(Arc<Mutex<HashMap<String, Vec<u8>>>>);
     impl Keys for MemoryKeys {
+        fn delete(&self, account: &str) -> Result<()> { self.0.lock().unwrap().remove(account); Ok(()) }
         fn get(&self, account: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
             Ok(self
                 .0
@@ -518,6 +545,23 @@ mod tests {
             password: password.into(),
         }
     }
+    #[test]
+    fn retired_profile_vault_reclamation_preserves_default_and_other_profiles() {
+        let root = tempfile::tempdir().unwrap();
+        let keys = MemoryKeys::default();
+        let default = Vault::with_keys(root.path(), "default", keys.clone()).unwrap();
+        let keep = Vault::with_keys(root.path(), "user-profile-2", keys.clone()).unwrap();
+        let retired = Vault::with_keys(root.path(), "user-profile-3", keys.clone()).unwrap();
+        for vault in [&default, &keep, &retired] { vault.upsert(&credential("test-only"), 1).unwrap(); }
+        assert!(default.destroy_retired().is_err());
+        retired.destroy_retired().unwrap();
+        assert!(!retired.file.exists());
+        assert!(keys.get(&retired.account).unwrap().is_none());
+        assert_eq!(default.list().unwrap().len(), 1);
+        assert_eq!(keep.list().unwrap().len(), 1);
+        retired.destroy_retired().unwrap();
+    }
+
     #[test]
     fn password_vault_reopens_updates_and_deletes_without_plaintext_on_disk() {
         let root = tempfile::tempdir().unwrap();

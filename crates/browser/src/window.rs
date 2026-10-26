@@ -924,6 +924,34 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // This path also constructs restored/shared-page windows; the engine-
+        // taking convenience constructor is not used by normal restoration.
+        let retired = profile.reclaimable_profile_storage_keys(cx);
+        if let Some(pages) = &pages {
+            let reclaimed = pages.reclaim_retired_profiles(&retired);
+            // No vault cleanup without engine root ownership and its unopened
+            // storage check, including failed second-process initialization.
+            if let Some(root) = profile.storage_directory(cx).filter(|_| !reclaimed.is_empty()) {
+                cx.background_executor().spawn(async move {
+                    for (key, directory) in reclaimed {
+                        if let Some(directory) = directory {
+                            if let Err(error) = std::fs::remove_dir_all(directory) {
+                                if error.kind() != std::io::ErrorKind::NotFound { eprintln!("Retired Chromium cache cleanup deferred: {error}"); }
+                            }
+                        }
+                        if let Err(error) = crate::profile_retirement::remove_captures(&root, &key) {
+                            eprintln!("Retired capture cleanup deferred: {error}");
+                        }
+                        if let Err(error) = crate::password_store::Vault::open(&root, &key).and_then(|vault| vault.destroy_retired()) {
+                            eprintln!("Retired password vault cleanup deferred: {error}");
+                        }
+                        if let Err(error) = crate::import_credentials::reclaim_retired_legacy(&root, &key) {
+                            eprintln!("Retired compatibility credential cleanup deferred: {error}");
+                        }
+                    }
+                }).detach();
+            }
+        }
         let selection = selection.unwrap_or_else(|| profile.new_window_selection());
         let browser = profile.projection(&selection);
         let profile = crate::profile::ProfileBinding::new(profile, selection, cx);

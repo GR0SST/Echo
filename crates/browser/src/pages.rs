@@ -99,6 +99,7 @@ pub trait WebEngine {
     fn set_site_boosts(&mut self, _storage: &StorageSelection, _boosts: Vec<engine::SiteBoost>) {}
     fn prepare_paste_and_match_style(&mut self, _view: ViewId) -> Option<NativePaste> { None }
     fn prepare_inspector_paste_and_match_style(&mut self, _id: engine::InspectorId) -> Option<NativePaste> { None }
+    fn reclaim_retired_profiles(&mut self, _keys: &[String]) -> Vec<(String, Option<std::path::PathBuf>)> { Vec::new() }
     fn supports_page_archiving(&self) -> bool { false }
     fn page_document_epoch(&self, _view:ViewId)->Option<u64> {Some(0)}
     fn request_navigation_history(&mut self, _view:ViewId)->Option<engine::NavigationHistoryRequest> {None}
@@ -263,6 +264,15 @@ impl Chromium {
 }
 
 impl WebEngine for Chromium {
+    fn reclaim_retired_profiles(&mut self, keys: &[String]) -> Vec<(String, Option<std::path::PathBuf>)> {
+        keys.iter().filter_map(|name| {
+            let key = engine::StorageKey::new(name).ok()?;
+            match self.engine.quarantine_retired_profile(&key) {
+                Ok(path) => Some((name.clone(), path)),
+                Err(error) => { eprintln!("Retired profile cleanup deferred: {error}"); None }
+            }
+        }).collect()
+    }
     fn browsing_data_counters(&self,storage:&StorageSelection,since:i64)->Result<engine::BrowsingDataCounters,String>{self.resolve_storage(storage)?.browsing_data_counters(since)}
     fn clear_browsing_data(&mut self, storage:&StorageSelection, categories:u32, since:i64)->Result<NativeDataClear,String> {let ticket=self.resolve_storage(storage)?.clear_browsing_data(categories,since)?;Ok(Box::new(move||ticket.take().map(|r|r.map_err(|mask|format!("Chromium could not remove all selected data ({mask})"))))) }
     fn extension_service(&self, view: ViewId) -> Result<Box<dyn engine::ExtensionService>, String> {
@@ -990,6 +1000,9 @@ impl Pages {
         self.store.borrow().pages.values().find(|page| page.view == view).map(|page| page.source_space)
     }
 
+    pub(crate) fn reclaim_retired_profiles(&self, keys: &[String]) -> Vec<(String, Option<std::path::PathBuf>)> {
+        self.store.borrow_mut().engine.reclaim_retired_profiles(keys)
+    }
     pub(crate) fn copy_context_image(&mut self, tab:TabId, request:u64, page_url:&str, url:&str)->bool {
         let mut store=self.store.borrow_mut();
         let Some(view)=store.pages.get(&tab).filter(|page| page.owner==self.host && page.visible).map(|page|page.view) else{return false;};

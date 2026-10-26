@@ -5,11 +5,10 @@
 //! Cache-path equality only validates configuration; full process-restart cookie
 //! and localStorage verification must establish runtime persistence separately.
 //!
-//! No profile deletion API is provided. Removing a profile in the application
-//! must only remove its metadata for now. Physical deletion needs a future
-//! barrier proving all pages, inspectors, forks, handles and CEF background
-//! users have released storage; dropping a handle is not that barrier. CEF is
-//! never shut down/reinitialized to switch profiles.
+//! Explicitly retired named stores may be reclaimed only while the runtime owns
+//! Chromium's root and the store has NEVER been opened in that runtime. The
+//! persistent registry retains contexts until shutdown, including background
+//! users; dropping a page or handle never permits deleting a loaded store.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -183,6 +182,36 @@ pub(crate) fn named_path(root: &Path, key: &StorageKey) -> Result<PathBuf, Strin
     child_dir(root, &format!("profile-{}", key.as_str()))
 }
 
+/// Called only by an initialized runtime (CEF owns the root singleton). Never
+/// create a missing retired directory and never follow a directory alias.
+/// Registered contexts remain retained until shutdown, regardless of Rc users.
+pub(crate) fn quarantine_unopened<T>(root: &Path, key: &StorageKey, contexts: &PersistentContexts<T>) -> Result<Option<PathBuf>, String> {
+    if std::fs::canonicalize(root).map_err(|e| e.to_string())? != root {
+        return Err("Chromium storage root changed".into());
+    }
+    let path = root.join(format!("profile-{}", key.as_str()));
+    let retired = root.join(format!(".retired-profile-{}", key.as_str()));
+    if contexts.snapshot().iter().any(|(loaded, _)| loaded == &path) {
+        return Err("Profile storage is still retained by Chromium; retry after restart".into());
+    }
+    fn direct_directory(path: &Path) -> Result<bool, String> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink()
+                && std::fs::canonicalize(path).map_err(|e| e.to_string())? == path => Ok(true),
+            Ok(_) => Err("Retired profile storage must be a direct directory".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+    let exists = direct_directory(&path)?;
+    let quarantined = direct_directory(&retired)?;
+    if exists && quarantined { return Err("Both original and retired profile storage exist; retain both".into()); }
+    if exists { std::fs::rename(&path, &retired).map_err(|e| e.to_string())?; }
+    // A single rename is independent of cache size. No engine ever opens the
+    // quarantine namespace; its recursive removal can run off the UI thread.
+    Ok((exists || quarantined).then_some(retired))
+}
+
 /// Check CEF's configured cache path against the exact canonical path supplied.
 /// An empty or mismatched value is rejected, but equality is NOT proof of runtime
 /// persistence: CEF 154 can fall back to OffTheRecord while retaining this value.
@@ -240,6 +269,35 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn retired_storage_reclamation_never_deletes_default_loaded_or_aliased_directories() {
+        let root = std::env::temp_dir().join(format!("echo-retired-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = canonical_root(&root).unwrap();
+        let registry = PersistentContexts::<()>::default();
+        let key = StorageKey::new("user-profile-24").unwrap();
+        let path = named_path(&root, &key).unwrap();
+        let default = default_path(&root).unwrap();
+        std::fs::write(path.join("Cookies"), b"fixture").unwrap();
+        registry.resolve(path.clone(), || Ok(())).unwrap();
+        assert!(quarantine_unopened(&root, &key, &registry).is_err());
+        assert!(path.join("Cookies").exists());
+        // The NEXT runtime's registry is empty; dropping a page alone did not
+        // allow removal while the previous registry was retained.
+        drop(registry);
+        let restarted = PersistentContexts::<()>::default();
+        let retired = quarantine_unopened(&root, &key, &restarted).unwrap().unwrap();
+        assert_eq!(std::fs::read(retired.join("Cookies")).unwrap(), b"fixture");
+        assert!(!path.exists());
+        assert!(default.exists());
+        assert_eq!(quarantine_unopened(&root, &key, &restarted).unwrap(), Some(retired));
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink(&default, &path).unwrap();
+            assert!(quarantine_unopened(&root, &key, &restarted).is_err());
+            assert!(default.exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn draining_retains_contexts_until_explicit_release_and_allows_drop_reentry() {

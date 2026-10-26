@@ -395,6 +395,13 @@ impl Engine {
         Ok(Self::with_context(runtime, context, Arc::new(Mutex::new(keyboard_priority::Configuration::new(shortcuts)))))
     }
 
+    /// Reclaim only explicit deleted profile keys, never Default or arbitrary
+    /// directory enumeration. Loaded profiles are retained until process exit.
+    pub fn quarantine_retired_profile(&self, key: &StorageKey) -> Result<Option<std::path::PathBuf>, String> {
+        self._runtime.lifecycle.require_running()?;
+        storage::quarantine_unopened(&self._runtime.root, key, &self._runtime.persistent)
+    }
+
     fn start_runtime(data_dir: &Path) -> Result<std::rc::Rc<Runtime>, String> {
         shutdown::check_start_thread()?;
         // Never bypass path validation when returning an existing runtime.

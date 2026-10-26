@@ -213,3 +213,33 @@ fn profile_settings_sheet_keeps_keyboard_focus_inside_and_blocks_background_chan
         enabled
     );
 }
+
+#[gpui::test]
+fn profile_reclamation_uses_loaded_retirements_and_never_an_unsaved_live_deletion(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let fixture = tempfile::tempdir().unwrap();
+    let handle = view.read_with(cx, |view, _| view.profile.handle.clone());
+    let id = handle.edit_settings(|browser| browser.create_user_profile("Retirement fixture").unwrap());
+    handle.edit_settings(|browser| browser.delete_user_profile(id).unwrap());
+    cx.update(|_, cx| handle.save_session_to(fixture.path().join("session.json"), cx));
+    assert!(cx.read(|cx| handle.reclaimable_profile_storage_keys(cx)).is_empty());
+}
+
+#[gpui::test]
+fn restored_shared_page_constructor_reclaims_only_explicitly_loaded_retirements(cx: &mut TestAppContext) {
+    cx.update(init);
+    let fixture = tempfile::tempdir().unwrap();
+    let path = fixture.path().join("session.json");
+    let mut browser = browser_core::Browser::new();
+    let id = browser.create_user_profile("Retired fixture").unwrap();
+    browser.delete_user_profile(id).unwrap();
+    browser_core::session::save(&path, &browser_core::session::to_json(&browser)).unwrap();
+    let profile = cx.update(|cx| crate::new_window::source_from_session(&path, cx).unwrap().profile);
+    let fake = FakeEngine::default();
+    let engine = fake.clone();
+    let (_, visual) = cx.add_window_view(|window, cx| {
+        BrowserWindow::with_profile_pages(profile, None, Some(crate::pages::Pages::new(Box::new(engine))), window, cx)
+    });
+    visual.run_until_parked();
+    assert_eq!(fake.0.borrow().retired_storage, vec![id.storage_key().unwrap()]);
+}

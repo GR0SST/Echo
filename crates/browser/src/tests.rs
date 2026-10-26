@@ -316,6 +316,7 @@ struct FakeState {
     navigation_histories: std::collections::HashMap<u64,engine::NavigationHistory>,
     archive_data: Option<Vec<u8>>,
     document_epochs: std::collections::HashMap<u64,u64>,
+    retired_storage: Vec<String>,
     context_images: Vec<(u64,u64,String,String)>,
     peek_policies: std::collections::HashMap<u64, engine::PeekPolicy>,
     boosts: std::collections::HashMap<crate::pages::StorageSelection, Vec<engine::SiteBoost>>,
@@ -399,6 +400,7 @@ impl WebEngine for FakeEngine {
         self.call(Call::HistoryEntry(raw(view),entry));true
     }
 
+    fn reclaim_retired_profiles(&mut self, keys:&[String])->Vec<(String,Option<std::path::PathBuf>)> { self.0.borrow_mut().retired_storage.extend_from_slice(keys); Vec::new() }
     fn take_extension_model_requests(&mut self) -> Vec<engine::ExtensionModelRequest> {
         std::mem::take(&mut self.0.borrow_mut().extension_model_requests)
     }

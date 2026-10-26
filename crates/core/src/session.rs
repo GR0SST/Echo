@@ -52,6 +52,9 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
     { return Err(serde_json::Error::custom("invalid user profile registry or ownership")); }
     let max_profile = browser.profiles.keys().map(|id| id.0)
         .chain(browser.archive.iter().map(|entry| entry.user_profile_id.0)).max().unwrap_or(1);
+    if browser.retired_user_profiles.iter().any(|id| id.0 <= 1 || id.0 >= browser.next_user_profile_id || browser.profiles.contains_key(id)) {
+        return Err(serde_json::Error::custom("invalid retired profile identity"));
+    }
     if browser.next_user_profile_id <= max_profile {
         // A persisted watermark also covers deleted identities. Never repair it
         // downward or infer a fresh Default on malformed versioned input.

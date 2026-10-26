@@ -314,7 +314,7 @@ pub(crate) fn source_from_session(
     let browser = crate::load_session(path)?;
     crate::app_icons::apply(browser.settings.app_icon);
     crate::shortcuts::apply(&browser.settings.shortcuts, cx);
-    let profile = ProfileHandle::new(browser, cx);
+    let profile = ProfileHandle::from_loaded_session(browser, cx);
     profile.save_session_to(path.to_path_buf(), cx);
     Ok(NormalProfile {
         profile,
