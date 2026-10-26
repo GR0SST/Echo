@@ -12060,3 +12060,52 @@ fn folder_inline_name_ignores_stale_cef_focus_but_commits_on_a_real_page_focus(c
         view.read_with(cx,|w,_| {assert!(w.folder_rename.is_none());assert!(w.browser.space().folders.iter().any(|f|f.name=="Retained editor"));});
     }
 }
+#[gpui::test]
+fn document_fullscreen_checkpoint_keeps_window_intent_and_native_fullscreen_still_persists(
+    cx: &mut TestAppContext,
+) {
+    use browser_core::window_restore::WindowMode;
+    let (view, cx, fake) = open_pages(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.attach_restoration(None, false, window, cx)
+    });
+    let original = view.read_with(cx, |view, _| view.restore_window.clone().unwrap());
+    // The native adapter reports Fullscreen while a real document owns it.
+    let full = gpui::WindowBounds::Fullscreen(gpui::Bounds::new(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::size(gpui::px(1920.), gpui::px(1080.)),
+    ));
+    fake.send(
+        cx,
+        Event::FullscreenChanged {
+            view: page(1),
+            fullscreen: true,
+        },
+    );
+    view.update(cx, |view, _| {
+        view.checkpoint_platform_bounds(full.clone(), Some("document-display".into()))
+    });
+    view.read_with(cx, |view, _| {
+        let saved = view.restore_window.as_ref().unwrap();
+        assert_eq!(saved.mode, original.mode);
+        assert_eq!(saved.frame, original.frame);
+        assert_eq!(saved.display, original.display);
+    });
+    fake.send(
+        cx,
+        Event::FullscreenChanged {
+            view: page(1),
+            fullscreen: false,
+        },
+    );
+    cx.simulate_keystrokes("ctrl-cmd-f");
+    view.update(cx, |view, _| {
+        view.checkpoint_platform_bounds(full, Some("browser-display".into()))
+    });
+    view.read_with(cx, |view, _| {
+        let saved = view.restore_window.as_ref().unwrap();
+        assert_eq!(saved.mode, WindowMode::Fullscreen);
+        assert_eq!((saved.frame.width, saved.frame.height), (1920., 1080.));
+        assert_eq!(saved.display.as_deref(), Some("browser-display"));
+    });
+}

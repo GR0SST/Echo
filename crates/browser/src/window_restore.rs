@@ -90,8 +90,32 @@ impl BrowserWindow {
     }
 
     pub(crate) fn checkpoint_bounds(&mut self, window: &Window, cx: &App) {
+        if self.restore_window.is_none() {
+            return;
+        }
+        self.checkpoint_platform_bounds(
+            window.window_bounds(),
+            window
+                .display(cx)
+                .and_then(|display| display.uuid().ok())
+                .map(|id| id.to_string()),
+        );
+    }
+
+    /// The native adapter supplies real bounds; the headless platform only
+    /// models its fullscreen flag, so tests inject this same platform receipt.
+    pub(crate) fn checkpoint_platform_bounds(
+        &mut self,
+        bounds: WindowBounds,
+        display: Option<String>,
+    ) {
+        // Document fullscreen is temporary page presentation, not window intent.
+        // Keep its original mode/frame even when the user quits before exiting it.
+        if self.page_fullscreen.is_some() {
+            self.checkpoint_window(false);
+            return;
+        }
         if let Some(saved) = &mut self.restore_window {
-            let bounds = window.window_bounds();
             let b = bounds.get_bounds();
             saved.frame = WindowFrame {
                 x: b.origin.x.into(),
@@ -104,10 +128,7 @@ impl BrowserWindow {
                 WindowBounds::Maximized(_) => WindowMode::Maximized,
                 WindowBounds::Fullscreen(_) => WindowMode::Fullscreen,
             };
-            saved.display = window
-                .display(cx)
-                .and_then(|d| d.uuid().ok())
-                .map(|id| id.to_string());
+            saved.display = display;
         }
         self.checkpoint_window(false);
     }
