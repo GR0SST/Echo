@@ -11,3 +11,7 @@ publish = false
 # Linux ENODATA spelling required by current libc; see the vendored patch note.
 [patch.crates-io]
 xattr = { path = "third_party/rust/xattr" }
+
+# Decoding the welcome cue gates the intro's start; keep it fast in dev builds.
+[profile.dev.package.lewton]
+opt-level = 3

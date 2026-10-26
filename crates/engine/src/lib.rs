@@ -42,6 +42,12 @@ pub use media::{MediaState, MediaAction};
 pub mod speech;
 mod ui_sound;
 mod welcome_music;
+/// The welcome cue's source: `examples/render_welcome_music.rs` renders it
+/// to the shipped `assets/welcome.ogg`.
+#[doc(hidden)]
+pub fn render_welcome_music(rate: u32) -> Vec<f32> {
+    welcome_music::render(rate)
+}
 pub use ui_sound::{play_ui_sound,stop_welcome_sound,welcome_sound_started,UiSound};
 mod page_swipe;
 pub use page_swipe::PageSwipe;

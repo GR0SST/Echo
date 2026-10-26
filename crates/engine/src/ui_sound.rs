@@ -60,7 +60,7 @@ pub fn play_ui_sound(sound: UiSound) -> bool {
 }
 fn waveform(sound: UiSound, rate: u32) -> Vec<f32> {
     if let UiSound::Welcome = sound {
-        return crate::welcome_music::render(rate);
+        return welcome_samples(rate).unwrap_or_else(|_| crate::welcome_music::render(rate));
     }
     let length = (rate as usize * 140 / 1000).max(1);
     let mut seed = 0x71c3_a5d9u32;
@@ -85,6 +85,41 @@ fn waveform(sound: UiSound, rate: u32) -> Vec<f32> {
                     (noise * 0.6 + (t * std::f32::consts::TAU * 920.).sin() * 0.4) * envelope * 0.09
                 }
             }
+        })
+        .collect()
+}
+/// The welcome cue, rendered once from `welcome_music` (see
+/// `examples/render_welcome_music.rs`) and shipped as Ogg Vorbis.
+const WELCOME_OGG: &[u8] = include_bytes!("../assets/welcome.ogg");
+/// Mono samples of the shipped cue at the output's `rate`.
+fn welcome_samples(rate: u32) -> Result<Vec<f32>, String> {
+    let mut reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(WELCOME_OGG))
+        .map_err(|e| e.to_string())?;
+    let source = reader.ident_hdr.audio_sample_rate;
+    let channels = usize::from(reader.ident_hdr.audio_channels.max(1));
+    let mut decoded = Vec::with_capacity((crate::welcome_music::SECONDS * source as f32) as usize);
+    while let Some(packet) = reader.read_dec_packet_itl().map_err(|e| e.to_string())? {
+        decoded.extend(packet.chunks_exact(channels).map(|frame| {
+            frame.iter().map(|&s| f32::from(s) / 32768.).sum::<f32>() / channels as f32
+        }));
+    }
+    Ok(resample(&decoded, source, rate))
+}
+/// Linear resampling keeps the cue's length, so the intro stays on the beat
+/// at any device rate.
+fn resample(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
+    if from == to || samples.is_empty() || from == 0 {
+        return samples.to_vec();
+    }
+    let length = (samples.len() as u64 * u64::from(to) / u64::from(from)) as usize;
+    let step = from as f64 / to as f64;
+    (0..length)
+        .map(|i| {
+            let at = i as f64 * step;
+            let index = at as usize;
+            let next = samples.get(index + 1).copied().unwrap_or(0.);
+            let current = samples.get(index).copied().unwrap_or(0.);
+            current + (next - current) * (at - index as f64) as f32
         })
         .collect()
 }
@@ -216,8 +251,9 @@ mod tests {
     fn welcome_music_is_finite_bounded_and_silent_at_its_edges() {
         let rate = 22050;
         let samples = waveform(UiSound::Welcome, rate);
-        assert_eq!(samples.len(), (crate::welcome_music::SECONDS * rate as f32) as usize);
-        assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 0.5001));
+        let expected = (crate::welcome_music::SECONDS * rate as f32) as usize;
+        assert!(samples.len().abs_diff(expected) < rate as usize / 100, "{}", samples.len());
+        assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 0.55));
         assert!(samples[0].abs() < 0.001 && samples.last().unwrap().abs() < 0.001);
         let rms = |from: f32, to: f32| {
             let part = &samples[(from * rate as f32) as usize..(to * rate as f32) as usize];
@@ -226,6 +262,29 @@ mod tests {
         // Quiet swell, a louder body after the downbeat, then a fade-out.
         assert!(rms(0.2, 1.5) < rms(6., 12.));
         assert!(rms(20.6, 21.2) < rms(6., 12.) * 0.1);
+    }
+    /// The shipped file must be regenerated whenever the source changes.
+    #[test]
+    fn shipped_welcome_cue_matches_its_source() {
+        // The asset's own rate: the synth's noise differs between rates.
+        let rate = 48_000;
+        let shipped = welcome_samples(rate).unwrap();
+        let source = crate::welcome_music::render(rate);
+        let envelope = |s: &[f32]| -> Vec<f32> {
+            s.chunks(rate as usize / 20).map(|w| (w.iter().map(|v| v * v).sum::<f32>() / w.len() as f32).sqrt()).collect()
+        };
+        let (a, b) = (envelope(&shipped), envelope(&source));
+        let n = a.len().min(b.len());
+        assert!(a.len().abs_diff(b.len()) <= 1);
+        let dot: f32 = (0..n).map(|i| a[i] * b[i]).sum();
+        let norm = |v: &[f32]| v[..n].iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(dot / (norm(&a) * norm(&b)) > 0.99, "{}", dot / (norm(&a) * norm(&b)));
+    }
+    #[test]
+    fn resampling_keeps_the_cue_length() {
+        let samples = vec![0.25; 48_000];
+        assert_eq!(resample(&samples, 48_000, 44_100).len(), 44_100);
+        assert_eq!(resample(&samples, 48_000, 96_000).len(), 96_000);
     }
     #[test]
     fn stopping_welcome_fades_to_silence() {
