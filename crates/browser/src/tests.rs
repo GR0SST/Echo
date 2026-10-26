@@ -11819,3 +11819,20 @@ fn split_history_menu_uses_the_focused_pane_with_toolbar_enabled(cx:&mut TestApp
     let calls=fake.take_calls();assert!(calls.contains(&Call::HistoryRequest(source)));assert!(calls.contains(&Call::HistoryEntry(source,22)));
     assert!(!calls.iter().any(|call|matches!(call,Call::HistoryEntry(id,_) if *id!=source)));
 }
+
+#[gpui::test]
+fn favorite_modifier_clicks_activate_instead_of_extending_sidebar_selection(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);
+    let (a,b)=view.update(cx,|w,_|w.edit_browser(|browser| {
+        let a=browser.new_tab("https://favorite-a.example",std::time::SystemTime::now());
+        let b=browser.new_tab("https://favorite-b.example",std::time::SystemTime::now());
+        assert!(browser.favorite_tab(a));assert!(browser.favorite_tab(b));(a,b)
+    }));cx.run_until_parked();
+    click(cx,test_selector(format!("favorite-{}",a.get())));fake.take_calls();
+    for modifiers in [Modifiers {platform:true,..Modifiers::none()},Modifiers {shift:true,..Modifiers::none()}] {
+        click(cx,test_selector(format!("favorite-{}",a.get())));
+        modifier_click(cx,test_selector(format!("favorite-{}",b.get())),modifiers);
+        view.read_with(cx,|w,_| {assert_eq!(w.browser.space().active_tab,Some(b));assert!(w.sidebar_selection_items().is_empty());});
+    }
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..)|Call::Close(..))));
+}
