@@ -534,3 +534,34 @@ fn ordinary_quit_has_no_progress_window_but_a_failed_barrier_gets_one(cx: &mut g
         assert!(!state.borrow().finalized);
     });
 }
+
+#[test]
+fn declined_native_intents_release_only_their_events_and_allow_a_new_first_sender() {
+    let mut gate = NativeQuitGate::default();
+    assert_eq!(gate.capture(), Ok(true));
+    gate.record_context(true, Some(41));
+    assert_eq!(gate.capture(), Ok(false));
+    gate.record_context(false, Some(73));
+    gate.record_context(false, Some(41));
+    assert_eq!(gate.cancel_intent(), Ok(vec![41, 73]));
+    assert_eq!(gate.take_request(), Ok(false));
+    assert_eq!(gate.capture(), Ok(true));
+    gate.record_context(true, Some(99));
+    assert_eq!(gate.claim_original(&status(ShutdownPhase::Complete)), Ok(Some(NativeReplayPlan {
+        first_suspension: Some(99), joined_suspensions: vec![],
+    })));
+    assert!(gate.cancel_intent().is_err());
+}
+
+#[test]
+fn native_cancel_cannot_clear_a_sticky_failure_or_an_accepted_barrier() {
+    let mut gate = NativeQuitGate::default();
+    gate.capture().unwrap();
+    gate.fail("Suspension failed".into());
+    assert_eq!(gate.cancel_intent(), Err("Suspension failed".into()));
+    assert!(gate.capture().is_err());
+    let mut gate = NativeQuitGate::default();
+    gate.note_app_request();
+    assert_eq!(gate.cancel_intent(), Ok(vec![]));
+    assert_eq!(gate.capture(), Ok(true));
+}

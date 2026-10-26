@@ -52,19 +52,25 @@ pub(crate) fn request(cx: &mut App) {
                 .into_iter()
                 .find_map(|w| w.downcast::<BrowserWindow>())
         });
-    let Some(owner) = owner else {
-        crate::quit::request(cx);
-        return;
-    };
-    let Ok((mut profile, window_local, parent, bounds)) = owner.update(cx, |view, window, _| {
-        (
-            view.profile.handle.clone(),
-            view.browser.is_private() || view.browser.is_blank(),
-            crate::native::view_of(window),
-            window.bounds(),
-        )
-    }) else {
-        return;
+    let (mut profile, window_local, parent, bounds) = if let Some(owner) = owner {
+        let Ok(state) = owner.update(cx, |view, window, _| {
+            (
+                view.profile.handle.clone(),
+                view.browser.is_private() || view.browser.is_blank(),
+                crate::native::view_of(window),
+                window.bounds(),
+            )
+        }) else { return; };
+        state
+    } else {
+        let Ok(normal) = crate::new_window::normal_source(cx) else {
+            // Without a readable install preference, preserve the established
+            // explicit-quit policy rather than leave a suspended OS request.
+            crate::quit::request(cx);
+            return;
+        };
+        (normal.profile, false, None,
+            gpui::Bounds::centered(None, gpui::size(px(450.), px(248.)), cx))
     };
     if window_local {
         if let Ok(normal) = crate::new_window::normal_source(cx) {
@@ -75,16 +81,18 @@ pub(crate) fn request(cx: &mut App) {
         crate::quit::request(cx);
         return;
     }
-    let _ = owner.update(cx, |view, window, cx| {
-        view.close_command_bar(cx);
-        view.close_site_controls(cx);
-        view.close_find(cx);
-        view.close_tab_menu(cx);
-        if let Some(pages) = &view.pages {
-            pages.borrow_mut().request_ui_focus();
-        }
-        window.activate_window();
-    });
+    if let Some(owner) = owner {
+        let _ = owner.update(cx, |view, window, cx| {
+            view.close_command_bar(cx);
+            view.close_site_controls(cx);
+            view.close_find(cx);
+            view.close_tab_menu(cx);
+            if let Some(pages) = &view.pages {
+                pages.borrow_mut().request_ui_focus();
+            }
+            window.activate_window();
+        });
+    }
     let confirmation = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -134,7 +142,7 @@ pub(crate) fn close_all(cx: &mut App) {
 }
 
 pub(crate) struct Confirmation {
-    owner: WindowHandle<BrowserWindow>,
+    owner: Option<WindowHandle<BrowserWindow>>,
     profile: ProfileHandle,
     focus: FocusHandle,
     native: Option<*mut std::ffi::c_void>,
@@ -149,7 +157,7 @@ impl Drop for Confirmation {
 impl Confirmation {
     #[cfg(test)]
     pub(crate) fn owner_id(&self) -> gpui::WindowId {
-        self.owner.window_id()
+        self.owner.expect("confirmation has a browser owner").window_id()
     }
     fn finish(
         &mut self,
@@ -166,8 +174,20 @@ impl Confirmation {
         if accept {
             cx.defer(crate::quit::request);
         } else {
+            #[cfg(all(target_os = "macos", not(test)))]
+            match crate::native::termination::prepare_cancel() {
+                Ok(pending) => {
+                    cx.spawn(async move |_, _| {
+                        if let Err(error) = pending.finish() {
+                            eprintln!("[quit-native] Cancellation failed: {error}");
+                        }
+                    }).detach();
+                }
+                Err(error) => eprintln!("[quit-native] Cancellation refused: {error}"),
+            }
             let owner = self.owner;
             cx.defer(move |cx| {
+                let Some(owner) = owner else { return; };
                 let _ = owner.update(cx, |view, window, cx| {
                     window.activate_window();
                     if let Some(pages) = &view.pages {

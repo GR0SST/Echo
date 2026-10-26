@@ -51,7 +51,6 @@ unsafe extern "C-unwind" fn terminate(app: *mut AnyObject, selector: Sel, sender
             return;
         }
     };
-    crate::quit::seal();
     if first {
         let sender = unsafe { Retained::retain(sender) };
         SENDER.with(|slot| *slot.borrow_mut() = Some(sender));
@@ -150,6 +149,9 @@ pub(crate) fn take_request() -> Result<bool, String> {
 
 /// Reply while an event is current or suspended; never retain its descriptor.
 unsafe fn fail_reply(reply: *mut AnyObject) {
+    unsafe { fail_reply_with_code(reply, -10000); }
+}
+unsafe fn fail_reply_with_code(reply: *mut AnyObject, code: i32) {
     unsafe {
         if reply.is_null() { return; }
         let kind: u32 = msg_send![reply, descriptorType];
@@ -158,9 +160,83 @@ unsafe fn fail_reply(reply: *mut AnyObject) {
         let existing: *mut AnyObject = msg_send![reply, paramDescriptorForKeyword: error_key];
         let existing_error: i32 = if existing.is_null() { 0 } else { msg_send![existing, int32Value] };
         if existing_error == 0 {
-            let error: *mut AnyObject = msg_send![AnyClass::get(c"NSAppleEventDescriptor").expect("Foundation is loaded"), descriptorWithInt32: -10000i32];
+            let error: *mut AnyObject = msg_send![AnyClass::get(c"NSAppleEventDescriptor").expect("Foundation is loaded"), descriptorWithInt32: code];
             let _: () = msg_send![reply, setParamDescriptor: error, forKeyword: error_key];
         }
+    }
+}
+
+/// Capture the user's decision synchronously, before a new native intent can
+/// arrive. This touches only Rust state; native resume happens outside GPUI.
+pub(crate) fn prepare_cancel() -> Result<PendingCancellation, String> {
+    if crate::quit::is_quitting() {
+        return Err("Shutdown is already sealed".into());
+    }
+    let ids = GATE.with(|gate| gate.borrow_mut().cancel_intent())?;
+    let sender = SENDER.with(|sender| sender.borrow_mut().take());
+    Ok(PendingCancellation {
+        ids,
+        _sender: sender,
+    })
+}
+pub(crate) struct PendingCancellation {
+    ids: Vec<usize>,
+    _sender: Option<Option<Retained<AnyObject>>>,
+}
+impl PendingCancellation {
+    /// Resuming an event can reenter AppKit. Cancellation replies errUserCanceled
+    /// and never calls the original quit UPP or alters a newer native intent.
+    pub(crate) fn finish(self) -> Result<(), String> {
+        if self.ids.is_empty() {
+            return Ok(());
+        }
+        let manager = apple_events().map_err(|error| {
+            GATE.with(|gate| gate.borrow_mut().fail(error.clone()));
+            error
+        })?;
+        for id in self.ids.iter().copied() {
+            let context = CONTEXTS.with(|contexts| contexts.borrow_mut().remove(&id));
+            let result = match context {
+                Some(EventContext::Foundation(suspension)) => unsafe {
+                    let reply: *mut AnyObject = msg_send![manager, replyAppleEventForSuspensionID: suspension as *mut c_void];
+                    fail_reply_with_code(reply, -128);
+                    let _: () =
+                        msg_send![manager, resumeWithSuspensionID: suspension as *mut c_void];
+                    Ok(())
+                },
+                Some(EventContext::Raw(mut raw)) => {
+                    let prepared = unsafe { fail_raw_reply_with_result(&mut raw.reply.0, -128) };
+                    let result = prepared.and_then(|_| {
+                        let error = unsafe {
+                            AEResumeTheCurrentEvent(
+                                std::ptr::addr_of!(raw.event.0),
+                                std::ptr::addr_of!(raw.reply.0),
+                                None,
+                                std::ptr::null_mut(),
+                            )
+                        };
+                        if error == 0 {
+                            Ok(())
+                        } else {
+                            Err(format!("Cannot cancel native quit AppleEvent: {error}"))
+                        }
+                    });
+                    if result.is_err() {
+                        CONTEXTS.with(|contexts| {
+                            contexts.borrow_mut().insert(id, EventContext::Raw(raw))
+                        });
+                    }
+                    result
+                }
+                None => Err("Canceled native quit event is missing".into()),
+            };
+            if let Err(error) = result {
+                GATE.with(|gate| gate.borrow_mut().fail(error.clone()));
+                return Err(error);
+            }
+        }
+        eprintln!("[quit-native] User canceled before shutdown; native intent released");
+        Ok(())
     }
 }
 
@@ -301,7 +377,6 @@ unsafe extern "C" fn capture_quit_event(event: *const RawDesc, reply: *mut RawDe
         Ok(first) => first,
         Err(_) => return unsafe { fail_raw_reply(reply) }.unwrap_or(-10000),
     };
-    crate::quit::seal();
     if first { SENDER.with(|slot| *slot.borrow_mut() = Some(None)); }
     let captured = (|| -> Result<usize, String> {
         if event.is_null() || reply.is_null() { return Err("Quit AppleEvent descriptors are absent".into()); }

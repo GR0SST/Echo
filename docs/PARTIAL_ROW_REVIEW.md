@@ -336,3 +336,23 @@ reset. The broader Shortcuts row remains partial for dynamic Space reassignment,
 Reset All priority scope and additional native layouts/platforms; visual
 differences remain cosmetic. See the ordering reference in
 `PROFILES_SETTINGS_REFERENCE.md`.
+
+## Round 4 — native and no-window quit
+
+Native OS quit now uses the install warning before sealing shutdown. Cancel
+releases only that intent's captured AppleEvents with user-canceled status;
+a new request can become the first intent. Accepted quit preserves the existing
+CEF barrier and original native continuation. The no-window route reads the
+retained normal preference and uses the same warning without opening a browser.
+Three disposable native cases, the full workspace suite and both foreign target
+checks pass. The General warning row remains partial: Arc's OS/no-window policy
+is reference unqualified, other auxiliary-host cases need qualification, and
+Light/motion differences are cosmetic. See `NATIVE_QUIT_POLICY_REFERENCE.md`.
+
+Functional closeout: folder archive/restore and its reveal toast, global Little
+shortcut recording/remapping, Favorites ordering, and SCC Full Page/Save/Share
+are now implemented and checked in Echo. Folder/global OS references retain
+their explicitly unqualified limits. Full Page uses a qualified live Arc PNG and
+toast pair. Portrait output, background Space creation's trigger, authenticated
+site Previews, empty-Space profile warnings, dynamic Space shortcut reassignment
+and Reset All priority scope remain partial; no behavior was guessed.

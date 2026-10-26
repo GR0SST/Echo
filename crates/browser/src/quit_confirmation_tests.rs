@@ -153,3 +153,22 @@ fn settings_quit_confirmation_uses_its_browser_instead_of_the_first_window(
     sheet.simulate_keystrokes("escape");
     assert!(!crate::quit::is_quitting());
 }
+
+#[gpui::test]
+fn no_browser_quit_uses_the_retained_install_preference_and_can_be_canceled(cx: &mut TestAppContext) {
+    let (view, visual) = open(cx);
+    visual.cx.update(|cx| {
+        view.update(cx, |view, cx| view.retain_normal_source(cx));
+    });
+    visual.update(|window, _| window.remove_window());
+    visual.cx.update(crate::quit_confirmation::request);
+    let mut sheet = warning(visual);
+    assert!(!crate::quit::is_quitting());
+    click(&mut sheet, "quit-cancel");
+    assert!(!crate::quit::is_quitting());
+    sheet.cx.update(crate::quit_confirmation::request);
+    let mut sheet = warning(visual);
+    click(&mut sheet, "quit-accept");
+    assert!(crate::quit::is_quitting());
+    sheet.cx.update(crate::quit::reset_for_test);
+}

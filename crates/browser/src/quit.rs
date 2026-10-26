@@ -10,7 +10,7 @@ thread_local! {
     pub(crate) static NATIVE_GATE: RefCell<NativeQuitGate> = RefCell::new(NativeQuitGate::default());
 }
 
-/// This gate is set synchronously, including inside native termination callbacks.
+/// This gate is set synchronously after quit is accepted (or a native failure).
 /// Deferred producers must check it again when they actually execute.
 pub(crate) fn is_quitting() -> bool { SEALED.with(Cell::get) }
 pub(crate) fn seal() { SEALED.with(|value| value.set(true)); }
@@ -175,6 +175,19 @@ impl NativeQuitGate {
     pub(crate) fn take_request(&mut self) -> Result<bool, String> {
         if let Some(error) = &self.failure { return Err(error.clone()); }
         Ok(std::mem::take(&mut self.pending))
+    }
+    /// A user's refusal precedes the irreversible shutdown barrier. Return
+    /// only that intent's suspended events, then allow a fresh quit intent.
+    pub(crate) fn cancel_intent(&mut self) -> Result<Vec<usize>, String> {
+        if let Some(error) = &self.failure { return Err(error.clone()); }
+        if self.original_called || self.complete {
+            return Err("Cannot cancel accepted native termination".into());
+        }
+        let mut ids = Vec::new();
+        if let Some(id) = self.first_suspension.flatten() { ids.push(id); }
+        ids.extend(self.joined_suspensions.iter().copied());
+        *self = Self::default();
+        Ok(ids)
     }
     pub(crate) fn fail(&mut self, error: String) {
         self.native_continuation_available = false;
@@ -433,7 +446,7 @@ pub(crate) fn init(cx: &mut App) {
             cx.background_executor().timer(Duration::from_millis(10)).await;
             #[cfg(all(target_os = "macos", not(test)))]
             match crate::native::termination::take_request() {
-                Ok(true) => { let _ = cx.update(request); }
+                Ok(true) => { let _ = cx.update(crate::quit_confirmation::request); }
                 Ok(false) => {}
                 Err(error) => {
                     let first_failure = state.borrow().failure.is_none();
