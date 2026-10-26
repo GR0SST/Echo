@@ -1,6 +1,6 @@
 # CEF shutdown investigation
 
-Status: the final six-patch generation `20261025T160409Z-9401` passed **16/16
+Status: the current six-patch generation `20261026T015700Z-65318` passed **16/16
 clean native exits**, all twelve HTTP cookie checks and the separate PiP input
 harness. The forced-timeout regression exits normally, reaps its network helper,
 and verifies retained cookie/localStorage/IndexedDB stores on restart. Corrupt
@@ -37,6 +37,59 @@ It asserts normal parent exit, marker creation, helper reaping, successful
 cookie/localStorage/IndexedDB recovery on restart, and rejection of an untouched
 corrupt SQLite fixture. Production 16-exit/PiP runs forbid those overrides and
 require every network helper to exit gracefully.
+
+### Second-audit SIGTRAP reports
+
+The queued second-audit failures are the same old timeout CHECK, rather than a
+new failure in the current generation. PID correlation matches
+`reaudit2-fixes/echo-refinements-Light/drive.log` to
+`~/Library/Logs/DiagnosticReports/Echo-2026-10-25-143122.ips` (PID 70347), and
+the Dark log to `Echo-2026-10-25-143412.ips` (PID 78533). They trap **10,173.919**
+and **10,157.388 ms** after the logged quit request. Both reports identify CEF
+UUID `4c4c44f8-5555-3144-a14f-c139a2d87f2b` and image offset `0x321c1b4`.
+
+A retained exact-UUID framework in
+`~/Documents/Bot/cef-src/qualification/shutdown-final.app` has SHA-256
+`5bddc3b2ea8c251ee8325be37768a775f5e05619082b8db86efe19eaba1c6f6e`,
+the phase-three `c5a5134` build. Offline `llvm-objdump` shows the network service
+name, `browser_process_io_thread.cc` and shutdown diagnostics in this function.
+At `0x321c07c`/`0x321c080`, it loads a **10,000,000 µs** wait argument; after
+the wait call it tests the returned success flag and exit code, branching at
+`0x321c094` directly to **`brk #0` at `0x321c1b4`** on failure. This is the old
+`BrowserProcessIOThread::ProcessHostCleanUp` assertion
+`CHECK(echo_exited && echo_exit_code == 0)`. Stripped-symbol reports label nearby
+code with the nearest `_v8_internal_Node_Print` export; that label does not
+identify a V8 crash. No debugger was attached.
+
+Commit `75bc810` already replaced this assertion with the bounded recovery
+policy above. The current `c9d3ae…` framework contains that fix, so reproducing
+these historical reports does not require another CEF patch or rebuild. The
+window-hide call precedes the shutdown work; the recorded fatal instruction is
+inside CEF's network cleanup. Pending network ThreadPool work explains the wait;
+the measured atomic flush itself was short, as detailed above.
+
+The fresh acceptance matrix can exercise the exact native termination entry
+point with `--quit-command native-quit`. It sends `terminate:nil`, verifies both
+the request and captured native gate in every log, and retains the same strict
+barrier/exit/cookie/network checks. The ordinary coordinator entry remains the
+default. Fixtures disable the persisted quit-warning preference explicitly.
+Offline proof, selected crash frames and bounded disassembly commands are in
+`~/Documents/Bot/cef-src/qualification/quit-trap-reaudit-20261026/offline-proof.json`.
+
+The fresh native-entry matrix passed **16/16 actual zero exits** on main
+`517494b`, executable SHA-256
+`d10458c51459f42448c96bc12def60586802d6f0051f8de50fa4a57dbb11642f`,
+with current framework `c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`.
+Every exit records the native request/capture and exactly one CEF shutdown and
+final terminate. All eight restart cases retained cookies, every network helper
+exited gracefully, and no owned process remained. The accompanying deterministic
+forced-timeout recovery also exited zero, reaped its helper and verified cookie,
+localStorage and IndexedDB retention. Both ran within one bounded long screen
+session, with the unchanged visibility guard and no debugger. Evidence:
+`quit-trap-reaudit-20261026/matrix/run-d8x6e7sg/` and
+`quit-trap-reaudit-20261026/recovery-i51yrbpw/`. The current distribution's
+`native-quit-qualification.json` links the follow-up evidence. No CEF rebuild or
+new generation was required; no new SIGTRAP was reproduced on the fixed build.
 
 ## What the old log concealed
 
@@ -296,6 +349,8 @@ python3 scripts/check-shutdown.py --appearance Light --case media-pip --case med
 python3 scripts/check-shutdown.py --profiles 4 --case profiles --repeat 3
 # Canonical qualification: all 16 exits in one uninterrupted screen session.
 zsh scripts/check-shutdown-matrix.sh --keep-going --require-network-exit
+# Same matrix through NSApplication terminate:nil (second-audit reproduction).
+zsh scripts/check-shutdown-matrix.sh --quit-command native-quit --keep-going --require-network-exit
 ```
 
 The script freezes a private coherent bundle and creates fresh fixture profiles.

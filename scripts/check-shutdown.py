@@ -44,6 +44,8 @@ def main():
     parser.add_argument("--output", default="target/parity/shutdown-watchdog/acceptance")
     parser.add_argument("--case", choices=["normal", "profiles", "private", "reset", "gpu", "combined", "media-pip", "media-archived"], action="append")
     parser.add_argument("--keep-going", action="store_true", help="collect all scenarios even after a failing quit")
+    parser.add_argument("--quit-command", choices=["quit", "native-quit"], default="quit",
+                        help="exercise the coordinator or native application termination entry point")
     parser.add_argument("--screen-locked", action="store_true", help="caller owns the screen lock for the complete matrix")
     parser.add_argument("--bundle", default=str(ROOT / "target/bundle/Echo.app"))
     parser.add_argument("--cef-dist", help="require this distribution's exact framework before the matrix")
@@ -78,6 +80,7 @@ def main():
         "main_sha256": hashlib.sha256((frozen_bundle / "Contents/MacOS/Echo").read_bytes()).hexdigest(),
         "framework_sha256": framework_hash,
         "cef_dist": str(pathlib.Path(args.cef_dist).resolve()) if args.cef_dist else None,
+        "quit_command": args.quit_command,
     }, indent=2))
     observations = []
     observations_lock = threading.Lock()
@@ -150,6 +153,9 @@ def main():
             "automation finished": "[automation] aborted:" not in text,
             "no destructive diagnostic": "[cef-helper local-fixture-probe]" not in text,
         }
+        if args.quit_command == "native-quit":
+            checks["native termination requested"] = "[automation] native-quit sending terminate:nil" in text
+            checks["native termination captured"] = "[quit-native] terminate captured;" in text
         if args.require_network_exit:
             cef_log = directory / f"{phase}-cef.log"
             cef_text = cef_log.read_text(errors="replace") if cef_log.exists() else ""
@@ -204,7 +210,7 @@ def main():
                         else:
                             script += navigate("verify", f"{prefix}-background")
                             script += "wait 1; dump; "
-                    text = drive(directory, "write", script + "quit", gpu)
+                    text = drive(directory, "write", script + args.quit_command, gpu)
                     if case.startswith("media-"):
                         assert any(r["path"] == "/playing" and r["label"] == prefix for r in observations[start:]), directory
                         assert any(r["path"] == "/pip-enter" and r["label"] == prefix for r in observations[start:]), directory
@@ -227,7 +233,7 @@ def main():
                     if case in ("private", "combined"):
                         script += "key cmd-shift-n; wait 2; window last; key escape; "
                         script += navigate("verify", f"{prefix}-private-empty")
-                    drive(directory, "read", script + "quit", gpu)
+                    drive(directory, "read", script + args.quit_command, gpu)
                     for i in range(1, count + 1):
                         records = [r for r in observations[start:] if r["label"] == f"{prefix}-verify{i}"]
                         assert records and all(r["cookie"] == f"{prefix}-p{i}" for r in records), (directory, records)
