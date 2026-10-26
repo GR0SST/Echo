@@ -20,7 +20,6 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) {
         if self.browser.is_private() || self.browser.is_blank() { return; }
-        self.sidebar_selection.folder_items.clear();
         let space = parent
             .and_then(|id| self.browser.folder_space(id))
             .unwrap_or(self.browser.space().id);
@@ -71,7 +70,7 @@ impl BrowserWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         match target {
-            Target::RenameFolder(id) => self.edit_browser(|browser| browser.rename_folder(id, name)),
+            Target::RenameFolder(id) => self.edit_browser(|browser| browser.rename_folder_with_undo(id, name)),
             Target::NewFolder { space, parent, tab } => {
                 if tab.is_some_and(|id| !self.browser.all_tabs().any(|tab| tab.id == id)) {
                     self.show_toast("Tab is no longer open".into(), cx);
@@ -87,10 +86,6 @@ impl BrowserWindow {
                 };
                 if let Some(tab) = tab {
                     self.edit_browser(|browser| browser.move_item_to_folder(tab, folder));
-                    let selected = std::mem::take(&mut self.sidebar_selection.folder_items);
-                    if selected.first() == Some(&tab) {
-                        self.edit_browser(|browser| { for id in selected.into_iter().skip(1) { browser.move_item_to_folder(id, folder); } });
-                    }
                     self.show_folder_pin(folder, cx);
                 }
                 if let Some(index) = self
@@ -409,8 +404,8 @@ impl BrowserWindow {
                         .relative().child(self.track_icon_anchor(IconTarget::Folder(id)))
                         .flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
                         .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
-                        .when(active, |this| this.bg(hsla(0., 0., 1., 0.25))).hover(move |this| this.bg(hsla(0., 0., 1., if dark { 0.1 } else { 0.3 })))
-                        .on_click(cx.listener(move |this, _, _, cx| { if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } if this.browser.folder(id).and_then(|f|f.live.as_ref()).is_some_and(|l|l.credential_id.is_empty()) { this.open_live_connection(id,cx); } else if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed)); } cx.notify(); }))
+                        .when(active || self.sidebar_folder_selected(id), |this| this.bg(hsla(0., 0., 1., 0.25))).hover(move |this| this.bg(hsla(0., 0., 1., if dark { 0.1 } else { 0.3 })))
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| { if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } if this.select_sidebar_folder(id,event.modifiers(),cx) {return;} if this.browser.folder(id).and_then(|f|f.live.as_ref()).is_some_and(|l|l.credential_id.is_empty()) { this.open_live_connection(id,cx); } else if let Some(collapsed) = this.browser.folder(id).map(|folder| !folder.collapsed) { this.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed)); } cx.notify(); }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } this.open_folder_menu(id, event.position, window, cx); }))
                         .on_drag(crate::folder_drag::FolderDrag::new(folder, focus, self.profile.handle.clone(), self.browser.spaces.iter().find(|entry| entry.id == space).expect("folder Space").user_profile_id), |drag, _, _, cx| cx.new(|_| drag.clone()))
                         .can_drop(move |value, _, cx| {
@@ -425,7 +420,7 @@ impl BrowserWindow {
                         .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_folder(drag, id, cx)))
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-icon-{key}"))())).size(px(18.)).flex_none()
                             .child(if folder.live.is_some() && folder.custom_icon.is_none() { crate::live_folders::folder_icon(!folder.collapsed) } else { crate::icons::folder_state(folder.custom_icon.as_deref(), !folder.collapsed) }))
-                        .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-name-{key}"))())).flex_1().min_w_0().truncate().child(folder.name.clone()))
+                        .child(self.render_inline_folder_name(id,cx).unwrap_or_else(||div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-name-{key}"))())).flex_1().min_w_0().truncate().child(folder.name.clone()).into_any_element()))
                         .when_some(folder.live.as_ref().filter(|l|l.unread_count()>0), |r,live|r.child(div().text_size(px(11.)).text_color(hsla(0.,0.,0.6,1.)).child(live.unread_count().to_string()))))
                         .children(self.render_live_items(id,cx))
                         .into_any_element())

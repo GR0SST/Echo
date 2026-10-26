@@ -174,6 +174,8 @@ impl BrowserWindow {
             && self.site_controls.is_none()
             && self.tab_rename.is_none()
             && self.tab_rename_pending.is_none()
+            && self.folder_rename.is_none()
+            && self.folder_rename_pending.is_none()
     }
 
     pub(crate) fn page_content_visible(&self) -> bool {
@@ -311,6 +313,7 @@ impl BrowserWindow {
     }
     pub(crate) fn begin_space_creation(&mut self, origin: SpaceId, cx: &mut Context<Self>) {
         self.sidebar_selection.new_space_items.clear();
+        self.sidebar_selection.new_space_selection=None;
         if crate::quit::is_quitting() {
             return;
         }
@@ -422,6 +425,11 @@ impl BrowserWindow {
         };
         match self.commit_space_creation_request(&request) {
             Ok(space) => {
+                if let Some(selection)=self.sidebar_selection.new_space_selection.take() {
+                    if request.user_profile_id==selection.profile {
+                        self.edit_browser(|browser|browser.move_sidebar_selection(&selection,space));
+                    }
+                }
                 let selected = std::mem::take(&mut self.sidebar_selection.new_space_items);
                 if request.user_profile_id == self.browser.active_user_profile_id() {
                     self.edit_browser(|browser| { for id in selected { let pinned = browser.all_tabs().find(|tab| tab.id == id).is_some_and(|tab| tab.pinned_url.is_some()); browser.move_tab(id, space, if pinned { browser_core::Section::Pinned } else { browser_core::Section::Today }); } });

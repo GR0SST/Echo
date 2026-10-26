@@ -92,3 +92,16 @@ fn private_supported_tab_commands_still_duplicate_close_and_restore(cx: &mut Tes
     assert_eq!(view.read_with(cx, |view, _| view.browser.space().today.len()), 2);
     assert!(view.read_with(cx, |view, _| view.browser.active_user_profile().history.is_empty()));
 }
+
+#[gpui::test]
+fn private_multi_selection_cannot_create_or_move_into_persistent_folders(cx:&mut TestAppContext) {
+    let (view,cx,fake)=private(cx);
+    let a=view.read_with(cx,|w,_|w.browser.space().active_tab.unwrap());
+    let b=view.update(cx,|w,_|w.edit_browser(|browser|browser.new_tab("https://private.example/second",std::time::SystemTime::UNIX_EPOCH)));cx.run_until_parked();
+    click(cx,test_selector(format!("tab-{}",a.get())));
+    modifier_click(cx,test_selector(format!("tab-{}",b.get())),Modifiers {platform:true,..Modifiers::none()});
+    right_click(cx,test_selector(format!("tab-{}",b.get())));let mut menu=tab_menu(&view,cx);fake.take_calls();
+    click(&mut menu,"tab-menu-new-folder-with-tab");click(&mut menu,"tab-menu-move-to");cx.run_until_parked();
+    view.read_with(cx,|w,_| {assert!(w.command_bar.is_none());assert!(w.browser.space().folders.is_empty());assert!(w.browser.space().pinned.is_empty());assert_eq!(w.browser.space().today.len(),2);assert!(w.tab_menu.as_ref().unwrap().submenu.is_none());});
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..)|Call::Create(..)|Call::Close(..))));
+}

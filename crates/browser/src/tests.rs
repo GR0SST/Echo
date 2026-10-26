@@ -10915,8 +10915,8 @@ fn sidebar_multi_selection_folder_action_moves_every_item_and_space_switch_clear
     cx.run_until_parked();
     let mut popup = tab_menu(&view, cx);
     click(&mut popup, "tab-menu-new-folder-with-tab");
-    bar(&view, cx).simulate_input("Selected pages");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.simulate_input("Selected pages");
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         let folder = view.browser.space().folders.iter().find(|folder| folder.name == "Selected pages").unwrap();
@@ -11930,4 +11930,101 @@ fn page_fullscreen_preserves_split_members_and_releases_on_renderer_failure(cx:&
     assert!(!cx.update(|window,_|window.is_fullscreen()));
     cx.executor().advance_clock(Duration::from_secs(2));cx.run_until_parked();
     assert!(view.read_with(cx,|view,_|view.toast.is_none()));
+}
+
+fn select_folder_fixture(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext)->(browser_core::folders::FolderId,browser_core::folders::FolderId,browser_core::TabId) {
+    let (a,b,tab)=view.update(cx,|w,_|w.edit_browser(|browser| {
+        let space=browser.space().id;
+        let a=browser.create_folder(space,None,"Selection A").unwrap();
+        let b=browser.create_folder(space,None,"Selection B").unwrap();
+        let tab=browser.space().active_tab.unwrap();(a,b,tab)
+    }));cx.run_until_parked();
+    modifier_click(cx,test_selector(format!("folder-{}",a.get())),Modifiers {platform:true,..Modifiers::none()});
+    modifier_click(cx,test_selector(format!("folder-{}",b.get())),Modifiers {shift:true,..Modifiers::none()});
+    (a,b,tab)
+}
+#[gpui::test]
+fn folder_modifier_range_and_mixed_copy_leave_the_loaded_document_active(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let (a,b,tab)=select_folder_fixture(&view,cx);fake.take_calls();
+    view.read_with(cx,|w,_| {assert!(w.sidebar_folder_selected(a));assert!(w.sidebar_folder_selected(b));assert_eq!(w.browser.space().active_tab,Some(tab));assert_eq!(w.sidebar_selection_count(),3);});
+    modifier_click(cx,test_selector(format!("tab-{}",tab.get())),Modifiers {platform:true,..Modifiers::none()});
+    assert_eq!(view.read_with(cx,|w,_|w.sidebar_selection_count()),3);
+    right_click(cx,test_selector(format!("folder-{}",a.get())));
+    let mut popup=tab_menu(&view,cx);
+    assert!(popup.debug_bounds("tab-menu-new-folder-with-tab").is_some());
+    click(&mut popup,"tab-menu-copy");cx.run_until_parked();
+    let expected=view.read_with(cx,|w,_|browser_core::links::clean_url(&w.browser.all_tabs().find(|t|t.id==tab).unwrap().url));
+    assert_eq!(cx.update(|_,cx|cx.read_from_clipboard().and_then(|item|item.text())),Some(expected));
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..)|Call::Close(..)|Call::Create(..))));
+}
+#[gpui::test]
+fn mixed_folder_grouping_creates_then_renames_inline_and_undo_preserves_pages(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let (a,b,tab)=select_folder_fixture(&view,cx);
+    modifier_click(cx,test_selector(format!("tab-{}",tab.get())),Modifiers {platform:true,..Modifiers::none()});
+    fake.take_calls();right_click(cx,test_selector(format!("folder-{}",a.get())));
+    click(&mut tab_menu(&view,cx),"tab-menu-new-folder-with-tab");cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.command_bar.is_none()));
+    assert!(cx.debug_bounds("inline-folder-rename").is_some());
+    let mut calls=fake.take_calls();
+    assert!(!calls.iter().any(|call|matches!(call,Call::FocusPage(..))),"{calls:?}");
+    cx.simulate_input("Grouped locally");cx.simulate_keystrokes("enter");cx.run_until_parked();
+    let group=view.read_with(cx,|w,_| {
+        let folder=w.browser.space().folders.iter().find(|f|f.name=="Grouped locally").unwrap();
+        assert_eq!(folder.items,vec![browser_core::folders::PinnedItem::Folder(a),browser_core::folders::PinnedItem::Folder(b),w.browser.pinned_item(tab)]);
+        assert_eq!(w.browser.space().active_tab,Some(tab));folder.id
+    });
+    calls.extend(fake.take_calls());
+    assert!(!calls.iter().any(|call|matches!(call,Call::Navigate(..)|Call::Close(..)|Call::Create(..))));
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|w,_|w.browser.folder(group).unwrap().name.clone()),"Untitled");
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    view.read_with(cx,|w,_| {assert!(w.browser.folder(group).is_none());assert!(w.browser.space().today.iter().any(|t|t.id==tab));assert!(w.browser.folder(a).is_some());assert!(w.browser.folder(b).is_some());});
+    cx.simulate_keystrokes("cmd-shift-z");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|w,_|w.browser.folder(group).unwrap().name.clone()),"Untitled");
+    cx.simulate_keystrokes("cmd-shift-z");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|w,_|w.browser.folder(group).unwrap().name.clone()),"Grouped locally");
+}
+#[gpui::test]
+fn folder_selection_delete_is_atomic_and_escape_keeps_new_untitled_group(cx:&mut TestAppContext) {
+    let (view,cx,_)=open_pages(cx);let (a,b,tab)=select_folder_fixture(&view,cx);
+    // Arc retains the active Today page alongside the folder range.
+    right_click(cx,test_selector(format!("folder-{}",a.get())));
+    click(&mut tab_menu(&view,cx),"tab-menu-close");cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.browser.folder(a).is_none() && w.browser.folder(b).is_none() && !w.browser.all_tabs().any(|t|t.id==tab)));
+    cx.simulate_keystrokes("cmd-z");cx.run_until_parked();
+    view.read_with(cx,|w,_| {assert!(w.browser.folder(a).is_some());assert!(w.browser.folder(b).is_some());assert_eq!(w.browser.space().active_tab,Some(tab));});
+    modifier_click(cx,test_selector(format!("folder-{}",a.get())),Modifiers {platform:true,..Modifiers::none()});
+    modifier_click(cx,test_selector(format!("folder-{}",b.get())),Modifiers {shift:true,..Modifiers::none()});
+    let a=view.read_with(cx,|w,_|w.sidebar_root_selection().unwrap().items.iter().find_map(|i|match i {browser_core::folders::selection::SidebarItem::Folder(id)=>Some(*id),_=>None}).unwrap());
+    right_click(cx,test_selector(format!("folder-{}",a.get())));click(&mut tab_menu(&view,cx),"tab-menu-new-folder-with-tab");cx.run_until_parked();cx.simulate_input("Cancelled name");cx.simulate_keystrokes("escape");cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.browser.space().folders.iter().any(|f|f.name=="Untitled")));assert!(view.read_with(cx,|w,_|w.folder_rename.is_none()));
+}
+
+#[gpui::test]
+fn folder_selection_menu_rejects_a_disappeared_root_instead_of_deleting_the_rest(cx:&mut TestAppContext) {
+    let (view,cx,_)=open_pages(cx);let (a,b,tab)=select_folder_fixture(&view,cx);
+    right_click(cx,test_selector(format!("folder-{}",a.get())));let _popup=tab_menu(&view,cx);
+    view.update(cx,|w,cx| {w.edit_browser(|browser|browser.delete_empty_folder(a));cx.notify();});cx.run_until_parked();
+    cx.simulate_keystrokes("enter");cx.run_until_parked();
+    view.read_with(cx,|w,_| {assert!(w.tab_menu.is_none());assert!(w.browser.folder(b).is_some());assert!(w.browser.all_tabs().any(|t|t.id==tab));});
+}
+
+#[gpui::test]
+fn folder_inline_name_ignores_stale_cef_focus_but_commits_on_a_real_page_focus(cx:&mut TestAppContext) {
+    let (view,cx,fake)=open_pages(cx);let (a,_,_)=select_folder_fixture(&view,cx);
+    right_click(cx,test_selector(format!("folder-{}",a.get())));click(&mut tab_menu(&view,cx),"tab-menu-new-folder-with-tab");cx.run_until_parked();
+    view.update(cx,|w,cx|w.defer_sidebar_focus(cx));cx.run_until_parked();
+    assert!(view.read_with(cx,|w,_|w.folder_rename.is_some()));
+    let source=fake.0.borrow().focused_page.unwrap();
+    {
+        let _owner=crate::native::TestUiResponder::set(true);
+        fake.send(cx,Event::Focused {view:source});
+        assert!(view.read_with(cx,|w,_|w.folder_rename.is_some()));
+        cx.simulate_input("Retained editor");cx.run_until_parked();
+    }
+    {
+        let _owner=crate::native::TestUiResponder::set(false);
+        fake.send(cx,Event::Focused {view:source});
+        view.read_with(cx,|w,_| {assert!(w.folder_rename.is_none());assert!(w.browser.space().folders.iter().any(|f|f.name=="Retained editor"));});
+    }
 }

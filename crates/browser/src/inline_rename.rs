@@ -88,6 +88,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn finish_tab_rename(&mut self, save: bool, cx: &mut Context<Self>) {
+        self.finish_folder_rename(save,cx);
         self.tab_rename_generation += 1;
         self.tab_rename_pending = None;
         let Some(editor) = self.tab_rename.take() else { return; };

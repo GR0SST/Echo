@@ -295,6 +295,7 @@ fn keystroke_for(shortcut: engine::Shortcut) -> Keystroke {
 
 pub fn bind_keys(cx: &mut App) {
     crate::inline_rename::bind_keys(cx);
+    crate::inline_folder_rename::bind_keys(cx);
     bind_window_keys(cx);
     let bar = Some(COMMAND_BAR_CONTEXT);
     cx.bind_keys([
@@ -779,6 +780,9 @@ pub struct BrowserWindow {
     pub(crate) user_profile_dialog: Option<crate::user_profiles::ProfileDialogHost>,
     pub(crate) setup: Option<crate::setup::SetupHost>,
     pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
+    pub(crate) folder_rename: Option<crate::inline_folder_rename::FolderRename>,
+    pub(crate) folder_rename_generation:u64,
+    pub(crate) folder_rename_pending:Option<browser_core::folders::FolderId>,
     pub(crate) tab_rename_pending: Option<TabId>,
     pub(crate) tab_rename_generation: u64,
     pub(crate) find_bar: Option<crate::find::FindBar>,
@@ -1130,6 +1134,9 @@ impl BrowserWindow {
             user_profile_dialog: None,
             setup: None,
             tab_rename: None,
+            folder_rename:None,
+            folder_rename_generation:0,
+            folder_rename_pending:None,
             tab_rename_pending: None,
             tab_rename_generation: 0,
             find_bar: None,
@@ -1410,7 +1417,12 @@ impl BrowserWindow {
                     || self.browser.user_profile_id_for_tab(identity.tab) != Some(identity.profile) { continue; }
             }
             let page_profile = identity.map(|identity| identity.profile);
-            if matches!(&event, Event::Focused { .. }) && (self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.navigation_history.menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
+            // Menu teardown can queue a page Focused callback before the
+            // inline editor becomes the actual responder. Do not replay it
+            // over a newer UI focus; a real page click changes the responder.
+            if matches!(&event,Event::Focused {..}) && self.folder_rename.is_some()
+                && crate::native::ui_owns_first_responder(window)==Some(true) {continue;}
+            if matches!(&event, Event::Focused { .. }) && (self.folder_rename_pending.is_some() || self.save_prompt_active || !self.native_page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.command_bar.is_some() || self.tab_switcher.is_some() || self.find_bar.is_some() || self.tab_menu.is_some() || self.navigation_history.menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some()) { continue; }
             let extension_metadata_changed = matches!(&event,
                 Event::LoadingChanged { .. } | Event::TitleChanged { .. } |
                 Event::UrlChanged { .. } | Event::AudioStateChanged { .. });
@@ -1863,7 +1875,7 @@ impl BrowserWindow {
 
     pub(crate) fn popup_owns_focus(&self) -> bool {
         self.save_prompt_active || self.extension_surface_owns_focus() || self.capture.is_some() || self.tab_switcher.is_some() || self.transient.as_ref().is_some_and(|state| state.picker.is_some()) || !self.page_content_visible() || self.theme_editor.is_some() || self.setup.is_some() || self.passwords.prompt.is_some() || self.user_profile_dialog.is_some() || self.live_folders.sheet.is_some() || self.navigation_history.menu.is_some() || self.site_controls.is_some() || self.new_menu.is_some() || self.command_bar.is_some() || self.tab_menu.is_some() || self.find_bar.is_some()
-            || self.tab_rename.is_some() || self.tab_rename_pending.is_some()
+            || self.tab_rename.is_some() || self.tab_rename_pending.is_some() || self.folder_rename.is_some() || self.folder_rename_pending.is_some()
     }
 
     /// Native activation may be asynchronous (GPUI's macOS backend queues
@@ -2769,7 +2781,7 @@ impl BrowserWindow {
         if self.setup.is_some() { self.close_setup(cx); return; }
         if self.live_folders.sheet.is_some() { self.close_live_connection(cx); return; }
         if self.user_profile_dialog.is_some() { self.close_user_profile_dialog(cx); return; }
-        let editing_name = self.tab_rename.is_some();
+        let editing_name = self.tab_rename.is_some() || self.folder_rename.is_some();
         self.close_focused_tab(cx);
         if editing_name { self.focus_handle.focus(window); }
     }
@@ -4902,7 +4914,7 @@ impl Render for BrowserWindow {
         let _ = crate::native::view_of(window);
         if let Some(pages)=&self.pages { pages.borrow_mut().sync_shortcuts(crate::shortcuts::page(cx)); }
         if window.is_window_active() {
-            let sidebar = self.command_bar.is_none() && self.tab_rename.is_none()
+            let sidebar = self.command_bar.is_none() && self.tab_rename.is_none() && self.folder_rename.is_none() && self.folder_rename_pending.is_none()
                 && !self.browser.active_tab().is_some_and(|tab| self.pages.as_ref().is_some_and(|pages| pages.borrow().state(tab.id).editable));
             let labels = if let Some(owner) = self.peek_owner.as_ref().and_then(|state| state.owner.upgrade()) {
                 let owner = owner.read(cx); (owner.browser.sidebar_undo_action(), owner.browser.sidebar_redo_action())
@@ -4910,7 +4922,7 @@ impl Render for BrowserWindow {
             crate::menus::sync_pinned(self.browser.active_tab().is_some_and(|tab| tab.pinned_url.is_some()), cx);
             crate::menus::sync_developer_mode(self.developer_mode_enabled(), cx);
             crate::menus::sync_appearance(self.theme_appearance(), cx);
-            crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, self.sidebar_selection_items().len() > 1, cx);
+            crate::menus::sync_sidebar_undo(if sidebar { labels.0 } else { None }, if sidebar { labels.1 } else { None }, self.sidebar_selection_count() > 1, cx);
         }
         if crate::quit::is_quitting() {
             return div().size_full().p_8().bg(gpui::rgb(0x202126)).text_color(gpui::rgb(0xf2f2f2))
@@ -4935,6 +4947,7 @@ impl Render for BrowserWindow {
             window.set_background_appearance(if theme_blurred { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque });
             self.theme_background_blurred = Some(theme_blurred);
         }
+        if !self.folder_rename_is_current() {self.finish_folder_rename(false,cx);}
         if self.tab_rename.as_ref().is_some_and(|editor| !self.can_rename_tab_inline_for(editor.space, editor.profile, editor.tab)) {
             self.finish_tab_rename(false, cx);
         }
@@ -5041,7 +5054,7 @@ impl Render for BrowserWindow {
                 .on_action(cx.listener(|this, _: &crate::menus::ChangeProfile, _, cx| { let space = this.browser.space().id; this.open_user_profile_switch(space, cx); })))
             .on_action(cx.listener(|this, _: &crate::menus::EditTheme, window, cx| { let space = this.browser.space().id; this.open_theme_editor(space, window, cx); }))
             .on_action(cx.listener(|this, _: &crate::menus::CloseWindow, _, cx| this.close_window(cx)))
-            .when(self.tab_rename.is_none(), |this| this
+            .when(self.tab_rename.is_none() && self.folder_rename.is_none() && self.folder_rename_pending.is_none(), |this| this
                 .on_action(cx.listener(|this, _: &crate::text_input::Undo, window, cx| this.edit_undo(false, window, cx)))
                 .on_action(cx.listener(|this, _: &crate::text_input::Redo, window, cx| this.edit_undo(true, window, cx))))
             .on_action(cx.listener(|this, _: &crate::history::ViewHistory, window, cx| this.open_history(window, cx)))

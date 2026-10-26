@@ -24,6 +24,35 @@ pub fn view_of(window: &gpui::Window) -> Option<*mut c_void> {
     Some(view)
 }
 
+/// Current responder ownership, rather than an asynchronously queued CEF
+/// notification. Backends without a native query keep the existing behavior.
+pub(crate) fn ui_owns_first_responder(window:&gpui::Window)->Option<bool> {
+    #[cfg(test)]
+    if let Some(value)=TEST_UI_RESPONDER.with(|owner|owner.get()) {return Some(value);}
+    #[cfg(target_os="macos")]
+    if let Some(view)=view_of(window) {
+        use objc2::runtime::AnyObject;
+        unsafe {
+            let native_window:*mut AnyObject=objc2::msg_send![view as *mut AnyObject,window];
+            if native_window.is_null() {return None;}
+            let responder:*mut AnyObject=objc2::msg_send![native_window,firstResponder];
+            return Some(responder==view.cast());
+        }
+    }
+    let _=window;None
+}
+
+#[cfg(test)]
+thread_local! {static TEST_UI_RESPONDER:std::cell::Cell<Option<bool>>=const {std::cell::Cell::new(None)};}
+#[cfg(test)]
+pub(crate) struct TestUiResponder(Option<bool>);
+#[cfg(test)]
+impl TestUiResponder {
+    pub(crate) fn set(owner:bool)->Self {Self(TEST_UI_RESPONDER.with(|value|value.replace(Some(owner))))}
+}
+#[cfg(test)]
+impl Drop for TestUiResponder {fn drop(&mut self) {TEST_UI_RESPONDER.with(|value|value.set(self.0));}}
+
 /// Native minimized state, which GPUI does not currently expose.
 pub(crate) fn window_minimized(window: &gpui::Window) -> bool {
     #[cfg(target_os = "macos")]

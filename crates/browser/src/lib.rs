@@ -80,6 +80,7 @@ mod space_drag;
 mod tab_drag;
 mod folder_drag;
 mod inline_rename;
+mod inline_folder_rename;
 mod link_status;
 mod page_zoom;
 mod navigation_history;

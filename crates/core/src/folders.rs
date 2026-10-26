@@ -10,6 +10,7 @@ mod copy;
 mod convert;
 mod order;
 pub mod archive;
+pub mod selection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FolderId(u64);

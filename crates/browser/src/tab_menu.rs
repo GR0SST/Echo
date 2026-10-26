@@ -210,12 +210,13 @@ pub(crate) fn short_title(title: &str) -> String {
 
 impl BrowserWindow {
     pub(crate) fn open_tab_menu(&mut self, tab: TabId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let target = if self.sidebar_item_selected(tab) && self.sidebar_selection_items().len() > 1 { MenuTarget::Selection(self.browser.space().id) } else { MenuTarget::Tab(tab) };
+        let target = if self.sidebar_item_selected(tab) && self.sidebar_selection_count() > 1 { MenuTarget::Selection(self.browser.space().id) } else { MenuTarget::Tab(tab) };
         self.open_sidebar_menu(target, position, window, cx);
     }
 
     pub(crate) fn open_folder_menu(&mut self, folder: FolderId, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_sidebar_menu(MenuTarget::Folder(folder), position, window, cx);
+        let target=if self.sidebar_folder_selected(folder) && self.sidebar_selection_count()>1 {MenuTarget::Selection(self.browser.space().id)} else {MenuTarget::Folder(folder)};
+        self.open_sidebar_menu(target, position, window, cx);
     }
 
     pub(crate) fn menu_target_exists(&self, target: MenuTarget) -> bool {
@@ -223,7 +224,7 @@ impl BrowserWindow {
             MenuTarget::Extension(id,profile) => self.browser.active_user_profile_id()==profile && self.extensions.profile==Some(profile) && self.extensions.entries.iter().any(|entry| entry.key()==Some(id)),
             MenuTarget::Tab(tab) => self.browser.active_user_profile().favorites.iter().chain(&self.browser.space().pinned).chain(&self.browser.space().today).any(|entry| entry.id == tab),
             MenuTarget::Folder(id) => self.browser.folder_space(id) == Some(self.browser.space().id),
-            MenuTarget::Selection(id) => self.browser.space().id == id && self.sidebar_selection_items().len() > 1,
+            MenuTarget::Selection(id) => self.browser.space().id == id && self.sidebar_selection_count() > 1,
             MenuTarget::SpaceDelete(id) => !self.browser.is_private() && self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Space(id) => self.browser.spaces.iter().any(|space| space.id == id),
             MenuTarget::Address => self.browser.active_tab().is_some(),
@@ -775,6 +776,7 @@ impl BrowserWindow {
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
+                        if !enabled {return;}
                         if has_submenu {
                             if let Some(menu) = &mut this.tab_menu { menu.selected = Some(index); menu.submenu = Some(index); }
                             cx.notify();

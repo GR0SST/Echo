@@ -8,6 +8,7 @@ mod archive;
 pub(crate) use archive::ArchiveCapture;
 mod pane;
 mod space;
+pub(crate) mod folder;
 pub(crate) use pane::PaneCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,11 +164,21 @@ pub(crate) fn insertion_index<T: Copy + Eq>(current: &[T], desired: &[T], item: 
 struct PinEdit { before: PinState, after: PinState }
 
 #[derive(Clone, Debug)]
-enum SidebarEdit { FolderArchive(crate::folders::archive::FolderArchiveEdit), Space(space::SpaceEdit), Batch(Vec<SidebarEdit>), Tidy(crate::max::TidyEdit), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Appearance { before: crate::themes::ThemeAppearance, after: crate::themes::ThemeAppearance }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
+enum SidebarEdit { Folder(folder::FolderEdit), FolderArchive(crate::folders::archive::FolderArchiveEdit), Space(space::SpaceEdit), Batch(Vec<SidebarEdit>), Tidy(crate::max::TidyEdit), PeekClose(u64), Pin(PinEdit), Archive(archive::ArchiveEdit), Pane(pane::PaneEdit), RemovePin { pin: PinEdit, archive: archive::ArchiveEdit }, Appearance { before: crate::themes::ThemeAppearance, after: crate::themes::ThemeAppearance }, Theme { space: SpaceId, before: Option<crate::themes::SpaceTheme>, after: Option<crate::themes::SpaceTheme> } }
 
 impl SidebarEdit {
+    fn label(&self) -> Option<&'static str> {
+        match self {
+            Self::Folder(folder::FolderEdit::Rename {..}) => Some("Rename Item"),
+            Self::Batch(edits) if matches!(edits.first(),Some(Self::Folder(folder::FolderEdit::Presence {created:true,..}))) => Some("New Folder…"),
+            Self::Space(edit) => Some(edit.label()), Self::Tidy(_) => Some("Tidy Tabs"),
+            Self::Appearance {..} => Some("Update Appearance"), Self::Theme {..} => Some("Update Theme"), Self::PeekClose(_) => Some("Close Peek"),
+            _ => None,
+        }
+    }
     fn apply(&mut self, redo: bool, browser: &mut Browser, now: std::time::SystemTime) -> bool {
         match self {
+            Self::Folder(edit) => edit.apply(redo, browser),
             Self::FolderArchive(edit) => edit.apply(redo, browser, now),
             Self::Space(edit) => edit.apply(redo, browser, now),
             Self::Batch(edits) => {
@@ -215,7 +226,7 @@ impl SidebarEdit {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SidebarHistory { undo: Vec<SidebarEdit>, redo: Vec<SidebarEdit> }
+pub(crate) struct SidebarHistory { undo: Vec<SidebarEdit>, redo: Vec<SidebarEdit>, collecting: bool }
 
 impl SidebarHistory {
     pub(crate) fn record_folder_archive(&mut self, edit: crate::folders::archive::FolderArchiveEdit) { self.record(SidebarEdit::FolderArchive(edit)); }
@@ -233,7 +244,7 @@ impl SidebarHistory {
 
     fn record(&mut self, edit: SidebarEdit) {
         self.redo.clear();
-        if self.undo.len() == HISTORY_LIMIT { self.undo.remove(0); }
+        if !self.collecting && self.undo.len() == HISTORY_LIMIT { self.undo.remove(0); }
         self.undo.push(edit);
     }
 }
@@ -254,17 +265,15 @@ impl Browser {
         for id in items.iter().map(|id| self.item_anchor(*id)) {
             if !ids.contains(&id) && self.space().pinned.iter().chain(&self.space().today).any(|tab| tab.id == id) { ids.push(id); }
         }
-        let history = std::mem::take(&mut self.sidebar_history);
-        let mut count = 0;
-        for id in ids {
-            let pinned = self.space().pinned.iter().any(|tab| tab.id == id);
-            let closed = if pinned { self.remove_pin(id, now) } else { self.close_tab(id, now) };
-            if closed == Some(crate::Closed::Archived) { count += 1; }
-        }
-        let edits = std::mem::take(&mut self.sidebar_history.undo);
-        self.sidebar_history = history;
-        if !edits.is_empty() { self.sidebar_history.record(SidebarEdit::Batch(edits)); }
-        count
+        self.sidebar_batch(|browser| {
+            let mut count = 0;
+            for id in ids {
+                let pinned = browser.space().pinned.iter().any(|tab| tab.id == id);
+                let closed = if pinned { browser.remove_pin(id, now) } else { browser.close_tab(id, now) };
+                if closed == Some(crate::Closed::Archived) { count += 1; }
+            }
+            count
+        })
     }
 
     /// Opaque identities for an archive accessory; other edits must never be
@@ -287,10 +296,10 @@ impl Browser {
         else { self.sidebar_history.undo.push(edit); false }
     }
     pub fn sidebar_undo_action(&self) -> Option<&'static str> {
-        match self.sidebar_history.undo.last() { Some(SidebarEdit::Space(edit)) => Some(edit.label()), Some(SidebarEdit::Tidy(_)) => Some("Tidy Tabs"), Some(SidebarEdit::Appearance { .. }) => Some("Update Appearance"), Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
+        self.sidebar_history.undo.last().and_then(SidebarEdit::label)
     }
     pub fn sidebar_redo_action(&self) -> Option<&'static str> {
-        match self.sidebar_history.redo.last() { Some(SidebarEdit::Space(edit)) => Some(edit.label()), Some(SidebarEdit::Tidy(_)) => Some("Tidy Tabs"), Some(SidebarEdit::Appearance { .. }) => Some("Update Appearance"), Some(SidebarEdit::Theme { .. }) => Some("Update Theme"), Some(SidebarEdit::PeekClose(_)) => Some("Close Peek"), _ => None }
+        self.sidebar_history.redo.last().and_then(SidebarEdit::label)
     }
 
     /// The UI owns the retained live renderer; the core only orders its opaque
