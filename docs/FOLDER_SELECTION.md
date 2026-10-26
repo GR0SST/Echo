@@ -95,7 +95,52 @@ history transactions.
 
 ## Acceptance remaining
 
-- Second structural Undo and extended discontiguous-anchor qualification in Arc.
+- Second structural Undo in Arc, hidden/collapsed-tree selection and cross-window deactivation.
 - Live Folder mixed actions, folder sibling insertion, compound Split creation, cross-profile folder
-  promotion and complete dismissal/alternate-state qualification remain partial.
+  promotion and cross-window/alternate-state qualification remain partial.
 - Color/glyph/material/motion polish is deferred by the release strategy.
+
+## Extended range qualification, 2026-10-26
+
+Two fresh guarded Echo Test references qualify a discontiguous selection with
+three empty owned folders A/B/C and a current Today page. Command-click A,
+Command-click C, Shift-click B selects all three folders plus the current page.
+Escape and a click on the page preserve that selection. Repeating Shift-B
+replaces the range with B/C/current; Shift-A expands to A/B/C/current.
+Command-B removes B (its right-click then offers the single-folder menu), and
+Shift-C retains A/C/current. This fixes the former sticky-first-click anchor,
+which dropped C on the first Shift and produced different subsequent ranges.
+A new GPUI regression drives this complete sequence and menu/page dismissal.
+It fails against the old behavior before the fix.
+
+Arc evidence: `target/parity/functional-sidebar/folder-extended-reference/`
+(nonce `70972b5`) and `folder-range-shrink-reference/` (`f757604`), with screenshots,
+menu inventories and cleanup receipts. The second wrapper reached its time limit
+after its measurements and cleanup; its receipts show no owned windows or drag
+layers left. Both sessions protected the two windows present in the fresh
+inventory (Work 72640 and Grosst 72508); earlier recovered IDs were already gone
+before input. Unrelated system file-access prompts were untouched.
+
+Folder insertion remains unqualified. The hover-only `folder-insertion-reference/`,
+`folder-insertion-quartz-reference/` and `folder-insertion-icon-reference/` attempts
+never exposed a drag card or insertion marker, even when the shared left-button
+state was confirmed down. They are diagnostic, not positive drag references.
+Every attempt sent Escape and mouse-up, cleaned its own empty folders and page,
+closed its root, and verified no held button or Arc layer>0 full-screen window.
+No drop was performed. No insertion UI or behavior was inferred from these attempts.
+
+Native before/after checks both terminate normally (exit 0):
+`target/parity/functional-sidebar/folder-extended-before-native/result.json`
+(`2aeb7b9`) reproduces the missing C and incorrect subsequent ranges;
+`folder-extended-native/result.json` (`f10854e`) verifies the corrected live page.
+Its document marker stays RGB (160, 101, 90) across all actions, Source is requested
+once, IDs 201/202/203 and Today 100 remain unchanged, and CEF Complete precedes
+exactly-once native termination. Both isolated fixtures disable Warn before
+quitting; owner preferences are untouched.
+
+Inspected 2× Arc / Echo-before / Echo-after crops:
+`target/parity/functional-sidebar/pairs/folder-range-{first,repeat,expanded,last}.png`.
+Selected roots and menu counts match (4 → 3 → 4 → 3). These are behavior evidence;
+selection tint, folder glyphs, menu material/geometry and the excluded cloud Share
+row still differ. The native after-page capture and GPUI menu/page dismissal
+checks retain the corrected selection without navigation.

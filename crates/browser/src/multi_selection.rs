@@ -10,6 +10,7 @@ pub(crate) struct SidebarSelection {
     profile: Option<browser_core::UserProfileId>,
     anchor: Option<SidebarItem>,
     ids: Vec<SidebarItem>,
+    extending_range: bool,
     pub(crate) new_space_selection: Option<ItemSelection>,
     pub(crate) new_space_items: Vec<TabId>,
 }
@@ -64,19 +65,27 @@ impl BrowserWindow {
         }
         let active=self.browser.space().active_tab.map(|id|SidebarItem::Tab(self.browser.item_anchor(id))).filter(|id|order.contains(id));
         if modifiers.shift {
-            let anchor=self.sidebar_selection.anchor.or(active).unwrap_or(id);
+            let anchor=active.or(self.sidebar_selection.anchor).unwrap_or(id);
             let a=order.iter().position(|entry|*entry==anchor).unwrap_or(0);
             let b=order.iter().position(|entry|*entry==id).unwrap();
+            let previous=std::mem::take(&mut self.sidebar_selection.ids);
             self.sidebar_selection.ids=order[a.min(b)..=a.max(b)].to_vec();
+            // The first Shift click extends a discontiguous Cmd selection.
+            // Further Shift clicks replace that range around the current page.
+            if !self.sidebar_selection.extending_range {
+                for item in previous {if !self.sidebar_selection.ids.contains(&item) {self.sidebar_selection.ids.push(item);}}
+            }
+            self.sidebar_selection.extending_range=true;
             // Arc keeps the current page in the sidebar selection even when
             // the extended range is elsewhere (folder-range-reference).
             if let Some(active)=active {if !self.sidebar_selection.ids.contains(&active) {self.sidebar_selection.ids.push(active);}}
         } else if modifiers.platform {
+            self.sidebar_selection.extending_range=false;
             if self.sidebar_selection.ids.is_empty() {if let Some(active)=active {self.sidebar_selection.ids.push(active);}}
             if let Some(index)=self.sidebar_selection.ids.iter().position(|entry|*entry==id) {if Some(id)!=active {self.sidebar_selection.ids.remove(index);}} else {self.sidebar_selection.ids.push(id);}
             if self.sidebar_selection.anchor.is_none() {self.sidebar_selection.anchor=Some(id);}
         } else {
-            self.sidebar_selection.ids.clear();self.sidebar_selection.anchor=Some(id);return false;
+            self.sidebar_selection.ids.clear();self.sidebar_selection.extending_range=false;self.sidebar_selection.anchor=Some(id);return false;
         }
         cx.notify();true
     }

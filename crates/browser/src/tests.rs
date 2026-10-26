@@ -10861,6 +10861,49 @@ fn modifier_click(cx: &mut VisualTestContext, selector: &'static str, modifiers:
 }
 
 #[gpui::test]
+fn discontiguous_folder_ranges_extend_then_replace_and_survive_dismissal(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let (a,b,c,tab) = view.update(cx, |w, _| w.edit_browser(|browser| {
+        let space=browser.space().id;
+        let a=browser.create_folder(space,None,"Extended A").unwrap();
+        let b=browser.create_folder(space,None,"Extended B").unwrap();
+        let c=browser.create_folder(space,None,"Extended C").unwrap();
+        (a,b,c,browser.space().active_tab.unwrap())
+    }));
+    cx.run_until_parked();fake.take_calls();
+    let command=Modifiers {platform:true,..Modifiers::none()};
+    let shift=Modifiers {shift:true,..Modifiers::none()};
+    for id in [a,c] {modifier_click(cx,test_selector(format!("folder-{}",id.get())),command);}
+    let assert_selected=|expected: &[browser_core::folders::FolderId],cx: &VisualTestContext| {
+        view.read_with(cx,|w,_| {
+            for id in [a,b,c] {assert_eq!(w.sidebar_folder_selected(id),expected.contains(&id),"folder {id:?}");}
+            assert!(w.sidebar_item_selected(tab));
+            assert_eq!(w.sidebar_selection_count(),expected.len()+1);
+            assert_eq!(w.browser.space().active_tab,Some(tab));
+        });
+    };
+    assert_selected(&[a,c],cx);
+    modifier_click(cx,test_selector(format!("folder-{}",b.get())),shift);
+    assert_selected(&[a,b,c],cx);
+    // Arc replaces the prior Shift range on a repeated click; its current
+    // page is the stable range anchor, even after discontiguous Cmd clicks.
+    modifier_click(cx,test_selector(format!("folder-{}",b.get())),shift);
+    assert_selected(&[b,c],cx);
+    right_click(cx,test_selector(format!("folder-{}",b.get())));
+    tab_menu(&view,cx).simulate_keystrokes("escape");cx.run_until_parked();
+    assert_selected(&[b,c],cx);
+    cx.simulate_click(gpui::point(gpui::px(600.),gpui::px(300.)),Modifiers::none());cx.run_until_parked();
+    assert_selected(&[b,c],cx);
+    modifier_click(cx,test_selector(format!("folder-{}",a.get())),shift);
+    assert_selected(&[a,b,c],cx);
+    modifier_click(cx,test_selector(format!("folder-{}",b.get())),command);
+    assert_selected(&[a,c],cx);
+    modifier_click(cx,test_selector(format!("folder-{}",c.get())),shift);
+    assert_selected(&[a,c],cx);
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(..)|Call::Navigate(..)|Call::Close(..))));
+}
+
+#[gpui::test]
 fn sidebar_multi_selection_modifiers_preserve_the_active_page_and_follow_visible_order(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let (a,b,c) = view.update(cx, |view, _| view.edit_browser(|browser| {
