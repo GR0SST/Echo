@@ -4966,6 +4966,7 @@ impl Render for BrowserWindow {
             self.close_find(cx);
         }
         self.sync_page_fullscreen(window, cx);
+        self.sync_web_theme_palette(cx);
         self.sync_page_viewport();
         self.sync_extension_model(window, cx);
         if let Some(pages) = &self.pages {

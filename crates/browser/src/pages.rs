@@ -165,6 +165,7 @@ pub trait WebEngine {
     fn move_view(&mut self, _view: ViewId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds);
     fn exit_fullscreen(&mut self, _view: ViewId) {}
+    fn set_page_palette(&mut self, _view: ViewId, _palette: Option<engine::PagePalette>) -> bool { true }
     fn set_viewport_clip(&mut self, _view: ViewId, _clip: Option<Bounds>) {}
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
@@ -441,6 +442,7 @@ impl WebEngine for Chromium {
             .create_view(self.parent, url, bounds, f64::from(CONTENT_CORNER_RADIUS))
     }
     fn exit_fullscreen(&mut self, view: ViewId) { self.engine.exit_fullscreen(view); }
+    fn set_page_palette(&mut self, view: ViewId, palette: Option<engine::PagePalette>) -> bool { self.engine.set_page_palette(view, palette) }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
         self.engine.set_frame(view, bounds)
     }
@@ -521,6 +523,7 @@ struct Page {
     state: PageState,
     muted: bool,
     color_scheme: Option<bool>,
+    web_palette: Option<Option<engine::PagePalette>>,
     snapshot: Option<(u64, Arc<Vec<u8>>)>,
     snapshot_pending: Option<u64>,
     snapshot_origin: Option<(u64, Bounds)>,
@@ -839,7 +842,7 @@ impl Pages {
         if item.muted { store.engine.set_audio_muted(view,true); }
         store.pages.insert(tab,Page { input_attachment:0, identity, source_space, owner:self.host,
             frame, visible:false, view, url:item.url.clone(), state:PageState {loading:true,..Default::default()},
-            muted:item.muted,color_scheme:None,snapshot:None,snapshot_pending:None,snapshot_origin:None,snapshot_good_origin:None });
+            muted:item.muted,color_scheme:None,web_palette:None,snapshot:None,snapshot_pending:None,snapshot_origin:None,snapshot_good_origin:None });
         Ok(true)
     }
     pub(crate) fn navigate_extension_tab(&mut self, tab: TabId, url: &str) {
@@ -1473,6 +1476,19 @@ impl Pages {
         }
     }
 
+    pub(crate) fn set_theme_palette(&mut self, palette: Option<engine::PagePalette>) {
+        let mut store = self.store.borrow_mut();
+        let PageStore { engine, pages, .. } = &mut *store;
+        for (tab, page) in pages.iter_mut().filter(|(_, page)| page.owner == self.host) {
+            // Opt-out clears every owned retained page, including background Spaces.
+            // Enabled colors belong to this window's visible Space, never another host.
+            if palette.is_some() && (!self.visible.contains(tab) || page.state.loading) { continue; }
+            if page.web_palette != Some(palette) && engine.set_page_palette(page.view, palette) {
+                page.web_palette = Some(palette);
+            }
+        }
+    }
+
     pub(crate) fn set_fullscreen_tab(&mut self, tab: Option<TabId>) {
         if self.fullscreen_tab != tab {
             self.fullscreen_tab = tab;
@@ -1602,7 +1618,7 @@ impl Pages {
                     };
                     created = true;
                     if muted { engine.set_audio_muted(view, true); }
-                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
+                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, web_palette: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
             let clip = self.viewport_clip.filter(|_| self.viewport.retains_library_page()).map(|clip| {
@@ -2275,6 +2291,7 @@ impl Pages {
             } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
                     page.state.loading = *loading && page.state.crashed.is_none();
+                    page.web_palette = None;
                     page.state.can_go_back = *can_go_back;
                     page.state.can_go_forward = *can_go_forward;
                     if *loading { page.state.status.clear(); }

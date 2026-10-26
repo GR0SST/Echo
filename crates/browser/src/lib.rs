@@ -86,6 +86,7 @@ mod page_zoom;
 mod navigation_history;
 mod page_loading;
 mod page_fullscreen;
+mod web_theme;
 mod status_url;
 mod private;
 mod profile;

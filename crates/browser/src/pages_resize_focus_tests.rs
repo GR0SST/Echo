@@ -62,7 +62,7 @@ fn fixture_for_tab(inspector: bool, tab: TabId) -> (Pages, Rc<RefCell<FocusState
         store.pages.insert(tab, Page {
             input_attachment: 3, identity, source_space: serde_json::from_str("1").unwrap(), owner: pages.host,
             frame: Bounds::default(), visible: true, view, url: "https://example.com".into(),
-            state: PageState::default(), muted: false, color_scheme: None, snapshot: None, snapshot_pending: None,
+            state: PageState::default(), muted: false, color_scheme: None, web_palette: None, snapshot: None, snapshot_pending: None,
             snapshot_origin: None, snapshot_good_origin: None,
         });
         if inspector {

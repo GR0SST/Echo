@@ -320,6 +320,7 @@ enum Call {
 /// the next pump, as if the page reported them.
 #[derive(Default)]
 struct FakeState {
+    page_palettes: Vec<(ViewId, Option<engine::PagePalette>)>,
     shortcut_keys: Vec<engine::Shortcut>,
     shortcut_priorities: Vec<(engine::Shortcut, engine::ShortcutPriority)>,
     data_clear_reply: Option<Rc<RefCell<Option<Result<(),String>>>>>,
@@ -404,6 +405,7 @@ impl FakeEngine {
 }
 
 impl WebEngine for FakeEngine {
+    fn set_page_palette(&mut self, view: ViewId, palette: Option<engine::PagePalette>) -> bool { self.0.borrow_mut().page_palettes.push((view,palette)); true }
     fn request_navigation_history(&mut self,view:ViewId)->Option<engine::NavigationHistoryRequest> {
         self.call(Call::HistoryRequest(raw(view)));
         self.0.borrow().navigation_histories.get(&raw(view)).cloned().map(|history|engine::NavigationHistoryRequest::completed(Ok(history)))
@@ -12059,6 +12061,164 @@ fn folder_inline_name_ignores_stale_cef_focus_but_commits_on_a_real_page_focus(c
         fake.send(cx,Event::Focused {view:source});
         view.read_with(cx,|w,_| {assert!(w.folder_rename.is_none());assert!(w.browser.space().folders.iter().any(|f|f.name=="Retained editor"));});
     }
+}
+#[gpui::test]
+fn web_theme_setting_clears_retained_documents_and_reapplies_on_selection(cx: &mut TestAppContext) {
+    use browser_core::settings::Toggle;
+    let (view, cx, fake) = open_pages(cx);
+    let source = view.read_with(cx, |view,_| view.browser.space().active_tab.unwrap());
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://palette-second.example/");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+        fake.0
+            .borrow()
+            .page_palettes
+            .iter()
+            .any(|(id, value)| *id == page(1) && value.is_some())
+    );
+    assert!(
+        fake.0
+            .borrow()
+            .page_palettes
+            .iter()
+            .any(|(id, value)| *id == page(2) && value.is_some())
+    );
+    let before = today_urls(&view, cx);
+    fake.take_calls();
+    fake.0.borrow_mut().page_palettes.clear();
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Advanced");
+    click(&mut settings, "settings-toggle-ThemeData");
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |view, _| {
+        view.browser.settings.enabled(Toggle::ThemeData)
+    }));
+    for id in [page(1), page(2)] {
+        assert!(fake.0.borrow().page_palettes.contains(&(id, None)));
+    }
+    fake.0.borrow_mut().page_palettes.clear();
+    click(&mut settings, "settings-toggle-ThemeData");
+    settings.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    assert!(
+        fake.0
+            .borrow()
+            .page_palettes
+            .iter()
+            .any(|(id, value)| *id == page(2) && value.is_some())
+    );
+    assert!(
+        !fake
+            .0
+            .borrow()
+            .page_palettes
+            .iter()
+            .any(|(id, value)| *id == page(1) && value.is_some())
+    );
+    click(cx, test_selector(format!("tab-{}",source.get())));
+    cx.run_until_parked();
+    assert!(
+        fake.0
+            .borrow()
+            .page_palettes
+            .iter()
+            .any(|(id, value)| *id == page(1) && value.is_some())
+    );
+    assert_eq!(today_urls(&view, cx), before);
+    assert!(!fake.take_calls().iter().any(|call| matches!(
+        call,
+        Call::Create(..) | Call::Close(..) | Call::Navigate(..) | Call::Reload(..)
+    )));
+}
+
+#[gpui::test]
+fn web_theme_tracks_appearance_and_reapplies_after_document_load(cx: &mut TestAppContext) {
+    use browser_core::themes::ThemeAppearance;
+    let (view, cx, fake) = open_pages(cx);
+    view.update(cx, |view, cx| {
+        view.edit_profile(|browser| browser.settings.theme_appearance = ThemeAppearance::Dark);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let dark = view
+        .read_with(cx, |view, cx| view.web_theme_palette(cx))
+        .unwrap();
+    fake.0.borrow_mut().page_palettes.clear();
+    view.update(cx, |view, cx| {
+        view.edit_profile(|browser| browser.settings.theme_appearance = ThemeAppearance::Light);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let light = view
+        .read_with(cx, |view, cx| view.web_theme_palette(cx))
+        .unwrap();
+    assert_ne!(dark, light);
+    assert!(
+        fake.0
+            .borrow()
+            .page_palettes
+            .contains(&(page(1), Some(light)))
+    );
+    fake.0.borrow_mut().page_palettes.clear();
+    fake.send(
+        cx,
+        Event::LoadingChanged {
+            view: page(1),
+            loading: true,
+            can_go_back: false,
+            can_go_forward: false,
+        },
+    );
+    assert!(fake.0.borrow().page_palettes.is_empty());
+    fake.send(
+        cx,
+        Event::LoadingChanged {
+            view: page(1),
+            loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+        },
+    );
+    assert!(
+        fake.0
+            .borrow()
+            .page_palettes
+            .contains(&(page(1), Some(light)))
+    );
+    fake.0.borrow_mut().page_palettes.clear();
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        fake.0.borrow().page_palettes.is_empty(),
+        "Unchanged frames must not keep injecting sheets"
+    );
+}
+
+#[gpui::test]
+fn web_theme_private_window_uses_the_normal_install_opt_out(cx: &mut TestAppContext) {
+    use browser_core::settings::Toggle;
+    let (normal,cx,_) = open_pages(cx);
+    normal.update(cx, |view,cx| view.retain_normal_source(cx));
+    cx.simulate_keystrokes("cmd-shift-n");
+    cx.run_until_parked();
+    let handle = cx.cx.update(|cx| cx.windows().into_iter().filter_map(|handle|handle.downcast::<BrowserWindow>())
+        .find(|handle|handle.read(cx).is_ok_and(|view| view.browser.is_private())).unwrap());
+    let private = handle.root(&mut cx.cx).unwrap();
+    let mut private_cx = VisualTestContext::from_window(handle.into(), &cx.cx);
+    private_cx.run_until_parked();
+    assert!(private.read_with(&private_cx, |view,cx| view.web_theme_palette(cx).is_some()));
+    private_cx.simulate_keystrokes("cmd-,");
+    let (_,mut settings) = settings_window(&mut private_cx);
+    click(&mut settings,"settings-tab-Advanced");
+    click(&mut settings,"settings-toggle-ThemeData");
+    private_cx.run_until_parked();
+    assert!(!normal.read_with(cx, |view,_| view.profile.handle.read_settings(|browser|browser.settings.enabled(Toggle::ThemeData))));
+    assert!(private.read_with(&private_cx, |view,_| view.browser.settings.enabled(Toggle::ThemeData)), "The private model alone would reset the shared opt-out");
+    assert!(private.read_with(&private_cx, |view,cx| view.web_theme_palette(cx).is_none()));
+    settings.simulate_keystrokes("cmd-w");
 }
 #[gpui::test]
 fn document_fullscreen_checkpoint_keeps_window_intent_and_native_fullscreen_still_persists(

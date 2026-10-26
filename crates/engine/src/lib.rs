@@ -72,6 +72,8 @@ mod quote;
 mod preview;
 pub use preview::LinkHover;
 pub use boosts::SiteBoost;
+mod page_palette;
+pub use page_palette::PagePalette;
 mod printing;
 mod file_download;
 pub use file_download::FileDownloadRequest;
@@ -1307,6 +1309,13 @@ impl Engine {
         let current = page.browser.main_frame().map(|frame| CefString::from(&frame.url()).to_string());
         if current.as_deref().and_then(site_info::web_origin).as_deref() != Some(origin) { return false; }
         self.site_data.request(id, origin, kind, &page.browser, &self.message_ids)
+    }
+
+    /// Updates only the main web document; future documents receive a fresh update.
+    pub fn set_page_palette(&mut self, view: ViewId, palette: Option<PagePalette>) -> bool {
+        if self._runtime.lifecycle.require_running().is_err() { return false; }
+        let Some(page) = self.views.get(&view).filter(|page| page.role == ViewRole::Page) else { return false; };
+        page_palette::apply(&page.browser, palette)
     }
 
     /// Releases document fullscreen in its existing native host.

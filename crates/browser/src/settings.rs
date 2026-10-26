@@ -460,6 +460,12 @@ impl SettingsWindow {
             let enabled = browser.settings.enabled(toggle);
             browser.settings.set_enabled(toggle, !enabled);
         });
+        if toggle == Toggle::ThemeData {
+            // Private/Little roots own separate models, but consume this install preference.
+            for handle in cx.windows().into_iter().filter_map(|window| window.downcast::<BrowserWindow>()) {
+                let _ = handle.update(cx, |_, _, cx| cx.notify());
+            }
+        }
         cx.notify();
     }
     fn toggle_row(
