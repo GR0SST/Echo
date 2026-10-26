@@ -1,5 +1,9 @@
 # Functional release gaps
 
+## Active code/test-only claims (2026-10-26)
+
+- `t3-71384893`: **#55 private-window action availability** implemented; **#81 moved/deleted completed downloads** remains claimed. Scope: shared GPUI/core logic and automated tests only; no screen, Arc reference or native-window qualification. These parts are verifiable-by-tests by inspection; broader platform/visual acceptance stays partial.
+
 Inventory baseline: `fcf128de1cabf4dbe4c6625bde9b071577c632f1`; reviewed 2026-10-25. All 208 rows whose status was `partial` or `missing` in [ARC_PARITY.md](ARC_PARITY.md) are classified below. Line numbers are baseline locators; feature names are the durable identifiers. No Arc sessions or pixel work were used for this triage.
 
 **Counts: F 103, C 52, B 53; total 208.** Counts are inventory rows, not unique features. Duplicate umbrella/menu rows remain visible; implement the canonical feature once.
@@ -66,7 +70,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 52 | L76: Hide Arc / Hide Others / Show All | M | Provide equivalent supported window-hide operations on remaining desktop platforms. |
 | 53 | L77: Quit | M | Qualify non-macOS quit visibility and ship the patched CEF teardown path rather than the risky fallback. |
 | 54 | L84: New Window | M | Qualify live-page ownership transfer and window restoration on Windows/X11. |
-| 55 | L86: New Incognito Window | M | Enforce private-window menu/action availability across all browser entry points. |
+| 55 | L86: New Incognito Window | M | **Test-verifiable sub-gap fixed:** private Command Bar, root/overlay/page shortcuts and direct folder/pin dispatch cannot move a tab into unrendered Pinned/Favorites/folder/Space destinations. Private New opens the Command Bar; ordinary duplicate/close/restore remains available. Broader reference/menu presentation remains partial. See code/test-only delivery evidence. |
 | 56 | L85: Blank Window | M | Complete Blank-window profile selection, Archive behavior and relaunch persistence. |
 | 57 | L70: Preferences… | M | Close the remaining Settings backend integrations listed in the per-setting rows below. |
 | 58 | L73: Import from Another Browser… | L | Complete the supported local import formats and categories; use the detailed onboarding/import row as the canonical task. |
@@ -359,3 +363,22 @@ Site Settings sheets retain their existing stale-action behavior.
   native acceptance remain qualified; the parent parity row stays partial.
 - Arc cleanup guard ambiguity prevented archiving a remaining synthetic Root
   fixture; no unknown/owner window was used as a cleanup target.
+
+### Private action availability — code/test-only sub-gap
+
+The private sidebar renders only its own Today list. Persistent-sidebar commands
+are omitted from typed suggestions and rejected again at dispatch. Root, popup
+and renderer pin shortcuts keep the selected private tab in that visible list.
+Folder-creation endpoints reject private requests, and regular New-menu dispatch
+cannot open a Space/folder menu in a private window. The tab context menu keeps
+its existing layout with unavailable folder destinations disabled. Core's generic
+model capabilities and normal/Blank behavior are unchanged.
+
+Four GPUI regressions cover typed availability, root/popup/renderer routing,
+captured direct dispatch and supported private duplicate/close/restore. No Arc
+session, native app interaction or visual qualification is part of this change.
+The parent rows remain partial for the unqualified reference/platform states.
+
+Validation for #55: all four focused regressions and the full workspace suite
+pass (1,365 browser and 284 core tests; all other enabled suites green, one
+existing AI test ignored). Logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/private-availability-{focused,full}.log`.

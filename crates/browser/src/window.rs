@@ -2131,7 +2131,7 @@ impl BrowserWindow {
                 (browser_core::bulk_archive::Relative::Below, "Archive Tabs Below", "archive tabs below|close tabs below"),
             ] { commands.push((Command::ArchiveRelative(relative), label, names, active.is_some_and(|tab| !self.browser.tabs_to_archive(tab.id, relative).is_empty()))); }
             let mut matches: Vec<_> = commands.into_iter().filter_map(|(command, label, names, available)| {
-                if !available || !self.blank_allows_command(command) { return None; }
+                if !available || !self.blank_allows_command(command) || !self.private_allows_command(command) { return None; }
                 let score = command_match_score(&query, label).into_iter().chain(command_match_score(&query, names)).min()?;
                 Some((score, Suggestion::Action { command, label: label.into() }))
             }).collect();
@@ -2176,7 +2176,7 @@ impl BrowserWindow {
                     }
                 }
             }
-            matches.retain(|(_, suggestion)| match suggestion { Suggestion::Action { command, .. } => self.blank_allows_command(*command), _ => true });
+            matches.retain(|(_, suggestion)| match suggestion { Suggestion::Action { command, .. } => self.blank_allows_command(*command) && self.private_allows_command(*command), _ => true });
             matches.sort_by_key(|(score, _)| *score);
             suggestions.extend(matches.into_iter().take(5).map(|(_, suggestion)| suggestion));
         }
@@ -2419,7 +2419,7 @@ impl BrowserWindow {
 
     pub(crate) fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         if crate::quit::is_quitting() { return; }
-        if !self.blank_allows_command(command) { return; }
+        if !self.blank_allows_command(command) || !self.private_allows_command(command) { return; }
         match command {
             Command::NewBoost => self.new_boost(cx),
             Command::NewFolder => self.edit_new_folder(None, None, cx),
@@ -2601,7 +2601,7 @@ impl BrowserWindow {
 
     /// Reuses the focused command input so the name editor keeps keyboard focus.
     fn edit_space_name(&mut self, space: Option<SpaceId>, cx: &mut Context<Self>) {
-        if self.browser.is_blank() { return; }
+        if self.browser.is_private() || self.browser.is_blank() { return; }
         let text = space.and_then(|id| self.browser.spaces.iter().find(|space| space.id == id)).map(|space| space.name.clone()).unwrap_or_default();
         if let Some(bar) = &mut self.command_bar {
             bar.target = space.map_or(Target::NewSpace, Target::RenameSpace);
@@ -2714,7 +2714,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn open_command_action(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.blank_allows_command(command) { return; }
+        if !self.blank_allows_command(command) || !self.private_allows_command(command) { return; }
         if command == Command::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
         self.open_command_bar(Target::NewTab, "", window, cx);
         self.run_command(command, cx);

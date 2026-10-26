@@ -1,9 +1,21 @@
 //! Incognito windows have independent tabs and no saved session.
-use crate::window::{BrowserWindow, Target};
+use crate::window::{BrowserWindow, Command, Target};
 use browser_core::Section;
 use gpui::{div, hsla, prelude::*, px, AnyElement, Context, Window};
 
 impl BrowserWindow {
+    /// Private chrome has only its window-local Today list. Do not offer a
+    /// mutation whose Pinned/Favorites/folder/Space destination is not rendered.
+    /// Check again at dispatch so a captured command cannot bypass availability.
+    pub(crate) fn private_allows_command(&self, command: Command) -> bool {
+        !self.browser.is_private() || !matches!(command,
+            Command::NewFolder | Command::NewFolderWithTab | Command::MoveToFolder | Command::PinToFolder(_)
+            | Command::CollapseAllFolders | Command::ExpandAllFolders | Command::RenameFolder(_) | Command::ExpandFolder(_)
+            | Command::NewSpace | Command::RenameSpace | Command::CustomizeSpaceIcon | Command::ResetSpace
+            | Command::ToggleSpaceHeader | Command::ToggleFavoritesOrdering | Command::TogglePin | Command::ToggleFavorite
+            | Command::TogglePinnedSection | Command::FocusSpace(_) | Command::MoveTab { .. })
+    }
+
     pub(crate) fn open_private_command_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_command_bar(Target::NewTab, "", window, cx);
     }

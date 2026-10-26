@@ -59,6 +59,7 @@ fn height() -> f32 {
 
 impl BrowserWindow {
     pub(crate) fn toggle_new_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser.is_private() { return; }
         if self.new_menu.is_some() { self.close_new_menu(cx); return; }
         self.close_user_profile_dialog(cx);
         self.close_tab_menu(cx);

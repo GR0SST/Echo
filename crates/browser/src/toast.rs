@@ -507,7 +507,7 @@ impl BrowserWindow {
 
     /// Arc confirms pinning only while its destination is hidden.
     pub(crate) fn toggle_tab_pin(&mut self, id: browser_core::TabId, cx: &mut Context<Self>) {
-        if self.browser.is_blank() { return; }
+        if self.browser.is_private() || self.browser.is_blank() { return; }
         let before = self.browser.all_tabs().find(|tab| tab.id == id).map(|tab| tab.pinned_url.is_some());
         let Some(before) = before else { return; };
         self.edit_browser(|browser| browser.toggle_pin(id));

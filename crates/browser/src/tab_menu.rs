@@ -370,8 +370,8 @@ impl BrowserWindow {
 
     fn move_to_entries(&self) -> Vec<Entry> {
         vec![
-            item("New Folder…", Command::NewFolderWithTab).enabled(!self.browser.is_blank()).into(),
-            item("Folder…", Command::MoveToFolder).enabled(!self.browser.is_blank()).into(),
+            item("New Folder…", Command::NewFolderWithTab).enabled(!self.browser.is_blank() && !self.browser.is_private()).into(),
+            item("Folder…", Command::MoveToFolder).enabled(!self.browser.is_blank() && !self.browser.is_private()).into(),
         ]
     }
 
@@ -593,7 +593,7 @@ impl BrowserWindow {
             Command::ToggleToolbar => self.toggle_toolbar(cx),
             Command::CustomizePage => { self.edit_browser(|browser|browser.activate_tab(id,std::time::SystemTime::now()));self.customize_page(cx); }
             Command::NewFolderWithTab => self.open_folder_creator(None, Some(id), window, cx),
-            Command::MoveToFolder => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
+            Command::MoveToFolder if !self.browser.is_private() => { self.open_command_bar(Target::MoveToFolder(id), "", window, cx); self.edit_folder_destination(Target::MoveToFolder(id), cx); }
             Command::Add(mut placement) => {
                 if !self.can_add_split(id) { self.show_toast("Cannot Add New Pane".into(), cx); }
                 else {

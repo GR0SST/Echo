@@ -19,7 +19,7 @@ impl BrowserWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.browser.is_blank() { return; }
+        if self.browser.is_private() || self.browser.is_blank() { return; }
         self.sidebar_selection.folder_items.clear();
         let space = parent
             .and_then(|id| self.browser.folder_space(id))
@@ -33,7 +33,7 @@ impl BrowserWindow {
         tab: Option<TabId>,
         cx: &mut Context<Self>,
     ) {
-        if self.browser.is_blank() { return; }
+        if self.browser.is_private() || self.browser.is_blank() { return; }
         let space = parent
             .and_then(|id| self.browser.folder_space(id))
             .unwrap_or(self.browser.space().id);
@@ -49,7 +49,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn edit_folder_name(&mut self, id: FolderId, cx: &mut Context<Self>) {
-        if self.browser.is_blank() { return; }
+        if self.browser.is_private() || self.browser.is_blank() { return; }
         let Some(name) = self.browser.folder(id).map(|folder| folder.name.clone()) else {
             return;
         };
@@ -114,7 +114,7 @@ impl BrowserWindow {
     }
 
     pub(crate) fn edit_folder_destination(&mut self, target: Target, cx: &mut Context<Self>) {
-        if self.browser.is_blank() { return; }
+        if self.browser.is_private() || self.browser.is_blank() { return; }
         if let Target::MoveToFolder(tab) = target {
             if self
                 .browser

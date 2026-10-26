@@ -27,6 +27,9 @@ mod little_archive_tests;
 #[path = "page_swipe_tests.rs"]
 mod page_swipe_tests;
 
+#[path = "private_availability_tests.rs"]
+mod private_availability_tests;
+
 use std::cell::RefCell;
 #[path = "split_drag_motion_tests.rs"]
 mod split_drag_motion_tests;
