@@ -56,7 +56,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 30 | L265: Assigning a profile to a Space ("Set Profile", "Edit Space profile") | M | Allow choosing the profile in a new-Space draft without reassigning an existing Space. |
 | 31 | L387: Global shortcut "Open Little Arc when I press … in any app" | M | Support recording the Little shortcut and implement missing platform global-key registration. |
 | 32 | L388: Links from other apps open in Little Arc | M | Register and dispatch external URL launches on Windows/Linux through the existing local ATC router. |
-| 33 | L389: ⌥⌘-click on a link opens it in Little Arc | S | Route Command-Option link clicks to a new Little window using captured URL/profile identity. |
+| 33 | L389: ⌥⌘-click on a link opens it in Little Arc | S | **Stale gap verified closed:** already-qualified trusted Option-Command navigation opens Little in its source profile; disabled preference opens Split View and a canceled website click opens nothing. Five native separate-GPU routing cases exit cleanly; ordinary modifier routing preserves source focus/Today order. See [reference and receipts](PROFILES_SETTINGS_REFERENCE.md#round-3--modifier-link-routing). |
 | 34 | L391: Show/Close all Little Arc windows | M | Implement Show/Close All Little windows with correct archive and renderer teardown semantics. |
 | 35 | L401: Moving Peek into a tab or a Space ("Open Little Arc or Peek in…" ⌘O) | M | Add the dedicated Peek destination picker and safe cross-profile storage transition. |
 | 36 | L166: Open Little Arc or Peek in… (pick a Space) | M | Complete reference-qualified cross-profile Little/Peek promotion without leaking storage or losing the lookup on failure. |
