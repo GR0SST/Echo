@@ -48,6 +48,7 @@ mod new_menu;
 mod new_window;
 mod window_restore;
 mod setup;
+mod welcome;
 mod browser_registration;
 mod import_credentials;
 mod password_store;

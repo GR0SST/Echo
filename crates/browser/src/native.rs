@@ -256,6 +256,18 @@ mod mac {
         }
     }
 
+    pub fn set_window_shown(view: *mut c_void, shown: bool) {
+        let window = window(view);
+        if window.is_null() { return; }
+        unsafe {
+            if shown {
+                let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null_mut::<AnyObject>()];
+            } else {
+                let _: () = msg_send![window, orderOut: std::ptr::null_mut::<AnyObject>()];
+            }
+        }
+    }
+
     pub fn set_traffic_lights_alpha(view: *mut c_void, alpha: f32) {
         let window = window(view);
         if window.is_null() { return; }
@@ -649,6 +661,25 @@ pub fn position_traffic_lights(view: *mut c_void, left: f32) {
     mac::position_traffic_lights(view, left);
     #[cfg(not(target_os = "macos"))]
     let _ = (view, left);
+}
+
+/// Hides or shows a window's native close/minimize/zoom buttons.
+pub fn set_traffic_lights_hidden(view: *mut c_void, hidden: bool) {
+    #[cfg(target_os = "macos")]
+    mac::set_traffic_lights_hidden(view, hidden);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (view, hidden);
+}
+
+/// Takes a native window off screen and brings it back, e.g. to keep the
+/// browser window (including its separately composited page layers) out of
+/// sight while the first-run intro draws on the desktop. Other backends keep
+/// it shown.
+pub fn set_window_shown(view: *mut c_void, shown: bool) {
+    #[cfg(target_os = "macos")]
+    mac::set_window_shown(view, shown);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (view, shown);
 }
 
 /// Fades the native window controls without removing them from hit testing,

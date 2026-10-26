@@ -11085,6 +11085,29 @@ fn onboarding_default_is_explicit_and_cancellation_never_completes_that_step(cx:
 }
 
 #[gpui::test]
+fn onboarding_welcome_intro_waits_for_its_arrow_then_continues_to_theme(cx: &mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Welcome));v.open_setup(true,cx);});
+    let (dialog,mut panel)=local_setup(&view,cx);
+    assert!(panel.debug_bounds("welcome-intro").is_some());
+    assert!(panel.debug_bounds("setup-close").is_none());
+    // Like Arc, the intro cannot be dismissed or skipped before the arrow shows.
+    click(&mut panel,"welcome-continue");panel.simulate_keystrokes("enter escape");panel.run_until_parked();cx.run_until_parked();
+    assert!(view.read_with(cx,|v,_|v.setup.is_some()));
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Welcome));
+    panel.executor().advance_clock(Duration::from_secs_f32(crate::welcome::READY));panel.run_until_parked();
+    assert!(dialog.read_with(&panel,|d,_|d.welcome_frame.is_some()));
+    click(&mut panel,"welcome-continue");cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
+    // The desktop-wide intro gives way to setup over the browser window.
+    let (dialog,mut panel)=local_setup(&view,cx);
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Theme));
+    assert!(dialog.read_with(&panel,|d,_|d.welcome_frame.is_none()));
+    assert!(panel.debug_bounds("setup-theme-0").is_some());
+}
+
+#[gpui::test]
 fn onboarding_theme_and_favorites_resume_without_duplicating_favorites(cx: &mut TestAppContext) {
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);

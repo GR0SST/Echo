@@ -227,12 +227,18 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
         .read_settings(|browser| browser.windows.last().map(|saved| saved.sidebar_width)))
         .unwrap_or(window::SIDEBAR_WIDTH);
     let focused = !request.dormant;
+    // First-run intro starts on the bare desktop: the browser window stays
+    // hidden until the intro hands over to setup.
+    let welcome = request.normal.profile.read_settings(|browser| {
+        browser.onboarding == Some(browser_core::onboarding::SetupStep::Welcome)
+    });
     let handle = cx
         .open_window(
             WindowOptions {
                 window_bounds: Some(bounds),
                 display_id,
-                focus: focused,
+                focus: focused && !welcome,
+                show: !welcome,
                 titlebar: Some(TitlebarOptions {
                     title: Some(crate::APP_NAME.into()),
                     appears_transparent: true,

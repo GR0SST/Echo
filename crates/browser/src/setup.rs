@@ -171,11 +171,21 @@ pub(crate) struct SetupDialog {
     registration: Arc<dyn BrowserRegistration>,
     default_state: DefaultState,
     brand: Option<Arc<gpui::RenderImage>>,
+    welcome_sound: bool,
+    /// The browser window's frame inside the desktop-wide intro window.
+    pub(crate) welcome_frame: Option<gpui::Bounds<gpui::Pixels>>,
+    /// The current per-frame orb image; replaced (and released) every frame.
+    welcome_orb: Option<Arc<gpui::RenderImage>>,
+    welcome_field: Option<Arc<gpui::RenderImage>>,
     artwork: std::collections::HashMap<BrowserKind, Arc<gpui::RenderImage>>,
 }
 impl Drop for SetupDialog {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        // Advancing keeps the music playing into setup, as in Arc.
+        if self.welcome_sound && self.step == Step::Onboard(SetupStep::Welcome) {
+            engine::stop_welcome_sound();
+        }
     }
 }
 impl Focusable for SetupDialog {
@@ -271,7 +281,34 @@ impl SetupDialog {
                 .unwrap_or_else(|| Arc::new(crate::import_credentials::SystemCredentialStore)),
             registration,
             brand,
+            // Arc's music starts with the orb and keeps playing into setup.
+            welcome_sound: step == Step::Onboard(SetupStep::Welcome)
+                && !cfg!(test)
+                && engine::play_ui_sound(engine::UiSound::Welcome),
+            welcome_frame: None,
+            welcome_orb: None,
+            welcome_field: None,
             artwork,
+        }
+    }
+    fn welcome_time(&self, cx: &App) -> f32 {
+        if crate::native::prefers_reduced_motion() {
+            return crate::welcome::READY;
+        }
+        let elapsed = cx
+            .background_executor()
+            .now()
+            .saturating_duration_since(self.opened)
+            .as_secs_f32();
+        if !self.welcome_sound {
+            return elapsed;
+        }
+        // The cue is synthesized before it plays: keep the beat-matched
+        // timeline at zero until the output starts. A failed device falls
+        // back to the clock after a short grace period.
+        match engine::welcome_sound_started() {
+            Some(start) => start.elapsed().as_secs_f32(),
+            None => (elapsed - 3.).max(0.),
         }
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
@@ -309,6 +346,11 @@ impl SetupDialog {
         match self.step {
             Step::Onboard(SetupStep::Import) => self.change(Step::Sources, cx),
             Step::Onboard(SetupStep::DefaultBrowser) => self.request_default(cx),
+            Step::Onboard(SetupStep::Welcome) => {
+                if self.welcome_time(cx) >= crate::welcome::READY {
+                    self.advance(SetupStep::Welcome, cx);
+                }
+            }
             Step::Onboard(step) => self.advance(step, cx),
             Step::Sources => {
                 let needs_access =
@@ -599,6 +641,7 @@ impl SetupDialog {
     }
     fn title(&self) -> &str {
         match self.step {
+            Step::Onboard(SetupStep::Welcome) => "Meet the internet again.",
             Step::Onboard(SetupStep::Theme) => "Add some flair with a theme.",
             Step::Onboard(SetupStep::Favorites) => "Choose the apps you use most.",
             Step::Onboard(SetupStep::Import) => "Get us up to speed.",
@@ -626,6 +669,7 @@ impl SetupDialog {
     }
     fn description(&self) -> String {
         match self.step {
+        Step::Onboard(SetupStep::Welcome)=>String::new(),
         Step::Onboard(SetupStep::Theme)=>"Pick a color, any color — add your favorite shade to your new home on the internet.".into(),
         Step::Onboard(SetupStep::Favorites)=>"Select your favorite apps to keep them handy in your sidebar.".into(),
         Step::Onboard(SetupStep::Import)=>"It’s a bold new internet. Hit the ground running and bring your most important tabs, passwords, history, and bookmarks with you.".into(),
@@ -865,6 +909,42 @@ impl gpui::Render for SetupDialog {
             browser_core::themes::ThemeAppearance::Automatic => matches!(window.appearance(), gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark),
         };
         self.palette = crate::material::DialogPalette::new(dark);
+        if self.step == Step::Onboard(SetupStep::Welcome) {
+            let t = self.welcome_time(cx);
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+            for previous in [self.welcome_orb.take(), self.welcome_field.take()].into_iter().flatten() {
+                let _ = window.drop_image(previous);
+            }
+            if t < crate::welcome::ORB_GONE {
+                self.welcome_orb = Some(crate::welcome::orb_image(t));
+            }
+            let size = self.welcome_frame.map_or(window.viewport_size(), |f| f.size);
+            let aspect = f32::from(size.width) / f32::from(size.height).max(1.);
+            self.welcome_field = Some(crate::welcome::field_image(t, aspect));
+            let arrow = div()
+                .id("welcome-continue")
+                .debug_selector(|| "welcome-continue".into())
+                .on_click(cx.listener(|this, _, _, cx| this.next(cx)));
+            // Arc's intro has no close or escape; Return continues once the
+            // arrow is shown.
+            return div()
+                .id("local-import-sheet")
+                .debug_selector(|| "local-import-sheet".into())
+                .key_context("LocalSetup")
+                .track_focus(&self.focus)
+                .size_full()
+                .font_family(".SystemUIFont")
+                .on_action(cx.listener(|this, _: &Next, _, cx| this.next(cx)))
+                .child(crate::welcome::render(
+                    t,
+                    window.viewport_size(),
+                    self.welcome_frame,
+                    self.welcome_orb.clone(),
+                    self.welcome_field.clone(),
+                    window.scale_factor(),
+                    arrow,
+                ));
+        }
         let elapsed = cx
             .background_executor()
             .now()
@@ -1368,12 +1448,27 @@ impl BrowserWindow {
             {
                 return;
             }
-            let Ok(bounds) = main.update(cx, |_, w, _| w.bounds()) else {
+            let Ok((bounds, area)) =
+                main.update(cx, |_, w, cx| (w.bounds(), crate::native::display_work_area(w, cx)))
+            else {
                 return;
             };
+            // Arc's intro starts on the desktop with no window: an orb that
+            // later blooms into the window. Cover the work area instead of
+            // the browser window, and hide the browser until setup proper.
+            let welcome = dialog.read(cx).step == Step::Onboard(SetupStep::Welcome);
+            let area = area.filter(|_| welcome).unwrap_or(bounds);
+            if welcome {
+                dialog.update(cx, |d, _| {
+                    d.welcome_frame = Some(gpui::Bounds::new(
+                        bounds.origin - area.origin,
+                        bounds.size,
+                    ))
+                });
+            }
             let Ok(overlay) = cx.open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(WindowBounds::Windowed(area)),
                     titlebar: None,
                     kind: WindowKind::Normal,
                     is_movable: false,
@@ -1384,7 +1479,12 @@ impl BrowserWindow {
                 },
                 |window, cx| {
                     if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
-                        crate::native::attach_overlay(parent, child, false);
+                        if welcome {
+                            crate::native::set_traffic_lights_hidden(child, true);
+                            crate::native::set_window_shown(parent, false);
+                        } else {
+                            crate::native::attach_overlay(parent, child, false);
+                        }
                     }
                     cx.new(|cx| Overlay::new(owner.clone(), OverlayKind::Setup, window, cx))
                 },
@@ -1435,6 +1535,14 @@ impl BrowserWindow {
                     .into(),
                     cx,
                 );
+            }
+            Event::Advance(SetupStep::Welcome) => {
+                // Leave the desktop-wide intro for setup over the browser window.
+                self.edit_browser(|b| b.advance_setup(SetupStep::Welcome));
+                self.close_setup(cx);
+                if self.browser.onboarding.is_some() {
+                    self.open_setup(true, cx);
+                }
             }
             Event::Advance(step) => {
                 if !self.edit_browser(|b| b.advance_setup(step)) {
@@ -1521,6 +1629,11 @@ impl BrowserWindow {
     }
     pub(crate) fn close_setup_with_focus(&mut self, focus: PopupFocus, cx: &mut Context<Self>) {
         if let Some(host) = self.setup.take() {
+            if host.dialog.read(cx).welcome_frame.is_some() {
+                if let Some(parent) = self.native_view {
+                    crate::native::set_window_shown(parent, true);
+                }
+            }
             host.dialog
                 .update(cx, |d, _| d.cancel.store(true, Ordering::Relaxed));
             self.close_popup_overlay(host.overlay, focus, true, cx);
@@ -1562,6 +1675,9 @@ impl BrowserWindow {
         let Some(child) = host.overlay else {
             return;
         };
+        if host.dialog.read(cx).welcome_frame.is_some() {
+            return;
+        }
         let dialog = host.dialog.clone();
         let size = window.viewport_size();
         cx.defer(move |cx| {

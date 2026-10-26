@@ -9,8 +9,22 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy)]
 pub enum UiSound {
     Capture,
+    /// The first-run welcome intro music (~21 s).
+    Welcome,
 }
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// Bumped to fade out a playing welcome cue.
+static WELCOME_STOP: AtomicUsize = AtomicUsize::new(0);
+/// When the welcome music actually reached the output, so visuals can follow
+/// its beat instead of the moment playback was requested.
+static WELCOME_STARTED: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+pub fn welcome_sound_started() -> Option<Instant> {
+    *WELCOME_STARTED.lock().unwrap_or_else(|e| e.into_inner())
+}
+/// Fades out the welcome music if it is playing.
+pub fn stop_welcome_sound() {
+    WELCOME_STOP.fetch_add(1, Ordering::AcqRel);
+}
 struct Lease;
 impl Drop for Lease {
     fn drop(&mut self) {
@@ -28,6 +42,9 @@ pub fn play_ui_sound(sound: UiSound) -> bool {
     {
         return false;
     }
+    if let UiSound::Welcome = sound {
+        *WELCOME_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
     let lease = Lease;
     std::thread::Builder::new()
         .name("echo-ui-sound".into())
@@ -42,6 +59,9 @@ pub fn play_ui_sound(sound: UiSound) -> bool {
         .is_ok()
 }
 fn waveform(sound: UiSound, rate: u32) -> Vec<f32> {
+    if let UiSound::Welcome = sound {
+        return crate::welcome_music::render(rate);
+    }
     let length = (rate as usize * 140 / 1000).max(1);
     let mut seed = 0x71c3_a5d9u32;
     (0..length)
@@ -50,6 +70,7 @@ fn waveform(sound: UiSound, rate: u32) -> Vec<f32> {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let noise = (seed >> 8) as f32 / 0x00ff_ffff as f32 * 2. - 1.;
             match sound {
+                UiSound::Welcome => 0.,
                 UiSound::Capture => {
                     // Two softly decaying mechanical ticks, composed here from scratch.
                     let pulse = |start: f32| {
@@ -71,13 +92,28 @@ struct Cursor {
     samples: Vec<f32>,
     position: usize,
     channels: usize,
+    rate: u32,
     done: Arc<AtomicBool>,
     rendered: Arc<AtomicUsize>,
+    /// Stop generation to watch, and the fade gain once it changes.
+    stop: Option<(usize, f32, f32)>,
 }
 impl Cursor {
     fn fill<T: cpal::Sample + cpal::FromSample<f32>>(&mut self, buffer: &mut [T]) {
+        if let Some((generation, _, step)) = &mut self.stop {
+            if WELCOME_STOP.load(Ordering::Acquire) != *generation && *step == 0. {
+                *step = 1. / (0.6 * self.rate.max(1) as f32);
+            }
+        }
         for frame in buffer.chunks_mut(self.channels) {
-            let sample = self.samples.get(self.position).copied().unwrap_or(0.);
+            let mut sample = self.samples.get(self.position).copied().unwrap_or(0.);
+            if let Some((_, gain, step)) = &mut self.stop {
+                *gain = (*gain - *step).max(0.);
+                sample *= *gain;
+                if *gain == 0. {
+                    self.position = self.samples.len();
+                }
+            }
             for channel in frame {
                 *channel = T::from_sample(sample);
             }
@@ -123,6 +159,9 @@ fn play(sound: UiSound) -> Result<(), String> {
     let rendered = Arc::new(AtomicUsize::new(0));
     let cursor = Cursor {
         samples: waveform(sound, config.sample_rate.0),
+        stop: matches!(sound, UiSound::Welcome)
+            .then(|| (WELCOME_STOP.load(Ordering::Acquire), 1., 0.)),
+        rate: config.sample_rate.0,
         position: 0,
         channels: config.channels as usize,
         done: done.clone(),
@@ -142,10 +181,17 @@ fn play(sound: UiSound) -> Result<(), String> {
         _ => Err("Unsupported UI output format".into()),
     }?;
     output.play().map_err(|e| e.to_string())?;
+    if let UiSound::Welcome = sound {
+        *WELCOME_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    }
+    let limit = match sound {
+        UiSound::Capture => Duration::from_millis(900),
+        UiSound::Welcome => Duration::from_secs_f32(crate::welcome_music::SECONDS + 2.),
+    };
     let start = Instant::now();
     while !done.load(Ordering::Acquire)
         && !failed.load(Ordering::Acquire)
-        && start.elapsed() < Duration::from_millis(900)
+        && start.elapsed() < limit
     {
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -155,7 +201,8 @@ fn play(sound: UiSound) -> Result<(), String> {
     }
     if std::env::var_os("BROWSER_SCRIPT").is_some() {
         eprintln!(
-            "[ui-sound] capture rendered_frames={} failed={}",
+            "[ui-sound] {} rendered_frames={} failed={}",
+            match sound { UiSound::Capture => "capture", UiSound::Welcome => "welcome" },
             rendered.load(Ordering::Relaxed),
             failed.load(Ordering::Acquire)
         );
@@ -165,6 +212,43 @@ fn play(sound: UiSound) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn welcome_music_is_finite_bounded_and_silent_at_its_edges() {
+        let rate = 22050;
+        let samples = waveform(UiSound::Welcome, rate);
+        assert_eq!(samples.len(), (crate::welcome_music::SECONDS * rate as f32) as usize);
+        assert!(samples.iter().all(|s| s.is_finite() && s.abs() <= 0.5001));
+        assert!(samples[0].abs() < 0.001 && samples.last().unwrap().abs() < 0.001);
+        let rms = |from: f32, to: f32| {
+            let part = &samples[(from * rate as f32) as usize..(to * rate as f32) as usize];
+            (part.iter().map(|s| s * s).sum::<f32>() / part.len() as f32).sqrt()
+        };
+        // Quiet swell, a louder body after the downbeat, then a fade-out.
+        assert!(rms(0.2, 1.5) < rms(6., 12.));
+        assert!(rms(20.6, 21.2) < rms(6., 12.) * 0.1);
+    }
+    #[test]
+    fn stopping_welcome_fades_to_silence() {
+        let done = Arc::new(AtomicBool::new(false));
+        let mut cursor = Cursor {
+            samples: vec![0.5; 4800],
+            position: 0,
+            channels: 1,
+            rate: 1000,
+            done: done.clone(),
+            rendered: Arc::new(AtomicUsize::new(0)),
+            stop: Some((WELCOME_STOP.load(Ordering::Acquire), 1., 0.)),
+        };
+        let mut output = [0f32; 100];
+        cursor.fill(&mut output);
+        assert_eq!(output[99], 0.5);
+        stop_welcome_sound();
+        let mut output = [0f32; 1000];
+        cursor.fill(&mut output);
+        assert!(output[0] < 0.5 && output[0] > 0.4);
+        assert_eq!(output[999], 0.);
+        assert!(done.load(Ordering::Acquire));
+    }
     #[test]
     fn original_capture_cue_is_short_finite_quiet_and_silent_at_its_edges() {
         for rate in [16000, 44100, 48000, 96000] {
@@ -186,6 +270,8 @@ mod tests {
             channels: 2,
             done: done.clone(),
             rendered: rendered.clone(),
+            stop: None,
+            rate: 48000,
         };
         let mut output = [9f32; 8];
         cursor.fill(&mut output);

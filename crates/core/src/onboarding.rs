@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SetupStep {
+    /// The animated welcome intro that precedes local setup.
+    Welcome,
     Theme,
     Favorites,
     Import,
@@ -12,6 +14,7 @@ pub enum SetupStep {
 impl SetupStep {
     pub fn next(self) -> Option<Self> {
         Some(match self {
+            Self::Welcome => Self::Theme,
             Self::Theme => Self::Favorites,
             Self::Favorites => Self::Import,
             Self::Import => Self::DefaultBrowser,
@@ -23,7 +26,7 @@ impl SetupStep {
 impl crate::Browser {
     pub fn first_run() -> Self {
         let mut b = Self::new();
-        b.onboarding = Some(SetupStep::Theme);
+        b.onboarding = Some(SetupStep::Welcome);
         b
     }
     pub fn advance_setup(&mut self, expected: SetupStep) -> bool {
@@ -41,6 +44,9 @@ mod tests {
     fn setup_resumes_and_cannot_be_rewound_by_a_stale_window() {
         let mut b = crate::Browser::first_run();
         assert!(b.all_tabs().next().is_none());
+        assert_eq!(b.onboarding, Some(SetupStep::Welcome));
+        assert!(!b.advance_setup(SetupStep::Theme));
+        assert!(b.advance_setup(SetupStep::Welcome));
         assert!(b.advance_setup(SetupStep::Theme));
         assert!(!b.advance_setup(SetupStep::Theme));
         let mut b = crate::session::from_json(&crate::session::to_json(&b)).unwrap();

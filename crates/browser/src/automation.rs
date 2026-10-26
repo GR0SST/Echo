@@ -969,6 +969,10 @@ unsafe fn make_key(view: *mut AnyObject) {
     if liveness_tests::native_call("make-key") { return; }
     unsafe {
         let window = window_of(view);
+        // A root the app keeps ordered out (the first-run intro hides the
+        // browser window) stays hidden, as it would for a real user.
+        let visible: Bool = msg_send![window, isVisible];
+        if !visible.as_bool() { return; }
         let nil: *mut AnyObject = std::ptr::null_mut();
         let _: () = msg_send![window, makeKeyAndOrderFront: nil];
         let app: *mut AnyObject = msg_send![AnyClass::get(c"NSApplication").unwrap(), sharedApplication];
