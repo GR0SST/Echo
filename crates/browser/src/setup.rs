@@ -255,12 +255,7 @@ impl SetupDialog {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, (_, url))| {
-                    browser
-                        .active_user_profile()
-                        .favorites
-                        .iter()
-                        .any(|t| t.url == *url)
-                        .then_some(i)
+                    browser.favorite_for_url(url).map(|_| i)
                 })
                 .collect(),
             blocked_bookmarks: HashSet::new(),
@@ -1562,14 +1557,10 @@ impl BrowserWindow {
             Event::Favorite(index) => {
                 let (name, url) = FAVORITES[index];
                 self.edit_browser(|b| {
-                    let existing = b
-                        .active_user_profile()
-                        .favorites
-                        .iter()
-                        .find(|t| t.url == url)
-                        .map(|t| t.id);
-                    if let Some(id) = existing {
-                        b.unfavorite_tab(id);
+                    // Match by the Favorite's saved address: Gmail and others
+                    // redirect (e.g. to sign-in) once loaded.
+                    if let Some(id) = b.favorite_for_url(url) {
+                        b.remove_favorite(id);
                     } else {
                         let id = b.new_tab(url, std::time::SystemTime::now());
                         b.set_title(id, name);

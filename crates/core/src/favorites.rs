@@ -68,6 +68,21 @@ impl Browser {
         true
     }
 
+    /// Removes a Favorite outright (no Today tab is left behind), e.g. when a
+    /// setup suggestion is deselected.
+    pub fn remove_favorite(&mut self, id: TabId) -> bool {
+        if !self.can_edit_persistent_sidebar() || self.split_for(id).is_some() { return false; }
+        self.take_favorite(id).is_some()
+    }
+
+    /// The Favorite originally added for `url`, even after it navigated or
+    /// redirected elsewhere.
+    pub fn favorite_for_url(&self, url: &str) -> Option<TabId> {
+        self.active_user_profile().favorites.iter()
+            .find(|tab| tab.pinned_url.as_deref().unwrap_or(&tab.url) == url)
+            .map(|tab| tab.id)
+    }
+
     pub(crate) fn take_favorite(&mut self, id: TabId) -> Option<Tab> {
         let index = self.active_user_profile().favorites.iter().position(|tab| tab.id == id)?;
         let tab = self.active_user_profile_mut().favorites.remove(index);

@@ -11108,6 +11108,24 @@ fn onboarding_welcome_intro_waits_for_its_arrow_then_continues_to_theme(cx: &mut
 }
 
 #[gpui::test]
+fn onboarding_favorite_toggles_survive_redirects_and_leave_no_tabs(cx: &mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Favorites));v.open_setup(true,cx);});
+    let (_,mut panel)=local_setup(&view,cx);
+    let tabs=|cx:&mut VisualTestContext|view.read_with(cx,|v,_|v.browser.all_tabs().count());
+    let before=tabs(cx);
+    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
+    // Gmail redirects to sign-in once it loads.
+    view.update(cx,|v,_|{let id=v.browser.favorite_for_url("https://mail.google.com").unwrap();v.edit_browser(|b|b.set_url(id,"https://accounts.google.com/signin"));});
+    for _ in 0..3 {click(&mut panel,"setup-favorite-0");cx.run_until_parked();click(&mut panel,"setup-favorite-0");cx.run_until_parked();}
+    view.read_with(cx,|v,_|assert_eq!(v.browser.active_user_profile().favorites.len(),1));
+    click(&mut panel,"setup-favorite-0");cx.run_until_parked();
+    view.read_with(cx,|v,_|assert!(v.browser.active_user_profile().favorites.is_empty()));
+    assert_eq!(tabs(cx),before);
+}
+
+#[gpui::test]
 fn onboarding_theme_and_favorites_resume_without_duplicating_favorites(cx: &mut TestAppContext) {
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);
