@@ -54,6 +54,59 @@ pub(crate) fn init(cx: &mut App) {
 #[derive(Clone)]
 pub(crate) struct ImportSources(pub Vec<SourceProfile>);
 impl gpui::Global for ImportSources {}
+/// App icons for the setup sheet. Extracting them from the OS takes seconds
+/// in all, so they are found once, off the UI thread.
+#[derive(Default)]
+struct Artwork {
+    brand: Option<Arc<gpui::RenderImage>>,
+    browsers: std::collections::HashMap<BrowserKind, Arc<gpui::RenderImage>>,
+}
+#[derive(Clone)]
+struct ArtworkTask(futures::future::Shared<gpui::Task<Arc<Artwork>>>);
+impl gpui::Global for ArtworkTask {}
+fn artwork(cx: &mut App) -> futures::future::Shared<gpui::Task<Arc<Artwork>>> {
+    use futures::FutureExt;
+    if let Some(task) = cx.try_global::<ArtworkTask>() {
+        return task.0.clone();
+    }
+    let task = cx
+        .background_executor()
+        .spawn(async { Arc::new(if cfg!(test) { Artwork::default() } else { Artwork::load() }) })
+        .shared();
+    cx.set_global(ArtworkTask(task.clone()));
+    task
+}
+impl Artwork {
+    fn load() -> Self {
+        let brand = std::env::current_exe().ok().and_then(|exe| {
+            exe.ancestors()
+                .nth(3)
+                .filter(|p| p.extension().is_some_and(|e| e == "app"))
+                .and_then(crate::download_files::native_icon)
+        });
+        let mut browsers = std::collections::HashMap::new();
+        if cfg!(target_os = "macos") {
+            for (kind, app) in [
+                (BrowserKind::Arc, "Arc"),
+                (BrowserKind::Safari, "Safari"),
+                (BrowserKind::Chrome, "Google Chrome"),
+                (BrowserKind::Firefox, "Firefox"),
+                (BrowserKind::Edge, "Microsoft Edge"),
+                (BrowserKind::Brave, "Brave Browser"),
+            ] {
+                let path = std::path::PathBuf::from(format!("/Applications/{app}.app"));
+                if path.exists() {
+                    if let Some(icon) =
+                        crate::download_files::native_icon(&path.canonicalize().unwrap_or(path))
+                    {
+                        browsers.insert(kind, icon);
+                    }
+                }
+            }
+        }
+        Self { brand, browsers }
+    }
+}
 #[derive(Clone)]
 pub(crate) struct Registration(pub Arc<dyn BrowserRegistration>);
 impl gpui::Global for Registration {}
@@ -138,6 +191,8 @@ enum Event {
     Advance(SetupStep),
     Theme(usize),
     Favorite(usize),
+    /// Minimize or zoom the browser window under the onboarding sheet.
+    Window(crate::menus::WindowOperation),
     Publish(Rc<ImportedData>, Option<UserProfileId>, String),
 }
 impl EventEmitter<Event> for SetupDialog {}
@@ -170,14 +225,15 @@ pub(crate) struct SetupDialog {
     credential_store: Arc<dyn importer::CredentialStore>,
     registration: Arc<dyn BrowserRegistration>,
     default_state: DefaultState,
-    brand: Option<Arc<gpui::RenderImage>>,
+    /// False while installed browsers are still being looked up.
+    sources_ready: bool,
+    artwork: Arc<Artwork>,
     welcome_sound: bool,
     /// The browser window's frame inside the desktop-wide intro window.
     pub(crate) welcome_frame: Option<gpui::Bounds<gpui::Pixels>>,
     /// The current per-frame orb image; replaced (and released) every frame.
     welcome_orb: Option<Arc<gpui::RenderImage>>,
     welcome_field: Option<Arc<gpui::RenderImage>>,
-    artwork: std::collections::HashMap<BrowserKind, Arc<gpui::RenderImage>>,
 }
 impl Drop for SetupDialog {
     fn drop(&mut self) {
@@ -201,10 +257,32 @@ const FAVORITES: [(&str, &str); 3] = [
 ];
 impl SetupDialog {
     fn new(browser: &browser_core::Browser, onboarding: bool, cx: &mut Context<Self>) -> Self {
-        let sources = cx
-            .try_global::<ImportSources>()
-            .map(|s| s.0.clone())
-            .unwrap_or_else(|| HostPaths::current().profiles());
+        let preset = cx.try_global::<ImportSources>().map(|s| s.0.clone());
+        let sources_ready = preset.is_some();
+        if !sources_ready {
+            let task = cx
+                .background_executor()
+                .spawn(async { HostPaths::current().profiles() });
+            cx.spawn(async move |this, cx| {
+                let sources = task.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.sources = sources;
+                    this.sources_ready = true;
+                    this.preselect_source();
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        let artwork_task = artwork(cx);
+        cx.spawn(async move |this, cx| {
+            let artwork = artwork_task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.artwork = artwork;
+                cx.notify();
+            });
+        })
+        .detach();
         let registration = cx
             .try_global::<Registration>()
             .map(|r| r.0.clone())
@@ -214,37 +292,12 @@ impl SetupDialog {
         } else {
             Step::Sources
         };
-        let brand = std::env::current_exe().ok().and_then(|exe| {
-            exe.ancestors()
-                .nth(3)
-                .filter(|p| p.extension().is_some_and(|e| e == "app"))
-                .and_then(crate::download_files::native_icon)
-        });
-        let mut artwork = std::collections::HashMap::new();
-        if cfg!(target_os = "macos") && !cfg!(test) {
-            for (kind, app) in [
-                (BrowserKind::Safari, "Safari"),
-                (BrowserKind::Chrome, "Google Chrome"),
-                (BrowserKind::Firefox, "Firefox"),
-                (BrowserKind::Edge, "Microsoft Edge"),
-                (BrowserKind::Brave, "Brave Browser"),
-            ] {
-                let path = std::path::PathBuf::from(format!("/Applications/{app}.app"));
-                if path.exists() {
-                    if let Some(icon) =
-                        crate::download_files::native_icon(&path.canonicalize().unwrap_or(path))
-                    {
-                        artwork.insert(kind, icon);
-                    }
-                }
-            }
-        }
-        Self {
+        let mut this = Self {
             step,
             onboarding,
             appearance: browser.settings.theme_appearance,
             palette: crate::material::DialogPalette::new(true),
-            sources,
+            sources: preset.unwrap_or_default(),
             source: None,
             profiles: browser
                 .user_profiles()
@@ -275,7 +328,8 @@ impl SetupDialog {
                 .map(|s| s.0.clone())
                 .unwrap_or_else(|| Arc::new(crate::import_credentials::SystemCredentialStore)),
             registration,
-            brand,
+            sources_ready,
+            artwork: Arc::default(),
             // Arc's music starts with the orb and keeps playing into setup.
             welcome_sound: step == Step::Onboard(SetupStep::Welcome)
                 && !cfg!(test)
@@ -283,7 +337,18 @@ impl SetupDialog {
             welcome_frame: None,
             welcome_orb: None,
             welcome_field: None,
-            artwork,
+        };
+        this.preselect_source();
+        this
+    }
+    /// The onboarding import step lists the installed browsers directly, with
+    /// the first chosen so Return continues with it.
+    fn preselect_source(&mut self) {
+        if self.step == Step::Onboard(SetupStep::Import)
+            && self.source.is_none()
+            && !self.sources.is_empty()
+        {
+            self.source = Some(0);
         }
     }
     fn welcome_time(&self, cx: &App) -> f32 {
@@ -312,6 +377,7 @@ impl SetupDialog {
     }
     fn change(&mut self, step: Step, cx: &mut Context<Self>) {
         self.step = step;
+        self.preselect_source();
         self.opened = cx.background_executor().now();
         self.error = None;
         cx.notify();
@@ -339,40 +405,37 @@ impl SetupDialog {
             return;
         }
         match self.step {
+            Step::Onboard(SetupStep::Import) if self.source.is_some() => self.choose_source(cx),
             Step::Onboard(SetupStep::Import) => self.change(Step::Sources, cx),
             Step::Onboard(SetupStep::DefaultBrowser) => self.request_default(cx),
-            Step::Onboard(SetupStep::Welcome) => {
-                if self.welcome_time(cx) >= crate::welcome::READY {
-                    self.advance(SetupStep::Welcome, cx);
-                }
-            }
+            // Return or the arrow continues at once, even mid-intro.
             Step::Onboard(step) => self.advance(step, cx),
-            Step::Sources => {
-                let needs_access =
-                    self.source
-                        .and_then(|i| self.sources.get(i))
-                        .is_some_and(|source| {
-                            source.browser == BrowserKind::Safari
-                                && ((std::env::var_os("BROWSER_SCRIPT").is_some()
-                                    && std::env::var("BROWSER_TEST_IMPORT_ACCESS").as_deref()
-                                        == Ok("denied"))
-                                    || std::fs::File::open(source.path.join("History.db"))
-                                        .is_err_and(|error| {
-                                            error.kind() == std::io::ErrorKind::PermissionDenied
-                                        }))
-                        });
-                if needs_access {
-                    self.change(Step::SafariAccess, cx);
-                    open_privacy_settings();
-                } else {
-                    self.change(Step::Destination, cx);
-                }
-            }
+            Step::Sources => self.choose_source(cx),
             Step::Destination => self.read(cx),
             Step::Bookmarks => self.change(Step::Passwords, cx),
             Step::Passwords => self.publish(cx),
             Step::Reading | Step::SafariAccess => {}
             Step::Shortcuts => self.change(Step::Onboard(SetupStep::Basics), cx),
+        }
+    }
+    fn choose_source(&mut self, cx: &mut Context<Self>) {
+        let needs_access = self
+            .source
+            .and_then(|i| self.sources.get(i))
+            .is_some_and(|source| {
+                source.browser == BrowserKind::Safari
+                    && ((std::env::var_os("BROWSER_SCRIPT").is_some()
+                        && std::env::var("BROWSER_TEST_IMPORT_ACCESS").as_deref()
+                            == Ok("denied"))
+                        || std::fs::File::open(source.path.join("History.db")).is_err_and(
+                            |error| error.kind() == std::io::ErrorKind::PermissionDenied,
+                        ))
+            });
+        if needs_access {
+            self.change(Step::SafariAccess, cx);
+            open_privacy_settings();
+        } else {
+            self.change(Step::Destination, cx);
         }
     }
     fn later(&mut self, cx: &mut Context<Self>) {
@@ -430,8 +493,11 @@ impl SetupDialog {
                     return;
                 }
                 this.busy = false;
+                // A whole browser comes over complete, as its Spaces and
+                // profiles; only a single profile's bookmarks are picked.
+                let whole = !report.data.profiles.is_empty();
                 this.report = Some(Rc::new(report));
-                this.change(Step::Bookmarks, cx);
+                this.change(if whole { Step::Passwords } else { Step::Bookmarks }, cx);
             });
         })
         .detach();
@@ -473,6 +539,7 @@ impl SetupDialog {
             bookmarks: selected(self, &report.data.bookmarks, ""),
             history: report.data.history.clone(),
             tabs: report.data.tabs.clone(),
+            profiles: report.data.profiles.clone(),
         }
     }
     fn publish(&mut self, cx: &mut Context<Self>) {
@@ -490,6 +557,7 @@ impl SetupDialog {
         if data.bookmarks.is_empty()
             && data.history.is_empty()
             && data.tabs.is_empty()
+            && data.profiles.is_empty()
             && self.credentials.is_empty()
             && self.report.as_ref().is_some_and(|r| !r.issues.is_empty())
         {
@@ -656,8 +724,16 @@ impl SetupDialog {
             return;
         }
         match self.step {
+            Step::Destination if self.onboarding => {
+                self.change(Step::Onboard(SetupStep::Import), cx)
+            }
             Step::Destination => self.change(Step::Sources, cx),
             Step::Bookmarks => self.change(Step::Destination, cx),
+            Step::Passwords
+                if self.report.as_ref().is_some_and(|r| !r.data.profiles.is_empty()) =>
+            {
+                self.change(Step::Destination, cx)
+            }
             Step::Passwords => self.change(Step::Bookmarks, cx),
             _ => {}
         }
@@ -822,7 +898,7 @@ impl SetupDialog {
                     .justify_center()
                     .bg(rgb(0x5d799c))
                     .rounded_r(px(if selected { 16. } else { 14. }))
-                    .child(self.artwork.get(&browser).map_or_else(
+                    .child(self.artwork.browsers.get(&browser).map_or_else(
                         || icons::ionicon("globe-outline", 24., 1.),
                         |icon| gpui::img(icon.clone()).size(px(24.)).into_any_element(),
                     )),
@@ -919,9 +995,23 @@ impl gpui::Render for SetupDialog {
             let arrow = div()
                 .id("welcome-continue")
                 .debug_selector(|| "welcome-continue".into())
-                .on_click(cx.listener(|this, _, _, cx| this.next(cx)));
-            // Arc's intro has no close or escape; Return continues once the
-            // arrow is shown.
+                .when(t >= crate::welcome::ARROW_ACTIVE, |s| {
+                    s.on_click(cx.listener(|this, _, _, cx| this.next(cx)))
+                });
+            let pane = t >= crate::welcome::PANE_ACTIVE;
+            // Closing the window during first run quits; the intro resumes
+            // on the next launch.
+            let close = div()
+                .id("welcome-close")
+                .debug_selector(|| "welcome-close".into())
+                .when(pane, |s| s.on_click(|_, _, cx| crate::quit::request(cx)));
+            let minimize = div()
+                .id("welcome-minimize")
+                .debug_selector(|| "welcome-minimize".into())
+                .when(pane, |s| {
+                    s.on_click(|_, window, _| window.minimize_window())
+                });
+            // Return continues at any moment; there is no escape.
             return div()
                 .id("local-import-sheet")
                 .debug_selector(|| "local-import-sheet".into())
@@ -938,6 +1028,7 @@ impl gpui::Render for SetupDialog {
                     self.welcome_field.clone(),
                     window.scale_factor(),
                     arrow,
+                    (close, minimize),
                 ));
         }
         let elapsed = cx
@@ -1034,13 +1125,15 @@ impl gpui::Render for SetupDialog {
                     );
                 }
             }
-            Step::Sources => {
+            Step::Sources | Step::Onboard(SetupStep::Import) => {
                 right = right
                     .left(px(332.))
                     .overflow_y_scroll()
                     .flex_shrink_0()
                     .when(self.sources.len() > 4, |s| s.justify_start());
-                if self.sources.is_empty() {
+                if !self.sources_ready {
+                    right = right.child("Looking for browsers…");
+                } else if self.sources.is_empty() {
                     right = right.child("No browser profiles found.");
                 }
                 for (i, source) in self.sources.iter().enumerate() {
@@ -1205,7 +1298,10 @@ impl gpui::Render for SetupDialog {
         let errors = self.error.clone().or_else(|| {
             self.report
                 .as_ref()
-                .filter(|_| self.step == Step::Bookmarks)
+                .filter(|r| {
+                    self.step == Step::Bookmarks
+                        || (self.step == Step::Passwords && !r.data.profiles.is_empty())
+                })
                 .and_then(|r| {
                     (!r.issues.is_empty()).then(|| {
                         r.issues
@@ -1253,6 +1349,29 @@ impl gpui::Render for SetupDialog {
                 }
             }))
             .on_action(cx.listener(|this, _: &Next, _, cx| this.next(cx)))
+            // The onboarding sheet covers the window's own traffic lights.
+            .when(self.onboarding, |s| {
+                s.child(crate::welcome::window_buttons(
+                    div()
+                        .id("setup-window-close")
+                        .debug_selector(|| "setup-window-close".into())
+                        .on_click(|_, _, cx| crate::quit::request(cx)),
+                    div()
+                        .id("setup-window-minimize")
+                        .debug_selector(|| "setup-window-minimize".into())
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(Event::Window(crate::menus::WindowOperation::Minimize))
+                        })),
+                    Some(
+                        div()
+                            .id("setup-window-zoom")
+                            .debug_selector(|| "setup-window-zoom".into())
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(Event::Window(crate::menus::WindowOperation::Zoom))
+                            })),
+                    ),
+                ))
+            })
             .child(
                 div()
                     .id("setup-card")
@@ -1278,7 +1397,7 @@ impl gpui::Render for SetupDialog {
                                     .pt(px(8.))
                                     .text_size(px(28.))
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .child(self.brand.as_ref().map_or_else(
+                                    .child(self.artwork.brand.as_ref().map_or_else(
                                         || div().child("Echo").into_any_element(),
                                         |image| {
                                             gpui::img(image.clone())
@@ -1547,6 +1666,17 @@ impl BrowserWindow {
                         self.close_setup(cx);
                     }
                 }
+            }
+            Event::Window(operation) => {
+                // Directly on the window: the menu path would close the sheet.
+                let main = self.main_window;
+                cx.defer(move |cx| {
+                    let _ = main.update(cx, |_, window, _| match operation {
+                        crate::menus::WindowOperation::Minimize => window.minimize_window(),
+                        crate::menus::WindowOperation::Zoom => window.zoom_window(),
+                        _ => {}
+                    });
+                });
             }
             Event::Theme(index) => {
                 let space = self.browser.space().id;

@@ -11092,11 +11092,13 @@ fn onboarding_welcome_intro_waits_for_its_arrow_then_continues_to_theme(cx: &mut
     let (dialog,mut panel)=local_setup(&view,cx);
     assert!(panel.debug_bounds("welcome-intro").is_some());
     assert!(panel.debug_bounds("setup-close").is_none());
-    // Like Arc, the intro cannot be dismissed or skipped before the arrow shows.
-    click(&mut panel,"welcome-continue");panel.simulate_keystrokes("enter escape");panel.run_until_parked();cx.run_until_parked();
+    // The invisible arrow and window buttons take no clicks, and there is no escape.
+    click(&mut panel,"welcome-continue");click(&mut panel,"welcome-close");panel.simulate_keystrokes("escape");panel.run_until_parked();cx.run_until_parked();
     assert!(view.read_with(cx,|v,_|v.setup.is_some()));
+    assert!(!crate::quit::is_quitting());
     assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Welcome));
     panel.executor().advance_clock(Duration::from_secs_f32(crate::welcome::READY));panel.run_until_parked();
+    assert!(panel.debug_bounds("welcome-minimize").is_some());
     assert!(dialog.read_with(&panel,|d,_|d.welcome_frame.is_some()));
     click(&mut panel,"welcome-continue");cx.run_until_parked();
     assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
@@ -11123,6 +11125,25 @@ fn onboarding_favorite_toggles_survive_redirects_and_leave_no_tabs(cx: &mut Test
     click(&mut panel,"setup-favorite-0");cx.run_until_parked();
     view.read_with(cx,|v,_|assert!(v.browser.active_user_profile().favorites.is_empty()));
     assert_eq!(tabs(cx),before);
+}
+
+#[gpui::test]
+fn onboarding_return_skips_the_intro_at_once_and_every_step_has_window_buttons(cx: &mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Welcome));v.open_setup(true,cx);});
+    let (_,mut panel)=local_setup(&view,cx);
+    panel.simulate_keystrokes("enter");panel.run_until_parked();cx.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::Theme));
+    let (dialog,mut panel)=local_setup(&view,cx);
+    for step in [SetupStep::Theme,SetupStep::Favorites,SetupStep::Import,SetupStep::DefaultBrowser] {
+        assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(step));
+        for id in ["setup-window-close","setup-window-minimize","setup-window-zoom"] { assert!(panel.debug_bounds(id).is_some(),"{id} on {step:?}"); }
+        let left=panel.debug_bounds("setup-window-close").unwrap().origin;
+        assert_eq!((left.x,left.y),(gpui::px(12.),gpui::px(16.)));
+        if step==SetupStep::Import { click(&mut panel,"setup-later"); } else { panel.simulate_keystrokes("enter"); }
+        panel.run_until_parked();cx.run_until_parked();
+    }
 }
 
 #[gpui::test]
@@ -11205,11 +11226,44 @@ fn onboarding_import_returns_directly_to_default_step_without_an_extra_completio
     use browser_core::onboarding::SetupStep;
     let (view,cx)=open(cx);let _fixture=import_fixture(cx);
     view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Import));v.open_setup(true,cx);});
-    let (dialog,mut panel)=local_setup(&view,cx);click(&mut panel,"setup-next");
-    click(&mut panel,"import-source-0");click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    let (dialog,mut panel)=local_setup(&view,cx);
+    // The step lists installed browsers itself, the first already chosen.
+    assert_eq!(dialog.read_with(&panel,|d,_|d.source),Some(0));
+    assert!(panel.debug_bounds("import-source-0").is_some());
+    click(&mut panel,"setup-next");
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Destination);
+    click(&mut panel,"setup-back");
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::Import));
+    click(&mut panel,"setup-next");click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
     click(&mut panel,"setup-next");click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
     assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Onboard(SetupStep::DefaultBrowser));
     assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::DefaultBrowser));
+}
+
+#[gpui::test]
+fn onboarding_imports_a_whole_browser_with_every_profile_without_the_bookmark_picker(cx:&mut TestAppContext) {
+    use browser_core::onboarding::SetupStep;
+    let (view,cx)=open(cx);
+    let root=tempfile::tempdir().unwrap();
+    for (directory,url) in [("Default","https://main.example"),("Profile 2","https://work.example")] {
+        std::fs::create_dir_all(root.path().join(directory)).unwrap();
+        std::fs::write(root.path().join(directory).join("Bookmarks"),format!(r#"{{"roots":{{"bookmark_bar":{{"type":"folder","name":"Bar","children":[{{"type":"url","name":"Page","url":"{url}"}}]}}}}}}"#)).unwrap();
+    }
+    std::fs::write(root.path().join("Local State"),r#"{"profile":{"info_cache":{"Default":{"name":"Me"},"Profile 2":{"name":"Work"}}}}"#).unwrap();
+    cx.cx.update(|cx|cx.set_global(crate::setup::ImportSources(vec![importer::SourceProfile {browser:importer::BrowserKind::Chrome,name:"Chrome".into(),path:root.path().into()}])));
+    view.update(cx,|v,cx|{v.edit_browser(|b|b.onboarding=Some(SetupStep::Import));v.open_setup(true,cx);});
+    let (dialog,mut panel)=local_setup(&view,cx);
+    panel.simulate_keystrokes("enter");panel.run_until_parked();
+    click(&mut panel,"import-destination-0");click(&mut panel,"setup-next");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(dialog.read_with(&panel,|d,_|d.step),crate::setup::Step::Passwords);
+    click(&mut panel,"setup-later");panel.run_until_parked();cx.run_until_parked();panel.run_until_parked();
+    assert_eq!(view.read_with(cx,|v,_|v.browser.onboarding),Some(SetupStep::DefaultBrowser));
+    view.read_with(cx,|v,_|{
+        let work=v.browser.user_profiles().find(|p|p.name()=="Work").expect("second profile recreated").id();
+        let spaces:Vec<_>=v.browser.spaces.iter().filter(|s|s.name=="From Chrome").map(|s|s.user_profile_id).collect();
+        assert_eq!(spaces.len(),2);
+        assert!(spaces.contains(&work));
+    });
 }
 
 #[gpui::test]

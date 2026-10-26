@@ -37,6 +37,16 @@ const LETTER_TIME: f32 = 0.55;
 const RISE: f32 = 36.;
 const BLUR: f32 = 12.;
 const ARROW_IN: (f32, f32) = (9.7, READY);
+/// Music time from which the arrow takes clicks.
+pub(crate) const ARROW_ACTIVE: f32 = ARROW_IN.0;
+/// Music time from which the window pane and its buttons are in place.
+pub(crate) const PANE_ACTIVE: f32 = FIELD_IN.1;
+/// Window buttons at the browser window's own traffic-light geometry
+/// (`window::TRAFFIC_LIGHT_X/Y` place the native buttons there).
+const LIGHT_SIDE: f32 = 14.;
+const LIGHT_LEFT: f32 = 12.;
+const LIGHT_TOP: f32 = 16.;
+const LIGHT_PITCH: f32 = 23.;
 
 const BASE: u32 = 0x4a3ce6;
 /// Field colors: light sky, pale lavender, violet, magenta, periwinkle, deep indigo.
@@ -200,6 +210,57 @@ fn placed(image: Arc<RenderImage>, x: f32, y: f32, side: f32) -> AnyElement {
         .into_any_element()
 }
 
+/// Working window buttons drawn like macOS's at the browser window's own
+/// traffic-light geometry, for onboarding surfaces that cover the native
+/// ones: colored, with their glyphs on hover. Without `zoom` the green
+/// button is shown disabled.
+pub(crate) fn window_buttons(
+    close: gpui::Stateful<gpui::Div>,
+    minimize: gpui::Stateful<gpui::Div>,
+    zoom: Option<gpui::Stateful<gpui::Div>>,
+) -> gpui::Div {
+    let light = |button: gpui::Stateful<gpui::Div>, index: usize, color: u32, icon: Icon| {
+        let group: gpui::SharedString = format!("window-light-{index}").into();
+        button
+            .group(group.clone())
+            .absolute()
+            .left(px(LIGHT_LEFT + LIGHT_PITCH * index as f32))
+            .top(px(LIGHT_TOP))
+            .size(px(LIGHT_SIDE))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::rgb(color))
+            .border_1()
+            .border_color(hsla(0., 0., 0., 0.12))
+            .text_color(hsla(0., 0., 0., 0.55))
+            .child(
+                div()
+                    .invisible()
+                    .group_hover(group, |s| s.visible())
+                    .child(icons::control_sized(icon, 10.)),
+            )
+    };
+    let row = div()
+        .absolute()
+        .inset_0()
+        .child(light(close, 0, 0xff5f57, Icon::Close))
+        .child(light(minimize, 1, 0xfebc2e, Icon::Minus));
+    match zoom {
+        Some(zoom) => row.child(light(zoom, 2, 0x28c840, Icon::Plus)),
+        None => row.child(
+            div()
+                .absolute()
+                .left(px(LIGHT_LEFT + 2. * LIGHT_PITCH))
+                .top(px(LIGHT_TOP))
+                .size(px(LIGHT_SIDE))
+                .rounded_full()
+                .bg(hsla(0., 0., 1., 0.35)),
+        ),
+    }
+}
+
 fn ease_out(range: (f32, f32), t: f32) -> f32 {
     let x = ((t - range.0) / (range.1 - range.0)).clamp(0., 1.);
     1. - (1. - x).powi(3)
@@ -283,6 +344,7 @@ pub(crate) fn render(
     field: Option<Arc<RenderImage>>,
     scale: f32,
     arrow: gpui::Stateful<gpui::Div>,
+    buttons: (gpui::Stateful<gpui::Div>, gpui::Stateful<gpui::Div>),
 ) -> AnyElement {
     let frame = frame.unwrap_or(gpui::Bounds::new(gpui::point(px(0.), px(0.)), size));
     let (w, h) = (f32::from(frame.size.width), f32::from(frame.size.height));
@@ -306,21 +368,8 @@ pub(crate) fn render(
                     .rounded(px(CORNER)),
             )
         });
-    // Arc's window shows its inactive buttons faintly over the field.
-    let lights = (0..3).fold(
-        div().absolute().inset_0().opacity(smooth(FIELD_IN, t) * 0.22),
-        |row, i| {
-            row.child(
-                div()
-                    .absolute()
-                    .left(px(18. + 18. * i as f32))
-                    .top(px(10.))
-                    .size(px(12.))
-                    .rounded_full()
-                    .bg(gpui::white()),
-            )
-        },
-    );
+    let (close, minimize) = buttons;
+    let lights = window_buttons(close, minimize, None).opacity(smooth(FIELD_IN, t));
     // Orb: grows in from nothing on the desktop, churns, then swells to
     // fill the pane and dissolves into the field.
     let orb_scale = (0.35 + 0.65 * smooth(ORB_IN, t))

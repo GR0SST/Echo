@@ -93,6 +93,7 @@ fn firefox_reads_profile_ini_places_and_selected_lz4_session_entry() {
         config: dir.path().join(".config"),
         local_app_data: dir.path().into(),
         roaming_app_data: dir.path().into(),
+        applications: vec![],
     };
     assert_eq!(
         paths.browser_root(BrowserKind::Firefox).unwrap(),
@@ -108,8 +109,13 @@ fn safari_binary_plist_bookmarks_and_history_epoch_and_platform_discovery() {
         config: dir.path().into(),
         local_app_data: dir.path().into(),
         roaming_app_data: dir.path().into(),
+        applications: vec![dir.path().join("Applications")],
     };
     let root = paths.browser_root(BrowserKind::Safari).unwrap();
+    // A leftover data folder is not offered once the app is gone.
+    std::fs::create_dir_all(&root).unwrap();
+    assert!(paths.profiles().is_empty());
+    std::fs::create_dir_all(dir.path().join("Applications/Safari.app")).unwrap();
     std::fs::create_dir_all(&root).unwrap();
     let value:plist::Value=plist::from_bytes(br#"<?xml version="1.0"?><plist version="1.0"><dict><key>Children</key><array><dict><key>WebBookmarkType</key><string>WebBookmarkTypeLeaf</string><key>URLString</key><string>https://safari.example</string><key>URIDictionary</key><dict><key>title</key><string>Safari bookmark</string></dict></dict></array></dict></plist>"#).unwrap();
     value.to_file_binary(root.join("Bookmarks.plist")).unwrap();
@@ -216,4 +222,35 @@ fn export_limits_reject_deep_html_oversized_passwords_and_ambiguous_csv_without_
     export_zip(&path,&[("One.csv",csv),("Two.csv",csv)]);assert!(importer::read_password_file(&path).is_err());
     let backup=dir.path().join("bookmarks.json");std::fs::write(&backup,br#"{"type":"text/x-moz-place-container","children":[{"type":"text/x-moz-place-container","title":"Empty"}]}"#).unwrap();
     let report=read_profile(&source(BrowserKind::Firefox,&backup),Selection::default(),&AtomicBool::new(false),|_|{});assert!(report.issues.is_empty());assert_eq!(report.data.bookmarks.len(),1);
+}
+
+#[test]
+fn installed_browser_is_one_source_that_reads_every_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = HostPaths {
+        platform: Platform::Mac,
+        home: dir.path().into(),
+        config: dir.path().into(),
+        local_app_data: dir.path().into(),
+        roaming_app_data: dir.path().into(),
+        applications: vec![dir.path().join("Applications")],
+    };
+    let root = paths.browser_root(BrowserKind::Chrome).unwrap();
+    for (directory, url) in [("Default", "https://main.example"), ("Profile 3", "https://work.example")] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+        std::fs::write(root.join(directory).join("Bookmarks"), format!(r#"{{"roots":{{"bookmark_bar":{{"type":"folder","name":"Bar","children":[{{"type":"url","name":"Page","url":"{url}"}}]}}}}}}"#)).unwrap();
+    }
+    std::fs::write(root.join("Local State"), r#"{"profile":{"info_cache":{"Profile 3":{"name":"Work"},"Default":{"name":"Person 1"}}}}"#).unwrap();
+    // Not offered while the app itself is missing.
+    assert!(paths.profiles().is_empty());
+    std::fs::create_dir_all(dir.path().join("Applications/Google Chrome.app")).unwrap();
+    let sources = paths.profiles();
+    assert_eq!(sources.len(), 1);
+    assert_eq!((sources[0].name.as_str(), sources[0].path.as_path()), ("Chrome", root.as_path()));
+    let report = read_profile(&sources[0], Selection::default(), &AtomicBool::new(false), |_| {});
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    let profiles = &report.data.profiles;
+    assert_eq!(profiles.iter().map(|p| p.name.as_deref()).collect::<Vec<_>>(), [None, Some("Work")]);
+    assert_eq!(profiles[1].spaces[0].title, "From Chrome");
+    assert!(report.data.bookmarks.is_empty());
 }
