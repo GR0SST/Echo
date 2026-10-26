@@ -8,6 +8,28 @@ Inspected Arc evidence: `target/parity/functional-sidebar/history-menu-v8/arc-{b
 
 Native Echo evidence is under `target/parity/functional-sidebar/history-native/`: Back selects One, Forward selects Three, each source document is requested once and native quit exits with status 0. Inspected 2× menu crops are `target/parity/functional-sidebar/pairs/history-{back,forward}.png`; the final native run exits with status 0 and preserves the complete Forward stack. Engine tests cover retained ordering, malformed/oversized replies, scoped cancellation, timeout and one-time consumption. GPUI tests cover sidebar selection by entry ID, toolbar/keyboard dismissal, stale-document rejection, an empty direction and separate sidebar/toolbar anchors and the focused Split pane.
 
-The parity row remains partial: Arc's menu availability immediately after typed address replacements, Light appearance, exact shadow/material and animation remain unqualified. The inspected Dark pairs also show a different long-title ellipsis/raster treatment; that cosmetic work is deferred. These limitations do not block the verified ordinary-link history flow; no long-press control is invented to compensate for the old inventory wording.
+The parity row remains partial for cosmetic qualification: Light appearance, exact shadow/material and animation remain unqualified. The inspected Dark pairs also show a different long-title ellipsis/raster treatment; that cosmetic work is deferred. These limitations do not block the verified ordinary-link history flow; no long-press control is invented to compensate for the old inventory wording.
 
 Delivery validation: `RUST_TEST_THREADS=4 cargo test` passed with 1,337 browser, 278 core and 196 engine tests (plus the other workspace crates). The final native fixture nonce is `ee03c8a`; its result records One/Two/Three requested once each and native exit 0. Exact logs: `/tmp/echo-history-delivery-full-test.log` and `target/parity/functional-sidebar/history-native/{engine.log,result.json}`.
+
+## Typed-address qualification, 2026-10-26
+
+Arc's guarded `history-typed-reference/` session enters One → Two → Three through
+Cmd+L replacements. Right-click Back immediately lists Two, One; selecting One
+leaves Forward listing Two, Three. Source records and cleanup receipts qualify
+this flow, superseding the earlier unsuccessful synthetic attempts. The session
+preserved both windows present at its initial inventory (Work 72640, Grosst 72508);
+the previous four restored window IDs were no longer present before any input.
+No owner windows were changed or recreated. Unrelated system access prompts at
+the right of the screen were untouched and excluded from the inspected menu crops.
+
+`target/parity/functional-sidebar/history-typed-native/result.json` records nonce
+`dc43406`, one tab, one request each for One/Two/Three, retained entry selection
+in both directions and native exit 0, including CEF Complete. The isolated fixture
+disables Warn before quitting; installed settings are untouched. The added GPUI
+regression exercises two Cmd+L replacements against the same engine view followed
+by Back/Forward entry-ID selection, without Create or copied-URL navigation.
+
+Inspected 2× pairs: `target/parity/functional-sidebar/pairs/history-typed-{back,forward}.png`.
+Behavior matches. Title ellipsis/raster and surrounding chrome remain cosmetic
+differences; these captures do not claim complete pixel parity.

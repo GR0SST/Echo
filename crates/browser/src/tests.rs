@@ -11774,6 +11774,38 @@ fn history_popover(view:&Entity<BrowserWindow>,cx:&mut VisualTestContext)->Visua
     VisualTestContext::from_window(handle.into(),cx)
 }
 #[gpui::test]
+fn typed_address_replacements_keep_the_retained_history_menu(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let tab = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    fake.take_calls();
+    for url in ["https://history.example/2", "https://history.example/3"] {
+        cx.simulate_keystrokes("cmd-l");
+        bar(&view, cx).simulate_keystrokes("cmd-a");
+        bar(&view, cx).simulate_input(url);
+        bar(&view, cx).simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(fake.take_calls().contains(&Call::Navigate(1, url.into())));
+        fake.send(cx, Event::UrlChanged { view: page(1), url: url.into() });
+        assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab), Some(tab));
+    }
+    history_fixture(&fake, 1, 2);
+    fake.take_calls();
+    right_click(cx, "go-back");
+    history_popover(&view, cx).simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    let calls = fake.take_calls();
+    assert!(calls.contains(&Call::HistoryRequest(1)));
+    assert!(calls.contains(&Call::HistoryEntry(1, 11)));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+    history_fixture(&fake, 1, 0);
+    right_click(cx, "go-forward");
+    history_popover(&view, cx).simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::HistoryEntry(1, 33)));
+    assert_eq!(view.read_with(cx, |w, _| w.browser.space().active_tab), Some(tab));
+}
+
+#[gpui::test]
 fn retained_history_menu_uses_entry_ids_and_preserves_the_tab(cx:&mut TestAppContext) {
     let (view,cx,fake)=open_pages(cx);history_fixture(&fake,1,2);fake.take_calls();
     let before=active_url(&view,cx);
