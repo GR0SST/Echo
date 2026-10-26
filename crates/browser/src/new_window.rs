@@ -29,6 +29,8 @@ struct NewWindow {
     selection: WindowSelection,
     restore: Option<browser_core::window_restore::RestoredWindow>,
     dormant: bool,
+    /// Committed normal-source width; transient/live drag geometry is excluded.
+    sidebar_width: Option<f32>,
 }
 
 impl BrowserWindow {
@@ -100,6 +102,7 @@ impl BrowserWindow {
         let Some(selection) = selection else {
             return;
         };
+        let sidebar_width = (self.transient.is_none() && !self.browser.is_blank()).then_some(self.sidebar_width);
         cx.defer(move |cx| {
             open_with(
                 NewWindow {
@@ -107,6 +110,7 @@ impl BrowserWindow {
                     selection,
                     restore: None,
                     dormant: false,
+                    sidebar_width,
                 },
                 false,
                 cx,
@@ -133,6 +137,7 @@ impl BrowserWindow {
             selection: self.browser.new_window_selection(),
             restore: None,
             dormant: false,
+            sidebar_width: Some(self.sidebar_width),
         };
         cx.defer(move |cx| open_with(request, true, cx));
     }
@@ -173,6 +178,7 @@ pub(crate) fn open(command_bar: bool, cx: &mut App) {
                         selection: restore.selection.clone(),
                         restore: Some(restore),
                         dormant: index != last,
+                        sidebar_width: None,
                     },
                     false,
                     cx,
@@ -193,6 +199,7 @@ pub(crate) fn open(command_bar: bool, cx: &mut App) {
             selection,
             restore: None,
             dormant: false,
+            sidebar_width: None,
         },
         command_bar,
         cx,
@@ -213,6 +220,12 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
                 None,
             )
         });
+    // Explicit source requests must not pick a different window's last focus.
+    // App-level requests without a normal source use the latest saved normal
+    // window; each restored window still overrides this in attach_restoration.
+    let inherited_sidebar_width = request.sidebar_width.or_else(|| request.normal.profile
+        .read_settings(|browser| browser.windows.last().map(|saved| saved.sidebar_width)))
+        .unwrap_or(window::SIDEBAR_WIDTH);
     let focused = !request.dormant;
     let handle = cx
         .open_window(
@@ -236,6 +249,7 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
                     selection,
                     restore,
                     dormant,
+                    sidebar_width: _,
                 } = request;
                 let pages = match &normal.pages {
                     Some(pages) => Some(
@@ -256,6 +270,7 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
                         window,
                         cx,
                     );
+                    view.sidebar_width = inherited_sidebar_width;
                     view.attach_restoration(restore, dormant, window, cx);
                     view.save_session_to(crate::profile_dir().join("session.json"), cx);
                     view

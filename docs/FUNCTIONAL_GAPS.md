@@ -2,7 +2,7 @@
 
 ## Active code/test-only claims (2026-10-26)
 
-- `t3-71384893` also claims **#63 sidebar width inheritance**: inspection confirms fresh normal-window requests omit the committed source width, while restored-window width is already persisted. Scope: request plumbing and GPUI/session tests, verifiable-by-tests; native drag/visual/platform acceptance excluded.
+- `t3-71384893` owns **#63 sidebar width inheritance** (implemented and tested): fresh normal-window requests capture the committed source width, while restored-window width is already persisted. Scope: request plumbing and GPUI/session tests, verifiable-by-tests; native drag/visual/platform acceptance excluded.
 
 - `t3-71384893`: **#55 private-window action availability** implemented; **#81 moved/deleted completed downloads** implemented and tested. Scope: shared GPUI/core logic and automated tests only; no screen, Arc reference or native-window qualification. These parts are verifiable-by-tests by inspection; broader platform/visual acceptance stays partial.
 
@@ -80,7 +80,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 60 | L90: New Boost / Edit Boost / Boost Gallery | M | Expose local Boost rename/delete controls using existing profile-owned model operations; omit cloud gallery. |
 | 61 | L149: New Space… | M | Finish theme/profile editing within the existing Space-creation draft. |
 | 62 | L152: Change Profile | M | Complete the empty-window warning policy for captured-Space profile reassignment. |
-| 63 | L214: Resize sidebar | S | Persist sidebar width and inherit it in new windows without changing document identity. |
+| 63 | L214: Resize sidebar | S | **Test-verifiable sub-gap fixed:** fresh normal windows inherit the committed source width; app-level creation uses the latest normal checkpoint, with the existing default if none exists. Window-local widths are checkpointed and restored independently; restored width wins over inheritance. Root/overlay/renderer, retained-document and session regressions cover the change. Native drag/visual/platform qualification remains partial. |
 | 64 | L220: **Favorites** (Top Apps): icon grid above Spaces, shared by all Spaces of a profile | M | Complete unread/calendar/profile behavior separately from the already-working Favorites dock. |
 | 65 | L229: Dragging tabs (between sections, into folders, into Favorites, into another Space) | M | Extend held-drag auto-scroll to folder drags and qualify edge cancellation across target types. |
 | 66 | L233: Custom tab icon ("Customize Tab") | M | Support uploaded custom tab images with bounded local decoding and persisted identity. |
@@ -405,3 +405,26 @@ the completion animation remain unqualified; the parent row remains partial.
 Validation for #81: all three focused GPUI regressions and the full workspace
 suite pass (1,368 browser and 284 core tests; all other enabled suites green,
 one existing AI test ignored). Logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/missing-download-{focused,full}.log`.
+
+### Sidebar width inheritance — code/test-only sub-gap
+
+Normal New Window and normal-source link-window requests capture the committed
+source sidebar width. Requests with no explicit normal source use the latest
+normal checkpoint, then the existing default. An in-progress presentation width
+is not captured. Each restored window retains its own saved width, which overrides
+inheritance before its checkpoint is written. Existing sidebar visibility and
+page selection behavior are retained. No setting, native geometry shim or drag
+physics is introduced.
+
+Four GPUI regressions cover root/overlay/renderer creation, explicit source
+precedence over another window's checkpoint, app-level fallback, persisted
+width round-trip and saved-width precedence. Fake-engine calls verify no source
+page creation, closure or navigation. Native resizing and exact presentation
+remain unqualified; the parent parity row remains partial.
+
+Validation for #63: all four focused regressions and the full workspace suite
+pass (1,372 browser and 284 core tests; all other enabled suites green, one
+existing AI test ignored). `scripts/check-targets.sh` passes both Linux GNU and
+Windows MSVC for the combined code/test-only batch. Logs:
+`~/Library/Caches/EchoBuildHealth/t3-71384893/logs/sidebar-width-{focused,full}.log`
+and `code-only-targets.log` in the same directory.

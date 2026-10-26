@@ -31,6 +31,8 @@ mod page_swipe_tests;
 mod private_availability_tests;
 #[path = "missing_download_tests.rs"]
 mod missing_download_tests;
+#[path = "sidebar_width_inheritance_tests.rs"]
+mod sidebar_width_inheritance_tests;
 
 use std::cell::RefCell;
 #[path = "split_drag_motion_tests.rs"]
