@@ -66,3 +66,82 @@ fn closing_little_retains_one_global_archive_record_but_promotion_does_not(cx: &
         assert!(view.browser.all_tabs().any(|tab| tab.url == "https://lookup.example/promoted"));
     });
 }
+
+
+fn quit_lookup(source: &Entity<BrowserWindow>, visual: &mut VisualTestContext, url: &str) -> Entity<BrowserWindow> {
+    source.update(visual, |view, cx| view.open_little_url(Some(url.into()), cx));
+    visual.run_until_parked();
+    visual.cx.update(|cx| cx.windows().into_iter()
+        .filter_map(|handle| handle.downcast::<BrowserWindow>())
+        .find_map(|handle| handle.root(cx).ok().filter(|view| view.read(cx).transient.is_some()
+            && view.read(cx).browser.active_tab().is_some_and(|tab| tab.url == url)))
+        .expect("fixture lookup"))
+}
+
+#[gpui::test]
+fn quit_collects_all_open_little_lookups_before_writing_and_is_idempotent(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.json");
+    let (source, visual) = open(cx);
+    source.update(visual, |view, cx| view.save_session_to(path.clone(), cx));
+    let selected = source.read_with(visual, |view, _| view.browser.space().active_tab);
+    let first = quit_lookup(&source, visual, "https://lookup.example/first");
+    let second = quit_lookup(&source, visual, "https://lookup.example/second");
+    assert!(source.read_with(visual, |view, _| view.browser.archive.is_empty()));
+    visual.cx.update(|cx| crate::quit::prepare_models_for_quit(cx).unwrap());
+    let saved = browser_core::session::load(&path).unwrap().unwrap();
+    let mut urls: Vec<_> = saved.archive.iter().map(|entry| entry.tab.url.as_str()).collect();
+    urls.sort();
+    assert_eq!(urls, ["https://lookup.example/first", "https://lookup.example/second"]);
+    assert!(saved.archive.iter().all(|entry| entry.origin == browser_core::ArchiveOrigin::LittleArc));
+    let identities: Vec<_> = saved.archive.iter().map(|entry| entry.tab.id).collect();
+    assert_ne!(identities[0], identities[1]);
+    assert_eq!(source.read_with(visual, |view, _| view.browser.space().active_tab), selected);
+    assert!(first.read_with(visual, |view, _| view.transient.as_ref().unwrap().archive_retained));
+    assert!(second.read_with(visual, |view, _| view.transient.as_ref().unwrap().archive_retained));
+    visual.cx.update(|cx| crate::quit::prepare_models_for_quit(cx).unwrap());
+    let again = browser_core::session::load(&path).unwrap().unwrap();
+    assert_eq!(again.archive.iter().map(|entry| entry.tab.id).collect::<Vec<_>>(), identities);
+}
+
+#[gpui::test]
+fn quit_flushes_a_little_source_writer_after_its_normal_window_and_global_are_gone(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.json");
+    let (source, visual) = open(cx);
+    source.update(visual, |view, cx| view.save_session_to(path.clone(), cx));
+    let lookup = quit_lookup(&source, visual, "https://lookup.example/last-window");
+    visual.update(|window, _| window.remove_window());
+    drop(source);
+    visual.cx.update(|cx| {
+        if cx.has_global::<crate::new_window::NormalProfile>() {
+            drop(cx.remove_global::<crate::new_window::NormalProfile>());
+        }
+    });
+    visual.cx.update(|cx| crate::quit::prepare_models_for_quit(cx).unwrap());
+    let saved = browser_core::session::load(&path).unwrap().unwrap();
+    assert_eq!(saved.archive.len(), 1);
+    assert_eq!(saved.archive[0].tab.url, "https://lookup.example/last-window");
+    assert!(lookup.read_with(visual, |view, _| view.transient.as_ref().unwrap().archive_retained));
+}
+
+#[gpui::test]
+fn quit_does_not_archive_empty_promoted_or_peek_documents(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.json");
+    let (source, visual) = open(cx);
+    source.update(visual, |view, cx| view.save_session_to(path.clone(), cx));
+    visual.simulate_keystrokes("cmd-alt-n");
+    visual.run_until_parked();
+    let (empty, _) = little_root(visual);
+    let promoted = quit_lookup(&source, visual, "https://lookup.example/kept-tab");
+    promoted.update(visual, |view, cx| view.promote_transient(None, cx));
+    visual.run_until_parked();
+    source.update_in(visual, |view, window, cx| view.open_peek("https://lookup.example/peek".into(), window, cx));
+    visual.run_until_parked();
+    visual.cx.update(|cx| crate::quit::prepare_models_for_quit(cx).unwrap());
+    let saved = browser_core::session::load(&path).unwrap().unwrap();
+    assert!(saved.archive.is_empty());
+    assert!(saved.all_tabs().any(|tab| tab.url == "https://lookup.example/kept-tab"));
+    assert!(empty.read_with(visual, |view, _| view.browser.active_tab().is_none()));
+}

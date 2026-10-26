@@ -4,7 +4,7 @@
 
 - `t3-71384893` claims **#89 automatic PiP visible-Split eligibility**. Verifiable-by-tests: changing focus between still-visible Split panes must not open PiP; leaving/returning to the group must track the unique previously-visible playing video even when another pane is focused. Existing engine commands only; iframe/native-window/ambiguous-multiple-video policy excluded.
 
-- `t3-71384893` claims **#80 Little lookup retention during app/final-window quit**. Verifiable-by-tests: collect open lookup archives before canonical writers flush, exactly once, with promotion/empty/private exclusions and synthetic session files. Restore-destination policy and native quit qualification are excluded.
+- `t3-71384893` owns **#80 Little lookup retention during app/final-window quit** (implemented and tested). Verifiable-by-tests: collect open lookup archives before canonical writers flush, exactly once, with promotion/empty/private exclusions and synthetic session files. Restore-destination policy and native quit qualification are excluded.
 
 - `t3-71384893` owns **#65 held folder-drag auto-scroll** (implemented and tested). Verifiable-by-tests: reuse the existing tab edge-scroll timer/physics for a validated folder payload, including hold, cancellation, Space/profile/workspace changes and drop cleanup. No new native gesture or visual policy.
 
@@ -107,7 +107,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 77 | L418: Changing a Space's profile, with warnings ("Switch to your … Profile?") | M | Implement the empty-window warning policy for a Space profile change. |
 | 78 | L443: General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | L | **Reclassified with #4:** no such controls are exposed by the installed desktop reference; do not invent them. |
 | 79 | L452: Max → 5-Second Previews | M | Complete automatic-site eligibility and image/system-share payload handling for 5-Second Previews. |
-| 80 | L463: Archive (see section 7) | M | Restore Little archive items to the correct destination and retain final-window/app-quit lookups exactly once. |
+| 80 | L463: Archive (see section 7) | M | **Test-verifiable quit sub-gap fixed:** all open lookups are collected before any canonical session flush; retained source writers survive loss of their normal root/global and repeated preparation does not duplicate records. GPUI tests use disposable session files. Little restore-destination policy and native quit acceptance remain partial. |
 | 81 | L464: Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | S | **Test-verifiable sub-gap fixed:** published-path availability refreshes the existing subtitle on entry, activation, periodic refresh and failed file actions. Open/Show/Copy/Trash revalidate the canonical path; Hide remains metadata-only. Restoring a file at that path clears the transient state without changing identity or filters. Native/visual and completion-flight qualification remain partial. See code/test-only delivery evidence. |
 | 82 | L465: Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | L | Implement bounded local media discovery and real file actions; avoid inventing a populated Arc layout. |
 | 83 | L466: Boosts: list, on/off, rename, delete | S | Expose local Boost rename/delete operations through the existing editor/list interaction contract. |
@@ -492,3 +492,21 @@ Escape or outside release, preserve the fixed header/document/inventory, reject
 foreign workspace/profile payloads and retire the source while scrolling.
 No Arc interaction or native/visual claim was made. Focused log:
 `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/folder-scroll-focused.log`.
+
+
+### Little lookup retention at quit — code/test-only delivery
+
+The accepted-quit path now collects open Little lookups across all browser
+roots before any model flush, checkpoint, renderer detachment or shutdown.
+Every distinct retained source writer is explicitly flushed, even when its
+normal root and global are gone. Existing canonical archive publication keeps
+fresh IDs, profile/origin metadata and private/non-web/retired-profile guards.
+The existing promotion/expiry/explicit-close idempotence flag is reused.
+Nothing is collected before the existing quit/download-consent barriers.
+
+Three new GPUI regressions exercise the production model-preparation step with
+disposable session files: multiple open lookups, repeated preparation, the last
+Little root after its normal/global removal, and empty/promoted/Peek exclusions.
+All six Little archive tests pass. Native last-window/app-quit acceptance and
+Little-specific restore destination remain unqualified. Focused log:
+`~/Library/Caches/EchoBuildHealth/t3-71384893/logs/little-quit-focused.log`.

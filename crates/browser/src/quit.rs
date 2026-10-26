@@ -10,6 +10,38 @@ thread_local! {
     pub(crate) static NATIVE_GATE: RefCell<NativeQuitGate> = RefCell::new(NativeQuitGate::default());
 }
 
+/// Collect every lookup before any canonical writer is flushed. A Little
+/// window can outlive its normal source window and the NormalProfile global.
+pub(crate) fn prepare_models_for_quit(cx: &mut App) -> Result<(), String> {
+    let windows: Vec<_> = cx.windows().into_iter()
+        .filter_map(|handle| handle.downcast::<crate::window::BrowserWindow>()).collect();
+    let mut retained = Vec::<crate::profile::ProfileHandle>::new();
+    for handle in &windows {
+        let writer = handle.update(cx, |view, _, _| {
+            if view.peek_owner.is_some() { return None; }
+            view.retain_little_archive();
+            view.transient.as_ref().map(|state| state.source.profile.clone())
+        }).map_err(|error| error.to_string())?;
+        if let Some(writer) = writer {
+            if !retained.iter().any(|entry| entry.same_workspace(&writer)) {
+                retained.push(writer);
+            }
+        }
+    }
+    for handle in windows {
+        handle.update(cx, |view, _, cx| view.prepare_quit(cx))
+            .map_err(|error| error.to_string())??;
+    }
+    if let Some(normal) = cx.try_global::<crate::new_window::NormalProfile>() {
+        let writer = normal.profile.clone();
+        if !retained.iter().any(|entry| entry.same_workspace(&writer)) {
+            retained.push(writer);
+        }
+    }
+    for writer in retained { writer.flush_for_quit(cx)?; }
+    Ok(())
+}
+
 /// This gate is set synchronously after quit is accepted (or a native failure).
 /// Deferred producers must check it again when they actually execute.
 pub(crate) fn is_quitting() -> bool { SEALED.with(Cell::get) }
@@ -501,15 +533,7 @@ pub(crate) fn init(cx: &mut App) {
                 Engine::release_file_download_initiators();
                 // Save every model before removing any native page metadata.
                 cx.update(|cx| -> Result<Vec<Box<dyn crate::pages::WebEngine>>, String> {
-                    for handle in cx.windows() {
-                        if let Some(handle) = handle.downcast::<crate::window::BrowserWindow>() {
-                            handle.update(cx, |view, _, cx| view.prepare_quit(cx)).map_err(|e| e.to_string())??;
-                        }
-                    }
-                    if cx.has_global::<crate::new_window::NormalProfile>() {
-                        let profile = cx.global::<crate::new_window::NormalProfile>().profile.clone();
-                        profile.flush_for_quit(cx)?;
-                    }
+                    prepare_models_for_quit(cx)?;
                     // Extract owners before dropping the last layout references.
                     let owners = crate::pages::take_shutdown_engines()?;
                     for handle in cx.windows() {
