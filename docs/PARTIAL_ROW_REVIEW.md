@@ -221,7 +221,9 @@ not promoted to done.
 The Little Arc global shortcut, external-link routing and expiry choices already
 have consumers. Round 3 adds the Option-Command page-link consumer, including
 the disabled preference’s Split View route and website cancellation. Custom global
-shortcut recording and additional platform qualification remain. Site
+shortcut recording now reaches OS registration, with conflict/removal/reset guards;
+Arc system-wide remapping remains reference unqualified and additional platform
+qualification remains. Site
 Previews are also persisted choices rather than an implemented site-preview
 backend. Neither is accepted by its Settings overview pair.
 

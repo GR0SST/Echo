@@ -493,3 +493,32 @@ input to its destination; it is not a background-tab fallback. The receipt is
 are `pair-modifier-{cmdclick,cmdshift,cmdalt,cmdaltdisabled,cmdaltprevent}-r3.png`;
 `pair-modifier-order-r3-2x.png` enlarges the source/below-opener ordering. Existing
 Little-window width, Split toolbar appearance and row materials remain cosmetic.
+
+
+## Global Little shortcut rebinding
+
+The existing Arc Shortcuts recorder and Links preference are reused. The Echo
+OS registration previously hard-coded Option-Command-N independently of that
+recorder. It now follows the effective installed `New Little Echo Window`
+action, unregistering its previous chord before registering a replacement.
+An explicitly removed or conflicted action has no global route; disabling the
+Links preference also retires it. Stale queued presses cannot invoke a retired
+registration. An armed Settings recorder temporarily suspends registration so
+it can receive the current OS chord. Individual reset restores the default without changing its
+separate website priority.
+
+Reference unqualified for Arc's system-wide remapping: the existing recorder
+and default-global-entry references are qualified, but no owner's Arc shortcut
+was changed for this check. No new UI or copy is introduced.
+
+GPUI coverage records a custom chord through Settings, removes it, resets it
+and records a conflicting Reload chord. Unit coverage checks the platform
+modifier mapping, function keys, test-only extra Control, invalid chords and
+press/release suppression. Full-workspace results are in
+`target/parity/partial-closeout/global-little-full-r4-recording.log`. Native acceptance
+uses a private profile, a complete canonical bundle and a disposable receiver
+applet, with an extra Control modifier to avoid Arc's live default binding.
+The production chord is never changed by that test modifier. Evidence is
+`global-little-native-r4-recording-accepted.log`, `echo-global-little-r4-receipt.json` and
+`echo-global-little-r4-38.png` / `echo-global-little-r4-40.png` in the same
+directory. Additional platform/layout/chord coverage remains partial.

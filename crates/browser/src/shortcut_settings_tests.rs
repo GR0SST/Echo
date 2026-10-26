@@ -431,3 +431,27 @@ fn stale_shortcut_priority_menu_cannot_change_a_removed_assignment(cx: &mut Test
         .priorities
         .contains_key("Copy URL")));
 }
+
+#[gpui::test]
+fn global_little_registration_follows_recording_conflict_removal_and_reset(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |view,cx|view.retain_normal_source(cx));
+    let original=cx.cx.update(|cx|crate::global_little::configured_binding(cx,false)).unwrap();
+    cx.simulate_keystrokes("cmd-,");
+    let (settings,mut visual)=settings_window(cx);
+    search_shortcuts(&settings,&mut visual,"New Little Echo Window");
+    click(&mut visual,"shortcut-record-New Little Echo Window");
+    assert!(visual.cx.update(|cx|crate::global_little::configured_binding(cx,false)).is_none(),"An armed recorder receives the old OS chord");
+    visual.simulate_keystrokes("ctrl-alt-k");
+    let custom=visual.cx.update(|cx|crate::global_little::configured_binding(cx,false)).unwrap();
+    assert_ne!(custom.id(),original.id());
+    click(&mut visual,"shortcut-record-New Little Echo Window");
+    visual.simulate_keystrokes("backspace");
+    assert!(visual.cx.update(|cx|crate::global_little::configured_binding(cx,false)).is_none());
+    click(&mut visual,"reset-one-shortcut");
+    assert_eq!(visual.cx.update(|cx|crate::global_little::configured_binding(cx,false)).unwrap().id(),original.id());
+    click(&mut visual,"shortcut-record-New Little Echo Window");
+    visual.simulate_keystrokes("cmd-r");
+    assert!(settings.read_with(&visual,|s,_|s.shortcut_has_conflict("New Little Echo Window")));
+    assert!(visual.cx.update(|cx|crate::global_little::configured_binding(cx,false)).is_none(),"A conflicted app binding cannot bypass its winner through the OS");
+}

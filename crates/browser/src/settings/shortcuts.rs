@@ -37,6 +37,7 @@ impl State {
     }
 }
 impl SettingsWindow {
+    pub(crate) fn recording_shortcut(&self) -> bool { self.shortcuts.armed }
     fn shortcut_entries(&self, cx: &App) -> Vec<(String, String)> {
         let mut entries = CATALOG.clone();
         self.profile.read_settings(|b| {
