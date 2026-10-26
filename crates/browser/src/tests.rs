@@ -35,6 +35,8 @@ mod missing_download_tests;
 mod sidebar_width_inheritance_tests;
 #[path = "suggestion_dismissal_tests.rs"]
 mod suggestion_dismissal_tests;
+#[path = "update_command_tests.rs"]
+mod update_command_tests;
 
 use std::cell::RefCell;
 #[path = "split_drag_motion_tests.rs"]

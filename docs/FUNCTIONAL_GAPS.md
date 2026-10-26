@@ -2,9 +2,11 @@
 
 ## Active code/test-only claims (2026-10-26)
 
+- `t3-71384893` claims **#80 Little lookup retention during app/final-window quit**. Verifiable-by-tests: collect open lookup archives before canonical writers flush, exactly once, with promotion/empty/private exclusions and synthetic session files. Restore-destination policy and native quit qualification are excluded.
+
 - `t3-71384893` claims **#65 held folder-drag auto-scroll**. Verifiable-by-tests: reuse the existing tab edge-scroll timer/physics for a validated folder payload, including hold, cancellation, Space/profile/workspace changes and drop cleanup. No new native gesture or visual policy.
 
-- `t3-71384893` claims **#71 missing Check for Updates Command Bar route**. Verifiable-by-tests: route to the existing app-owned update action/window, typed aliases, source retention and cancellation. No transport, installer or presentation changes.
+- `t3-71384893` owns **#71 missing Check for Updates Command Bar route** (implemented and tested). Verifiable-by-tests: route to the existing app-owned update action/window, typed aliases, source retention and cancellation. No transport, installer or presentation changes.
 
 - `t3-71384893` owns **#39 remote suggestion dismissal** (implemented and tested). Verifiable-by-tests: profile/provider-scoped persisted suppression, existing delete-control routing, stale callback guards and history isolation. Supported transport rows only; no provider-account deletion API or native/visual qualification.
 
@@ -94,7 +96,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 68 | L246: Media controls in the sidebar | M | Complete the media-control behaviors tracked in the detailed mini-player row. |
 | 69 | L264: Space Manager (Library → Spaces) | M | Complete Space Manager theme/overflow actions and behavioral routing independently of card styling. |
 | 70 | L272: Theme editor ("Edit Theme Color…", "Tap to pick a color for this space") | S | Clamp the theme picker to the work area and anchor Library entry to the clicked card so controls stay reachable. |
-| 71 | L305: Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo | S | Connect remaining in-scope menu actions to Command Bar routes; exclude the Arc update feed. |
+| 71 | L305: Other: Toggle Sidebar, Manage Passwords, Search Settings, Air Traffic Control, Edit Keyboard Shortcuts, Check for Updates, Undo/Redo | S | **Missing route implemented:** Check for Updates… and its aliases call the existing Echo updater action, reusing its utility window and in-flight check. Existing sidebar/password/search/ATC/shortcut/Undo/Redo routes remain. GPUI tests cover invocation, cancellation, deduplication, retry and source-page retention. Arc’s feed is excluded; native presentation remains unqualified. |
 | 72 | L348: Archive page in Library: "Today/Yesterday", filters by Space, "How was the tab closed?" (Auto-Closed/Manually Closed), Little Arc | M | Reconcile the stale Library/Little archive note with the implemented cross-profile inventory and remaining restoration gaps. |
 | 73 | L374: Resize Split View panes | M | Verify and fix overflow hit testing for four-pane horizontal/vertical splits. |
 | 74 | L375: Create by dragging a tab to the middle of the window | M | Qualify and implement initially-unarmed center-drop semantics without changing retained-page identities. |
@@ -455,3 +457,19 @@ session round trips. Native appearance remains unqualified.
 Validation for #39: the full workspace suite passes (1,374 browser, 287 core
 and all remaining enabled suites; one existing AI test ignored). New coverage:
 two GPUI and three core regressions. Log: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/suggestion-dismiss-full.log`.
+
+### Check for Updates Command Bar route — code/test-only delivery
+
+`Check for Updates…`, `check updates`, `software update` and `update echo`
+reach the same app-owned action as the existing app menu. The existing updater
+owns check serialization, failure retry, its one utility window and cancellation.
+The route closes the Command Bar through the existing utility-focus handoff.
+No release transport, installer, feed or window presentation was changed.
+
+Two GPUI regressions drive typed aliases/Enter and Escape, compare the retained
+source document, reuse the app-menu window and retry a synthetic failure state.
+Tests make no network request or native app/window interaction.
+
+Validation for #71: two focused GPUI regressions and the full workspace suite
+pass (1,380 browser, 287 core and all remaining enabled suites; one existing
+AI test ignored). Logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/update-command-{focused,full}.log`.

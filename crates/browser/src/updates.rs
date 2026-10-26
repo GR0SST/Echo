@@ -26,8 +26,7 @@ pub(crate) fn init(cx: &mut App) {
         gpui::KeyBinding::new("cmd-w", CloseUpdate, Some("UpdateWindow")),
     ]);
     cx.on_action(|_: &CheckForUpdates, cx| {
-        check(cx);
-        show(cx);
+        request_check(cx);
     });
     cx.on_action(|_: &RestartAndUpdate, cx| restart(cx));
     #[cfg(not(test))]
@@ -53,6 +52,11 @@ pub(crate) fn init(cx: &mut App) {
     })
     .detach();
 }
+pub(crate) fn request_check(cx: &mut App) {
+    check(cx);
+    show(cx);
+}
+
 pub(crate) fn check(cx: &mut App) {
     if crate::quit::is_quitting() {
         return;

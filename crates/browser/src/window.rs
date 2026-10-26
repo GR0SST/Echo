@@ -490,6 +490,7 @@ pub enum Command {
     SearchSettings,
     ManagePasswords,
     AboutEcho,
+    CheckForUpdates,
     ImportBrowser,
     SetDefaultBrowser,
     ToggleSpaceHeader,
@@ -2085,6 +2086,7 @@ impl BrowserWindow {
                 (Command::AddExtension, "Add Extension…", "add extension|install extension|chrome web store", !self.browser.is_private()),
                 (Command::Settings, "Settings…", "settings|preferences", true),
                 (Command::AboutEcho, "About Echo", "about echo|about", true),
+                (Command::CheckForUpdates, "Check for Updates…", "check for updates|check updates|software update|update echo", true),
                 (Command::ImportBrowser, "Import from Another Browser…", "import from another browser|import browser|import bookmarks|import history", self.transient.is_none() && !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::SetDefaultBrowser, "Set as Default Browser", "set as default browser|default browser", bar.can_set_default_browser),
                 (Command::ManagePasswords, "Manage Passwords", "manage passwords|password manager|passwords", true),
@@ -2535,6 +2537,7 @@ impl BrowserWindow {
             Command::SearchSettings => self.search_settings_from_command(cx),
             Command::ManagePasswords => self.passwords_from_command(cx),
             Command::AboutEcho => self.open_menu_utility(crate::about::open, cx),
+            Command::CheckForUpdates => self.open_menu_utility(crate::updates::request_check, cx),
             Command::ImportBrowser => self.open_setup(false, cx),
             Command::SetDefaultBrowser => { self.close_command_bar(cx); self.request_default_browser(cx); }
             Command::FindPage => self.find_from_command(cx),
