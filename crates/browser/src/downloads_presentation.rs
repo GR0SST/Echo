@@ -1,5 +1,6 @@
-//! Canonical completed-record ordering and calendar presentation. No disk reads,
-//! engine callbacks, destination decisions, or inferred completion belong here.
+//! Canonical completed-record ordering and calendar presentation. Host refreshes
+//! also sample published-path availability through the file adapter; no engine
+//! callbacks, destination decisions, or inferred completion belong here.
 use crate::downloads_view::{CompletedDownload as Row, DownloadsGroup, DownloadsList};
 use browser_core::downloads::{CompletedDownload, CompletedDownloadId, DownloadTime};
 use chrono::{DateTime, Local, Utc};
@@ -26,7 +27,7 @@ pub(crate) fn completed(
         records,
         filtered,
         |date| date_heading(date, now),
-        crate::download_files::subtitle,
+        crate::download_files::published_subtitle,
     )
 }
 

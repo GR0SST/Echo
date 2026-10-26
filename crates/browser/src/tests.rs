@@ -29,6 +29,8 @@ mod page_swipe_tests;
 
 #[path = "private_availability_tests.rs"]
 mod private_availability_tests;
+#[path = "missing_download_tests.rs"]
+mod missing_download_tests;
 
 use std::cell::RefCell;
 #[path = "split_drag_motion_tests.rs"]

@@ -49,6 +49,16 @@ impl BrowserWindow {
         cx.notify();
     }
 
+    /// Returning from a file manager must refresh external file changes even
+    /// when canonical metadata, the query and the selected profile are unchanged.
+    pub(crate) fn refresh_download_file_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.downloads_route_active() {
+            self.sidebar_navigation.downloads.dirty = true;
+            self.sync_library_downloads(window, cx);
+            cx.notify();
+        }
+    }
+
     pub(crate) fn downloads_route_active(&self) -> bool {
         !self.browser.is_private()
             && !self.browser.is_blank()
@@ -237,7 +247,8 @@ impl BrowserWindow {
         );
         self.sidebar_navigation.downloads.subscriptions = vec![intents, focus];
         // Refresh presentation as relative labels, the local calendar and locale
-        // change while the section stays open. This owns no download consumer
+        // change while the section stays open, including published files moved or
+        // restored outside Echo. This owns no download consumer
         // and never pumps CEF. Route retirement drops the timer immediately.
         self.sidebar_navigation.downloads.presentation_clock =
             Some(cx.spawn(async move |this, cx| loop {

@@ -38,7 +38,7 @@ pub(crate) struct CompletedDownload<Token> {
     pub token: Token,
     pub profile: UserProfileId,
     pub title: String,
-    /// Host-formatted file type plus optional source domain; never a disk path.
+    /// Host-formatted file kind/source or missing-file state; never a disk path.
     pub subtitle: String,
 }
 
@@ -159,6 +159,11 @@ impl<Token: Clone + Eq + 'static> Focusable for DownloadsView<Token> {
 }
 
 impl<Token: Clone + Eq + 'static> DownloadsView<Token> {
+    #[cfg(test)]
+    pub(crate) fn projection_for_test(&self) -> &DownloadsProjection<Token> {
+        &self.projection
+    }
+
     pub(crate) fn new(
         projection: DownloadsProjection<Token>,
         colors: DownloadsColors,

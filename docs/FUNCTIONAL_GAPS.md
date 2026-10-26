@@ -2,7 +2,9 @@
 
 ## Active code/test-only claims (2026-10-26)
 
-- `t3-71384893`: **#55 private-window action availability** implemented; **#81 moved/deleted completed downloads** remains claimed. Scope: shared GPUI/core logic and automated tests only; no screen, Arc reference or native-window qualification. These parts are verifiable-by-tests by inspection; broader platform/visual acceptance stays partial.
+- `t3-71384893` also claims **#63 sidebar width inheritance**: inspection confirms fresh normal-window requests omit the committed source width, while restored-window width is already persisted. Scope: request plumbing and GPUI/session tests, verifiable-by-tests; native drag/visual/platform acceptance excluded.
+
+- `t3-71384893`: **#55 private-window action availability** implemented; **#81 moved/deleted completed downloads** implemented and tested. Scope: shared GPUI/core logic and automated tests only; no screen, Arc reference or native-window qualification. These parts are verifiable-by-tests by inspection; broader platform/visual acceptance stays partial.
 
 Inventory baseline: `fcf128de1cabf4dbe4c6625bde9b071577c632f1`; reviewed 2026-10-25. All 208 rows whose status was `partial` or `missing` in [ARC_PARITY.md](ARC_PARITY.md) are classified below. Line numbers are baseline locators; feature names are the durable identifiers. No Arc sessions or pixel work were used for this triage.
 
@@ -96,7 +98,7 @@ Ranking prioritizes data retention, login/navigation, everyday retrieval and rec
 | 78 | L443: General → Built-in blocker: Block Ads, Block Trackers, Block Cookie Banners, "Ad Block Settings…" (Advanced Ad Block Settings), advice to keep a single blocker | L | **Reclassified with #4:** no such controls are exposed by the installed desktop reference; do not invent them. |
 | 79 | L452: Max → 5-Second Previews | M | Complete automatic-site eligibility and image/system-share payload handling for 5-Second Previews. |
 | 80 | L463: Archive (see section 7) | M | Restore Little archive items to the correct destination and retain final-window/app-quit lookups exactly once. |
-| 81 | L464: Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | S | Handle files moved/deleted after publication in Library Open/Show actions and missing-file state. |
+| 81 | L464: Downloads (⇧⌘J): filter, filter by profile, "download flies into Library" animation, "File deleted or moved" | S | **Test-verifiable sub-gap fixed:** published-path availability refreshes the existing subtitle on entry, activation, periodic refresh and failed file actions. Open/Show/Copy/Trash revalidate the canonical path; Hide remains metadata-only. Restoring a file at that path clears the transient state without changing identity or filters. Native/visual and completion-flight qualification remain partial. See code/test-only delivery evidence. |
 | 82 | L465: Media: Captures and files from Desktop/Documents/Downloads, Open in Preview, Show in Finder, Hide from Arc, Copy | L | Implement bounded local media discovery and real file actions; avoid inventing a populated Arc layout. |
 | 83 | L466: Boosts: list, on/off, rename, delete | S | Expose local Boost rename/delete operations through the existing editor/list interaction contract. |
 | 84 | L488: Site Control Center: security icon, Copy URL, Capture / Full Page / Portrait, Share, Boosts, extensions (pin/unpin, Add Extension), Clear Cache, Clear Cookies, All Site Settings… | L | Complete cross-origin permission requests, main-panel keyboard traversal and global site-settings navigation. |
@@ -382,3 +384,24 @@ The parent rows remain partial for the unqualified reference/platform states.
 Validation for #55: all four focused regressions and the full workspace suite
 pass (1,365 browser and 284 core tests; all other enabled suites green, one
 existing AI test ignored). Logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/private-availability-{focused,full}.log`.
+
+### Missing completed downloads — code/test-only sub-gap
+
+The Library samples the canonical published path on host refresh and uses its
+existing subtitle for `File deleted or moved` when the path is absent or no longer
+a regular file. Re-entry, window activation, the existing 60-second presenter
+clock and failed file actions refresh this state. A restored file at that exact
+path regains its type/source subtitle. No record is deleted or retargeted, and
+query/profile selection remains unchanged. Open, Reveal, Copy and Trash recheck
+availability at activation; Hide is always metadata-only.
+
+Three GPUI regressions use disposable files and the real Library presenter: move
+and restore across activation/re-entry, directory/restored-file timer transitions
+with a retained query, and stale file-action rejection plus Hide. They assert
+canonical IDs/paths and retained-page isolation. No platform Open/Reveal/Trash invocation, Arc
+session, screen work or new layout is part of this change. Native appearance and
+the completion animation remain unqualified; the parent row remains partial.
+
+Validation for #81: all three focused GPUI regressions and the full workspace
+suite pass (1,368 browser and 284 core tests; all other enabled suites green,
+one existing AI test ignored). Logs: `~/Library/Caches/EchoBuildHealth/t3-71384893/logs/missing-download-{focused,full}.log`.

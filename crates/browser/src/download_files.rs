@@ -44,6 +44,18 @@ pub(crate) fn kind_for(path:&Path,mime:&str)->&'static str {
     }
 }
 
+pub(crate) const MISSING_FILE: &str = "File deleted or moved";
+
+pub(crate) fn available(record: &CompletedDownload) -> bool {
+    record.final_path().is_file()
+}
+
+/// Availability is presentation state, never canonical completion/removal.
+/// Called on a host refresh, not while rendering individual row elements.
+pub(crate) fn published_subtitle(record: &CompletedDownload) -> String {
+    if available(record) { subtitle(record) } else { MISSING_FILE.into() }
+}
+
 pub(crate) fn subtitle(record: &CompletedDownload) -> String {
     let kind = kind(record);
     if kind=="Download" {return kind.into();}

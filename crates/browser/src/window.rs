@@ -983,7 +983,7 @@ impl BrowserWindow {
             cx.notify();
         }).detach();
         cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() { this.restore_dormant=false; this.checkpoint_window(true); this.restore_site_settings_peek_focus(cx); this.maybe_password_prompt(cx); }
+            if window.is_window_active() { this.refresh_download_file_state(window, cx); this.restore_dormant=false; this.checkpoint_window(true); this.restore_site_settings_peek_focus(cx); this.maybe_password_prompt(cx); }
             this.password_accounts_activation(window.is_window_active(),cx);
             this.set_little_archive_active(window.is_window_active(),cx);
             this.max_preview_activation(window.is_window_active(),cx);

@@ -36,7 +36,7 @@ impl BrowserWindow {
         let Some(record) = self.download_menu_record(id, owner) else {
             return vec![];
         };
-        let available = record.final_path().is_file();
+        let available = download_files::available(&record);
         let kind = download_files::kind(&record);
         vec![
             tab_menu::item(format!("Open {kind}"), Command::Download(FileAction::Open))
@@ -71,7 +71,7 @@ impl BrowserWindow {
                 self.profile.handle.hide_completed_download(id);
                 Ok(())
             }
-            _ if !record.final_path().is_file() => Err("File deleted or moved".into()),
+            _ if !download_files::available(&record) => Err(download_files::MISSING_FILE.into()),
             FileAction::Open => {
                 cx.open_with_system(record.final_path());
                 Ok(())
