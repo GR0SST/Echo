@@ -455,3 +455,23 @@ fn global_little_registration_follows_recording_conflict_removal_and_reset(cx: &
     assert!(settings.read_with(&visual,|s,_|s.shortcut_has_conflict("New Little Echo Window")));
     assert!(visual.cx.update(|cx|crate::global_little::configured_binding(cx,false)).is_none(),"A conflicted app binding cannot bypass its winner through the OS");
 }
+
+#[gpui::test]
+fn shortcut_ordering_checkbox_changes_ordinal_navigation_and_survives_key_reset(cx:&mut TestAppContext) {
+    let (view,cx,_)=open_pages(cx);
+    cx.dispatch_action(crate::window::ToggleFavorite);
+    let (favorite,pinned)=view.read_with(cx,|v,_|(v.browser.active_user_profile().favorites[0].id,v.browser.space().pinned[0].id));
+    cx.simulate_keystrokes("cmd-,");let(settings,mut visual)=settings_window(cx);
+    search_shortcuts(&settings,&mut visual,"Go to Sidebar Item 1");
+    click(&mut visual,"shortcut-select-Go to Sidebar Item 1");
+    click(&mut visual,"shortcut-include-favorites");
+    assert!(!view.read_with(cx,|v,_|v.browser.active_user_profile().include_favorites_in_ordering));
+    click(&mut visual,"reset-one-shortcut");
+    assert!(!view.read_with(cx,|v,_|v.browser.active_user_profile().include_favorites_in_ordering));
+    visual.simulate_keystrokes("cmd-w");cx.update(|window,cx|view.read(cx).focus_handle.focus(window));cx.simulate_keystrokes("cmd-1");
+    assert_eq!(view.read_with(cx,|v,_|v.browser.space().active_tab),Some(pinned));
+    cx.simulate_keystrokes("cmd-,");let(settings,mut visual)=settings_window(cx);
+    search_shortcuts(&settings,&mut visual,"Go to Sidebar Item 1");click(&mut visual,"shortcut-select-Go to Sidebar Item 1");click(&mut visual,"shortcut-include-favorites");
+    visual.simulate_keystrokes("cmd-w");cx.update(|window,cx|view.read(cx).focus_handle.focus(window));cx.simulate_keystrokes("cmd-1");
+    assert_eq!(view.read_with(cx,|v,_|v.browser.space().active_tab),Some(favorite));
+}

@@ -326,3 +326,13 @@ qualified source flows. Background Space creation still has no qualified
 trigger compatible with keeping the healthy shared Echo Test Space. None of
 these rows is promoted by a Settings overview, bundle string or a cosmetic
 comparison.
+
+## Round 4 — numbered shortcut ordering
+
+The Arc-qualified details checkbox `Include Favorites in ordering.` now drives
+the existing per-profile ordinal navigation setting. Its regression verifies
+Command-1 with and without Favorites and preservation across individual key
+reset. The broader Shortcuts row remains partial for dynamic Space reassignment,
+Reset All priority scope and additional native layouts/platforms; visual
+differences remain cosmetic. See the ordering reference in
+`PROFILES_SETTINGS_REFERENCE.md`.

@@ -522,3 +522,27 @@ The production chord is never changed by that test modifier. Evidence is
 `global-little-native-r4-recording-accepted.log`, `echo-global-little-r4-receipt.json` and
 `echo-global-little-r4-38.png` / `echo-global-little-r4-40.png` in the same
 directory. Additional platform/layout/chord coverage remains partial.
+
+## Sidebar shortcut ordering checkbox
+
+Arc's read-only Shortcuts inspection selected `Go to Sidebar Item 1` in the
+existing Echo Test session. The checkbox is in the details pane beneath the
+priority explanation, with exact text `Include Favorites in ordering.`
+The installed executable also contains that string at line 52028 of
+`target/parity/partial-closeout/arc-strings-r4.txt`. The source preference was
+not toggled, and the owned Settings and browser window were closed in the same
+locked script. Reference: `arc-shortcut-ordering-menu-r4.png` and its AX receipt.
+
+Echo uses the existing per-profile ordering preference and numbered sidebar
+routes. The checkbox is shown for numbered and last-item actions; an obsolete
+profile or stale checkbox state cannot change another profile's setting.
+A GPUI regression clicks the checkbox, verifies actual Command-1 navigation,
+resets the selected key without resetting ordering, and toggles ordering back.
+The overall Shortcuts row remains partial; visual differences are cosmetic.
+
+Native qualification: `ordering-native-toggle-r4.log` records both persisted
+checkbox states, closure of the owned Settings window, and strict exit 0.
+Reviewed pairs: `target/parity/partial-closeout/pair-shortcut-ordering-r4.png`
+and `pair-shortcut-ordering-r4-2x.png`; text wrapping, vertical offsets and
+material/raster differences remain cosmetic. `ordering-full-r4.log` passed
+1,358 browser, 284 core and 203 engine tests plus the other workspace suites.

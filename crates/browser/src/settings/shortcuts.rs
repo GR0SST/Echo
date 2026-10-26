@@ -146,6 +146,27 @@ impl SettingsWindow {
         runtime::apply(&self.profile.settings_snapshot().settings.shortcuts, cx);
         cx.notify();
     }
+    fn ordering_profile(&self,cx:&App)->Option<UserProfileId> {
+        let id=self.owner.as_ref().and_then(|owner|owner.upgrade()).map(|owner|owner.read(cx).browser.active_user_profile_id()).unwrap_or(self.selected_profile);
+        self.profile.read_settings(|browser|browser.user_profile(id).map(|_|id))
+    }
+    fn ordering_checkbox(&self,cx:&mut Context<Self>)->AnyElement {
+        let Some(profile)=self.ordering_profile(cx) else{return div().into_any_element();};
+        let included=self.profile.read_settings(|browser|browser.user_profile(profile).unwrap().include_favorites_in_ordering);
+        let colors=self.colors;
+        div().id("shortcut-include-favorites").debug_selector(||"shortcut-include-favorites".into())
+            .mt(px(8.)).h(px(20.)).flex().items_center().gap(px(6.)).text_size(px(13.)).cursor_pointer()
+            .child(div().size(px(16.)).flex_none().rounded(px(4.)).bg(colors.rgb(if included {0x1684ff}else{0x555968})).text_color(rgb(0xffffff))
+                .when(included,|check|check.child(icons::control_sized(Icon::Check,16.))))
+            .child("Include Favorites in ordering.")
+            .on_click(cx.listener(move |this,_,_,cx| {
+                if this.ordering_profile(cx)!=Some(profile) {return;}
+                this.profile.edit_settings(|browser| {
+                    if let Some(target)=browser.user_profile_mut(profile).filter(|p|p.include_favorites_in_ordering==included) {target.include_favorites_in_ordering=!included;}
+                });
+                cx.notify();
+            })).into_any_element()
+    }
     fn shortcut_priority_panel(&self, id: &str, cx: &mut Context<Self>) -> AnyElement {
         let priority = self
             .profile
@@ -200,6 +221,7 @@ impl SettingsWindow {
                     .text_color(self.colors.rgb(0x929494))
                     .child(description),
             )
+            .when(id.starts_with("Go to Sidebar Item ") || id=="Go to last Sidebar Item",|panel|panel.child(self.ordering_checkbox(cx)))
             .into_any_element()
     }
     pub(super) fn edit_shortcut(&mut self, id: &str, value: Option<String>, cx: &mut Context<Self>) {
@@ -377,6 +399,7 @@ impl SettingsWindow {
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(id.clone()),
                 )
+                .when(id == "Go to Sidebar Item 1", |panel|panel.child(div().mt(px(6.)).text_size(px(11.)).line_height(px(14.)).child("Jumps to the first item in your Sidebar, starting with your Favorites at the top.")))
                 .when(id == "Blank Window", |panel| {
                     panel.child(
                         div()
