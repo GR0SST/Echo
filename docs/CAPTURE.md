@@ -46,7 +46,8 @@ presenter; presenting/enumerating saved captures is not implemented or claimed a
 parity. The local files and canonical inventory are present and persisted.
 
 Destination search, Edit, New Easel and system-message/share handoffs are not
-connected. The Send To… field retains text but does not route a destination.
+connected. The owner chose to drop the Send To… field from the action menu;
+Copy confirms with a "Copied to Clipboard" toast and keeps the menu open.
 Those secondary actions, full-page capture, private/Blank Library behavior,
 frame/shadow-DOM picking, exact remaining glyph/font/motion details and native
 Save… panel presentation need further work. Cloud/gallery publishing is excluded.

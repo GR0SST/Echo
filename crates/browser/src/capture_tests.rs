@@ -87,6 +87,11 @@ fn capture_drag_crops_retina_pixels_copies_and_saves_only_to_its_canonical_profi
     complete(&view, cx, &fake, request, image(frame));
     overlay.run_until_parked();
     click(&mut overlay, "capture-Copy");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.toast.as_ref().map(|t| t.message.clone())),
+        Some("Copied to Clipboard".to_string())
+    );
+    assert!(overlay.debug_bounds("capture-menu").is_some());
     let bytes = cx.update(|_, cx| cx.read_from_clipboard()).unwrap();
     let png = bytes
         .entries()

@@ -2,12 +2,11 @@
 use crate::{
     icons::{self, Icon},
     pages::PageIdentity,
-    text_input::TextInput,
     window::{BrowserWindow, Overlay, OverlayKind, PopupFocus},
 };
 use gpui::{
     actions, div, point, prelude::*, px, size, AnyElement, App, Bounds, ClipboardItem, Context,
-    CursorStyle, Entity, FocusHandle, Focusable, KeyBinding, MouseButton, Pixels, Point, Window,
+    CursorStyle, FocusHandle, Focusable, KeyBinding, MouseButton, Pixels, Point, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use std::{
@@ -46,7 +45,6 @@ pub(crate) struct Capture {
     png: Option<Arc<Vec<u8>>>,
     dimensions: (u32, u32),
     saved: bool,
-    destination: Entity<TextInput>,
 }
 impl Capture {
     pub(crate) fn is_selecting(&self) -> bool {
@@ -160,7 +158,6 @@ impl BrowserWindow {
         if !full_page { self.suspend_popup_focus_for_utility(); }
         let frame = viewport(scope.frame);
         let focus = cx.focus_handle();
-        let destination = cx.new(|cx| TextInput::new("Send To...", cx));
         let query=if full_page {
             self.pages.as_ref().and_then(|pages| pages.borrow_mut().evaluate_script(scope.identity.tab,scope.identity.profile,&scope.url,
                 "JSON.stringify([Math.max(document.documentElement.scrollWidth,document.body?.scrollWidth||0,innerWidth),Math.max(document.documentElement.scrollHeight,document.body?.scrollHeight||0,innerHeight)])").ok())
@@ -182,7 +179,6 @@ impl BrowserWindow {
             png: None,
             dimensions: (0, 0),
             saved: false,
-            destination,
         });
         if !full_page {
         if let Some(pages) = &self.pages { pages.borrow_mut().focus_ui(); }
@@ -330,7 +326,6 @@ impl BrowserWindow {
                     crate::feedback::capture(self,cx);
                     capture.dimensions = (width, height);
                     let overlay = capture.overlay;
-                    let input = capture.destination.clone();
                     let owner = cx.weak_entity();
                     cx.defer(move |cx| {
                         let ready = owner
@@ -342,9 +337,12 @@ impl BrowserWindow {
                             .unwrap_or(false);
                         if ready {
                             if let Some(overlay) = overlay {
-                                let _ = overlay.update(cx, |_, window, cx| {
-                                    input.read(cx).focus_handle(cx).focus(window)
+                                let focus = owner.read_with(cx, |view, _| {
+                                    view.capture.as_ref().map(|state| state.focus.clone())
                                 });
+                                if let Ok(Some(focus)) = focus {
+                                    let _ = overlay.update(cx, |_, window, _| focus.focus(window));
+                                }
                             }
                         }
                     });
@@ -547,7 +545,6 @@ impl BrowserWindow {
             .or(capture.hover);
         let focus = capture.focus.clone();
         let pointer = capture.pointer;
-        let menu_input = capture.destination.clone();
         let saved = capture.saved;
         let ready = capture.png.is_some();
         let full = window.bounds().size;
@@ -680,7 +677,7 @@ impl BrowserWindow {
             );
         } else if ready {
             let r = rect.unwrap();
-            let height = px(229.);
+            let height = px(170.);
             let x = if r.right() + px(286.) <= full.width {
                 r.right() + px(14.)
             } else {
@@ -737,23 +734,13 @@ impl BrowserWindow {
                     .w(px(273.))
                     .rounded(px(7.))
                     .px(px(10.))
-                    .pt(px(13.))
-                    .pb(px(4.))
+                    .py(px(4.))
                     .bg(gpui::rgb(0x130f2e))
                     .text_color(gpui::rgb(0xe8e7ea))
                     .text_size(px(14.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .cursor_default()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        div()
-                            .h(px(31.))
-                            .mb(px(7.))
-                            .rounded(px(5.))
-                            .px(px(10.))
-                            .bg(gpui::rgb(0x24203d))
-                            .child(menu_input),
-                    )
                     .child(
                         row(
                             if saved {
@@ -776,7 +763,8 @@ impl BrowserWindow {
                                 if let Some(state) = &view.capture {
                                     state.focus.focus(window);
                                 }
-                                view.capture_copy(cx)
+                                view.capture_copy(cx);
+                                view.show_compact_toast("Copied to Clipboard".into(), cx);
                             },
                         )),
                     )
