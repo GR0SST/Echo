@@ -10541,6 +10541,10 @@ fn empty_address_search_affordance_opens_the_bar_and_returns_after_archiving(cx:
     cx.run_until_parked();
     assert!(cx.debug_bounds("address-placeholder").is_some());
     assert_eq!(cx.debug_bounds("address-search-icon").unwrap().size, gpui::size(gpui::px(16.), gpui::px(16.)));
+    // The glyph keeps a 10 px inset; the placeholder text still starts 32 px in.
+    let (field, icon, text) = (cx.debug_bounds("address").unwrap(), cx.debug_bounds("address-search-icon").unwrap(), cx.debug_bounds("address-placeholder").unwrap());
+    assert_eq!(icon.left() - field.left(), gpui::px(10.));
+    assert_eq!(text.left() - field.left(), gpui::px(32.));
     click(cx, "address");
     assert!(view.read_with(cx, |w, _| w.command_bar.is_some()));
     bar(&view, cx).simulate_input("https://example.com/empty-address");

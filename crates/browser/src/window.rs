@@ -3178,7 +3178,7 @@ impl BrowserWindow {
             drag.travel += dx;
             drag.samples.push((now, dx));
             let raw = drag.start - drag.travel / sidebar_width.max(1.);
-            self.pager.position = rubber_band(raw, page_count);
+            self.pager.position = rubber_band(one_page_reach(raw, drag.start.round()), page_count);
             cx.notify();
         }
         match event.touch_phase {
@@ -3735,7 +3735,7 @@ impl BrowserWindow {
                             cx.stop_propagation();
                             this.open_sidebar_menu(crate::tab_menu::MenuTarget::Address, event.position, window, cx);
                         }))
-                        .when(address_placeholder, |this| this.pl(px(4.)).gap(px(12.))
+                        .when(address_placeholder, |this| this.pl(px(10.)).gap(px(6.))
                             .child(div().debug_selector(|| self.sidebar_debug_name((|| "address-search-icon".into())()))
                                 .flex_none().child(crate::icons::control_sized(crate::icons::Icon::Search, 16.))))
                         .child(div().flex_1().min_w_0().overflow_hidden()
@@ -5338,6 +5338,19 @@ fn hover_fade<E: IntoElement + Styled + 'static>(element: E, id: impl Into<Share
 }
 
 /// Resists dragging past the first and last space.
+/// One swipe reaches only the neighbouring Space: beyond one page from the
+/// gesture's origin the strip resists like the rubber band at the ends.
+fn one_page_reach(position: f32, origin: f32) -> f32 {
+    let (low, high) = (origin - 1., origin + 1.);
+    if position < low {
+        low + (position - low) * PAGER_RUBBER_BAND
+    } else if position > high {
+        high + (position - high) * PAGER_RUBBER_BAND
+    } else {
+        position
+    }
+}
+
 fn rubber_band(position: f32, spaces: usize) -> f32 {
     let last = spaces.saturating_sub(1) as f32;
     if position < 0.0 {

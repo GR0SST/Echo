@@ -103,3 +103,15 @@ fn library_selection_survives_reorder_without_selecting_or_allocating_a_space() 
     );
     assert!(controller.draft().is_none());
 }
+
+#[test]
+fn one_swipe_reaches_only_the_neighbouring_space() {
+    use super::{one_page_reach, PAGER_RUBBER_BAND};
+    // Within one page of the origin the strip follows the fingers.
+    for position in [1.0, 1.5, 2.0, 2.9, 3.0] {
+        assert_eq!(one_page_reach(position, 2.), position);
+    }
+    // Beyond it, travel is damped, so dragging three pages stays near one.
+    assert!((one_page_reach(5., 2.) - (3. + 2. * PAGER_RUBBER_BAND)).abs() < 1e-5);
+    assert!((one_page_reach(-1., 2.) - (1. - 2. * PAGER_RUBBER_BAND)).abs() < 1e-5);
+}
