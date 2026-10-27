@@ -291,7 +291,7 @@ fn field_grid(surface: &Surface, translucent: bool) -> Rc<Vec<ThemeColor>> {
     grid
 }
 #[derive(Clone, Default)]
-pub(crate) struct ThemePaintCache(Rc<RefCell<Option<PaintData>>>);
+pub(crate) struct ThemePaintCache(Rc<RefCell<Vec<PaintData>>>);
 impl ThemePaintCache {
     fn images(&self, mut key: PaintKey) -> (Arc<RenderImage>, Arc<RenderImage>) {
         // The default is a painted field in the reference: desktop crops stay
@@ -300,7 +300,7 @@ impl ThemePaintCache {
             key.translucent = false;
         }
         let mut cache = self.0.borrow_mut();
-        if let Some(data) = cache.as_ref().filter(|data| data.key == key) {
+        if let Some(data) = cache.iter().find(|data| data.key == key) {
             return (data.gradient.clone(), data.texture.clone());
         }
         // Each Space's pigments are computed once; a swipe frame only blends
@@ -338,7 +338,11 @@ impl ThemePaintCache {
         });
         let gradient = Arc::new(RenderImage::new(vec![image::Frame::new(gradient)]));
         let texture = Arc::new(RenderImage::new(vec![image::Frame::new(texture)]));
-        *cache = Some(PaintData {
+        // Baked once per Space; swipes crossfade these instead of rebuilding.
+        if cache.len() >= 8 {
+            cache.remove(0);
+        }
+        cache.push(PaintData {
             key,
             gradient: gradient.clone(),
             texture: texture.clone(),
@@ -841,10 +845,40 @@ impl BrowserWindow {
     }
 
     fn theme_surface_with_origin(&self, translucent: bool, window_aligned: bool) -> AnyElement {
-        let (gradient, texture) = self
-            .theme_paint_cache
-            .images(self.theme_paint_key(translucent));
+        let key = self.theme_paint_key(translucent);
         let private = self.browser.is_private();
+        let baked = |surface: &Surface| {
+            let (gradient, texture) = self.theme_paint_cache.images(PaintKey {
+                from: surface.clone(),
+                to: surface.clone(),
+                fraction: 0.,
+                translucent,
+            });
+            field_layer(gradient, texture, private, window_aligned)
+        };
+        if key.fraction <= 0. || key.from == key.to {
+            return baked(&key.from);
+        }
+        if key.fraction >= 1. {
+            return baked(&key.to);
+        }
+        // Crossfade two baked fields. With the incoming layer at `f` and the
+        // outgoing one at (1 - f) / (1 - f·αB), premultiplied color and alpha
+        // blend exactly linearly, so translucent fields never flash denser.
+        let f = key.fraction;
+        let alpha = |surface: &Surface| if !translucent || surface.default_style { 1. } else { picked_alpha(surface.theme.intensity, surface.dark) };
+        let under = ((1. - f) / (1. - f * alpha(&key.to)).max(1e-3)).min(1.);
+        gpui::div()
+            .absolute()
+            .size_full()
+            .child(gpui::div().absolute().inset_0().opacity(under).child(baked(&key.from)))
+            .child(gpui::div().absolute().inset_0().opacity(f).child(baked(&key.to)))
+            .into_any_element()
+    }
+}
+
+/// One baked Space field: the stretched pigment image plus the grain tiles.
+fn field_layer(gradient: Arc<RenderImage>, texture: Arc<RenderImage>, private: bool, window_aligned: bool) -> AnyElement {
         gpui::div()
             .absolute()
             .size_full()
@@ -919,7 +953,6 @@ impl BrowserWindow {
                 .inset_0()),
             )
             .into_any_element()
-    }
 }
 
 #[cfg(test)]
