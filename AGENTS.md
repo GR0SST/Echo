@@ -134,8 +134,10 @@ See `README.md`. In short:
   `scripts/check-targets.sh` and require both Linux GNU and Windows MSVC
   workspace checks to pass. See `docs/PLATFORMS.md` for cross-check setup.
   This targeted requirement is separate from the general `cargo test` push gate.
-- Dev builds run Chromium with `--use-mock-keychain`, otherwise macOS asks
-  for the keychain password after every rebuild.
+- Unsigned dev builds run Chromium with `--use-mock-keychain`, otherwise
+  macOS asks for the keychain password after every rebuild. Bundles signed
+  with `ECHO_SIGN_IDENTITY` (see `crates/bundle/src/sign.rs`) keep a stable
+  identity and use the real keychain.
 - After the tests, check the change in the real app:
   `scripts/drive.sh "<script>"` runs a copy of the bundle with a separate
   profile and executes a script from `crates/browser/src/automation.rs`

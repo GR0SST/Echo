@@ -21,8 +21,8 @@ Profiles are independent: installed dogfood uses
 moved into dogfood. `BROWSER_DATA_DIR` explicitly overrides any channel for tests.
 Do not delete these directories to update the app.
 
-Release uses the real OS keychain; only debug builds append
-`--use-mock-keychain`. Unsigned/ad-hoc builds can trigger keychain authorization
+Release and Developer ID signed builds use the real OS keychain; only unsigned
+debug builds append `--use-mock-keychain`. Unsigned/ad-hoc builds can trigger keychain authorization
 again after rebuilding; stable Developer ID signing is required for public use.
 Never approve a different app's keychain access on Echo's behalf.
 

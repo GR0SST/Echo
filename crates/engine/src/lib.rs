@@ -2193,6 +2193,20 @@ wrap_keyboard_handler! {
     }
 }
 
+/// Key the bundler writes into `Info.plist` before signing with a Developer ID.
+const DEVELOPER_ID_SIGNED_KEY: &str = "EchoDeveloperIDSigned";
+
+/// Whether the outermost app bundle around this executable was signed with a
+/// stable Developer ID, whose keychain access survives rebuilds.
+fn developer_id_signed() -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let Some(app) = exe.ancestors().filter(|path| path.extension().is_some_and(|ext| ext == "app")).last() else {
+        return false;
+    };
+    std::fs::read_to_string(app.join("Contents/Info.plist"))
+        .is_ok_and(|plist| plist.contains(&format!("<key>{DEVELOPER_ID_SIGNED_KEY}</key>")))
+}
+
 wrap_app! {
     struct EngineApp { shutdown_marker: String }
 
@@ -2202,8 +2216,9 @@ wrap_app! {
             _process_type: Option<&CefString>,
             command_line: Option<&mut CommandLine>,
         ) {
-            // Development builds are unsigned, so macOS asks for the keychain
-            // password after every rebuild. Release builds use the real keychain.
+            // Unsigned development builds change identity on every rebuild, so
+            // macOS would ask for the keychain password each time. Release and
+            // Developer ID signed builds use the real keychain.
             if let Some(command_line) = command_line {
                 command_line.append_switch_with_value(
                     Some(&CefString::from("echo-shutdown-marker")),
@@ -2212,7 +2227,7 @@ wrap_app! {
                 command_line.append_switch(Some(&CefString::from("echo-video-only-pip")));
                 #[cfg(target_os = "linux")]
                 command_line.append_switch_with_value(Some(&CefString::from("ozone-platform")), Some(&CefString::from("x11")));
-                if cfg!(debug_assertions) {
+                if cfg!(debug_assertions) && !developer_id_signed() {
                     command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 }
                 if cfg!(debug_assertions) && std::env::var_os("BROWSER_SCRIPT").is_some()

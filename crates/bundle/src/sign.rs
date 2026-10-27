@@ -8,6 +8,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Must match `engine::DEVELOPER_ID_SIGNED_KEY`.
+const MARKER: &str = "EchoDeveloperIDSigned";
+
 /// V8 and SwiftShader generate code at run time; Chromium's helpers need the
 /// same exceptions under the hardened runtime as in Chrome's own signing.
 const JIT: &[&str] = &[
@@ -96,6 +99,10 @@ pub(super) fn run(app: &Path) {
         let file = write(&name, helper_entitlements(&name));
         codesign(&identity, helper, file.as_deref());
     }
+    // Sealed by the signature below; tells the engine to use the real keychain.
+    let status = Command::new("plutil").args(["-replace", MARKER, "-bool", "true"])
+        .arg(app.join("Contents/Info.plist")).status().expect("cannot run plutil");
+    assert!(status.success(), "cannot mark the bundle as signed");
     let file = write("Echo", APP);
     codesign(&identity, app, file.as_deref());
     let _ = std::fs::remove_dir_all(&scratch);
