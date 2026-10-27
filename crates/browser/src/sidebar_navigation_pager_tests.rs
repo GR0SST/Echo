@@ -111,7 +111,12 @@ fn one_swipe_reaches_only_the_neighbouring_space() {
     for position in [1.0, 1.5, 2.0, 2.9, 3.0] {
         assert_eq!(one_page_reach(position, 2.), position);
     }
-    // Beyond it, travel is damped, so dragging three pages stays near one.
-    assert!((one_page_reach(5., 2.) - (3. + 2. * PAGER_RUBBER_BAND)).abs() < 1e-5);
-    assert!((one_page_reach(-1., 2.) - (1. - 2. * PAGER_RUBBER_BAND)).abs() < 1e-5);
+    // Beyond it the strip stops: even three pages of finger travel stay
+    // within the slack past the neighbour.
+    use super::PAGER_REACH_SLACK;
+    let _ = PAGER_RUBBER_BAND;
+    assert!(one_page_reach(5., 2.) <= 3. + PAGER_REACH_SLACK && one_page_reach(5., 2.) > 3.);
+    assert!(one_page_reach(-1., 2.) >= 1. - PAGER_REACH_SLACK && one_page_reach(-1., 2.) < 1.);
+    // Continuous at the limit.
+    assert!((one_page_reach(3.0001, 2.) - 3.0001).abs() < 1e-3);
 }

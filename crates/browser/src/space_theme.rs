@@ -266,6 +266,30 @@ struct PaintData {
     gradient: Arc<RenderImage>,
     texture: Arc<RenderImage>,
 }
+/// The field pigments of one Space, veiled for translucency when needed.
+/// Kept for the few Spaces a swipe passes through.
+fn field_grid(surface: &Surface, translucent: bool) -> Rc<Vec<ThemeColor>> {
+    thread_local! {
+        static GRIDS: RefCell<Vec<(Surface, bool, Rc<Vec<ThemeColor>>)>> = const { RefCell::new(Vec::new()) };
+    }
+    if let Some(grid) = GRIDS.with(|grids| grids.borrow().iter()
+        .find(|(s, t, _)| s == surface && *t == translucent).map(|entry| entry.2.clone())) {
+        return grid;
+    }
+    let veil = translucent && !surface.default_style;
+    let alpha = picked_alpha(surface.theme.intensity, surface.dark);
+    let step = (FIELD_SIZE - 1) as f32;
+    let grid: Rc<Vec<ThemeColor>> = Rc::new((0..FIELD_SIZE * FIELD_SIZE).map(|i| {
+        let c = surface.sample((i % FIELD_SIZE) as f32 / step, (i / FIELD_SIZE) as f32 / step);
+        if veil { veil_pigment(c, alpha) } else { c }
+    }).collect());
+    GRIDS.with(|grids| {
+        let mut grids = grids.borrow_mut();
+        if grids.len() >= 8 { grids.remove(0); }
+        grids.push((surface.clone(), translucent, grid.clone()));
+    });
+    grid
+}
 #[derive(Clone, Default)]
 pub(crate) struct ThemePaintCache(Rc<RefCell<Option<PaintData>>>);
 impl ThemePaintCache {
@@ -279,22 +303,15 @@ impl ThemePaintCache {
         if let Some(data) = cache.as_ref().filter(|data| data.key == key) {
             return (data.gradient.clone(), data.texture.clone());
         }
+        // Each Space's pigments are computed once; a swipe frame only blends
+        // two cached grids.
+        let (from, to) = (field_grid(&key.from, key.translucent), field_grid(&key.to, key.translucent));
+        let round = key.from.default_style || key.to.default_style;
+        let alpha = gradient_alpha(&key);
         let gradient = image::RgbaImage::from_fn(FIELD_SIZE, FIELD_SIZE, |x, y| {
-            let sample = |surface: &Surface| {
-                let c = surface.sample(x as f32 / (FIELD_SIZE - 1) as f32, y as f32 / (FIELD_SIZE - 1) as f32);
-                if key.translucent && !surface.default_style {
-                    veil_pigment(c, picked_alpha(surface.theme.intensity, surface.dark))
-                } else {
-                    c
-                }
-            };
-            let c = mix(sample(&key.from), sample(&key.to), key.fraction);
-            image::Rgba([
-                quantize(c.blue, key.from.default_style || key.to.default_style),
-                quantize(c.green, key.from.default_style || key.to.default_style),
-                quantize(c.red, key.from.default_style || key.to.default_style),
-                gradient_alpha(&key),
-            ])
+            let i = (y * FIELD_SIZE + x) as usize;
+            let c = mix(from[i], to[i], key.fraction);
+            image::Rgba([quantize(c.blue, round), quantize(c.green, round), quantize(c.red, round), alpha])
         });
         let texture = image::RgbaImage::from_fn(NOISE_TILE, NOISE_TILE, |x, y| {
             let overlay = |surface: &Surface| {
@@ -1080,5 +1097,24 @@ mod tests {
             noise(NoiseTexture::Grain, 7, 9),
             noise(NoiseTexture::Grain, 7, 9)
         );
+    }
+}
+
+#[cfg(test)]
+mod field_cost {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn time_a_swipe_frame() {
+        let mut theme = SpaceTheme::from_hue(0.);
+        theme.colors = vec![ThemeColor::from_hsv(80., 0.6, 0.9), ThemeColor::from_hsv(220., 0.6, 0.9), ThemeColor::from_hsv(300., 0.5, 0.9)];
+        let s = Surface { theme, dark: true, picked: true, default_style: false };
+        let cache = ThemePaintCache::default();
+        cache.images(PaintKey { from: s.clone(), to: s.clone(), fraction: 0.001, translucent: true });
+        let start = std::time::Instant::now();
+        for frame in 0..10 {
+            cache.images(PaintKey { from: s.clone(), to: s.clone(), fraction: 0.01 + frame as f32 / 20., translucent: true });
+        }
+        eprintln!("per frame: {:?}", start.elapsed() / 10);
     }
 }

@@ -67,6 +67,7 @@ const SPACE_SCROLL_GAIN: f32 = 0.5;
 const SPACE_FLICK_SPEED: f32 = 300.0;
 /// How much the pager follows the fingers past the first and last space.
 const PAGER_RUBBER_BAND: f32 = 0.3;
+const PAGER_REACH_SLACK: f32 = 0.08;
 const PAGER_FRAME: Duration = Duration::from_millis(16);
 /// Pointer distance (px) from the window's left edge that reveals a hidden sidebar.
 const SIDEBAR_REVEAL_EDGE: f32 = 8.0;
@@ -5338,14 +5339,16 @@ fn hover_fade<E: IntoElement + Styled + 'static>(element: E, id: impl Into<Share
 }
 
 /// Resists dragging past the first and last space.
-/// One swipe reaches only the neighbouring Space: beyond one page from the
-/// gesture's origin the strip resists like the rubber band at the ends.
+/// One swipe reaches only the neighbouring Space: past it the strip stops
+/// against a firm limit, moving at most `PAGER_REACH_SLACK` further however
+/// far the fingers travel.
 fn one_page_reach(position: f32, origin: f32) -> f32 {
     let (low, high) = (origin - 1., origin + 1.);
+    let resist = |excess: f32| PAGER_REACH_SLACK * (1. - (-excess / PAGER_REACH_SLACK).exp());
     if position < low {
-        low + (position - low) * PAGER_RUBBER_BAND
+        low - resist(low - position)
     } else if position > high {
-        high + (position - high) * PAGER_RUBBER_BAND
+        high + resist(position - high)
     } else {
         position
     }
