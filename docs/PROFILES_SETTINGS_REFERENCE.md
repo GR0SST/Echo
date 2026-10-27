@@ -103,20 +103,34 @@ Source: the existing native `arc_Icon.png` Settings capture. Its six rows
 use 80 px content height plus a 1 px separator, 20 px radios, 52 px artwork
 and the selected row's CURRENT ICON caption. The same layout contains Echo's
 original, Candy Echo, Neon, Fluted Glass, Schoolbook and Colorful variants.
+The five alternatives use the supplied reference’s materials, applied directly
+to the original `echo-mark.png` alpha: pastel candy, luminous neon, dark/amber
+behind vertical glass ribs, colorful schoolbook ink on cream, and a vivid
+gradient on indigo. No contours are redrawn or approximated.
+`scripts/make_icon_variants.py` renders five 1024 px PNG assets, with the
+Original’s 100 px canvas padding, mark placement and continuous n=5
+superellipse. Settings previews are filtered separately to 208 px.
+Original artwork and its preview path are unchanged.
+The material refresh was checked in the bundled app’s Icon pane and the actual
+macOS Dock with Candy selected, alongside the original Echo icon and other
+applications. Screenshots and the clean CEF shutdown log are retained locally
+under `target/parity/app-icons/`; `final-settings-2.png` captures the pane and
+`dock-detail.png` captures the Dock. The full `cargo test` run passed
+(1425 browser tests, no failures; workspace suites also passed).
 The alternatives are original concentric Echo geometry, with no Arc artwork,
 referral controls, third-party artist attribution or account dependencies.
 
 The install-wide choice persists outside website-profile preferences. Click,
 Tab and Space activation update it only after native application succeeds.
-macOS applies the SVG artwork immediately; startup restores the choice, and
+macOS applies the PNG artwork immediately; startup restores the choice, and
 Original clears the override to recover the bundle's full-resolution icon.
 Other-platform native application remains unimplemented behind the shared
 interface. The GUI test backend avoids calling AppKit.
 
-The first native pair exposed GPUI 0.2's encoded SVG path leaving premultiplied
-RGBA bytes in the BGRA image buffer. Preview rendering now converts those
-bytes and removes transparent Dock padding for the measured optical frame.
-The native Dock retains vector artwork and its own padding. A regression
+The earlier procedural SVG previews required a GPUI channel correction. The
+material variants now share the same rendered PNGs between Settings and the
+Dock, avoiding SVG-filter differences between GPUI and macOS. Transparent
+Dock padding is removed only in the measured 52 px settings optical frame. A regression
 checks all six decoders, transparent corners and the yellow variant's channel
 order, alongside choice activation and session persistence.
 

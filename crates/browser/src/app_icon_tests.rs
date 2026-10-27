@@ -50,7 +50,7 @@ fn app_icon_choices_retain_one_selection_and_persist_without_changing_website_pr
 }
 
 #[gpui::test]
-fn app_icon_svg_previews_keep_the_artwork_color_channels_and_alpha(cx: &mut TestAppContext) {
+fn app_icon_previews_keep_the_artwork_color_channels_and_alpha(cx: &mut TestAppContext) {
     cx.update(|cx| {
         for icon in AppIcon::ALL {
             let image = crate::app_icons::preview_image(icon, cx);

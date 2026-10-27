@@ -3,63 +3,15 @@ use browser_core::settings::AppIcon;
 use gpui::{prelude::*, px, AnyElement};
 
 pub(crate) fn artwork(icon: AppIcon) -> (gpui::ImageFormat, Vec<u8>) {
-    if icon == AppIcon::Original {
-        return (
-            gpui::ImageFormat::Png,
-            include_bytes!("../assets/echo-icon.png").to_vec(),
-        );
-    }
-    let (top, bottom, ink) = match icon {
-        AppIcon::Candy => ("#f8d3e7", "#a7b8ec", "#fff5ff"),
-        AppIcon::Neon => ("#171039", "#370b54", "#f88cfa"),
-        AppIcon::Glass => ("#ece9e5", "#c2c8cc", "#555568"),
-        AppIcon::Schoolbook => ("#fff2ad", "#efcd76", "#3164cd"),
-        AppIcon::Colorful => ("#160b3d", "#321052", "#ff6aaf"),
-        AppIcon::Original => unreachable!(),
+    let bytes: &[u8] = match icon {
+        AppIcon::Original => include_bytes!("../assets/echo-icon.png"),
+        AppIcon::Candy => include_bytes!("../assets/app-icons/candy.png"),
+        AppIcon::Neon => include_bytes!("../assets/app-icons/neon.png"),
+        AppIcon::Glass => include_bytes!("../assets/app-icons/glass.png"),
+        AppIcon::Schoolbook => include_bytes!("../assets/app-icons/schoolbook.png"),
+        AppIcon::Colorful => include_bytes!("../assets/app-icons/colorful.png"),
     };
-    // Echo's concentric, six-lobed echo mark, expressed as portable geometry.
-    let mut svg = format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192"><defs><linearGradient id="b" x2="0" y2="1"><stop stop-color="{top}"/><stop offset="1" stop-color="{bottom}"/></linearGradient></defs><rect x="15" y="15" width="162" height="162" rx="32" fill="url(#b)"/>"##
-    );
-    if icon == AppIcon::Glass {
-        for x in (23..170).step_by(7) {
-            svg.push_str(&format!(r#"<rect x="{x}" y="38" width="2" height="116" rx="1" fill="white" opacity="0.34"/>"#));
-        }
-    }
-    if icon == AppIcon::Schoolbook {
-        for y in (39..160).step_by(13) {
-            svg.push_str(&format!(
-                r##"<path d="M25 {y}H167" stroke="#be9d54" opacity="0.25"/>"##
-            ));
-        }
-    }
-    for ring in 0..6 {
-        let ink = if icon == AppIcon::Colorful {
-            [
-                "#ffe487", "#ffb344", "#ff6aaf", "#c765f4", "#6759ee", "#3c87e8",
-            ][ring]
-        } else {
-            ink
-        };
-        let radius = 15. + ring as f32 * 8.;
-        let opacity = 1. - ring as f32 * 0.12;
-        let mut path = String::new();
-        for step in 0..=180 {
-            let angle = step as f32 / 180. * std::f32::consts::TAU;
-            let r = radius * (1. + 0.085 * (6. * angle).cos());
-            path.push_str(&format!(
-                "{} {:.2} {:.2} ",
-                if step == 0 { "M" } else { "L" },
-                96. + r * angle.cos(),
-                96. + r * angle.sin()
-            ));
-        }
-        svg.push_str(&format!(
-            r#"<path d="{path}Z" fill="none" stroke="{ink}" stroke-width="4" opacity="{opacity}"/>"#
-        ));
-    }
-    svg.push_str("</svg>");
-    (gpui::ImageFormat::Svg, svg.into_bytes())
+    (gpui::ImageFormat::Png, bytes.to_vec())
 }
 
 pub(crate) fn preview_image(icon: AppIcon, cx: &gpui::App) -> std::sync::Arc<gpui::RenderImage> {
@@ -68,20 +20,7 @@ pub(crate) fn preview_image(icon: AppIcon, cx: &gpui::App) -> std::sync::Arc<gpu
         .to_image_data(cx.svg_renderer())
         .expect("generated Echo artwork");
     let size = decoded.size(0);
-    let mut pixels = decoded.as_bytes(0).expect("first icon frame").to_vec();
-    // GPUI 0.2's encoded-image SVG path omits its normal RGBA-to-BGRA
-    // conversion. Supply straight-alpha BGRA, as its PNG path already does.
-    if icon != AppIcon::Original {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-            if pixel[3] > 0 {
-                let alpha = pixel[3] as f32 / 255.;
-                for channel in &mut pixel[..3] {
-                    *channel = (*channel as f32 / alpha) as u8;
-                }
-            }
-        }
-    }
+    let pixels = decoded.as_bytes(0).expect("first icon frame").to_vec();
     let buffer = image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, pixels)
         .expect("decoder dimensions");
     // Dock artwork includes transparent outer padding; radio rows use a 52 px
@@ -97,6 +36,12 @@ pub(crate) fn preview_image(icon: AppIcon, cx: &gpui::App) -> std::sync::Arc<gpu
     }
     let buffer =
         image::imageops::crop_imm(&buffer, left, top, right - left, bottom - top).to_image();
+    // Pre-filter the high-resolution artwork for a 52 pt Retina thumbnail.
+    let buffer = if icon == AppIcon::Original {
+        buffer
+    } else {
+        image::imageops::resize(&buffer, 208, 208, image::imageops::FilterType::Lanczos3)
+    };
     std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 pub(crate) fn preview(icon: AppIcon, cx: &gpui::App) -> AnyElement {
