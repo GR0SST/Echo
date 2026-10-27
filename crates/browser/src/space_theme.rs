@@ -26,21 +26,23 @@ impl Surface {
         let b = position.ceil() as usize;
         let color = mix(colors[a], colors[b], position.fract());
         if self.picked {
-            // Reference intensity fades the pigment toward a pale neutral in
-            // both appearances. Dark mode does not multiply the chosen RGB.
-            let (neutral, strength, exponent) = if self.dark {
-                (0.85, 0.58, 0.65)
-            } else {
-                (0.84, 0.75, 1.4)
-            };
+            if self.dark {
+                // Dark appearance keeps the pigment's hue but deepens it: low
+                // intensity is a near-neutral charcoal, high intensity a deep
+                // saturated tint. Light chrome never appears in Dark mode.
+                let (h, s, v) = color.hsv();
+                let i = self.theme.intensity.clamp(0., 1.);
+                return ThemeColor::from_hsv(h, s * (0.25 + 0.65 * i), 0.1 + v * (0.08 + 0.17 * i));
+            }
+            // Light appearance fades the pigment toward a pale neutral.
             return mix(
                 ThemeColor {
-                    red: neutral,
-                    green: neutral,
-                    blue: neutral,
+                    red: 0.84,
+                    green: 0.84,
+                    blue: 0.84,
                 },
                 color,
-                0.12 + self.theme.intensity.powf(exponent) * strength,
+                0.12 + self.theme.intensity.powf(1.4) * 0.75,
             );
         }
         // Keep chroma in the pigment, with intensity controlling its mix into
@@ -122,10 +124,16 @@ fn gradient_alpha(key: &PaintKey) -> u8 {
         if !key.translucent || s.default_style {
             255.
         } else {
-            224.
+            picked_alpha(s.theme.intensity) * 255.
         }
     };
     (alpha(&key.from) * (1. - key.fraction) + alpha(&key.to) * key.fraction).round() as u8
+}
+/// Window opacity of a picked theme over the desktop blur. The lowest
+/// intensity leaves the window almost see-through; the highest stays
+/// slightly translucent.
+fn picked_alpha(intensity: f32) -> f32 {
+    0.22 + intensity.clamp(0., 1.) * 0.7
 }
 fn default_grain(surface: &Surface, x: u32, y: u32) -> (ThemeColor, f32) {
     let reference = surface.sample(0.1, 0.5);
@@ -202,7 +210,7 @@ impl ThemePaintCache {
                 if surface.default_style {
                     return default_grain(surface, x, y);
                 }
-                let gain = if key.translucent { 0.82 } else { 1. };
+                let gain = if key.translucent { picked_alpha(surface.theme.intensity) } else { 1. };
                 (
                     ThemeColor {
                         red: 0.,
@@ -637,6 +645,13 @@ impl BrowserWindow {
             translucent,
         }
     }
+    /// Opacity of the window's own blur layer. Low-intensity picked themes
+    /// let the desktop show through; the default field stays fully backed.
+    pub(crate) fn theme_backdrop_alpha(&self) -> f64 {
+        let key = self.theme_paint_key(true);
+        let alpha = gradient_alpha(&key) as f32 / 255.;
+        (0.5 + 0.5 * alpha) as f64
+    }
     pub(crate) fn theme_default_fraction(&self) -> f32 {
         let key = self.theme_paint_key(false);
         (if key.from.default_style { 1. } else { 0. }) * (1. - key.fraction)
@@ -766,10 +781,10 @@ mod tests {
         assert_ne!(s.sample(0., 0.), light);
         s.theme.intensity = 0.;
         assert_ne!(s.sample(0., 0.), s.sample(1., 1.));
-        assert!(s.sample(0., 0.).red > 0.7);
+        assert!(s.sample(0., 0.).red < 0.25);
     }
     #[test]
-    fn picked_dark_themes_keep_bright_pigments_and_unpicked_chrome_stays_dark() {
+    fn picked_dark_themes_stay_dark_and_unpicked_chrome_stays_dark() {
         let mut s = Surface {
             theme: SpaceTheme::from_hue(280.),
             dark: true,
@@ -782,10 +797,13 @@ mod tests {
             blue: 0.616,
         }];
         let picked = s.sample(0.5, 0.5);
-        assert!(picked.red > 0.6 && picked.green > 0.5 && picked.blue > 0.6);
+        assert!(picked.red < 0.35 && picked.red > picked.green);
         s.theme.intensity = 0.;
         let faint = s.sample(0.5, 0.5);
-        assert!(faint.hsv().1 < picked.hsv().1);
+        assert!(faint.hsv().1 < picked.hsv().1 && faint.hsv().2 < picked.hsv().2);
+        // A near-white pick stays dark chrome in Dark appearance.
+        s.theme.colors = vec![ThemeColor { red: 0.95, green: 0.93, blue: 0.94 }];
+        assert!(s.sample(0.5, 0.5).red < 0.2);
         s.picked = false;
         s.theme.intensity = 0.2;
         assert!((0.12..0.2).contains(&s.sample(0.5, 0.5).red));
@@ -814,7 +832,13 @@ mod tests {
             fraction: 0.5,
             translucent: true,
         };
-        assert_eq!(gradient_alpha(&key), 240);
+        assert_eq!(gradient_alpha(&key), 227);
+        let mut faint = key.to.clone();
+        faint.theme.intensity = 0.;
+        let mut full = faint.clone();
+        full.theme.intensity = 1.;
+        let alpha = |s: Surface| gradient_alpha(&PaintKey { from: s.clone(), to: s, fraction: 0., translucent: true });
+        assert!(alpha(faint) < 64 && (230..255).contains(&alpha(full)));
         let cache = ThemePaintCache::default();
         let opaque = PaintKey {
             from: from.clone(),

@@ -4988,7 +4988,7 @@ impl Render for BrowserWindow {
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {
             use crate::material::*;
             crate::native::set_backdrop_configured(view, "space-theme", Some([0., 0., f32::from(window.viewport_size().width) as f64, f32::from(window.viewport_size().height) as f64]), WINDOW_CORNER_RADIUS as f64,
-                BackdropConfig { appearance: if self.theme_is_dark() { EffectAppearance::Dark } else { EffectAppearance::Light }, state: EffectState::FollowWindow, blending: EffectBlending::BehindWindow, emphasized: false, effect_alpha: 1., material: EffectMaterial::WindowBackground }) == BackdropInstallation::Installed
+                BackdropConfig { appearance: if self.theme_is_dark() { EffectAppearance::Dark } else { EffectAppearance::Light }, state: EffectState::FollowWindow, blending: EffectBlending::BehindWindow, emphasized: false, effect_alpha: self.theme_backdrop_alpha(), material: EffectMaterial::UnderWindowBackground }) == BackdropInstallation::Installed
         });
         if self.theme_background_blurred != Some(theme_blurred) {
             window.set_background_appearance(if theme_blurred { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque });

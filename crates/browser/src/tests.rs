@@ -9688,7 +9688,7 @@ fn closing_a_peek_owner_retires_both_native_page_hosts(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn dark_appearance_uses_dark_ink_for_bright_pigments_and_light_ink_for_black(cx: &mut TestAppContext) {
+fn dark_appearance_keeps_dark_chrome_with_light_ink_for_bright_and_black_pigments(cx: &mut TestAppContext) {
     use browser_core::themes::{SpaceTheme, ThemeAppearance, ThemeColor};
     let (view, cx) = open(cx);
     view.update(cx, |w, cx| {
@@ -9702,7 +9702,7 @@ fn dark_appearance_uses_dark_ink_for_bright_pigments_and_light_ink_for_black(cx:
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert!(w.theme_is_dark());
-        assert!(w.theme_colors().foreground.l < 0.2);
+        assert!(w.theme_colors().foreground.l > 0.9);
     });
     view.update(cx, |w, cx| {
         let id = w.browser.space().id;
