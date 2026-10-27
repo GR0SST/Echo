@@ -2,6 +2,18 @@
 use super::*;
 use browser_core::settings::AppIcon;
 impl SettingsWindow {
+    /// Shows the choice at once; the Dock catches up after this frame, since
+    /// handing the 1024 px artwork to AppKit is slower than a frame.
+    fn choose_app_icon(&mut self, icon: AppIcon, cx: &mut Context<Self>) {
+        self.profile.edit_settings(|browser| browser.settings.app_icon = icon);
+        cx.notify();
+        cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+            crate::app_icons::apply(icon);
+        })
+        .detach();
+    }
+
     pub(super) fn icon(&self, cx: &mut Context<Self>) -> AnyElement {
         let colors = self.colors;
         let selected = self
@@ -33,12 +45,9 @@ impl SettingsWindow {
                             .on_key_down(cx.listener(
                                 move |this, event: &gpui::KeyDownEvent, _, cx| {
                                     if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        && crate::app_icons::apply(icon)
+                                        && crate::app_icons::supported()
                                     {
-                                        this.profile.edit_settings(|browser| {
-                                            browser.settings.app_icon = icon
-                                        });
-                                        cx.notify();
+                                        this.choose_app_icon(icon, cx);
                                         cx.stop_propagation();
                                     }
                                 },
@@ -48,10 +57,8 @@ impl SettingsWindow {
                             .gap(px(26.))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if crate::app_icons::apply(icon) {
-                                    this.profile
-                                        .edit_settings(|browser| browser.settings.app_icon = icon);
-                                    cx.notify();
+                                if crate::app_icons::supported() {
+                                    this.choose_app_icon(icon, cx);
                                 }
                             }))
                             .child(

@@ -71,3 +71,14 @@ fn app_icon_previews_keep_the_artwork_color_channels_and_alpha(cx: &mut TestAppC
         assert_eq!(&paper.as_bytes(0).unwrap()[..4], &[0, 0, 0, 0]);
     });
 }
+
+#[gpui::test]
+fn app_icon_previews_are_decoded_once(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        for icon in AppIcon::ALL {
+            let first = crate::app_icons::preview_image(icon, cx);
+            let second = crate::app_icons::preview_image(icon, cx);
+            assert!(std::sync::Arc::ptr_eq(&first, &second));
+        }
+    });
+}

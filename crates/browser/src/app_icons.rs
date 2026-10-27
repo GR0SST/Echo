@@ -14,7 +14,23 @@ pub(crate) fn artwork(icon: AppIcon) -> (gpui::ImageFormat, Vec<u8>) {
     (gpui::ImageFormat::Png, bytes.to_vec())
 }
 
+/// Decoding and downscaling the 1024 px artwork takes far longer than a
+/// frame, so each thumbnail is built once and reused by every render.
 pub(crate) fn preview_image(icon: AppIcon, cx: &gpui::App) -> std::sync::Arc<gpui::RenderImage> {
+    thread_local! {
+        static PREVIEWS: std::cell::RefCell<[Option<std::sync::Arc<gpui::RenderImage>>; 6]> =
+            Default::default();
+    }
+    let index = AppIcon::ALL.iter().position(|candidate| *candidate == icon).unwrap_or(0);
+    if let Some(image) = PREVIEWS.with(|previews| previews.borrow()[index].clone()) {
+        return image;
+    }
+    let image = build_preview(icon, cx);
+    PREVIEWS.with(|previews| previews.borrow_mut()[index] = Some(image.clone()));
+    image
+}
+
+fn build_preview(icon: AppIcon, cx: &gpui::App) -> std::sync::Arc<gpui::RenderImage> {
     let (format, bytes) = artwork(icon);
     let decoded = gpui::Image::from_bytes(format, bytes)
         .to_image_data(cx.svg_renderer())
@@ -49,6 +65,11 @@ pub(crate) fn preview(icon: AppIcon, cx: &gpui::App) -> AnyElement {
         .size(px(52.))
         .flex_none()
         .into_any_element()
+}
+
+/// Whether this platform can change the running application's icon.
+pub(crate) fn supported() -> bool {
+    cfg!(any(test, target_os = "macos"))
 }
 
 /// Platform integration is isolated from preference and artwork logic.
