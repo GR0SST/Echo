@@ -4488,7 +4488,21 @@ impl BrowserWindow {
             .shadow_lg()
 
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
-            .child(self.theme_surface(false))
+            // The page shows through a rounded native blur when the window is
+            // translucent, as with the docked sidebar.
+            .when(!self.browser.is_private() && self.theme_background_blurred == Some(true), |this| this.child({
+                let dark = self.theme_is_dark();
+                canvas(|_, _, _| (), move |bounds, _, window, _| {
+                    use crate::material::*;
+                    let Some(view) = crate::native::view_of(window) else { return };
+                    crate::native::set_backdrop_configured(view, "floating-sidebar",
+                        Some([f32::from(bounds.origin.x) as f64, f32::from(bounds.origin.y) as f64, f32::from(bounds.size.width) as f64, f32::from(bounds.size.height) as f64]),
+                        (WINDOW_CORNER_RADIUS - FLOATING_SIDEBAR_INSET) as f64,
+                        BackdropConfig { appearance: if dark { EffectAppearance::Dark } else { EffectAppearance::Light }, state: EffectState::FollowApp,
+                            blending: EffectBlending::BehindWindow, emphasized: false, effect_alpha: 1., material: EffectMaterial::Hud });
+                }).absolute().inset_0()
+            }))
+            .when(!self.browser.is_private(), |this| this.child(self.theme_surface_rounded(WINDOW_CORNER_RADIUS - FLOATING_SIDEBAR_INSET)))
             .child(self.render_sidebar(cx))
             .child(self.render_sidebar_resize_handle(true, cx))
             // This overlay is its own native window with forwarded controls.

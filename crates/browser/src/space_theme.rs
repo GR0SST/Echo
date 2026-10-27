@@ -249,6 +249,55 @@ impl ThemePaintCache {
         (gradient, texture)
     }
 }
+/// One image for a rounded panel: field and grain composed at the panel's
+/// own size, so a single rounded paint clips both (GPUI clips rectangles).
+fn panel_image(key: &PaintKey, width: u32, height: u32) -> Arc<RenderImage> {
+    thread_local! {
+        static CACHE: RefCell<Option<(PaintKey, u32, u32, Arc<RenderImage>)>> = const { RefCell::new(None) };
+    }
+    if let Some(image) = CACHE.with(|cache| cache.borrow().as_ref()
+        .filter(|(k, w, h, _)| k == key && *w == width && *h == height).map(|entry| entry.3.clone())) {
+        return image;
+    }
+    let (width, height) = (width.max(2), height.max(2));
+    let fill_alpha = gradient_alpha(key) as f32 / 255.;
+    let image = image::RgbaImage::from_fn(width, height, |x, y| {
+        let (u, v) = (x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32);
+        let sample = |surface: &Surface| {
+            let c = surface.sample(u, v);
+            if key.translucent && !surface.default_style {
+                veil_pigment(c, picked_alpha(surface.theme.intensity, surface.dark))
+            } else {
+                c
+            }
+        };
+        let base = mix(sample(&key.from), sample(&key.to), key.fraction);
+        let (tx, ty) = (x % NOISE_TILE, y % NOISE_TILE);
+        let grain = |surface: &Surface| if surface.default_style {
+            default_grain(surface, tx, ty)
+        } else {
+            speckle(surface.theme.texture, tx, ty, surface.theme.noise)
+        };
+        let ((from, a), (to, b)) = (grain(&key.from), grain(&key.to));
+        let (a, b) = (a * (1. - key.fraction), b * key.fraction);
+        let grain_alpha = (a + b).min(1.);
+        let grain_color = if a + b > 0. { mix(from, to, b / (a + b)) } else { from };
+        let alpha = grain_alpha + fill_alpha * (1. - grain_alpha);
+        let color = if alpha > 0. {
+            ThemeColor {
+                red: (grain_color.red * grain_alpha + base.red * fill_alpha * (1. - grain_alpha)) / alpha,
+                green: (grain_color.green * grain_alpha + base.green * fill_alpha * (1. - grain_alpha)) / alpha,
+                blue: (grain_color.blue * grain_alpha + base.blue * fill_alpha * (1. - grain_alpha)) / alpha,
+            }
+        } else {
+            base
+        };
+        image::Rgba([quantize(color.blue, true), quantize(color.green, true), quantize(color.red, true), quantize(alpha, true)])
+    });
+    let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
+    CACHE.with(|cache| *cache.borrow_mut() = Some((key.clone(), width, height, image.clone())));
+    image
+}
 /// The profile sheet previews each Space's actual pigments and texture.
 /// It uses the sidebar's field and noise functions rather than a hue swatch.
 #[derive(Clone, Default)]
@@ -665,6 +714,19 @@ impl BrowserWindow {
     pub(crate) fn theme_window_field(&self) -> AnyElement {
         gpui::div().debug_selector(|| "theme-window-field".into()).absolute().inset_0().overflow_hidden()
             .child(self.theme_surface_with_origin(false, true)).into_any_element()
+    }
+
+    /// The Space field for a rounded floating panel, clipped to `radius`.
+    /// Translucent when the window shows a native blur behind it.
+    pub(crate) fn theme_surface_rounded(&self, radius: f32) -> AnyElement {
+        let key = self.theme_paint_key(self.theme_background_blurred == Some(true));
+        canvas(|_, _, _| (), move |bounds, _, window, _| {
+            let image = panel_image(&key, f32::from(bounds.size.width).round() as u32, f32::from(bounds.size.height).round() as u32);
+            let _ = window.paint_image(bounds, gpui::Corners::all(px(radius)), image, 0, false);
+        })
+        .absolute()
+        .inset_0()
+        .into_any_element()
     }
 
     fn theme_surface_with_origin(&self, translucent: bool, window_aligned: bool) -> AnyElement {
