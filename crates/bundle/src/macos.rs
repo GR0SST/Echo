@@ -2,6 +2,7 @@
 //! Embedded Framework and the helper apps CEF needs on macOS.
 //!
 //! Usage: `cargo run -p bundle`, then `open target/bundle/Echo.app`.
+//! Set `ECHO_SIGN_IDENTITY` (and `ECHO_NOTARY_PROFILE`) to sign; see `sign.rs`.
 
 use std::path::Path;
 use crate::acknowledgements;
@@ -47,6 +48,7 @@ pub(super) fn run() {
             install_scripting(&path);
             install_icon_notices(&path);
             acknowledgements::install(&path);
+            crate::sign::run(&path);
             println!("Bundle: {}", path.display());
         }
         Err(error) => {

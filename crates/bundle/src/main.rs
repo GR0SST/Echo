@@ -5,6 +5,8 @@ mod acknowledgements;
 mod macos;
 #[cfg(target_os = "macos")]
 mod cef_dist;
+#[cfg(target_os = "macos")]
+mod sign;
 
 #[cfg(any(not(target_os = "macos"), test))]
 mod native_bundle;
