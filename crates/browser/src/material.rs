@@ -49,6 +49,9 @@ pub(crate) enum EffectAppearance {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EffectState {
     FollowWindow,
+    /// Active while the application is frontmost, including when one of its
+    /// own popups or panels is key; inactive once another app is in front.
+    FollowApp,
     Active,
     Inactive,
 }
@@ -63,8 +66,6 @@ pub(crate) enum EffectMaterial {
     Menu,
     Popover,
     WindowBackground,
-    /// Clear, strongly blurred window material; picked Space themes tint it.
-    FullScreenUi,
     /// Explicit reference-only looks; deprecated by AppKit. Not theme modes.
     ReferenceLight,
     ReferenceDark,

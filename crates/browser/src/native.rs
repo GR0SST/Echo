@@ -304,7 +304,7 @@ mod mac {
     // AppKit raw enum values are isolated here, never in shared theme logic.
     fn effect_material(material: crate::material::EffectMaterial) -> isize {
         use crate::material::EffectMaterial::*;
-        match material { Hud => 13, Menu => 5, Popover => 6, WindowBackground => 12, FullScreenUi => 15,
+        match material { Hud => 13, Menu => 5, Popover => 6, WindowBackground => 12,
             ReferenceLight => 1, ReferenceDark => 2 }
     }
 
@@ -372,7 +372,16 @@ mod mac {
                 // explicit override, allowing effective appearance inheritance.
                 let _: () = msg_send![self.effect, setAppearance: appearance];
                 let _: () = msg_send![self.effect, setMaterial: effect_material(config.material)];
-                let state: isize = match config.state { EffectState::FollowWindow => 0, EffectState::Active => 1, EffectState::Inactive => 2 };
+                let state: isize = match config.state {
+                    EffectState::FollowWindow => 0,
+                    EffectState::Active => 1,
+                    EffectState::Inactive => 2,
+                    EffectState::FollowApp => {
+                        let app: *mut AnyObject = msg_send![objc2::class!(NSApplication), sharedApplication];
+                        let active: Bool = msg_send![app, isActive];
+                        if active.as_bool() { 1 } else { 2 }
+                    }
+                };
                 let blending: isize = match config.blending { EffectBlending::BehindWindow => 0, EffectBlending::WithinWindow => 1 };
                 let _: () = msg_send![self.effect, setState: state];
                 let _: () = msg_send![self.effect, setBlendingMode: blending];

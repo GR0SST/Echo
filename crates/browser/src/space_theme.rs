@@ -27,12 +27,12 @@ impl Surface {
         let color = mix(colors[a], colors[b], position.fract());
         if self.picked {
             if self.dark {
-                // Dark appearance keeps the pigment's hue but deepens it: low
-                // intensity is a near-neutral charcoal, high intensity a deep
-                // saturated tint. Light chrome never appears in Dark mode.
+                // Dark appearance keeps hue and saturation; intensity only
+                // sets the tint opacity. Light chrome never appears in Dark.
                 let (h, s, v) = color.hsv();
-                let i = self.theme.intensity.clamp(0., 1.);
-                return ThemeColor::from_hsv(h, s * (0.25 + 0.65 * i), 0.1 + v * (0.08 + 0.17 * i));
+                // Saturated pigments stay vivid as in the reference; only
+                // near-neutral picks (white, grays) fall to charcoal.
+                return ThemeColor::from_hsv(h, s, 0.06 + v * (0.18 + 0.72 * s.min(1.)));
             }
             // Light appearance fades the pigment toward a pale neutral.
             return mix(
@@ -124,7 +124,7 @@ fn gradient_alpha(key: &PaintKey) -> u8 {
         if !key.translucent || s.default_style {
             255.
         } else {
-            picked_alpha(s.theme.intensity) * 255.
+            picked_alpha(s.theme.intensity, s.dark) * 255.
         }
     };
     (alpha(&key.from) * (1. - key.fraction) + alpha(&key.to) * key.fraction).round() as u8
@@ -132,8 +132,16 @@ fn gradient_alpha(key: &PaintKey) -> u8 {
 /// Tint opacity of a picked theme over the desktop blur. The lowest
 /// intensity leaves the window almost see-through; the highest stays
 /// slightly translucent, as in the reference.
-fn picked_alpha(intensity: f32) -> f32 {
-    0.15 + intensity.clamp(0., 1.) * 0.65
+fn picked_alpha(intensity: f32, _dark: bool) -> f32 {
+    // Window tint opacity spans 0.30..0.80 over the HUD blur, the range
+    // Zen Browser (MPL-2.0) uses for the same Arc-style control on macOS.
+    0.3 + intensity.clamp(0., 1.) * 0.5
+}
+/// Over the blur, low opacities lift the pigment toward white so the tint
+/// stays visible; full opacity keeps the pure pigment (Zen's macOS blend).
+fn veil_pigment(color: ThemeColor, alpha: f32) -> ThemeColor {
+    let kept = (alpha + 0.3 + 0.6 * (1. - (alpha + 0.3))).min(1.);
+    mix(ThemeColor { red: 1., green: 1., blue: 1. }, color, kept)
 }
 fn default_grain(surface: &Surface, x: u32, y: u32) -> (ThemeColor, f32) {
     let reference = surface.sample(0.1, 0.5);
@@ -193,11 +201,15 @@ impl ThemePaintCache {
             return (data.gradient.clone(), data.texture.clone());
         }
         let gradient = image::RgbaImage::from_fn(64, 64, |x, y| {
-            let c = mix(
-                key.from.sample(x as f32 / 63., y as f32 / 63.),
-                key.to.sample(x as f32 / 63., y as f32 / 63.),
-                key.fraction,
-            );
+            let sample = |surface: &Surface| {
+                let c = surface.sample(x as f32 / 63., y as f32 / 63.);
+                if key.translucent && !surface.default_style {
+                    veil_pigment(c, picked_alpha(surface.theme.intensity, surface.dark))
+                } else {
+                    c
+                }
+            };
+            let c = mix(sample(&key.from), sample(&key.to), key.fraction);
             image::Rgba([
                 quantize(c.blue, key.from.default_style || key.to.default_style),
                 quantize(c.green, key.from.default_style || key.to.default_style),
@@ -210,7 +222,7 @@ impl ThemePaintCache {
                 if surface.default_style {
                     return default_grain(surface, x, y);
                 }
-                let gain = if key.translucent { picked_alpha(surface.theme.intensity) } else { 1. };
+                let gain = if key.translucent { picked_alpha(surface.theme.intensity, surface.dark) } else { 1. };
                 (
                     ThemeColor {
                         red: 0.,
@@ -400,7 +412,8 @@ impl BrowserWindow {
             let alpha = 0.21 * (1. - default) + 0.10 * default;
             let luminance = (0.5 * 0.21 * (1. - default) + 0.10 * default) / alpha;
             // Over the blur the panel stays a little lighter than the field.
-            gpui::hsla(0., 0., luminance, if tint < 1. { 0.07 + alpha * tint * 1.2 } else { alpha })
+            // Over the blur the reference panel is a faint white veil.
+            if tint < 1. { gpui::hsla(0., 0., 1., 0.07) } else { gpui::hsla(0., 0., luminance, alpha) }
         } else {
             let alpha = 0.70 * (1. - default) + (2. / 3.) * default;
             gpui::hsla(0., 0., 1., if tint < 1. { 0.12 + alpha * tint } else { alpha })
@@ -793,10 +806,11 @@ mod tests {
         assert_ne!(s.sample(0., 0.), light);
         s.theme.intensity = 0.;
         assert_ne!(s.sample(0., 0.), s.sample(1., 1.));
-        assert!(s.sample(0., 0.).red < 0.25);
+        s.theme.colors = vec![ThemeColor { red: 0.95, green: 0.95, blue: 0.95 }];
+        assert!(s.sample(0., 0.).red < 0.3);
     }
     #[test]
-    fn picked_dark_themes_stay_dark_and_unpicked_chrome_stays_dark() {
+    fn picked_dark_themes_keep_vivid_pigments_and_neutral_picks_stay_dark() {
         let mut s = Surface {
             theme: SpaceTheme::from_hue(280.),
             dark: true,
@@ -809,13 +823,14 @@ mod tests {
             blue: 0.616,
         }];
         let picked = s.sample(0.5, 0.5);
-        assert!(picked.red < 0.35 && picked.red > picked.green);
-        s.theme.intensity = 0.;
-        let faint = s.sample(0.5, 0.5);
-        assert!(faint.hsv().1 < picked.hsv().1 && faint.hsv().2 < picked.hsv().2);
+        assert!(picked.red < 0.4 && picked.red > picked.green);
+        // A vivid pick keeps its saturation and most of its brightness.
+        s.theme.colors = vec![ThemeColor { red: 0.12, green: 0.06, blue: 0.75 }];
+        let vivid = s.sample(0.5, 0.5);
+        assert!(vivid.hsv().1 > 0.85 && vivid.blue > 0.6);
         // A near-white pick stays dark chrome in Dark appearance.
         s.theme.colors = vec![ThemeColor { red: 0.95, green: 0.93, blue: 0.94 }];
-        assert!(s.sample(0.5, 0.5).red < 0.2);
+        assert!(s.sample(0.5, 0.5).red < 0.25);
         s.picked = false;
         s.theme.intensity = 0.2;
         assert!((0.12..0.2).contains(&s.sample(0.5, 0.5).red));
@@ -844,13 +859,21 @@ mod tests {
             fraction: 0.5,
             translucent: true,
         };
-        assert_eq!(gradient_alpha(&key), 213);
+        assert_eq!(gradient_alpha(&key), 217);
         let mut faint = key.to.clone();
         faint.theme.intensity = 0.;
         let mut full = faint.clone();
         full.theme.intensity = 1.;
         let alpha = |s: Surface| gradient_alpha(&PaintKey { from: s.clone(), to: s, fraction: 0., translucent: true });
-        assert!(alpha(faint) < 48 && (190..230).contains(&alpha(full)));
+        // Tint opacity spans 0.30..0.80 in both appearances.
+        assert_eq!((alpha(faint.clone()), alpha(full.clone())), (77, 204));
+        let mut light = faint.clone();
+        light.dark = false;
+        assert_eq!(alpha(light), alpha(faint.clone()));
+        // Low opacity lifts the pigment toward white; full keeps it pure.
+        let pigment = ThemeColor { red: 0.1, green: 0.1, blue: 0.8 };
+        assert!(veil_pigment(pigment, 0.3).red > 0.2);
+        assert!((veil_pigment(pigment, 0.8).red - pigment.red).abs() < 1e-5);
         let cache = ThemePaintCache::default();
         let opaque = PaintKey {
             from: from.clone(),
