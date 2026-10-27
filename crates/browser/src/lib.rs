@@ -392,7 +392,7 @@ pub fn run() {
             std::process::exit(1);
         }
     }
-    let app = Application::new();
+    let app = Application::new().with_assets(crate::icons::IconAssets);
     app.on_reopen(reopen);
     let urls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, Option<String>)>::new()));
     let incoming = urls.clone();

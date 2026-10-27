@@ -11682,7 +11682,7 @@ fn header_theme_editor_uses_the_originating_menu_anchor(cx: &mut TestAppContext)
 
 
 #[gpui::test]
-fn theme_add_preserves_the_selected_color_and_last_remove_restores_the_unpicked_field(cx: &mut TestAppContext) {
+fn theme_add_keeps_the_selected_handle_complementary_and_last_remove_restores_the_unpicked_field(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     dispatch_menu(cx, "Spaces", "Edit Theme…");
     let mut editor = space_theme_editor(&view, cx);
@@ -11692,12 +11692,14 @@ fn theme_add_preserves_the_selected_color_and_last_remove_restores_the_unpicked_
     dispatch_menu(cx, "Spaces", "Edit Theme…");
     let mut editor = space_theme_editor(&view, cx);
     click(&mut editor, "theme-add-color");
-    let added = view.read_with(cx, |view, _| view.theme_editor.as_ref().unwrap().draft.colors[1]);
     click(&mut editor, "theme-preset-4");
     view.read_with(cx, |view, _| {
         let theme = &view.theme_editor.as_ref().unwrap().draft;
+        // Add keeps the original handle selected; the added one follows it
+        // to the complementary position.
         assert_eq!(theme.colors[0], crate::theme_editor::preset_color(0, 4));
-        assert_eq!(theme.colors[1], added, "Add color must keep the original handle selected");
+        let ((h0, s0, _), (h1, s1, _)) = (theme.colors[0].hsv(), theme.colors[1].hsv());
+        assert!(((h1 - h0).rem_euclid(360.) - 180.).abs() < 1. && (s1 - s0).abs() < 0.01);
     });
     click(&mut editor, "theme-remove-color");
     let surviving = view.read_with(cx, |view, _| view.browser.space().theme.clone());

@@ -348,6 +348,7 @@ impl BrowserWindow {
                     let hue = (y.atan2(x).to_degrees() + 90.).rem_euclid(360.);
                     let saturation = (x.hypot(y) / 130.).clamp(0., 1.);
                     e.draft.colors[e.selected] = ThemeColor::from_hsv(hue, saturation, 0.95);
+                    harmonize(&mut e.draft.colors, e.selected);
                     e.picked = true;
                 }
             }
@@ -578,18 +579,15 @@ impl BrowserWindow {
                                 this.on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(e) = &mut this.theme_editor {
                                         if add {
-                                            let (h, s, v) = e.draft.colors[e.selected].hsv();
-                                            e.draft.colors.push(ThemeColor::from_hsv(
-                                                h + 120.,
-                                                s,
-                                                v,
-                                            ));
+                                            e.draft.colors.push(e.draft.colors[e.selected]);
+                                            harmonize(&mut e.draft.colors, e.selected);
                                             // Arc keeps the existing large handle selected.
                                         } else if e.draft.colors.len() == 1 {
                                             e.picked = false;
                                         } else {
                                             e.draft.colors.remove(e.selected);
                                             e.selected = e.selected.min(e.draft.colors.len() - 1);
+                                            harmonize(&mut e.draft.colors, e.selected);
                                         }
                                     }
                                     this.commit_theme_editor();
@@ -655,6 +653,7 @@ impl BrowserWindow {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(e) = &mut this.theme_editor {
                                     e.draft.colors[e.selected] = c;
+                                    harmonize(&mut e.draft.colors, e.selected);
                                     e.picked = true;
                                 }
                                 this.commit_theme_editor();
@@ -925,3 +924,48 @@ const PALETTES: [[[f32; 3]; 9]; 4] = [
         [0.000, 0.000, 0.000],
     ],
 ];
+
+/// Handle angles relative to the first color. Two colors are complementary;
+/// three form Arc's narrow triangle, both extras near the opposite side.
+fn harmony_offsets(count: usize) -> &'static [f32] {
+    match count {
+        2 => &[0., 180.],
+        3 => &[0., 153., 207.],
+        _ => &[0.],
+    }
+}
+
+/// Moves every handle with `anchor`: same distance from the center (and
+/// brightness), hues kept at the harmony offsets.
+pub(crate) fn harmonize(colors: &mut [ThemeColor], anchor: usize) {
+    let offsets = harmony_offsets(colors.len());
+    if offsets.len() != colors.len() || anchor >= colors.len() {
+        return;
+    }
+    let (h, s, v) = colors[anchor].hsv();
+    let base = h - offsets[anchor];
+    for (index, (color, offset)) in colors.iter_mut().zip(offsets).enumerate() {
+        if index != anchor {
+            *color = ThemeColor::from_hsv((base + offset).rem_euclid(360.), s, v);
+        }
+    }
+}
+
+#[cfg(test)]
+mod harmony_tests {
+    use super::*;
+    #[test]
+    fn handles_stay_complementary_or_in_a_narrow_triangle() {
+        let mut two = vec![ThemeColor::from_hsv(30., 0.6, 0.95); 2];
+        harmonize(&mut two, 0);
+        assert!((two[1].hsv().0 - 210.).abs() < 0.5 && (two[1].hsv().1 - 0.6).abs() < 0.01);
+        let mut three = vec![ThemeColor::from_hsv(20., 0.8, 0.95); 3];
+        harmonize(&mut three, 0);
+        let hues: Vec<f32> = three.iter().map(|c| c.hsv().0).collect();
+        assert!((hues[1] - 173.).abs() < 0.5 && (hues[2] - 227.).abs() < 0.5);
+        // Dragging a secondary handle carries the others with it.
+        three[1] = ThemeColor::from_hsv(183., 0.8, 0.95);
+        harmonize(&mut three, 1);
+        assert!((three[0].hsv().0 - 30.).abs() < 0.5 && (three[2].hsv().0 - 237.).abs() < 0.5);
+    }
+}

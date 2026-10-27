@@ -171,25 +171,61 @@ static IONICONS: std::sync::LazyLock<IconContours> = std::sync::LazyLock::new(||
 });
 
 pub(crate) fn ionicon(name: &str, size: f32, zoom: f32) -> AnyElement {
-    let name = name.to_owned();
-    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
-        let Some(commands) = IONICONS.get(&name) else { return; };
-        let scale = f32::from(bounds.size.width) / 512. * zoom;
+    let path: gpui::SharedString = format!("{ICON_ASSET_PREFIX}ionicon/{name}.svg").into();
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, cx| {
         let center = bounds.center();
-        let at = |x, y| center + gpui::point(px((x - 256.) * scale), px((255. - y) * scale));
-        let mut path = gpui::PathBuilder::fill();
-        for command in commands {
-            match command.as_slice() {
-                [0., x, y] => path.move_to(at(*x, *y)),
-                [1., x, y] => path.line_to(at(*x, *y)),
-                [2., cx, cy, x, y] => path.curve_to(at(*x, *y), at(*cx, *cy)),
-                [3., c1x, c1y, c2x, c2y, x, y] => path.cubic_bezier_to(at(*x, *y), at(*c1x, *c1y), at(*c2x, *c2y)),
-                [4.] => path.close(),
-                _ => unreachable!("embedded contour command"),
-            }
-        }
-        if let Ok(path) = path.build() { window.paint_path(path, window.text_style().color); }
+        let side = bounds.size.width * zoom;
+        let bounds = gpui::Bounds::new(center - gpui::point(side / 2., side / 2.), gpui::size(side, side));
+        let color = window.text_style().color;
+        let _ = window.paint_svg(bounds, path.clone(), Default::default(), color, cx);
     }).size(px(size)).flex_none().into_any_element()
+}
+
+/// Vector controls rasterize through GPUI's SVG renderer, which antialiases
+/// with full coverage. Path fills only get 4x MSAA, which steps edges and
+/// drops thin arrow tips.
+const ICON_ASSET_PREFIX: &str = "echo-icon/";
+pub(crate) struct IconAssets;
+impl gpui::AssetSource for IconAssets {
+    fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        let Some(rest) = path.strip_prefix(ICON_ASSET_PREFIX) else { return Ok(None) };
+        let svg = if let Some(name) = rest.strip_prefix("ionicon/").and_then(|r| r.strip_suffix(".svg")) {
+            IONICONS.get(name).map(|commands| ionicon_svg(commands))
+        } else if let Some(name) = rest.strip_prefix("frame/").and_then(|r| r.strip_suffix(".svg")) {
+            frame_icon(name).map(|paths| stroke_svg(18., 1.5, &paths))
+        } else {
+            None
+        };
+        Ok(svg.map(|svg| std::borrow::Cow::Owned(svg.into_bytes())))
+    }
+    fn list(&self, _path: &str) -> gpui::Result<Vec<gpui::SharedString>> { Ok(Vec::new()) }
+}
+
+/// The embedded contours are y-up in a 512 box; SVG is y-down.
+fn ionicon_svg(commands: &[Vec<f32>]) -> String {
+    let mut d = String::new();
+    let y = |v: f32| 511. - v;
+    for command in commands {
+        match command.as_slice() {
+            [0., x, v] => d += &format!("M{x} {} ", y(*v)),
+            [1., x, v] => d += &format!("L{x} {} ", y(*v)),
+            [2., cx, cy, x, v] => d += &format!("Q{cx} {} {x} {} ", y(*cy), y(*v)),
+            [3., c1x, c1y, c2x, c2y, x, v] => d += &format!("C{c1x} {} {c2x} {} {x} {} ", y(*c1y), y(*c2y), y(*v)),
+            [4.] => d += "Z ",
+            _ => {}
+        }
+    }
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="black" fill-rule="evenodd" d="{d}"/></svg>"#)
+}
+
+fn stroke_svg(size: f32, width: f32, paths: &[Vec<(f32, f32)>]) -> String {
+    let mut body = String::new();
+    for points in paths {
+        let d: Vec<String> = points.iter().enumerate()
+            .map(|(i, (x, y))| format!("{}{x} {y}", if i == 0 { "M" } else { "L" })).collect();
+        body += &format!(r#"<path d="{}"/>"#, d.join(" "));
+    }
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}"><g fill="none" stroke="black" stroke-width="{width}" stroke-linecap="round" stroke-linejoin="round">{body}</g></svg>"#)
 }
 
 pub(crate) fn control(icon: Icon) -> AnyElement { control_sized(icon, 18.) }
@@ -341,23 +377,26 @@ fn command_globe(size: f32, zoom: f32) -> AnyElement {
 }
 
 /// Reference-specific frame/key controls absent from the Ionicons catalog.
+fn frame_icon(name: &str) -> Option<Vec<Vec<(f32, f32)>>> {
+    Some(match name {
+        "sidebar" => vec![rounded_rect(1.5, 3., 15., 12., 2.), vec![(6.5, 3.), (6.5, 15.)], vec![(3.5, 6.), (4.5, 6.)], vec![(3.5, 8.5), (4.5, 8.5)]],
+        "split" => vec![rounded_rect(2., 3., 14., 12., 1.5), vec![(9., 3.), (9., 15.)]],
+        "command" => vec![rounded_rect(3., 3., 4., 4., 1.75), rounded_rect(11., 3., 4., 4., 1.75), rounded_rect(3., 11., 4., 4., 1.75), rounded_rect(11., 11., 4., 4., 1.75), rounded_rect(7., 7., 4., 4., 0.)],
+        _ => return None,
+    })
+}
+
 fn chrome_frame(icon: Icon) -> AnyElement {
-    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
-        let paths = match icon {
-            Icon::Sidebar => vec![rounded_rect(1.5, 3., 15., 12., 2.), vec![(6.5, 3.), (6.5, 15.)], vec![(3.5, 6.), (4.5, 6.)], vec![(3.5, 8.5), (4.5, 8.5)]],
-            Icon::Split => vec![rounded_rect(2., 3., 14., 12., 1.5), vec![(9., 3.), (9., 15.)]],
-            Icon::Command => vec![rounded_rect(3., 3., 4., 4., 1.75), rounded_rect(11., 3., 4., 4., 1.75), rounded_rect(3., 11., 4., 4., 1.75), rounded_rect(11., 11., 4., 4., 1.75), rounded_rect(7., 7., 4., 4., 0.)],
-            _ => unreachable!("catalog-backed control"),
-        };
+    let name = match icon {
+        Icon::Sidebar => "sidebar",
+        Icon::Split => "split",
+        Icon::Command => "command",
+        _ => unreachable!("catalog-backed control"),
+    };
+    let path: gpui::SharedString = format!("{ICON_ASSET_PREFIX}frame/{name}.svg").into();
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, cx| {
         let color = window.text_style().color;
-        for points in paths {
-            let mut path = gpui::PathBuilder::stroke(px(1.5));
-            for (index, (x, y)) in points.iter().enumerate() {
-                let point = bounds.origin + gpui::point(px(*x), px(*y));
-                if index == 0 { path.move_to(point); } else { path.line_to(point); }
-            }
-            if let Ok(path) = path.build() { window.paint_path(path, color); }
-        }
+        let _ = window.paint_svg(bounds, path.clone(), Default::default(), color, cx);
     }).size(px(18.)).flex_none().into_any_element()
 }
 
@@ -646,4 +685,19 @@ fn feedback_glyph(haptic: bool, size: f32, zoom: f32) -> AnyElement {
             }
         }
     }).size(px(size)).flex_none().into_any_element()
+}
+
+#[cfg(test)]
+mod icon_asset_tests {
+    use gpui::AssetSource;
+    #[test]
+    fn controls_load_as_svg_assets() {
+        for path in ["echo-icon/ionicon/arrow-back-outline.svg", "echo-icon/ionicon/reload-outline.svg", "echo-icon/frame/sidebar.svg"] {
+            let svg = super::IconAssets.load(path).unwrap().expect(path);
+            let svg = std::str::from_utf8(&svg).unwrap();
+            assert!(svg.starts_with("<svg") && svg.contains("<path d=") || svg.contains(" d=\""), "{path}");
+        }
+        assert!(super::IconAssets.load("echo-icon/ionicon/missing.svg").unwrap().is_none());
+        assert!(super::IconAssets.load("other/file.svg").unwrap().is_none());
+    }
 }
