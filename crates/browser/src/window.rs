@@ -4421,10 +4421,14 @@ impl BrowserWindow {
                     .gap_2()
                     .when(!split_open, |this| this.px_8())
                     .when(!split_open, |this| this.overflow_hidden())
-                    .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).bg(gpui::white()).shadow_md())
-                    .when(self.browser.is_private() && has_page && !split_open, |this| this.bg(hsla(210. / 360., 0.035, 0.15, 1.)))
+                    .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).shadow_md())
                     .when(empty_canvas, |this| this.rounded(px(CONTENT_CORNER_RADIUS)))
                     .relative()
+                    // The loading backing sits one pixel inside the native page so
+                    // its antialiased corners never fringe past the page's own mask.
+                    .when(has_page && !split_open, |this| this.child(div().debug_selector(|| "page-card-backing".into())
+                        .absolute().inset(px(1.)).rounded(px(CONTENT_CORNER_RADIUS - 1.))
+                        .bg(if self.browser.is_private() { hsla(210. / 360., 0.035, 0.15, 1.) } else { gpui::white() })))
                     .when(!has_page, |this| this.child(div().debug_selector(|| "empty-space-canvas".into()).absolute().inset_0()
                         .when(empty_canvas, |canvas| canvas
                             // A blurred window already shows its translucent field

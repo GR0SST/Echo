@@ -10012,6 +10012,29 @@ fn theme_noise_dial_starts_at_noon_and_intensity_thumb_follows_the_pointer(cx: &
 }
 
 #[gpui::test]
+fn theme_intensity_and_noise_ignore_the_pointer_until_a_color_is_picked(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    let before = view.read_with(cx, |w, _| w.theme_editor.as_ref().unwrap().draft.clone());
+    let slider = editor.debug_bounds("theme-intensity").unwrap();
+    let noise = editor.debug_bounds("theme-noise").unwrap();
+    for p in [gpui::point(slider.left() + gpui::px(40.), slider.center().y), noise.center() + gpui::point(gpui::px(32.), gpui::px(0.))] {
+        editor.simulate_mouse_move(p, None, Modifiers::none());
+        editor.simulate_mouse_down(p, gpui::MouseButton::Left, Modifiers::none());
+        editor.simulate_mouse_move(p + gpui::point(gpui::px(30.), gpui::px(0.)), Some(gpui::MouseButton::Left), Modifiers::none());
+        editor.simulate_mouse_up(p, gpui::MouseButton::Left, Modifiers::none());
+        editor.run_until_parked();
+    }
+    view.read_with(cx, |w, _| {
+        let e = w.theme_editor.as_ref().unwrap();
+        assert!(!e.picked);
+        assert_eq!(e.draft, before);
+    });
+    assert!(editor.debug_bounds("theme-intensity-thumb").is_none());
+}
+
+#[gpui::test]
 fn boost_library_filters_and_toggles_profile_owned_records(cx:&mut TestAppContext){
     let (view,cx)=open(cx);
     view.update(cx,|view,cx|{view.edit_browser(|browser|{let boosts=&mut browser.active_user_profile_mut().boosts;let id=boosts.create("https://example.com").unwrap();boosts.get_mut(id).unwrap().name="Example Boost".into();boosts.create("https://zebra.example").unwrap();});cx.notify();});
@@ -11756,21 +11779,20 @@ fn main_menu_theme_editor_follows_the_pointer_and_extends_its_owned_window(cx: &
 }
 
 #[gpui::test]
-fn theme_noise_marker_is_hidden_when_idle_even_after_a_color_is_picked(cx: &mut TestAppContext) {
+fn theme_noise_handle_appears_once_a_color_is_picked_and_stays_while_idle(cx: &mut TestAppContext) {
     let (view, visual) = open(cx);
     dispatch_menu(visual, "Spaces", "Edit Theme…");
     let mut editor = space_theme_editor(&view, visual);
-    click(&mut editor, "theme-preset-2");
     assert!(!view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
+    click(&mut editor, "theme-preset-2");
+    assert!(view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
     let noise = editor.debug_bounds("theme-noise").unwrap();
     let p = noise.center() + gpui::point(gpui::px(32.), gpui::px(0.));
     editor.simulate_mouse_move(p, None, Modifiers::none());
     editor.simulate_mouse_down(p, gpui::MouseButton::Left, Modifiers::none());
-    editor.run_until_parked();
-    assert!(view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
     editor.simulate_mouse_up(p, gpui::MouseButton::Left, Modifiers::none());
     editor.run_until_parked();
-    assert!(!view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
+    assert!(view.read_with(visual, |view, _| view.theme_editor.as_ref().unwrap().noise_marker_visible()));
     assert_eq!(view.read_with(visual, |view, _| view.browser.space().theme().noise), 0.25);
 }
 

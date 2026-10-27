@@ -47,7 +47,7 @@ pub(crate) struct ThemeEditor {
 }
 impl ThemeEditor {
     pub(crate) fn noise_marker_visible(&self) -> bool {
-        self.picked && matches!(self.dragging, Some(Drag::Noise))
+        self.picked
     }
 }
 
@@ -683,6 +683,7 @@ impl BrowserWindow {
         let noise = e.draft.noise;
         let noise_marker_visible = e.noise_marker_visible();
         let intensity = e.draft.intensity;
+        let wave = if picked { intensity } else { 0. };
         let sliders = div()
             .h(px(80.))
             .flex()
@@ -699,9 +700,9 @@ impl BrowserWindow {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                            if let Some(e) = &mut this.theme_editor {
-                                e.dragging = Some(Drag::Intensity);
-                            }
+                            // Without a picked color there is no tint to adjust.
+                            let Some(e) = this.theme_editor.as_mut().filter(|e| e.picked) else { return };
+                            e.dragging = Some(Drag::Intensity);
                             this.theme_pointer(event.position, cx);
                         }),
                     )
@@ -716,7 +717,7 @@ impl BrowserWindow {
                                             px(i as f32),
                                             px(34.
                                                 + (i as f32 / 32. * std::f32::consts::TAU).sin()
-                                                    * (intensity * 14.)),
+                                                    * (wave * 14.)),
                                         );
                                     if i == 0 {
                                         path.move_to(p);
@@ -747,9 +748,8 @@ impl BrowserWindow {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                            if let Some(e) = &mut this.theme_editor {
-                                e.dragging = Some(Drag::Noise);
-                            }
+                            let Some(e) = this.theme_editor.as_mut().filter(|e| e.picked) else { return };
+                            e.dragging = Some(Drag::Noise);
                             this.theme_pointer(event.position, cx);
                         }),
                     )
@@ -758,13 +758,16 @@ impl BrowserWindow {
                             move |b, _, _| noise_bounds.set(Some(b)),
                             move |b, _, w, _| {
                                 for i in 0..24 {
-                                    let a = i as f32 / 24. * std::f32::consts::TAU;
+                                    // Dots run clockwise from noon; those up to the
+                                    // current noise value light up.
+                                    let a = i as f32 / 24. * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
                                     let p = b.center()
                                         + point(px(a.cos() * 32. - 2.), px(a.sin() * 32. - 2.));
+                                    let lit = noise_marker_visible && noise > 0. && i as f32 / 24. <= noise;
                                     w.paint_quad(
                                         gpui::fill(
                                             Bounds::new(p, gpui::size(px(4.), px(4.))),
-                                            hsla(0., 0., 1., 0.15),
+                                            hsla(0., 0., 1., if lit { 0.6 } else { 0.15 }),
                                         )
                                         .corner_radii(px(2.)),
                                     );

@@ -100,21 +100,20 @@ fn noise(texture: NoiseTexture, x: u32, y: u32) -> f32 {
     }
 }
 
-// Native captures repeat at 100 logical pixels in both axes (the Metal
-// material family). This original field matches measured grain statistics.
+// Grain tiles repeat at 100 logical pixels in both axes.
 const NOISE_TILE: u32 = 100;
-fn noise_opacity(texture: NoiseTexture, x: u32, y: u32, strength: f32) -> f32 {
-    let (mean, amplitude) = match texture {
-        NoiseTexture::None => return 0.,
-        NoiseTexture::Grain => (0.039, 0.087),
-        NoiseTexture::Sand => (0.047, 0.108),
-        NoiseTexture::Tweed => (0.0634, 0.0344),
-        NoiseTexture::Denim => (0.10, 0.0634),
-    };
-    (mean + noise(texture, x, y) * amplitude).clamp(0., 0.2) * strength
-}
 
 const GRAIN_OPACITY: f32 = 0.25;
+/// Light and dark speckles scaled by the noise dial, after Zen Browser's
+/// grain layer but subtler (about 5% mean opacity). The pattern is original.
+fn speckle(texture: NoiseTexture, x: u32, y: u32, strength: f32) -> (ThemeColor, f32) {
+    if texture == NoiseTexture::None {
+        return (ThemeColor { red: 0., green: 0., blue: 0. }, 0.);
+    }
+    let gray = (0.5 + noise(texture, x, y) * 0.7).clamp(0., 1.);
+    let alpha = (0.05 + hash(x.wrapping_add(7), y.wrapping_add(3)) * 0.05).clamp(0., GRAIN_OPACITY);
+    (ThemeColor { red: gray, green: gray, blue: gray }, alpha * strength.clamp(0., 1.))
+}
 fn quantize(value: f32, round: bool) -> u8 {
     let value = value.clamp(0., 1.) * 255.;
     (if round { value.round() } else { value }) as u8
@@ -222,15 +221,7 @@ impl ThemePaintCache {
                 if surface.default_style {
                     return default_grain(surface, x, y);
                 }
-                let gain = if key.translucent { picked_alpha(surface.theme.intensity, surface.dark) } else { 1. };
-                (
-                    ThemeColor {
-                        red: 0.,
-                        green: 0.,
-                        blue: 0.,
-                    },
-                    noise_opacity(surface.theme.texture, x, y, surface.theme.noise) * gain,
-                )
+                speckle(surface.theme.texture, x, y, surface.theme.noise)
             };
             let (from, a) = overlay(&key.from);
             let (to, b) = overlay(&key.to);
@@ -276,14 +267,7 @@ impl ProfileCardPreview {
             let (tint, alpha) = if surface.default_style {
                 default_grain(&surface, x, y)
             } else {
-                (
-                    ThemeColor {
-                        red: 0.,
-                        green: 0.,
-                        blue: 0.,
-                    },
-                    noise_opacity(surface.theme.texture, x, y, surface.theme.noise),
-                )
+                speckle(surface.theme.texture, x % NOISE_TILE, y % NOISE_TILE, surface.theme.noise)
             };
             let color = mix(base, tint, alpha);
             image::Rgba([
@@ -889,21 +873,15 @@ mod tests {
         assert!(Arc::ptr_eq(&a, &b) && Arc::ptr_eq(&grain_a, &grain_b));
     }
     #[test]
-    fn original_sand_matches_reference_mean_contrast_and_neighbour_correlation() {
-        let values: Vec<f32> = (0..100)
-            .flat_map(|y| (0..100).map(move |x| noise_opacity(NoiseTexture::Sand, x, y, 1.)))
+    fn speckle_mixes_light_and_dark_grain_scaled_by_the_dial() {
+        let samples: Vec<_> = (0..100)
+            .flat_map(|y| (0..100).map(move |x| speckle(NoiseTexture::Grain, x, y, 1.)))
             .collect();
-        let mean = values.iter().sum::<f32>() / values.len() as f32;
-        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
-        let covariance = (0..100)
-            .flat_map(|y| (1..100).map(move |x| (y, x)))
-            .map(|(y, x)| (values[y * 100 + x] - mean) * (values[y * 100 + x - 1] - mean))
-            .sum::<f32>()
-            / 9900.;
-        assert!((0.045..0.049).contains(&mean));
-        assert!((0.022..0.026).contains(&variance.sqrt()));
-        assert!((0.08..0.22).contains(&(covariance / variance)));
-        assert_eq!(noise_opacity(NoiseTexture::Grain, 10, 20, 0.), 0.);
+        let mean = samples.iter().map(|(_, a)| a).sum::<f32>() / samples.len() as f32;
+        assert!((0.04..0.06).contains(&mean));
+        assert!(samples.iter().any(|(c, _)| c.red > 0.75) && samples.iter().any(|(c, _)| c.red < 0.25));
+        assert_eq!(speckle(NoiseTexture::Grain, 10, 20, 0.).1, 0.);
+        assert_eq!(speckle(NoiseTexture::None, 10, 20, 1.).1, 0.);
     }
     #[test]
     fn textures_are_deterministic_and_distinct() {
