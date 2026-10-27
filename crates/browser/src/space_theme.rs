@@ -129,11 +129,11 @@ fn gradient_alpha(key: &PaintKey) -> u8 {
     };
     (alpha(&key.from) * (1. - key.fraction) + alpha(&key.to) * key.fraction).round() as u8
 }
-/// Window opacity of a picked theme over the desktop blur. The lowest
+/// Tint opacity of a picked theme over the desktop blur. The lowest
 /// intensity leaves the window almost see-through; the highest stays
-/// slightly translucent.
+/// slightly translucent, as in the reference.
 fn picked_alpha(intensity: f32) -> f32 {
-    0.22 + intensity.clamp(0., 1.) * 0.7
+    0.15 + intensity.clamp(0., 1.) * 0.65
 }
 fn default_grain(surface: &Surface, x: u32, y: u32) -> (ThemeColor, f32) {
     let reference = surface.sample(0.1, 0.5);
@@ -389,12 +389,19 @@ impl BrowserWindow {
         // The masked field is opaque; compensate for the native window
         // material already included in Arc's underlying translucent field.
         let default = self.theme_default_fraction();
+        // Over a blurred window the panel thins with the theme tint, so a
+        // translucent Space stays see-through across the page area too.
+        let tint = if self.theme_background_blurred == Some(true) {
+            gradient_alpha(&self.theme_paint_key(true)) as f32 / 255.
+        } else {
+            1.
+        };
         if self.theme_is_dark() {
             let alpha = 0.21 * (1. - default) + 0.10 * default;
             let luminance = (0.5 * 0.21 * (1. - default) + 0.10 * default) / alpha;
-            gpui::hsla(0., 0., luminance, alpha)
+            gpui::hsla(0., 0., luminance, alpha * tint)
         } else {
-            gpui::hsla(0., 0., 1., 0.70 * (1. - default) + (2. / 3.) * default)
+            gpui::hsla(0., 0., 1., (0.70 * (1. - default) + (2. / 3.) * default) * tint)
         }
     }
     /// Keep the shadow outside the translucent panel. Nested outlines leave
@@ -645,13 +652,6 @@ impl BrowserWindow {
             translucent,
         }
     }
-    /// Opacity of the window's own blur layer. Low-intensity picked themes
-    /// let the desktop show through; the default field stays fully backed.
-    pub(crate) fn theme_backdrop_alpha(&self) -> f64 {
-        let key = self.theme_paint_key(true);
-        let alpha = gradient_alpha(&key) as f32 / 255.;
-        (0.5 + 0.5 * alpha) as f64
-    }
     pub(crate) fn theme_default_fraction(&self) -> f32 {
         let key = self.theme_paint_key(false);
         (if key.from.default_style { 1. } else { 0. }) * (1. - key.fraction)
@@ -832,13 +832,13 @@ mod tests {
             fraction: 0.5,
             translucent: true,
         };
-        assert_eq!(gradient_alpha(&key), 227);
+        assert_eq!(gradient_alpha(&key), 213);
         let mut faint = key.to.clone();
         faint.theme.intensity = 0.;
         let mut full = faint.clone();
         full.theme.intensity = 1.;
         let alpha = |s: Surface| gradient_alpha(&PaintKey { from: s.clone(), to: s, fraction: 0., translucent: true });
-        assert!(alpha(faint) < 64 && (230..255).contains(&alpha(full)));
+        assert!(alpha(faint) < 48 && (190..230).contains(&alpha(full)));
         let cache = ThemePaintCache::default();
         let opaque = PaintKey {
             from: from.clone(),

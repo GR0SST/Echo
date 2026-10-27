@@ -304,7 +304,7 @@ mod mac {
     // AppKit raw enum values are isolated here, never in shared theme logic.
     fn effect_material(material: crate::material::EffectMaterial) -> isize {
         use crate::material::EffectMaterial::*;
-        match material { Hud => 13, Menu => 5, Popover => 6, WindowBackground => 12, UnderWindowBackground => 21,
+        match material { Hud => 13, Menu => 5, Popover => 6, WindowBackground => 12, FullScreenUi => 15,
             ReferenceLight => 1, ReferenceDark => 2 }
     }
 

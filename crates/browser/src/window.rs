@@ -774,7 +774,7 @@ pub struct BrowserWindow {
     pub(crate) theme_editor: Option<crate::theme_editor::ThemeEditor>,
     pub(crate) theme_paint_cache: crate::space_theme::ThemePaintCache,
     pub(crate) theme_system_dark: bool,
-    theme_background_blurred: Option<bool>,
+    pub(crate) theme_background_blurred: Option<bool>,
     pub(crate) passwords: crate::password_flow::PasswordFlow,
     pub(crate) password_manager: crate::password_manager::State,
     pub(crate) browsing_data: crate::browsing_data::State,
@@ -4403,7 +4403,7 @@ impl BrowserWindow {
             .pr(px(CONTENT_INSET + if self.peek_child.is_some() { 9. } else { 0. }))
             .pl(px(CONTENT_INSET * (1. - self.sidebar_amount()) + if self.peek_child.is_some() { 9. } else { 0. }))
             .relative()
-            .when(empty_canvas, |this| this.child(div()
+            .when(empty_canvas && self.theme_background_blurred != Some(true), |this| this.child(div()
                 .debug_selector(|| "empty-space-panel-shadow".into())
                 .absolute().top(px(CONTENT_INSET)).bottom(px(CONTENT_INSET))
                 .right(px(CONTENT_INSET)).left(px(CONTENT_INSET * (1. - self.sidebar_amount())))
@@ -4427,7 +4427,9 @@ impl BrowserWindow {
                     .relative()
                     .when(!has_page, |this| this.child(div().debug_selector(|| "empty-space-canvas".into()).absolute().inset_0()
                         .when(empty_canvas, |canvas| canvas
-                            .child(self.theme_surface_mask(panel_bounds, viewport, panel_mask))
+                            // A blurred window already shows its translucent field
+                            // here; a second opaque copy would hide the desktop.
+                            .when(self.theme_background_blurred != Some(true), |canvas| canvas.child(self.theme_surface_mask(panel_bounds, viewport, panel_mask)))
                             .child(div().absolute().inset_0().rounded(px(CONTENT_CORNER_RADIUS)).bg(self.theme_empty_panel_fill())))))
                     .child(div().debug_selector(|| "page-document-surface".into()).absolute().left_0().right_0().bottom_0()
                         .top(px(if has_page && self.page_toolbar_shown() && !split_open { self.page_toolbar_height() } else { 0. }))
@@ -4988,7 +4990,7 @@ impl Render for BrowserWindow {
         let theme_blurred = crate::native::view_of(window).is_some_and(|view| {
             use crate::material::*;
             crate::native::set_backdrop_configured(view, "space-theme", Some([0., 0., f32::from(window.viewport_size().width) as f64, f32::from(window.viewport_size().height) as f64]), WINDOW_CORNER_RADIUS as f64,
-                BackdropConfig { appearance: if self.theme_is_dark() { EffectAppearance::Dark } else { EffectAppearance::Light }, state: EffectState::FollowWindow, blending: EffectBlending::BehindWindow, emphasized: false, effect_alpha: self.theme_backdrop_alpha(), material: EffectMaterial::UnderWindowBackground }) == BackdropInstallation::Installed
+                BackdropConfig { appearance: if self.theme_is_dark() { EffectAppearance::Dark } else { EffectAppearance::Light }, state: EffectState::FollowWindow, blending: EffectBlending::BehindWindow, emphasized: false, effect_alpha: 1., material: EffectMaterial::FullScreenUi }) == BackdropInstallation::Installed
         });
         if self.theme_background_blurred != Some(theme_blurred) {
             window.set_background_appearance(if theme_blurred { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque });

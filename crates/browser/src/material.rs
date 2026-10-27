@@ -63,8 +63,8 @@ pub(crate) enum EffectMaterial {
     Menu,
     Popover,
     WindowBackground,
-    /// The most see-through window material; picked Space themes tint it.
-    UnderWindowBackground,
+    /// Clear, strongly blurred window material; picked Space themes tint it.
+    FullScreenUi,
     /// Explicit reference-only looks; deprecated by AppKit. Not theme modes.
     ReferenceLight,
     ReferenceDark,
