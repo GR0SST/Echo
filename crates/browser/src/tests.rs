@@ -9219,9 +9219,11 @@ fn space_dock_uses_eight_pixel_active_and_four_pixel_inactive_dots(cx: &mut Test
     click(cx, "space-1");
     cx.executor().advance_clock(Duration::from_millis(80));
     cx.run_until_parked();
-    // While the active overlay travels, both stationary rail dots stay small.
-    assert_eq!(cx.debug_bounds("space-dot-0").unwrap().size.width, gpui::px(4.));
-    assert_eq!(cx.debug_bounds("space-dot-1").unwrap().size.width, gpui::px(4.));
+    // Mid-switch the marks interpolate: the source shrinks while the target
+    // grows, and no dot travels between them.
+    let (from, to) = (cx.debug_bounds("space-dot-0").unwrap().size.width, cx.debug_bounds("space-dot-1").unwrap().size.width);
+    assert!(from > gpui::px(4.) && from < gpui::px(8.) && to > gpui::px(4.) && to < gpui::px(8.));
+    assert!((f32::from(from + to) - 12.).abs() < 0.01);
     cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(cx.debug_bounds("space-dot-1").unwrap().size.width, gpui::px(8.));

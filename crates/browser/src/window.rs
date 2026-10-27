@@ -3851,6 +3851,9 @@ impl BrowserWindow {
     /// dots and show their colors only while the pointer is over them.
     pub(crate) fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let hovered = self.traffic_lights_hovered;
+        // Idle controls are the theme's ink over the Space field (measured in
+        // the reference: about 10% black on light themes, 31% white on dark).
+        let idle = if self.theme_uses_light_ink_for(self.browser.space().id) { hsla(0., 0., 1., 0.31) } else { hsla(0., 0., 0., 0.10) };
         div().id("traffic-lights").debug_selector(|| self.sidebar_debug_name((|| "traffic-lights".into())())).flex_none().w(px(74.)).h_full()
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if this.traffic_lights_hovered != *hovered {
@@ -3865,11 +3868,10 @@ impl BrowserWindow {
                 let native_controls = hovered || window.is_fullscreen();
                 crate::native::set_traffic_lights_alpha(view, if native_controls { 1. } else { 0. });
                 let Some(frames) = crate::native::traffic_light_frames(view).filter(|_| !native_controls) else { return; };
-                for (frame, rim) in frames.iter().zip([0xff5f57, 0xfebc2e, 0x28c840]) {
+                for frame in frames.iter() {
                     let diameter = frame[2].min(frame[3]);
                     let origin = point(px(frame[0] + (frame[2] - diameter) / 2.), px(frame[1] + (frame[3] - diameter) / 2.));
-                    window.paint_quad(gpui::quad(Bounds::new(origin, size(px(diameter), px(diameter))), px(diameter / 2.),
-                        hsla(0., 0., 0.47, 1.), px(1.), Hsla::from(gpui::rgb(rim)).opacity(0.45), gpui::BorderStyle::Solid));
+                    window.paint_quad(gpui::fill(Bounds::new(origin, size(px(diameter), px(diameter))), idle).corner_radii(px(diameter / 2.)));
                 }
             }).size_full())
     }
@@ -4152,24 +4154,15 @@ impl BrowserWindow {
 
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> gpui::Div {
         let ink = if self.theme_uses_light_ink_for(self.browser.space().id) {1.} else {0.};
-        // Layout the stationary marks first, then paint the active dot between
-        // their actual centers. The reference moves one dot along the rail.
-        let dot_centers = Rc::new(RefCell::new(Vec::new()));
-        let paint_centers = dot_centers.clone();
+        // Each mark grows and brightens as the pager approaches its Space; no
+        // dot travels between marks, as in the reference.
         let pager_position = self.pager.position;
-        let active_dot_fill = self.theme_space_dot_fill(true);
-        let drag_moves_active = self.sidebar_page_interactive;
         let new_menu_anchor = if self.sidebar_debug_namespace.is_none() { self.new_menu_anchor.clone() } else { Default::default() };
         let normal = !self.browser.is_blank() && !self.browser.is_private();
         let pages = self.sidebar_navigation.controller.pages(&self.browser);
         let selected = self.sidebar_navigation.controller.selected();
-        let default_positions: Vec<_> = self.browser.spaces.iter().enumerate()
-            .filter(|(_, space)| space.custom_icon.is_none())
-            .map(|(index, space)| if normal {
-                pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::Space(space.id)).unwrap_or(index + 1)
-            } else { index }).collect();
-        let traveling_dot = default_positions.contains(&(pager_position.floor() as usize))
-            && default_positions.contains(&(pager_position.ceil() as usize));
+        let (idle_fill, active_fill) = (self.theme_space_dot_fill(false), self.theme_space_dot_fill(true));
+        let drag_moves_active = self.sidebar_page_interactive;
         let corner = |id: &'static str| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .flex_none().size(px(32.)).rounded_md().flex().items_center().justify_center()
             .text_color(hsla(0., 0., ink, 0.5)).hover(|s| s.bg(hsla(0.0, 0.0, 1.0, 0.3)));
@@ -4184,22 +4177,7 @@ impl BrowserWindow {
                 .when(normal, |this| this.on_click(cx.listener(|this, _, _, cx| {
                     this.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx);
                     this.settle_pager(cx);
-                }))
-            .child(canvas(|_, _, _| (), move |_, _, window, _| {
-                let centers = paint_centers.borrow();
-                let lower = pager_position.floor() as usize;
-                let upper = pager_position.ceil() as usize;
-                let left = centers.iter().find(|(index, _, _)| *index == lower);
-                let right = centers.iter().find(|(index, _, _)| *index == upper);
-                if let (Some((_, left, true)), Some((_, right, true))) = (left, right) {
-                    let fraction = pager_position - lower as f32;
-                    let center = *left + (*right - *left) * fraction;
-                    window.paint_quad(gpui::fill(
-                        Bounds::new(center - point(px(4.), px(4.)), size(px(8.), px(8.))),
-                        active_dot_fill,
-                    ).corner_radii(px(4.)));
-                }
-            }).absolute().inset_0()))
+                })))
                 .child(crate::icons::control(crate::icons::Icon::Library))
                 .children(self.sidebar_navigation.downloads.progress.filter(|_|normal).map(|progress|
                     div().id("download-progress-badge").debug_selector(||"download-progress-badge".into()).absolute().right(px(-4.)).top(px(-6.)).size(px(20.))
@@ -4212,8 +4190,8 @@ impl BrowserWindow {
                     pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::Space(space_id)).unwrap_or(index + 1)
                 } else { index };
                 let active = page_index == self.pager.position.round() as usize;
-                let centers = dot_centers.clone();
-                let default_icon = space.custom_icon.is_none();
+                let weight = (1. - (pager_position - page_index as f32).abs()).clamp(0., 1.);
+                let fill = active_fill.opacity(1.).alpha(idle_fill.a + (active_fill.a - idle_fill.a) * weight);
                 let drag = crate::space_drag::SpaceDrag { id: space_id, workspace: self.profile.handle.clone(), name: space.name.clone(), icon: space.custom_icon.clone(), hue: space.hue };
                 // Space marks are monochrome; only user emoji keep their colors.
                 let mark = self.theme_space_dot_fill(active);
@@ -4225,17 +4203,12 @@ impl BrowserWindow {
                     .hover(|s| s.bg(hsla(0., 0., 1., 0.3)))
                     .when(space.custom_icon.is_none(), |this| this.child(div()
                         .debug_selector(|| self.sidebar_debug_name((move || format!("space-dot-{index}"))()))
-                        .size(px(if active && (!traveling_dot || pager_position.fract() == 0.) { 8. } else { 4. })).rounded_full()
-                        .bg(if active && !traveling_dot { mark } else if active && pager_position.fract() == 0. {
-                            gpui::transparent_black()
-                        } else { self.theme_space_dot_fill(false) })
+                        .size(px(4. + 4. * weight)).rounded_full()
+                        .bg(fill)
                         .group_hover(SharedString::from(format!("space-mark-{index}")), |s| s.bg(hsla(0., 0., ink, if active { 0.8 } else { 0.5 })))))
                     .when_some(space.custom_icon.clone(), |this, icon| this.text_color(mark)
-                        .opacity(if active { 1. } else { 0.5 })
+                        .opacity(0.5 + 0.5 * weight)
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("space-icon-{index}"))())).child(crate::icons::glyph(&icon))))
-                    .child(canvas(move |bounds, _, _| {
-                        centers.borrow_mut().push((page_index, bounds.center(), default_icon));
-                    }, |_, _, _, _| ()).absolute().inset_0())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(index) = this.browser.spaces.iter().position(|space| space.id == space_id) {
                             this.switch_space(index, cx);
