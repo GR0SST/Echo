@@ -201,7 +201,9 @@ impl gpui::AssetSource for IconAssets {
     fn list(&self, _path: &str) -> gpui::Result<Vec<gpui::SharedString>> { Ok(Vec::new()) }
 }
 
-/// The embedded contours are y-up in a 512 box; SVG is y-down.
+/// The embedded contours are y-up in a 512 box; SVG is y-down. They are
+/// outlined strokes whose caps overlap the body, so even-odd filling would
+/// punch holes at arrow tips and crossings; nonzero keeps real holes intact.
 fn ionicon_svg(commands: &[Vec<f32>]) -> String {
     let mut d = String::new();
     let y = |v: f32| 511. - v;
@@ -215,7 +217,7 @@ fn ionicon_svg(commands: &[Vec<f32>]) -> String {
             _ => {}
         }
     }
-    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="black" fill-rule="evenodd" d="{d}"/></svg>"#)
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="black" fill-rule="nonzero" d="{d}"/></svg>"#)
 }
 
 fn stroke_svg(size: f32, width: f32, paths: &[Vec<(f32, f32)>]) -> String {
@@ -697,6 +699,8 @@ mod icon_asset_tests {
             let svg = std::str::from_utf8(&svg).unwrap();
             assert!(svg.starts_with("<svg") && svg.contains("<path d=") || svg.contains(" d=\""), "{path}");
         }
+        let arrow = super::IconAssets.load("echo-icon/ionicon/arrow-back-outline.svg").unwrap().unwrap();
+        assert!(std::str::from_utf8(&arrow).unwrap().contains("fill-rule=\"nonzero\""));
         assert!(super::IconAssets.load("echo-icon/ionicon/missing.svg").unwrap().is_none());
         assert!(super::IconAssets.load("other/file.svg").unwrap().is_none());
     }
