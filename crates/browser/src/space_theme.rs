@@ -399,9 +399,11 @@ impl BrowserWindow {
         if self.theme_is_dark() {
             let alpha = 0.21 * (1. - default) + 0.10 * default;
             let luminance = (0.5 * 0.21 * (1. - default) + 0.10 * default) / alpha;
-            gpui::hsla(0., 0., luminance, alpha * tint)
+            // Over the blur the panel stays a little lighter than the field.
+            gpui::hsla(0., 0., luminance, if tint < 1. { 0.07 + alpha * tint * 1.2 } else { alpha })
         } else {
-            gpui::hsla(0., 0., 1., (0.70 * (1. - default) + (2. / 3.) * default) * tint)
+            let alpha = 0.70 * (1. - default) + (2. / 3.) * default;
+            gpui::hsla(0., 0., 1., if tint < 1. { 0.12 + alpha * tint } else { alpha })
         }
     }
     /// Keep the shadow outside the translucent panel. Nested outlines leave
@@ -687,8 +689,18 @@ impl BrowserWindow {
                                 gpui::hsla(210. / 360., 0.06, 0.05, 1.),
                             ));
                         } else {
-                            let _ =
-                                window.paint_image(bounds, Default::default(), gradient, 0, false);
+                            // Filtering fades the small field image toward
+                            // transparency at its border; push that fade one
+                            // texel outside the clip so edges stay fully tinted.
+                            let clip = bounds;
+                            let texel = gpui::size(bounds.size.width / 63., bounds.size.height / 63.);
+                            let field = Bounds::new(
+                                bounds.origin - gpui::point(texel.width, texel.height),
+                                gpui::size(bounds.size.width + texel.width * 2., bounds.size.height + texel.height * 2.),
+                            );
+                            window.with_content_mask(Some(gpui::ContentMask { bounds: clip }), |window| {
+                                let _ = window.paint_image(field, Default::default(), gradient, 0, false);
+                            });
                         }
                     },
                 )
