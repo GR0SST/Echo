@@ -95,7 +95,8 @@ impl BrowserWindow {
         let query = text.trim().to_lowercase();
         let mut rows: Vec<_> = omnibox::resolve(text).filter(|resolved| !omnibox::is_internal_url(resolved.url())).map(Suggestion::Load).into_iter().collect();
         let favorites = self.browser.active_user_profile().favorites.iter().map(|tab| ("Favorites", tab));
-        rows.extend(favorites.chain(self.browser.spaces.iter().filter(|space| space.user_profile_id == self.browser.active_user_profile_id()).flat_map(|space| space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))))
+        // Only the current Space's tabs and the shared Favorites.
+        rows.extend(favorites.chain(std::iter::once(self.browser.space()).flat_map(|space| space.pinned.iter().chain(&space.today).map(move |tab| (space.name.as_str(), tab))))
             .filter(|(_, tab)| tab.id != anchor && tab.url != EMPTY_PANE_URL && self.browser.split_for(tab.id).is_none() && !omnibox::is_internal_url(&tab.url))
             .filter(|(_, tab)| query.is_empty() || tab.title.to_lowercase().contains(&query) || tab.url.to_lowercase().contains(&query)
                 || tab.page_title.as_ref().is_some_and(|title| title.to_lowercase().contains(&query)))

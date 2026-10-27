@@ -2220,13 +2220,11 @@ impl BrowserWindow {
         suggestions.extend(preferences.resolve(text).map(Suggestion::Load));
         if let Some(prefix) = bar.completion(cx) { suggestions.push(Suggestion::Load(preferences.search(prefix))); }
         if bar.target == Target::NewTab {
-            // Typed matches keep section/Space order and rank Today within each
-            // Space by visit frequency/recency. An empty field uses recency,
-            // keeping distinct URLs and choosing the most recent pane of a group.
-            let current = self.browser.active_space;
-            let spaces = std::iter::once(&self.browser.spaces[current]).chain(
-                self.browser.spaces.iter().enumerate().filter(|(index, _)| *index != current).map(|(_, space)| space)
-            );
+            // Only this Space's tabs (plus the profile's shared Favorites) are
+            // offered, so the Command Bar never jumps to another Space. Typed
+            // matches keep section order and rank Today by visit frequency/
+            // recency; an empty field uses recency and distinct URLs.
+            let spaces = std::iter::once(&self.browser.spaces[self.browser.active_space]);
             let favorites = self.browser.active_user_profile().favorites.iter().map(|tab| (0usize, "Favorites", tab));
             let mut seen = std::collections::HashSet::new();
             let mut candidates: Vec<_> = favorites.chain(spaces.filter(|space| space.user_profile_id == self.browser.active_user_profile_id()).enumerate().flat_map(|(index, space)| {

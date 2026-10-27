@@ -1829,16 +1829,20 @@ fn command_bar_switches_spaces_by_name(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn command_bar_finds_and_focuses_tabs_in_other_spaces(cx: &mut TestAppContext) {
+fn command_bar_offers_only_tabs_from_the_current_space(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
+    // "gpui" is open in Personal; from the second Space it must not appear.
     cx.simulate_keystrokes("ctrl-2 cmd-t");
     bar(&view, cx).simulate_input("gpui");
     let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
-    assert!(matches!(&suggestions[1], Suggestion::SwitchToTab { space, .. } if space == "Personal"));
-    bar(&view, cx).simulate_keystrokes("down enter");
-    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 0);
-    assert_eq!(active_url(&view, cx).as_deref(), Some("https://www.gpui.rs"));
-    assert_eq!(today_urls(&view, cx).len(), 3);
+    assert!(!suggestions.iter().any(|s| matches!(s, Suggestion::SwitchToTab { .. })), "{suggestions:?}");
+    bar(&view, cx).simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    // Back in Personal the same tab is offered and focused there.
+    cx.simulate_keystrokes("ctrl-1 cmd-t");
+    bar(&view, cx).simulate_input("gpui");
+    let suggestions = view.read_with(cx, |w, cx| w.suggestions(cx));
+    assert!(suggestions.iter().any(|s| matches!(s, Suggestion::SwitchToTab { space, .. } if space == "Personal")));
 }
 
 #[gpui::test]
