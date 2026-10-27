@@ -19,12 +19,14 @@ impl Surface {
         if self.default_style {
             return default_field::sample(self.dark, x, y);
         }
-        let colors = &self.theme.colors;
-        let t = (y * 0.82 + x * 0.18).clamp(0., 1.);
-        let position = t * (colors.len() - 1) as f32;
-        let a = position.floor() as usize;
-        let b = position.ceil() as usize;
-        let color = mix(colors[a], colors[b], position.fract());
+        // Each pick is adapted to the appearance first, then the adapted
+        // pigments blend; adapting a blended pixel would darken the
+        // low-saturation middle of every transition.
+        let colors: Vec<_> = self.theme.colors.iter().map(|c| self.appearance_pigment(*c)).collect();
+        field_pigment(&colors, x, y)
+    }
+
+    fn appearance_pigment(&self, color: ThemeColor) -> ThemeColor {
         if self.picked {
             if self.dark {
                 // Dark appearance keeps hue and saturation; intensity only
@@ -65,6 +67,82 @@ impl Surface {
         )
     }
 }
+/// Field layout after Zen Browser's Arc-style gradients (MPL-2.0), on a
+/// 3:2 field. Two colors run along a -30° line; three are soft blobs: the
+/// first from the top-left corner, the second from the top-right, the third
+/// rising from the bottom. Layers composite in OKLab with restored chroma.
+fn field_pigment(colors: &[ThemeColor], x: f32, y: f32) -> ThemeColor {
+    const ASPECT: f32 = 1.5;
+    let (px, py) = (x * ASPECT, y);
+    // CSS-style stop ramp: opaque before `from`, clear after `to`.
+    let ramp = |t: f32, from: f32, to: f32| 1. - ((t - from) / (to - from)).clamp(0., 1.);
+    let radial = |cx: f32, cy: f32, from: f32, to: f32| {
+        let corners = [(0., 0.), (ASPECT, 0.), (0., 1.), (ASPECT, 1.)];
+        let reach = corners.iter().map(|(x, y): &(f32, f32)| (x - cx).hypot(y - cy)).fold(0., f32::max);
+        ramp((px - cx).hypot(py - cy) / reach, from, to)
+    };
+    match colors {
+        [] => ThemeColor { red: 0.5, green: 0.5, blue: 0.5 },
+        [only] => *only,
+        [a, b] => {
+            // linear-gradient(-30deg, b 0%, a 100%): b bottom-right, a top-left.
+            let (dx, dy) = (-0.5f32, -0.866f32);
+            let length = (ASPECT * dx).abs() + dy.abs();
+            let t = 0.5 + ((px - ASPECT / 2.) * dx + (py - 0.5) * dy) / length;
+            mix_hue(*b, *a, t.clamp(0., 1.))
+        }
+        [a, b, c, ..] => {
+            let mut color = *a;
+            color = mix_hue(color, *b, radial(0.95 * ASPECT, 0., 0., 0.75));
+            // linear-gradient(-5deg, c 10%, transparent 80%) from the bottom.
+            mix_hue(color, *c, ramp(1. - py + (px - ASPECT / 2.) * 0.087 / ASPECT, 0.1, 0.8))
+        }
+    }
+}
+
+fn to_oklab(c: ThemeColor) -> (f32, f32, f32) {
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    let (r, g, b) = (lin(c.red), lin(c.green), lin(c.blue));
+    let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+    let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+    let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+    (
+        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+    )
+}
+
+fn from_oklab((lightness, a, b): (f32, f32, f32)) -> ThemeColor {
+    let l = (lightness + 0.3963377774 * a + 0.2158037573 * b).powi(3);
+    let m = (lightness - 0.1055613458 * a - 0.0638541728 * b).powi(3);
+    let s = (lightness - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+    let gamma = |v: f32| {
+        let v = v.clamp(0., 1.);
+        if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1. / 2.4) - 0.055 }
+    };
+    ThemeColor {
+        red: gamma(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+        green: gamma(-1.2684380046 * l + 2.6097574011 * m - 0.3413214470 * s),
+        blue: gamma(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s),
+    }
+}
+
+/// OKLab interpolation that restores most of the chroma: the hue direction
+/// comes from the straight Lab blend (continuous everywhere, unlike a
+/// shortest-arc hue that flips between neighbouring pixels), and chroma is
+/// boosted toward the interpolated value, so blends stay saturated.
+fn mix_hue(from: ThemeColor, to: ThemeColor, t: f32) -> ThemeColor {
+    let ((l1, a1, b1), (l2, a2, b2)) = (to_oklab(from), to_oklab(to));
+    let (a, b) = (a1 + (a2 - a1) * t, b1 + (b2 - b1) * t);
+    let chroma = a1.hypot(b1) + (a2.hypot(b2) - a1.hypot(b1)) * t;
+    let length = a.hypot(b);
+    // A bounded boost: near-opposite pairs would otherwise swirl through
+    // every hue around their cancellation point.
+    let scale = if length > 1e-6 { (chroma / length).min(2.5) } else { 1. };
+    from_oklab((l1 + (l2 - l1) * t, a * scale, b * scale))
+}
+
 fn mix(a: ThemeColor, b: ThemeColor, t: f32) -> ThemeColor {
     ThemeColor {
         red: a.red + (b.red - a.red) * t,
@@ -103,6 +181,8 @@ fn noise(texture: NoiseTexture, x: u32, y: u32) -> f32 {
 // Grain tiles repeat at 100 logical pixels in both axes.
 const NOISE_TILE: u32 = 100;
 
+/// Field image resolution; fine enough that stretched texels never read as steps.
+const FIELD_SIZE: u32 = 192;
 const GRAIN_OPACITY: f32 = 0.25;
 /// Light and dark speckles scaled by the noise dial, after Zen Browser's
 /// grain layer but subtler (about 5% mean opacity). The pattern is original.
@@ -199,9 +279,9 @@ impl ThemePaintCache {
         if let Some(data) = cache.as_ref().filter(|data| data.key == key) {
             return (data.gradient.clone(), data.texture.clone());
         }
-        let gradient = image::RgbaImage::from_fn(64, 64, |x, y| {
+        let gradient = image::RgbaImage::from_fn(FIELD_SIZE, FIELD_SIZE, |x, y| {
             let sample = |surface: &Surface| {
-                let c = surface.sample(x as f32 / 63., y as f32 / 63.);
+                let c = surface.sample(x as f32 / (FIELD_SIZE - 1) as f32, y as f32 / (FIELD_SIZE - 1) as f32);
                 if key.translucent && !surface.default_style {
                     veil_pigment(c, picked_alpha(surface.theme.intensity, surface.dark))
                 } else {
@@ -452,10 +532,24 @@ impl BrowserWindow {
             gpui::hsla(0., 0., 1., if tint < 1. { 0.12 + alpha * tint } else { alpha })
         }
     }
-    /// Keep the shadow outside the translucent panel. Nested outlines leave
-    /// its interior untouched, including the six-pixel corner cutouts.
-    pub(crate) fn theme_empty_panel_shadow(&self) -> AnyElement {
-        self.theme_surface_shadow(crate::pages::CONTENT_CORNER_RADIUS)
+    /// The reference's tight contact shadow around the page area: about 14%
+    /// black at the edge, gone within three points. Shared by pages and the
+    /// empty panel, and visible over translucent fields too.
+    pub(crate) fn theme_page_edge_shadow(&self) -> AnyElement {
+        let radius = crate::pages::CONTENT_CORNER_RADIUS;
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                for (spread, alpha) in [(1., 0.085), (2., 0.045), (3., 0.02)] {
+                    window.paint_quad(
+                        gpui::outline(bounds.dilate(px(spread)), gpui::hsla(0., 0., 0., alpha), Default::default())
+                            .corner_radii(px(radius + spread)),
+                    );
+                }
+            },
+        )
+        .size_full()
+        .into_any_element()
     }
     pub(crate) fn theme_surface_shadow(&self, radius: f32) -> AnyElement {
         canvas(
@@ -752,7 +846,7 @@ impl BrowserWindow {
                             // transparency at its border; push that fade one
                             // texel outside the clip so edges stay fully tinted.
                             let clip = bounds;
-                            let texel = gpui::size(bounds.size.width / 63., bounds.size.height / 63.);
+                            let texel = gpui::size(bounds.size.width / (FIELD_SIZE - 1) as f32, bounds.size.height / (FIELD_SIZE - 1) as f32);
                             let field = Bounds::new(
                                 bounds.origin - gpui::point(texel.width, texel.height),
                                 gpui::size(bounds.size.width + texel.width * 2., bounds.size.height + texel.height * 2.),
@@ -836,6 +930,28 @@ mod tests {
         assert!(command_shadow_alpha(764., 278., 382., 390.) < 0.04);
     }
 
+    #[test]
+    fn complementary_blends_keep_chroma_instead_of_turning_gray() {
+        let (green, magenta) = (ThemeColor::from_hsv(140., 0.8, 0.9), ThemeColor::from_hsv(320., 0.8, 0.9));
+        let middle = mix_hue(green, magenta, 0.5);
+        assert!(middle.hsv().1 > 0.3, "{middle:?}");
+        let rgb = mix(green, magenta, 0.5);
+        assert!(rgb.hsv().1 < middle.hsv().1);
+        // Endpoints round-trip through OKLab.
+        let back = mix_hue(green, magenta, 0.);
+        assert!((back.red - green.red).abs() < 0.01 && (back.blue - green.blue).abs() < 0.01);
+    }
+    #[test]
+    fn three_colors_are_corner_blobs_over_a_rising_third() {
+        let colors = [ThemeColor::from_hsv(80., 0.4, 0.9), ThemeColor::from_hsv(220., 0.4, 0.9), ThemeColor::from_hsv(280., 0.3, 0.95)];
+        let near = |a: ThemeColor, b: ThemeColor| (a.red - b.red).abs() + (a.green - b.green).abs() + (a.blue - b.blue).abs() < 0.03;
+        assert!(near(field_pigment(&colors, 0., 0.), colors[0]));
+        assert!(near(field_pigment(&colors, 0.95, 0.), colors[1]));
+        assert!(near(field_pigment(&colors, 0.5, 1.), colors[2]));
+        // Blobs: no straight seam, the top edge blends smoothly between corners.
+        let mid = field_pigment(&colors, 0.5, 0.);
+        assert!(!near(mid, colors[0]) && !near(mid, colors[1]));
+    }
     #[test]
     fn appearance_intensity_and_third_color_affect_the_shared_background() {
         let mut s = Surface {

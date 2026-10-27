@@ -4376,11 +4376,11 @@ impl BrowserWindow {
             .pr(px(CONTENT_INSET + if self.peek_child.is_some() { 9. } else { 0. }))
             .pl(px(CONTENT_INSET * (1. - self.sidebar_amount()) + if self.peek_child.is_some() { 9. } else { 0. }))
             .relative()
-            .when(empty_canvas && self.theme_background_blurred != Some(true), |this| this.child(div()
+            .when(empty_canvas || (has_page && !split_open), |this| this.child(div()
                 .debug_selector(|| "empty-space-panel-shadow".into())
                 .absolute().top(px(CONTENT_INSET)).bottom(px(CONTENT_INSET))
                 .right(px(CONTENT_INSET)).left(px(CONTENT_INSET * (1. - self.sidebar_amount())))
-                .child(self.theme_empty_panel_shadow())))
+                .child(self.theme_page_edge_shadow())))
             .child(
                 div()
                     .debug_selector(|| "page-surface".into())
@@ -4394,7 +4394,7 @@ impl BrowserWindow {
                     .gap_2()
                     .when(!split_open, |this| this.px_8())
                     .when(!split_open, |this| this.overflow_hidden())
-                    .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)).shadow_md())
+                    .when(has_page && !split_open, |this| this.rounded(px(CONTENT_CORNER_RADIUS)))
                     .when(empty_canvas, |this| this.rounded(px(CONTENT_CORNER_RADIUS)))
                     .relative()
                     // The loading backing sits one pixel inside the native page so
