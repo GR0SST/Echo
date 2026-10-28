@@ -352,37 +352,34 @@ impl ThemePaintCache {
 }
 /// One image for a rounded panel: field and grain composed at the panel's
 /// own size, so a single rounded paint clips both (GPUI clips rectangles).
-fn panel_image(key: &PaintKey, width: u32, height: u32) -> Arc<RenderImage> {
+/// The four `side`-point corner squares of a `width`×`height` rounded panel,
+/// composed exactly as the field and grain layers render them (top-left,
+/// top-right, bottom-right, bottom-left). The rest of the panel reuses the
+/// Space's baked field, so only these few hundred pixels are computed.
+fn panel_corners(surface: &Surface, translucent: bool, width: u32, height: u32, side: u32) -> [Arc<RenderImage>; 4] {
     thread_local! {
-        static CACHE: RefCell<Option<(PaintKey, u32, u32, Arc<RenderImage>)>> = const { RefCell::new(None) };
+        static CACHE: RefCell<Vec<(Surface, bool, u32, u32, u32, [Arc<RenderImage>; 4])>> = const { RefCell::new(Vec::new()) };
     }
-    if let Some(image) = CACHE.with(|cache| cache.borrow().as_ref()
-        .filter(|(k, w, h, _)| k == key && *w == width && *h == height).map(|entry| entry.3.clone())) {
-        return image;
+    if let Some(images) = CACHE.with(|cache| cache.borrow().iter()
+        .find(|(s, t, w, h, d, _)| s == surface && *t == translucent && *w == width && *h == height && *d == side)
+        .map(|entry| entry.5.clone())) {
+        return images;
     }
-    let (width, height) = (width.max(2), height.max(2));
-    let fill_alpha = gradient_alpha(key) as f32 / 255.;
-    let image = image::RgbaImage::from_fn(width, height, |x, y| {
-        let (u, v) = (x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32);
-        let sample = |surface: &Surface| {
-            let c = surface.sample(u, v);
-            if key.translucent && !surface.default_style {
-                veil_pigment(c, picked_alpha(surface.theme.intensity, surface.dark))
-            } else {
-                c
-            }
-        };
-        let base = mix(sample(&key.from), sample(&key.to), key.fraction);
+    let (width, height, side) = (width.max(2), height.max(2), side.max(1));
+    let key = PaintKey { from: surface.clone(), to: surface.clone(), fraction: 0., translucent };
+    let fill_alpha = gradient_alpha(&key) as f32 / 255.;
+    let grid = field_grid(surface, translucent);
+    let last = (FIELD_SIZE - 1) as f32;
+    let at = |x: usize, y: usize| grid[y * FIELD_SIZE as usize + x];
+    let pixel = |x: u32, y: u32| {
+        let (gx, gy) = (x as f32 / (width - 1) as f32 * last, y as f32 / (height - 1) as f32 * last);
+        let (x0, y0) = (gx.floor() as usize, gy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(FIELD_SIZE as usize - 1), (y0 + 1).min(FIELD_SIZE as usize - 1));
+        let (fx, fy) = (gx - x0 as f32, gy - y0 as f32);
+        let base = mix(mix(at(x0, y0), at(x1, y0), fx), mix(at(x0, y1), at(x1, y1), fx), fy);
         let (tx, ty) = (x % NOISE_TILE, y % NOISE_TILE);
-        let grain = |surface: &Surface| if surface.default_style {
-            default_grain(surface, tx, ty)
-        } else {
-            speckle(surface.theme.texture, tx, ty, surface.theme.noise)
-        };
-        let ((from, a), (to, b)) = (grain(&key.from), grain(&key.to));
-        let (a, b) = (a * (1. - key.fraction), b * key.fraction);
-        let grain_alpha = (a + b).min(1.);
-        let grain_color = if a + b > 0. { mix(from, to, b / (a + b)) } else { from };
+        let (grain_color, grain_alpha) = if surface.default_style { default_grain(surface, tx, ty) } else { speckle(surface.theme.texture, tx, ty, surface.theme.noise) };
+        let grain_alpha = grain_alpha.min(1.);
         let alpha = grain_alpha + fill_alpha * (1. - grain_alpha);
         let color = if alpha > 0. {
             ThemeColor {
@@ -394,10 +391,17 @@ fn panel_image(key: &PaintKey, width: u32, height: u32) -> Arc<RenderImage> {
             base
         };
         image::Rgba([quantize(color.blue, true), quantize(color.green, true), quantize(color.red, true), quantize(alpha, true)])
+    };
+    let corner = |ox: u32, oy: u32| Arc::new(RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_fn(side, side, |x, y| pixel(ox + x, oy + y)))]));
+    let (right, bottom) = (width.saturating_sub(side), height.saturating_sub(side));
+    let images = [corner(0, 0), corner(right, 0), corner(right, bottom), corner(0, bottom)];
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 8 { cache.remove(0); }
+        cache.push((surface.clone(), translucent, width, height, side, images.clone()));
     });
-    let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
-    CACHE.with(|cache| *cache.borrow_mut() = Some((key.clone(), width, height, image.clone())));
-    image
+    images
 }
 /// The profile sheet previews each Space's actual pigments and texture.
 /// It uses the sidebar's field and noise functions rather than a hue swatch.
@@ -834,14 +838,81 @@ impl BrowserWindow {
     /// The Space field for a rounded floating panel, clipped to `radius`.
     /// Translucent when the window shows a native blur behind it.
     pub(crate) fn theme_surface_rounded(&self, radius: f32) -> AnyElement {
-        let key = self.theme_paint_key(self.theme_background_blurred == Some(true));
-        canvas(|_, _, _| (), move |bounds, _, window, _| {
-            let image = panel_image(&key, f32::from(bounds.size.width).round() as u32, f32::from(bounds.size.height).round() as u32);
-            let _ = window.paint_image(bounds, gpui::Corners::all(px(radius)), image, 0, false);
-        })
-        .absolute()
-        .inset_0()
-        .into_any_element()
+        let translucent = self.theme_background_blurred == Some(true);
+        let key = self.theme_paint_key(translucent);
+        let cache = self.theme_paint_cache.clone();
+        // Same baked field as the pinned sidebar, painted in three rectangles
+        // that avoid the corners (GPUI clips rectangles only); each corner is
+        // a tiny rounded patch. Nothing is rebuilt per frame or per reveal.
+        let layer = move |surface: Surface, opacity: f32| {
+            let (gradient, texture) = cache.images(PaintKey { from: surface.clone(), to: surface.clone(), fraction: 0., translucent });
+            let r = px(radius.max(0.).ceil());
+            let bands = move |bounds: Bounds<gpui::Pixels>| {
+                let (w, h) = (bounds.size.width, bounds.size.height);
+                [
+                    Bounds::new(bounds.origin + gpui::point(r, px(0.)), gpui::size((w - r * 2.).max(px(0.)), h)),
+                    Bounds::new(bounds.origin + gpui::point(px(0.), r), gpui::size(r, (h - r * 2.).max(px(0.)))),
+                    Bounds::new(bounds.origin + gpui::point(w - r, r), gpui::size(r, (h - r * 2.).max(px(0.)))),
+                ]
+            };
+            let corners = canvas(|_, _, _| (), move |bounds, _, window, _| {
+                let side = f32::from(r) as u32;
+                let images = panel_corners(&surface, translucent, f32::from(bounds.size.width).round() as u32, f32::from(bounds.size.height).round() as u32, side);
+                let (w, h) = (bounds.size.width, bounds.size.height);
+                let square = gpui::size(r, r);
+                let origins = [gpui::point(px(0.), px(0.)), gpui::point(w - r, px(0.)), gpui::point(w - r, h - r), gpui::point(px(0.), h - r)];
+                for (index, (image, origin)) in images.into_iter().zip(origins).enumerate() {
+                    let mut round = gpui::Corners::default();
+                    let radius = px(radius);
+                    match index { 0 => round.top_left = radius, 1 => round.top_right = radius, 2 => round.bottom_right = radius, _ => round.bottom_left = radius }
+                    let _ = window.paint_image(Bounds::new(bounds.origin + origin, square), round, image, 0, false);
+                }
+            }).absolute().inset_0();
+            let body = canvas(|_, _, _| (), move |bounds, _, window, _| {
+                let texel = gpui::size(bounds.size.width / (FIELD_SIZE - 1) as f32, bounds.size.height / (FIELD_SIZE - 1) as f32);
+                let field = Bounds::new(bounds.origin - gpui::point(texel.width, texel.height),
+                    gpui::size(bounds.size.width + texel.width * 2., bounds.size.height + texel.height * 2.));
+                for band in bands(bounds) {
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: band }), |window| {
+                        let _ = window.paint_image(field, Default::default(), gradient.clone(), 0, false);
+                    });
+                }
+            }).absolute().inset_0();
+            let grain = canvas(|_, _, _| (), move |bounds, _, window, _| {
+                for band in bands(bounds) {
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: band }), |window| {
+                        let cols = (f32::from(bounds.size.width) / NOISE_TILE as f32).ceil() as u32;
+                        let rows = (f32::from(bounds.size.height) / NOISE_TILE as f32).ceil() as u32;
+                        for row in 0..rows {
+                            for col in 0..cols {
+                                let tile = Bounds::new(bounds.origin + gpui::point(px((col * NOISE_TILE) as f32), px((row * NOISE_TILE) as f32)),
+                                    gpui::size(px(NOISE_TILE as f32), px(NOISE_TILE as f32)));
+                                if tile.intersects(&window.content_mask().bounds) {
+                                    let _ = window.paint_image(tile, Default::default(), texture.clone(), 0, false);
+                                }
+                            }
+                        }
+                    });
+                }
+            }).absolute().inset_0();
+            gpui::div().absolute().inset_0().opacity(opacity)
+                .child(body)
+                .child(gpui::div().absolute().inset_0().opacity(GRAIN_OPACITY).child(grain))
+                .child(corners)
+        };
+        if key.fraction <= 0. || key.from == key.to {
+            return layer(key.from, 1.).into_any_element();
+        }
+        if key.fraction >= 1. {
+            return layer(key.to, 1.).into_any_element();
+        }
+        let f = key.fraction;
+        let alpha = |surface: &Surface| if !translucent || surface.default_style { 1. } else { picked_alpha(surface.theme.intensity, surface.dark) };
+        let under = ((1. - f) / (1. - f * alpha(&key.to)).max(1e-3)).min(1.);
+        gpui::div().absolute().inset_0()
+            .child(layer(key.from, under))
+            .child(layer(key.to, f))
+            .into_any_element()
     }
 
     fn theme_surface_with_origin(&self, translucent: bool, window_aligned: bool) -> AnyElement {
@@ -1149,5 +1220,18 @@ mod field_cost {
             cache.images(PaintKey { from: s.clone(), to: s.clone(), fraction: 0.01 + frame as f32 / 20., translucent: true });
         }
         eprintln!("per frame: {:?}", start.elapsed() / 10);
+    }
+    #[test]
+    #[ignore]
+    fn time_a_floating_panel_bake() {
+        let mut theme = SpaceTheme::from_hue(0.);
+        theme.colors = vec![ThemeColor::from_hsv(80., 0.6, 0.9), ThemeColor::from_hsv(220., 0.6, 0.9)];
+        let s = Surface { theme, dark: true, picked: true, default_style: false };
+        let start = std::time::Instant::now();
+        panel_corners(&s, true, 300, 2100, 8);
+        eprintln!("cold bake: {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        for _ in 0..10 { panel_corners(&s, true, 300, 2100, 8); }
+        eprintln!("cached frame: {:?}", start.elapsed() / 10);
     }
 }
