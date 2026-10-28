@@ -20,12 +20,13 @@ fn create_pull_is_reversible_and_the_form_waits_for_a_fully_armed_release(cx: &m
     cx.run_until_parked();
     assert!((view.read_with(cx, |view, _| view.space_creation_pull_progress()) - 0.5).abs() < 0.001);
     assert!(view.read_with(cx, |view, _| view.sidebar_navigation.form.is_none()));
-    assert!(view.read_with(cx, |view, _| view.space_creation_mark_visible(view.browser.space().id)));
+    assert!(!view.read_with(cx, |view, _| view.space_creation_mark_visible(view.browser.space().id)));
     assert!(cx.debug_bounds("space-creation-pull").is_some());
     scroll(cx, "sidebar", Moved, -150., 0.);
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.space_creation_pull_progress()), 1.);
     assert!(view.read_with(cx, |view, _| view.sidebar_navigation.controller.draft().is_none()));
+    assert!(!view.read_with(cx, |view, _| view.space_creation_mark_visible(view.browser.space().id)));
     assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 1);
     scroll(cx, "sidebar", Moved, 100., 0.);
     cx.run_until_parked();
@@ -49,6 +50,7 @@ fn create_pull_is_reversible_and_the_form_waits_for_a_fully_armed_release(cx: &m
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.sidebar_navigation.controller.selected() == SidebarPage::CreateSpace));
     assert!(view.read_with(cx, |view, _| view.sidebar_navigation.form.is_some()));
+    assert!(view.read_with(cx, |view, _| view.space_creation_mark_visible(view.browser.space().id)));
     assert_eq!(view.read_with(cx, |view, _| (view.browser.spaces.len(), view.browser.all_tabs().count())), inventory);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }

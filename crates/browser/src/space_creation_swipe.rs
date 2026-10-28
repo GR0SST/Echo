@@ -13,12 +13,11 @@ pub(super) struct CreationPull {
 }
 impl BrowserWindow {
     pub(crate) fn space_creation_mark_visible(&self, origin: SpaceId) -> bool {
-        self.pager.creation_pull.as_ref().is_some_and(|pull| pull.origin == origin && pull.progress > 0.)
-            || (self.sidebar_navigation.controller.draft().is_some_and(|draft| draft.origin == origin)
+        self.sidebar_navigation.controller.draft().is_some_and(|draft| draft.origin == origin)
                 && (self.sidebar_navigation.controller.selected() == SidebarPage::CreateSpace || self.sidebar_navigation.creation_exiting)
                 && self.sidebar_navigation.controller.pages(&self.browser).iter()
                     .position(|page| *page == SidebarPage::CreateSpace)
-                    .is_some_and(|index| (index as f32 - self.pager.position).abs() < 1.))
+                    .is_some_and(|index| (index as f32 - self.pager.position).abs() < 1.)
     }
 
     pub(crate) fn space_creation_pull_progress(&self) -> f32 {
@@ -53,35 +52,41 @@ impl BrowserWindow {
     pub(super) fn render_creation_pull(&self) -> Option<AnyElement> {
         let pull = self.pager.creation_pull.as_ref().filter(|pull| pull.progress > 0.)?;
         let space = self.browser.spaces.iter().find(|space| space.id == pull.origin)?;
-        let pigment: Hsla = crate::theme_editor::color(space.theme().colors[0]).into();
+        let default_theme = space.theme.is_none();
+        let pigment: Hsla = if default_theme { gpui::rgb(0x1f2aff).into() }
+            else { crate::theme_editor::color(space.theme().colors[0]).into() };
         let progress = pull.progress;
         let draw = move |bounce: f32| canvas(|_, _, _| (), move |bounds, _, window, _| {
             let center = bounds.center();
             let radius = 15. * (1. + bounce);
             let armed = progress >= 1.;
-            let mut fill = pigment;
             let mut outline = pigment;
             outline.l *= 0.38;
-            if armed { fill = outline; }
-            let mut ring = gpui::PathBuilder::stroke(px(1.5));
-            let mut segment = gpui::PathBuilder::fill();
-            let cut = radius * (1. - 2. * progress);
-            let mut count = 0;
+            let mut body = pigment;
+            if armed { body.l *= if default_theme { 0.8 } else { 0.38 }; }
+            let ink = if default_theme || armed { hsla(0., 0., 1., 0.95) } else { outline };
+            let mut disk = gpui::PathBuilder::fill();
+            let mut track = gpui::PathBuilder::stroke(px(2.));
             for i in 0..=96 {
                 let angle = i as f32 / 96. * std::f32::consts::TAU;
-                let x = radius * angle.cos();
-                let y = radius * angle.sin();
-                let point = center + point(px(x), px(y));
-                if i == 0 { ring.move_to(point); } else { ring.line_to(point); }
-                if y >= cut {
-                    if count == 0 { segment.move_to(point); } else { segment.line_to(point); }
-                    count += 1;
-                }
+                let point = center + point(px(radius * angle.cos()), px(radius * angle.sin()));
+                if i == 0 { disk.move_to(point); track.move_to(point); }
+                else { disk.line_to(point); track.line_to(point); }
             }
-            segment.close();
-            if count > 2 { if let Ok(path) = segment.build() { window.paint_path(path, fill); } }
-            if let Ok(path) = ring.build() { window.paint_path(path, outline); }
-            let ink = if armed { hsla(0., 0., 1., 0.95) } else { outline };
+            disk.close();
+            if let Ok(path) = disk.build() { window.paint_path(path, body); }
+            if let Ok(path) = track.build() { window.paint_path(path, ink.opacity(0.25)); }
+            // Progress travels along the outline clockwise from noon. The
+            // interior stays solid; reversing the gesture unwinds this arc.
+            let mut arc = gpui::PathBuilder::stroke(px(2.));
+            let steps = (96. * progress).ceil().max(1.) as usize;
+            for i in 0..=steps {
+                let angle = -std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::TAU * progress * i as f32 / steps as f32;
+                let point = center + point(px(radius * angle.cos()), px(radius * angle.sin()));
+                if i == 0 { arc.move_to(point); } else { arc.line_to(point); }
+            }
+            if let Ok(path) = arc.build() { window.paint_path(path, ink); }
             let mut plus = gpui::PathBuilder::stroke(px(1.7));
             plus.move_to(center - point(px(6.), px(0.))); plus.line_to(center + point(px(6.), px(0.)));
             plus.move_to(center - point(px(0.), px(6.))); plus.line_to(center + point(px(0.), px(6.)));
