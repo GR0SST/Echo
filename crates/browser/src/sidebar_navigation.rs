@@ -243,7 +243,7 @@ impl BrowserWindow {
             self.pager.position = self.sidebar_page_index() as f32;
         }
     }
-    fn close_navigation_peers(&mut self, cx: &mut Context<Self>) {
+    fn close_navigation_peers(&mut self, keep_floating: bool, cx: &mut Context<Self>) {
         self.retire_library_downloads_route();
         // Invalidate restoration before removing any child; the new root owns focus.
         self.invalidate_sidebar_focus();
@@ -257,7 +257,8 @@ impl BrowserWindow {
         self.close_link_status(cx);
         // A Space hover changes selection inside the current drag. Keep its
         // floating source surface until the typed drag completes.
-        if !cx.has_active_drag() {
+        // Switching Spaces keeps the floating sidebar the pointer is over, as in Arc.
+        if !cx.has_active_drag() && !keep_floating {
             self.close_floating_sidebar(cx);
         }
     }
@@ -278,7 +279,7 @@ impl BrowserWindow {
         {
             return;
         }
-        self.close_navigation_peers(cx);
+        self.close_navigation_peers(matches!(page, SidebarPage::Space(_)), cx);
         let was_library = self.sidebar_navigation.controller.selected() == SidebarPage::Library;
         if was_library != (page == SidebarPage::Library) {
             self.animate_library_slide(page == SidebarPage::Library, cx);
@@ -329,7 +330,7 @@ impl BrowserWindow {
         {
             return;
         }
-        self.close_navigation_peers(cx);
+        self.close_navigation_peers(false, cx);
         self.sidebar_visible = true;
         if self.sidebar_navigation.form.is_none() {
             let draft = self

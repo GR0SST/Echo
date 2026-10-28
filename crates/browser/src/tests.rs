@@ -1826,6 +1826,18 @@ fn new_tab_from_the_floating_sidebar_uses_the_browser_window_bounds(cx: &mut Tes
 }
 
 #[gpui::test]
+fn switching_spaces_keeps_the_floating_sidebar_open(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-s");
+    move_mouse(cx, 2.0, 300.0);
+    assert!(floating(&view, cx).is_some());
+    cx.simulate_keystrokes("ctrl-2");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_space), 1);
+    assert!(view.read_with(cx, |w, _| w.floating_sidebar.as_ref().is_some_and(|f| !f.closing)));
+}
+
+#[gpui::test]
 fn showing_the_sidebar_again_removes_the_floating_one(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-s");

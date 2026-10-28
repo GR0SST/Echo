@@ -726,7 +726,7 @@ pub struct FloatingSidebar {
     pub overlay: Option<WindowHandle<Overlay>>,
     /// The pointer has been over it; leaving then hides it.
     entered: bool,
-    closing: bool,
+    pub(crate) closing: bool,
     height: f32,
     _pointer_task: Option<Task<()>>,
 }
