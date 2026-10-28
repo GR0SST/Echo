@@ -520,31 +520,45 @@ mod mac {
 
     /// Accessibility clients (window managers such as ModDrag) climb from
     /// the element under the pointer to the first AXWindow and move that.
-    /// An overlay reports itself as a group inside the browser window, so
-    /// such tools move the whole browser, as with Arc's Command Bar.
+    /// Attached overlays report as a group inside the browser window, so such
+    /// tools move the whole browser, as with Arc's Command Bar. The methods
+    /// are added to the toolkit's window class (never swapping an instance's
+    /// class, which GPUI's dealloc cannot handle) and defer to AppKit for
+    /// windows without a parent.
     unsafe fn present_as_part_of_parent(overlay: *mut AnyObject) {
-        use objc2::runtime::{AnyClass, ClassBuilder};
-        unsafe extern "C-unwind" fn role(_: &AnyObject, _: Sel) -> *mut AnyObject {
-            unsafe { msg_send![objc2::class!(NSString), stringWithUTF8String: c"AXGroup".as_ptr()] }
+        use objc2::runtime::{AnyClass, Imp};
+        type Getter = unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> *mut AnyObject;
+        static ORIGINAL: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+        unsafe extern "C-unwind" fn role(this: *mut AnyObject, sel: Sel) -> *mut AnyObject {
+            let owner: *mut AnyObject = unsafe { msg_send![this, parentWindow] };
+            if !owner.is_null() {
+                return unsafe { msg_send![objc2::class!(NSString), stringWithUTF8String: c"AXGroup".as_ptr()] };
+            }
+            let original: Getter = unsafe { std::mem::transmute(ORIGINAL.get().unwrap().0) };
+            unsafe { original(this, sel) }
         }
-        unsafe extern "C-unwind" fn parent(this: &AnyObject, _: Sel) -> *mut AnyObject {
+        unsafe extern "C-unwind" fn parent(this: *mut AnyObject, sel: Sel) -> *mut AnyObject {
             let owner: *mut AnyObject = unsafe { msg_send![this, parentWindow] };
             if !owner.is_null() { return owner; }
-            unsafe { msg_send![objc2::class!(NSApplication), sharedApplication] }
+            let original: Getter = unsafe { std::mem::transmute(ORIGINAL.get().unwrap().1) };
+            unsafe { original(this, sel) }
         }
         unsafe {
             let class: &AnyClass = msg_send![overlay, class];
-            let name = class.name().to_string_lossy();
-            if name.starts_with("EchoOverlay") { return; }
-            let sub = format!("EchoOverlay{name}\0");
-            let sub_name = std::ffi::CStr::from_bytes_with_nul(sub.as_bytes()).unwrap();
-            let subclass = AnyClass::get(sub_name).unwrap_or_else(|| {
-                let mut builder = ClassBuilder::new(sub_name, class).expect("overlay subclass");
-                builder.add_method(sel!(accessibilityRole), role as unsafe extern "C-unwind" fn(_, _) -> _);
-                builder.add_method(sel!(accessibilityParent), parent as unsafe extern "C-unwind" fn(_, _) -> _);
-                builder.register()
+            let class = class as *const AnyClass as *mut AnyClass;
+            ORIGINAL.get_or_init(|| {
+                let install = |sel: Sel, imp: Getter| -> usize {
+                    let method = objc2::ffi::class_getInstanceMethod(class, sel);
+                    let original = objc2::ffi::method_getImplementation(method).map_or(0, |imp| imp as usize);
+                    let types = objc2::ffi::method_getTypeEncoding(method);
+                    let imp: Imp = std::mem::transmute(imp);
+                    if !objc2::ffi::class_addMethod(class, sel, imp, types).as_bool() {
+                        objc2::ffi::class_replaceMethod(class, sel, imp, types);
+                    }
+                    original
+                };
+                (install(sel!(accessibilityRole), role), install(sel!(accessibilityParent), parent))
             });
-            objc2::ffi::object_setClass(overlay.cast(), (subclass as *const AnyClass).cast());
         }
     }
 
