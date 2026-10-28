@@ -759,6 +759,8 @@ pub struct BrowserWindow {
     sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
     /// The DevTools divider is being dragged.
     pub(crate) devtools_resizing: bool,
+    /// Latest dragged divider x, applied once per frame.
+    pub(crate) devtools_resize_target: Option<f64>,
     sidebar_resize_generation: u64,
     sidebar_resize_focus_on_activation: Option<(crate::pages::ResizePageFocus, u64)>,
     pub(crate) sidebar_render_width: Option<f32>,
@@ -1126,6 +1128,7 @@ impl BrowserWindow {
             restore_window: None, restore_dormant: false,
             sidebar_resize: None,
             devtools_resizing: false,
+            devtools_resize_target: None,
             sidebar_resize_generation: 0,
             sidebar_resize_focus_on_activation: None,
             sidebar_render_width: None,
@@ -4383,6 +4386,7 @@ impl BrowserWindow {
         self.pages.clone().and_then(|pages| {
                         let generation = pages.try_borrow().ok()?.viewport_generation();
                         let divider_pages = pages.clone();
+                        let divider_dark = self.theme_is_dark();
                         // Reports the card's bounds so the native page view can sit on it.
                         Some(canvas(
                             move |bounds, window, cx| {
@@ -4420,7 +4424,7 @@ impl BrowserWindow {
                             },
                             move |_, _, window, _| {
                                 if let Some(divider) = divider_pages.borrow().devtools_divider() {
-                                    window.paint_quad(crate::devtools::grip(divider));
+                                    crate::devtools::paint_divider(window, divider, divider_dark);
                                 }
                             },
                         )

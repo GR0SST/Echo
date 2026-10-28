@@ -360,6 +360,7 @@ struct FakeState {
     bounds_changes: Vec<(u64, Bounds)>,
     viewport_clips: std::collections::HashMap<u64, Option<Bounds>>,
     rounded_top: std::collections::HashMap<u64, bool>,
+    side_corners: std::collections::HashMap<u64, (bool, bool)>,
     next_view: u64,
     focused_page: Option<ViewId>,
     events: Vec<Event>,
@@ -643,6 +644,9 @@ impl WebEngine for FakeEngine {
         if state.bounds.insert(raw(view), bounds) != Some(bounds) { state.bounds_changes.push((raw(view), bounds)); }
     }
     fn set_viewport_clip(&mut self, view: ViewId, clip: Option<Bounds>) { self.0.borrow_mut().viewport_clips.insert(raw(view), clip); }
+    fn set_side_corners_rounded(&mut self, view: ViewId, left: bool, right: bool) {
+        self.0.borrow_mut().side_corners.insert(raw(view), (left, right));
+    }
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
         let mut state = self.0.borrow_mut();
         if state.rounded_top.insert(raw(view), rounded) != Some(rounded) {
@@ -8103,6 +8107,11 @@ fn devtools_divider_drag_resizes_the_dock_and_keeps_the_page_frame_stable(cx: &m
     assert_eq!(after.x + after.width, before.x + before.width);
     assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)].width, page.width - 100.);
     assert!(!view.read_with(cx, |view, _| view.devtools_resizing));
+    // The page squares only the joint with the dock, and rounds it again on close.
+    assert_eq!(fake.0.borrow().side_corners.get(&raw(status.inspected)), Some(&(true, false)));
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    assert_eq!(fake.0.borrow().side_corners.get(&raw(status.inspected)), Some(&(true, true)));
 }
 
 #[gpui::test]

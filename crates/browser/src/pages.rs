@@ -169,6 +169,7 @@ pub trait WebEngine {
     fn set_page_palette(&mut self, _view: ViewId, _palette: Option<engine::PagePalette>) -> bool { true }
     fn set_viewport_clip(&mut self, _view: ViewId, _clip: Option<Bounds>) {}
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
+    fn set_side_corners_rounded(&mut self, _view: ViewId, _left: bool, _right: bool) {}
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
     fn apply_context_media(&mut self, _view:ViewId, _epoch:u64, _target:&engine::page_context::MediaTarget, _operation:engine::page_context::MediaOperation)->bool {false}
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
@@ -454,6 +455,9 @@ impl WebEngine for Chromium {
     }
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
         self.engine.set_top_corners_rounded(view, rounded)
+    }
+    fn set_side_corners_rounded(&mut self, view: ViewId, left: bool, right: bool) {
+        self.engine.set_side_corners_rounded(view, left, right)
     }
     fn set_visible(&mut self, view: ViewId, visible: bool) {
         self.engine.set_visible(view, visible)

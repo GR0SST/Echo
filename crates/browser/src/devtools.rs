@@ -87,13 +87,15 @@ pub(crate) fn frames(frame: Bounds, dock_width: Option<f64>) -> Option<(Bounds, 
     ))
 }
 
-/// Arc's small round grip centered in the divider gap.
-pub(crate) fn grip(divider: Bounds) -> gpui::PaintQuad {
+/// Arc's opaque divider gap with its small round grip centered.
+pub(crate) fn paint_divider(window: &mut gpui::Window, divider: Bounds, dark: bool) {
     use gpui::{point, px, size};
     const GRIP: f32 = 5.;
-    let center = point(px((divider.x + divider.width / 2.) as f32), px((divider.y + divider.height / 2.) as f32));
-    gpui::fill(gpui::Bounds::new(center - point(px(GRIP / 2.), px(GRIP / 2.)), size(px(GRIP), px(GRIP))), gpui::hsla(0., 0., 0.5, 0.25))
-        .corner_radii(px(GRIP / 2.))
+    let gap = gpui::Bounds::new(point(px(divider.x as f32), px(divider.y as f32)), size(px(divider.width as f32), px(divider.height as f32)));
+    window.paint_quad(gpui::fill(gap, gpui::hsla(0., 0., if dark { 0.13 } else { 0.91 }, 1.)));
+    let center = gap.center();
+    window.paint_quad(gpui::fill(gpui::Bounds::new(center - point(px(GRIP / 2.), px(GRIP / 2.)), size(px(GRIP), px(GRIP))), gpui::hsla(0., 0., 0.5, 0.25))
+        .corner_radii(px(GRIP / 2.)));
 }
 
 impl BrowserWindow {
@@ -106,18 +108,27 @@ impl BrowserWindow {
         let owner = cx.entity().downgrade();
         let tracking = self.devtools_resizing.then(|| gpui::canvas(|_, _, _| (), move |_, _, window, _| {
             let moving = owner.clone();
-            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
                 if phase != gpui::DispatchPhase::Capture { return; }
                 let _ = moving.update(cx, |this, cx| {
-                    if !event.dragging() { this.devtools_resizing = false; }
-                    else if let Some(pages) = &this.pages { pages.borrow_mut().resize_devtools(f64::from(f32::from(event.position.x))); }
-                    cx.notify();
+                    if !event.dragging() { this.devtools_resizing = false; cx.notify(); return; }
+                    // One native resize per frame: pointer events outpace
+                    // Chromium, which kept resizing after the release.
+                    let scheduled = this.devtools_resize_target.replace(f64::from(f32::from(event.position.x))).is_some();
+                    if !scheduled {
+                        cx.on_next_frame(window, |this, _, cx| this.apply_devtools_resize(cx));
+                    }
                 });
             });
             let ending = owner.clone();
             window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
                 if phase != gpui::DispatchPhase::Capture || event.button != gpui::MouseButton::Left { return; }
-                let _ = ending.update(cx, |this, cx| { this.devtools_resizing = false; cx.notify(); });
+                let _ = ending.update(cx, |this, cx| {
+                    this.devtools_resize_target = Some(f64::from(f32::from(event.position.x)));
+                    this.apply_devtools_resize(cx);
+                    this.devtools_resizing = false;
+                    cx.notify();
+                });
             });
         }).absolute().size_0());
         Some(gpui::div()
@@ -138,6 +149,12 @@ impl BrowserWindow {
             }))
             .children(tracking)
             .into_any_element())
+    }
+
+    fn apply_devtools_resize(&mut self, cx: &mut Context<Self>) {
+        let Some(x) = self.devtools_resize_target.take() else { return; };
+        if let Some(pages) = &self.pages { pages.borrow_mut().resize_devtools(x); }
+        cx.notify();
     }
 
     pub(crate) fn devtools_available(&self) -> bool {
@@ -409,6 +426,7 @@ impl PageStore {
             return;
         };
         self.engine.close_inspector(dock.id);
+        self.engine.set_side_corners_rounded(dock.view, true, true);
         self.devtools_restore.insert(dock.host);
         self.mirror_revision = self.mirror_revision.wrapping_add(1);
         if let Some(page) = self
@@ -455,6 +473,7 @@ impl PageStore {
             return Some(dock.host);
         };
         self.engine.set_bounds(dock.view, page_frame);
+        self.engine.set_side_corners_rounded(dock.view, true, false);
         self.pages.get_mut(&dock.tab).unwrap().frame = page_frame;
         self.engine.set_inspector_frame(dock.id, frontend);
         self.engine.set_inspector_corners(dock.id, f64::from(crate::pages::CONTENT_CORNER_RADIUS));

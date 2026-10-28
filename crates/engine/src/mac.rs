@@ -243,12 +243,16 @@ pub fn set_corner_radius(view: *mut c_void, radius: f64) {
 }
 
 /// The clip host is an unflipped NSView: minimum-Y corners are its bottom edge.
-/// Keep those rounded when the page joins a GPUI split header along its top edge.
-pub fn set_top_corners_rounded(view: *mut c_void, rounded: bool) {
+/// A split header squares the top pair; a docked inspector squares one side.
+pub fn set_rounded_corners(view: *mut c_void, top: bool, (left, right): (bool, bool)) {
+    // kCALayerMinXMinYCorner, MaxXMinY, MinXMaxY, MaxXMaxY.
+    let corners = [(1usize, left, false), (2, right, false), (4, left, true), (8, right, true)]
+        .into_iter()
+        .filter(|&(_, side, upper)| side && (top || !upper))
+        .fold(0, |mask, (bit, _, _)| mask | bit);
     unsafe {
         let layer: *mut AnyObject = msg_send![view as *mut AnyObject, layer];
         if !layer.is_null() {
-            let corners: usize = if rounded { 0b1111 } else { 0b0011 };
             let _: () = msg_send![layer, setMaskedCorners: corners];
         }
     }

@@ -263,6 +263,8 @@ struct View<B = Browser, C = RequestContext> {
     native_scale: f64,
     focus_state: native_geometry::FocusState,
     rounded_top: bool,
+    /// Left and right corner pairs; a docked inspector squares the joint.
+    rounded_sides: (bool, bool),
     link_policy: Arc<Mutex<PeekPolicy>>,
 }
 
@@ -972,6 +974,7 @@ impl Engine {
                 native_scale: host::scale(parent),
                 focus_state: Default::default(),
                 rounded_top: true,
+                rounded_sides: (true, true),
                 link_policy: policy,
             },
         );
@@ -1102,7 +1105,17 @@ impl Engine {
         if view.rounded_top == rounded { return; }
         view.rounded_top = rounded;
         #[cfg(target_os = "macos")]
-        mac::set_top_corners_rounded(view.host, rounded);
+        mac::set_rounded_corners(view.host, view.rounded_top, view.rounded_sides);
+    }
+
+    /// A docked inspector joins the page squarely: the page keeps its left
+    /// corners, the inspector its right ones.
+    pub fn set_side_corners_rounded(&mut self, id: ViewId, left: bool, right: bool) {
+        let Some(view) = self.views.get_mut(&id) else { return; };
+        if view.rounded_sides == (left, right) { return; }
+        view.rounded_sides = (left, right);
+        #[cfg(target_os = "macos")]
+        mac::set_rounded_corners(view.host, view.rounded_top, view.rounded_sides);
     }
 
     pub fn frame(&self, id: ViewId) -> Option<Bounds> {
@@ -1409,14 +1422,15 @@ impl Engine {
         if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_frame(session.frontend, frame); }
     }
 
-    /// A docked inspector is its own rounded card beside the page, sharing
-    /// the page's top-corner treatment when a split header owns those.
+    /// A docked inspector rounds only its outer (right) corners, sharing the
+    /// page's top-corner treatment when a split header owns those.
     pub fn set_inspector_corners(&mut self, inspector: InspectorId, radius: f64) {
         let Some(session) = self.inspectors.sessions.get(&inspector) else { return; };
         let (frontend, inspected) = (session.frontend, session.status.inspected);
         let top = self.views.get(&inspected).is_none_or(|view| view.rounded_top);
         self.set_corner_radius(frontend, radius);
         self.set_top_corners_rounded(frontend, top);
+        self.set_side_corners_rounded(frontend, false, true);
     }
 
     pub fn set_inspector_visible(&mut self, inspector: InspectorId, visible: bool) {
@@ -2502,6 +2516,7 @@ mod view_storage_lifetime_tests {
             native_scale: 1.,
             focus_state: Default::default(),
             rounded_top: true,
+            rounded_sides: (true, true),
             link_policy: Arc::default(),
         }
     }
