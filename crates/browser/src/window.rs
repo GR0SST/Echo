@@ -4405,7 +4405,7 @@ impl BrowserWindow {
                 .child(div().min_w_0().truncate().child(text))))
             .child(self.render_pinned_extensions(cx))
             .child(button("toolbar-site-controls",crate::icons::Icon::SiteControls).on_click(cx.listener(|this,_,window,cx|this.toggle_site_controls(window,cx))).child(canvas(|_,_,_|(),move |bounds,_,_,_|anchor.set(Some(bounds))).absolute().inset_0()))
-            .child(button("toolbar-split",crate::icons::Icon::Split).on_click(cx.listener(|this,_,_,cx|this.edit_split(None,cx))))
+            .child(button("toolbar-split",crate::icons::Icon::Split).on_click(cx.listener(|this,_,window,cx|this.open_command_action(Command::AddSplit(None),window,cx))))
             .into_any_element()
     }
 

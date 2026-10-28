@@ -12697,3 +12697,18 @@ fn theme_adjustment_haptics_follow_detents_and_leave_colors_silent(cx: &mut Test
         view.update(cx, |view, _| view.edit_profile(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::HapticFeedback, true)));
     }
 }
+
+#[gpui::test]
+fn toolbar_split_opens_a_focused_command_bar_ready_for_typing(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    dispatch_menu(cx, "View", "Show/Hide Toolbar");
+    cx.run_until_parked();
+    fake.take_calls();
+    click(cx, "toolbar-split");
+    assert!(view.read_with(cx, |view, _| view.split_draft.is_some()));
+    assert!(bar_input_focused(&view, cx));
+    bar(&view, cx).simulate_input("https://split-focus.example");
+    assert_eq!(bar_text(&view, cx).as_deref(), Some("https://split-focus.example"));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
+    bar(&view, cx).simulate_keystrokes("escape");
+}
