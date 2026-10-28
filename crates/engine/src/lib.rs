@@ -622,11 +622,7 @@ impl Engine {
         {
             const MAX_SKIPS: u32 = 6;
             thread_local!(static SKIPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
-            // During a live resize Chromium must keep laying pages out, but
-            // only while the queue is empty so the tracking loop always
-            // receives the mouse-up itself.
             if mac::is_tracking_events() {
-                if !mac::has_pending_events() { shutdown::pump_once(); }
                 return;
             }
             if mac::has_pending_events() && SKIPS.get() < MAX_SKIPS {
