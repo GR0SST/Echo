@@ -762,7 +762,7 @@ pub struct BrowserWindow {
     pub(crate) icon_anchors: Rc<RefCell<HashMap<crate::icons::IconTarget, Bounds<gpui::Pixels>>>>,
     pub(crate) last_icon_catalog: crate::icon_catalog::Catalog,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
-    tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<bool>>>>,
+    tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<Option<bool>>>>>,
     pub(crate) tab_drag_active: bool,
     tab_drag_press: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
     sidebar_press: Option<(TabId, f32, f32, Instant)>,
@@ -3399,7 +3399,6 @@ impl BrowserWindow {
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
         let drag_moves_active = self.sidebar_page_interactive;
         let move_edge = edge.clone();
-        let paint_edge = edge.clone();
         let drag_owner = cx.entity().downgrade();
         let drag_row_width = (self.sidebar_width() - 16.).max(1.);
         let drag_press = self.tab_drag_press.clone();
@@ -3429,16 +3428,32 @@ impl BrowserWindow {
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this,event:&gpui::DragMoveEvent<crate::tab_drag::TabDrag>,_,cx| {
                 let drag=event.drag(cx);
-                if !drag_moves_active||!this.accepts_tab_drag(drag)||drag.id==id{return;}
-                let after=event.event.position.y>event.bounds.center().y;
-                if event.bounds.contains(&event.event.position){move_edge.set(after);this.reorder_feedback(drag,Some((id,after)),cx);}
-                else if drag.reorder_target.get().is_some_and(|(tab,_)|tab==id){this.reorder_feedback(drag,None,cx);}
+                let valid = drag_moves_active && this.accepts_tab_drag(drag) && this.browser.item_anchor(id) != drag.id;
+                // Include half the inter-row gap on each side. The midpoint belongs
+                // to the lower row, so exactly one insertion indicator is active.
+                let position = event.event.position;
+                let inside = valid && position.x >= event.bounds.left() && position.x < event.bounds.right()
+                    && position.y >= event.bounds.top() - px(SIDEBAR_ROW_GAP / 2.)
+                    && position.y < event.bounds.bottom() + px(SIDEBAR_ROW_GAP / 2.);
+                let target = inside.then_some(position.y > event.bounds.center().y);
+                if let Some(after) = target { this.reorder_feedback(drag,Some((id,after)),cx); }
+                if move_edge.replace(target) != target { cx.notify(); }
             }))
-            .drag_over::<crate::tab_drag::TabDrag>(move |style, _, _, _| {
-                let style = style.border_color(hsla(0., 0., 0.2, 0.6));
-                if paint_edge.get() { style.border_b_2() } else { style.border_t_2() }
+            // Paint from the drag position: the floating card may occlude hover hitboxes.
+            .when(cx.has_active_drag() && edge.get().is_some(), |row| {
+                let after = edge.get().unwrap();
+                row.child(div().absolute().left_0().right_0().h(px(SIDEBAR_ROW_GAP))
+                    .when(after, |line| line.bottom(px(-SIDEBAR_ROW_GAP)))
+                    .when(!after, |line| line.top(px(-SIDEBAR_ROW_GAP)))
+                    .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| {
+                        cx.stop_propagation();
+                        if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_relative(drag, id, after, cx); }
+                    }))
+                    .child(div().debug_selector(move || format!("tab-insertion-line-{key}"))
+                        .absolute().left_0().right_0().top(px((SIDEBAR_ROW_GAP - 2.) / 2.))
+                        .h(px(2.)).bg(hsla(0., 0., 0.2, 0.6))))
             })
-            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_relative(drag, id, edge.get(), cx); } }))
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_relative(drag, id, edge.get().unwrap_or(false), cx); } }))
             .flex_none()
             .flex()
             .items_center()
@@ -5072,6 +5087,7 @@ impl Render for BrowserWindow {
         }
         self.sync_extension_model_on_render(window, cx);
         if !cx.has_active_drag() {
+            for edge in self.tab_drop_edges.get_mut().values() { edge.set(None); }
             self.sidebar_drag_scroll = None;
             if self.split_drop.is_some() { self.close_split_drop(cx); }
         }

@@ -55,12 +55,45 @@ impl TabDrag {
 }
 
 impl BrowserWindow {
-    pub(crate) fn reorder_feedback(&self,drag:&TabDrag,target:Option<(TabId,bool)>,cx:&gpui::App) {
-        if !crate::feedback::enabled(self,browser_core::settings::Toggle::HapticFeedback,cx){drag.reorder_target.set(None);return;}
-        let target=target.filter(|(tab,_)|self.accepts_tab_drag(drag)&&self.browser.user_profile_id_for_tab(*tab)==Some(drag.profile)&&self.browser.item_anchor(*tab)!=drag.id);
-        if drag.reorder_target.get()==target{return;}
+    /// Both halves beside a gap identify the same insertion boundary.
+    fn reorder_boundary(&self, target: (TabId, bool)) -> (TabId, bool) {
+        let (tab, after) = target;
+        let tab = self.browser.item_anchor(tab);
+        if !after { return (tab, false); }
+        for space in &self.browser.spaces {
+            if space.today.iter().any(|entry| entry.id == tab) {
+                let rows = self.browser.today_rows(space.id);
+                return rows.iter().position(|row| matches!(row, browser_core::max::TodayRow::Tab(id) if *id == tab))
+                    .and_then(|index| rows.get(index + 1))
+                    .and_then(|row| match row { browser_core::max::TodayRow::Tab(id) => Some(*id), _ => None })
+                    .map_or((tab, true), |next| (next, false));
+            }
+            if space.pinned.iter().any(|entry| entry.id == tab) {
+                let parent = self.browser.folder_ancestors(tab).last().copied();
+                let items = parent.and_then(|id| self.browser.folder(id)).map_or(&space.pinned_items, |folder| &folder.items);
+                // A folder header is its own drop target; never merge across it.
+                let item = self.browser.pinned_item(tab);
+                return items.iter().position(|entry| *entry == item)
+                    .and_then(|index| items.get(index + 1))
+                    .and_then(|item| self.browser.pinned_item_tab(space.id, *item))
+                    .map_or((tab, true), |next| (next, false));
+            }
+        }
+        (tab, after)
+    }
+
+    pub(crate) fn reorder_feedback(&self, drag: &TabDrag, target: Option<(TabId, bool)>, cx: &gpui::App) {
+        if !crate::feedback::enabled(self, browser_core::settings::Toggle::HapticFeedback, cx) {
+            drag.reorder_target.set(None);
+            return;
+        }
+        let target = target.filter(|(tab, _)| self.accepts_tab_drag(drag)
+            && self.browser.user_profile_id_for_tab(*tab) == Some(drag.profile)
+            && self.browser.item_anchor(*tab) != drag.id)
+            .map(|target| self.reorder_boundary(target));
+        if drag.reorder_target.get() == target { return; }
         drag.reorder_target.set(target);
-        if target.is_some(){crate::native::reorder_haptic();}
+        if target.is_some() { crate::native::reorder_haptic(); }
     }
 
     pub(crate) fn accepts_tab_drag(&self, drag: &TabDrag) -> bool {
