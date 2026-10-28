@@ -7,8 +7,10 @@ establish a working browser, native linking, GPU initialization or OS integratio
 
 ## Repeatable checks
 
-Use a rustup-managed Cargo and rustc from the same toolchain. On machines with
-Homebrew Rust, put `$HOME/.cargo/bin` before Homebrew in `PATH` first.
+Use a rustup-managed Cargo and rustc from the same toolchain. On macOS the
+script prepends `$HOME/.cargo/bin` and Homebrew LLVM to its own `PATH`, without
+changing shell profiles or the normal native build environment. Explicit `CARGO`
+and `RUSTC` overrides remain supported.
 
 ```sh
 rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
@@ -32,17 +34,49 @@ Windows SDK. The script converts Rust's native library path for Git Bash globbin
 not supply these headers or compilers. Default dev-profile checks are intended;
 GPUI's Windows release shaders require the Windows shader build tools as well.
 
-For cross-checking from macOS:
+For cross-checking from this Apple Silicon macOS host, run this one-time setup
+from the repository root (Python 3 and macOS's `/usr/bin/tar` are required):
 
-- Install `cargo-xwin` and LLVM (`clang-cl` and LLVM tools) in `PATH`. The script
-  selects `cargo-xwin check` for a foreign MSVC target when available. Its Windows
-  SDK/CRT cache can be selected with `XWIN_CACHE_DIR`.
-- Install Zig in `PATH` and supply `ECHO_LINUX_SYSROOT` pointing to an extracted
-  **real x86_64 Linux development SDK**, including the packages above. The script
-  selects Zig for target C/C++ compilation and isolates pkg-config to that SDK.
-  It does not fabricate pkg-config metadata or use macOS headers for Linux.
-  Alternatively configure your own target C compiler and pkg-config environment
-  and leave `ECHO_LINUX_SYSROOT` unset.
+```sh
+brew install zig llvm pkgconf
+PATH="$HOME/.cargo/bin:$PATH" cargo install --locked cargo-xwin --version 0.23.1
+"$HOME/.cargo/bin/rustup" target add --toolchain 1.96.0 \
+  x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
+python3 scripts/setup-linux-sysroot.py
+```
+
+Then both checks need only:
+
+```sh
+scripts/check-targets.sh
+```
+
+The default persistent cache is `$HOME/Library/Caches/Echo/cross`:
+
+- `linux-bookworm-amd64/`: extracted real Debian bookworm amd64 development
+  packages, headers, libraries and pkg-config metadata. The setup helper resolves
+  their concrete dependencies, verifies package SHA-256 hashes against Debian's
+  HTTPS package index, and extracts them without running Linux code or package
+  maintainer scripts. `echo-packages.tsv` records exact versions, hashes and URLs.
+- `debs/` and `bookworm-amd64-Packages.xz`: downloaded Debian packages/index.
+  Rerunning setup refreshes the index and reuses verified package archives.
+- `xwin/`: Microsoft SDK/CRT downloaded automatically by cargo-xwin on first check.
+  Using cargo-xwin accepts its upstream Microsoft SDK license; see
+  <https://docs.rs/crate/cargo-xwin/latest>.
+
+`ECHO_CROSS_CACHE` overrides that common cache root for both setup and checks.
+`ECHO_LINUX_SYSROOT` overrides the Linux SDK path; `XWIN_CACHE_DIR` overrides the
+Windows cache. Cargo's build artifacts remain under the repository's normal
+`target/` directory.
+
+The Linux package seeds cover ALSA, fontconfig/FreeType, xkbcommon, Wayland,
+X11/XCB, EGL/GL and udev; their complete dependency closure is in the manifest.
+The check script isolates pkg-config to that SDK and uses Zig for C/C++ target
+compilation. It never substitutes macOS headers or invented `.pc` files. For a
+custom cross compiler, leave `ECHO_LINUX_SYSROOT` unset and configure the target
+compiler and pkg-config environment yourself (move the default SDK aside if it
+was installed). Native Windows checks use Cargo directly; foreign MSVC checks
+use cargo-xwin with LLVM's `clang-cl` and tools.
 
 CEF 154's dependency build script can download distributions for all three
 platforms. For a future native linked build, use a separate cache, for example
@@ -59,13 +93,28 @@ attribute handling remains enabled and the original licenses are preserved.
 
 ## Checked configuration
 
-On 2026-10-25, Rust 1.96.0 checked the complete workspace for
-`x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` through
-`scripts/check-targets.sh` from an Apple Silicon macOS host. Linux used Zig
-0.15.2 with Debian bookworm amd64 development headers/pkg-config metadata;
-Windows used cargo-xwin 0.23.1 with the downloaded Microsoft SDK/CRT and LLVM.
+Setup on 2026-10-28 uses rustup Rust 1.96.0, Homebrew Zig 0.17.0,
+LLVM 22.1.7 (`/opt/homebrew/opt/llvm/bin`), cargo-xwin 0.23.1
+(`$HOME/.cargo/bin/cargo-xwin`), Windows SDK 10.0.26100 / CRT 14.44.17.14,
+and 154 Debian bookworm amd64 packages (295 MB extracted, 72 MB archives).
+Zig's Homebrew dependencies also installed LLVM/lld 22.1.8. The Windows cache
+occupies about 1.6 GB.
+
+- `x86_64-unknown-linux-gnu`: full workspace check passed.
+- `x86_64-pc-windows-msvc`: full workspace check passed.
+
 These are compile checks with `engine/check-only`, not foreign native-link or
 runtime tests. Normal macOS builds/tests use native CEF without that feature.
+For the native test gate on this host, GPUI's bindgen needs an explicit macOS
+SDK when rebuilding under rustup (otherwise `dispatch/dispatch.h` is not found):
+
+```sh
+SDKROOT="$(xcrun --show-sdk-path)" PATH="$HOME/.cargo/bin:$PATH" cargo test
+```
+
+The native gate passed 2012 tests on this host, and an isolated bundled Echo
+smoke run rendered a page and shut CEF down cleanly. Keep this SDK setting scoped
+to native builds; do not export a macOS SDK into foreign checks.
 
 ## Integration coverage
 

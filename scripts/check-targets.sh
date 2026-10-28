@@ -15,6 +15,21 @@ and a real target SDK selected by ECHO_LINUX_SYSROOT. See docs/PLATFORMS.md.
 HELP
     exit 0
 fi
+# Scope cross-build tools to this process; leave native Cargo workflows unchanged.
+if [[ $(uname -s) == Darwin ]]; then
+    if [[ -x "$HOME/.cargo/bin/rustup" ]]; then
+        export PATH="$HOME/.cargo/bin:$PATH"
+    fi
+    if command -v brew >/dev/null; then
+        llvm_prefix=$(brew --prefix llvm) || exit 1
+        export PATH="$llvm_prefix/bin:$PATH"
+    fi
+    cross_cache=${ECHO_CROSS_CACHE:-$HOME/Library/Caches/Echo/cross}
+    export XWIN_CACHE_DIR=${XWIN_CACHE_DIR:-$cross_cache/xwin}
+    if [[ -z ${ECHO_LINUX_SYSROOT:-} && -f "$cross_cache/linux-bookworm-amd64/echo-packages.tsv" ]]; then
+        export ECHO_LINUX_SYSROOT="$cross_cache/linux-bookworm-amd64"
+    fi
+fi
 cargo_bin=${CARGO:-cargo}
 rustc_bin=${RUSTC:-rustc}
 host=$("$rustc_bin" -vV | sed -n 's/^host: //p')
