@@ -45,19 +45,30 @@ pub(super) struct Dock {
     pub host: u64,
 }
 
+/// The GPUI gap between the page card and the DevTools card, as in Arc.
+pub(crate) const DIVIDER_WIDTH: f64 = crate::pages::CONTENT_INSET as f64;
+/// Neither card shrinks below this while the divider is dragged.
+const MIN_PANE: f64 = 160.;
+
 /// Keep both native children strictly within the owner pane, with a GPUI gap.
-/// The default matches the observed right dock (one third of content width).
-pub(crate) fn frames(frame: Bounds) -> Option<(Bounds, Bounds, Bounds)> {
+/// Without a dragged width the dock takes the observed third of the content.
+pub(crate) fn frames(frame: Bounds, dock_width: Option<f64>) -> Option<(Bounds, Bounds, Bounds)> {
     if ![frame.x, frame.y, frame.width, frame.height]
         .iter()
         .all(|v| v.is_finite())
-        || frame.width < 3.
+        || frame.width < DIVIDER_WIDTH + 2.
         || frame.height < 1.
     {
         return None;
     }
-    let dock_width = (frame.width / 3.).floor().max(1.);
-    let page_width = frame.width - dock_width - 1.;
+    let available = frame.width - DIVIDER_WIDTH;
+    let min = MIN_PANE.min(available / 2.).max(1.);
+    let dock_width = dock_width
+        .filter(|width| width.is_finite())
+        .unwrap_or(frame.width / 3.)
+        .clamp(min, available - min)
+        .floor();
+    let page_width = available - dock_width;
     Some((
         Bounds {
             width: page_width,
@@ -65,18 +76,70 @@ pub(crate) fn frames(frame: Bounds) -> Option<(Bounds, Bounds, Bounds)> {
         },
         Bounds {
             x: frame.x + page_width,
-            width: 1.,
+            width: DIVIDER_WIDTH,
             ..frame
         },
         Bounds {
-            x: frame.x + page_width + 1.,
+            x: frame.x + page_width + DIVIDER_WIDTH,
             width: dock_width,
             ..frame
         },
     ))
 }
 
+/// Arc's small round grip centered in the divider gap.
+pub(crate) fn grip(divider: Bounds) -> gpui::PaintQuad {
+    use gpui::{point, px, size};
+    const GRIP: f32 = 5.;
+    let center = point(px((divider.x + divider.width / 2.) as f32), px((divider.y + divider.height / 2.) as f32));
+    gpui::fill(gpui::Bounds::new(center - point(px(GRIP / 2.), px(GRIP / 2.)), size(px(GRIP), px(GRIP))), gpui::hsla(0., 0., 0.5, 0.25))
+        .corner_radii(px(GRIP / 2.))
+}
+
 impl BrowserWindow {
+    /// The divider gap is GPUI's own surface between the two native cards, so
+    /// it owns the resize cursor and drag; window listeners keep the drag
+    /// while the pointer crosses either native view.
+    pub(crate) fn render_devtools_divider(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use gpui::{prelude::*, px};
+        let divider = self.pages.as_ref()?.try_borrow().ok()?.devtools_divider()?;
+        let owner = cx.entity().downgrade();
+        let tracking = self.devtools_resizing.then(|| gpui::canvas(|_, _, _| (), move |_, _, window, _| {
+            let moving = owner.clone();
+            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                if phase != gpui::DispatchPhase::Capture { return; }
+                let _ = moving.update(cx, |this, cx| {
+                    if !event.dragging() { this.devtools_resizing = false; }
+                    else if let Some(pages) = &this.pages { pages.borrow_mut().resize_devtools(f64::from(f32::from(event.position.x))); }
+                    cx.notify();
+                });
+            });
+            let ending = owner.clone();
+            window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                if phase != gpui::DispatchPhase::Capture || event.button != gpui::MouseButton::Left { return; }
+                let _ = ending.update(cx, |this, cx| { this.devtools_resizing = false; cx.notify(); });
+            });
+        }).absolute().size_0());
+        Some(gpui::div()
+            .id("devtools-divider")
+            .debug_selector(|| "devtools-divider".into())
+            .absolute()
+            .left(px(divider.x as f32))
+            .top(px(divider.y as f32))
+            .w(px(divider.width as f32))
+            .h(px(divider.height as f32))
+            .cursor(gpui::CursorStyle::ResizeLeftRight)
+            .capture_any_mouse_down(cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                if event.button != gpui::MouseButton::Left { return; }
+                window.prevent_default();
+                cx.stop_propagation();
+                this.devtools_resizing = true;
+                cx.notify();
+            }))
+            .children(tracking)
+            .into_any_element())
+    }
+
     pub(crate) fn devtools_available(&self) -> bool {
         if !self.page_content_visible() { return false; }
         let Some(tab) = self
@@ -151,7 +214,7 @@ impl Pages {
             .copied()
             .filter(|parent| !parent.is_null())?;
         let frame = *store.layouts.get(&self.host)?.get(&tab)?;
-        frames(frame)?;
+        frames(frame, store.devtools_width)?;
         Some((page.view, parent, frame))
     }
 
@@ -200,7 +263,7 @@ impl Pages {
         let Operation::Open(panel, inspect) = operation else {
             unreachable!()
         };
-        let (_, _, dock_frame) = frames(frame).unwrap();
+        let (_, _, dock_frame) = frames(frame, store.devtools_width).unwrap();
         let id = store
             .engine
             .open_inspector(view, parent, dock_frame, panel, inspect)?;
@@ -264,7 +327,21 @@ impl Pages {
     pub(crate) fn devtools_divider(&self) -> Option<Bounds> {
         let store = self.store.borrow();
         let dock = store.devtools.filter(|dock| dock.host == self.host)?;
-        frames(*store.layouts.get(&self.host)?.get(&dock.tab)?).map(|(_, divider, _)| divider)
+        frames(*store.layouts.get(&self.host)?.get(&dock.tab)?, store.devtools_width).map(|(_, divider, _)| divider)
+    }
+
+    /// Drag the divider so its center follows `x`; the width persists for
+    /// every later dock in this session.
+    pub(crate) fn resize_devtools(&mut self, x: f64) {
+        let mut store = self.store.borrow_mut();
+        let Some(dock) = store.devtools.filter(|dock| dock.host == self.host) else { return; };
+        let Some(frame) = store.layouts.get(&self.host).and_then(|layout| layout.get(&dock.tab)).copied() else { return; };
+        let width = frame.x + frame.width - x - DIVIDER_WIDTH / 2.;
+        let Some((_, _, frontend)) = frames(frame, Some(width)) else { return; };
+        if store.devtools_width == Some(frontend.width) { return; }
+        store.devtools_width = Some(frontend.width);
+        store.mirror_revision = store.mirror_revision.wrapping_add(1);
+        store.layout_devtools();
     }
 }
 
@@ -372,7 +449,7 @@ impl PageStore {
             .get(&dock.host)
             .and_then(|layout| layout.get(&dock.tab))
             .copied()
-            .and_then(frames);
+            .and_then(|frame| frames(frame, self.devtools_width));
         let Some((page_frame, _, frontend)) = layout.filter(|_| valid) else {
             self.close_devtools();
             return Some(dock.host);
@@ -380,6 +457,7 @@ impl PageStore {
         self.engine.set_bounds(dock.view, page_frame);
         self.pages.get_mut(&dock.tab).unwrap().frame = page_frame;
         self.engine.set_inspector_frame(dock.id, frontend);
+        self.engine.set_inspector_corners(dock.id, f64::from(crate::pages::CONTENT_CORNER_RADIUS));
         self.engine.set_inspector_visible(dock.id, true);
         None
     }
@@ -439,36 +517,25 @@ mod tests {
     }
     #[test]
     fn right_third_native_frames_leave_only_the_gpui_divider_uncovered() {
-        for width in [3., 31., 899.5, 1200.] {
-            let frame = Bounds {
-                x: 248.,
-                y: 8.,
-                width,
-                height: 700.,
-            };
-            let (page, divider, frontend) = frames(frame).unwrap();
-            assert_eq!(page.x, frame.x);
-            assert_eq!(page.x + page.width, divider.x);
-            assert_eq!(divider.x + divider.width, frontend.x);
-            assert_eq!(frontend.x + frontend.width, frame.x + width);
-            assert_eq!(frontend.width, (width / 3.).floor());
-            assert!(page.width >= 1. && frontend.width >= 1.);
+        for width in [DIVIDER_WIDTH + 2., 31., 899.5, 1200.] {
+            let frame = Bounds { x: 248., y: 8., width, height: 700. };
+            for dock in [None, Some(0.), Some(250.), Some(1e6)] {
+                let (page, divider, frontend) = frames(frame, dock).unwrap();
+                assert_eq!(page.x, frame.x);
+                assert_eq!(page.x + page.width, divider.x);
+                assert_eq!(divider.width, DIVIDER_WIDTH);
+                assert_eq!(divider.x + divider.width, frontend.x);
+                assert_eq!(frontend.x + frontend.width, frame.x + width);
+                assert!(page.width >= 1. && frontend.width >= 1.);
+            }
         }
-        assert!(
-            frames(Bounds {
-                width: 2.,
-                height: 700.,
-                ..Bounds::default()
-            })
-            .is_none()
-        );
-        assert!(
-            frames(Bounds {
-                width: f64::NAN,
-                height: 700.,
-                ..Bounds::default()
-            })
-            .is_none()
-        );
+        let frame = Bounds { x: 0., y: 0., width: 1200., height: 700. };
+        assert_eq!(frames(frame, None).unwrap().2.width, 400.);
+        assert_eq!(frames(frame, Some(250.)).unwrap().2.width, 250.);
+        // Neither card collapses while dragging.
+        assert_eq!(frames(frame, Some(0.)).unwrap().2.width, MIN_PANE);
+        assert_eq!(frames(frame, Some(1e6)).unwrap().0.width, MIN_PANE);
+        assert!(frames(Bounds { width: 2., height: 700., ..Bounds::default() }, None).is_none());
+        assert!(frames(Bounds { width: f64::NAN, height: 700., ..Bounds::default() }, None).is_none());
     }
 }

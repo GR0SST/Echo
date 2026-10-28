@@ -1409,6 +1409,16 @@ impl Engine {
         if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_frame(session.frontend, frame); }
     }
 
+    /// A docked inspector is its own rounded card beside the page, sharing
+    /// the page's top-corner treatment when a split header owns those.
+    pub fn set_inspector_corners(&mut self, inspector: InspectorId, radius: f64) {
+        let Some(session) = self.inspectors.sessions.get(&inspector) else { return; };
+        let (frontend, inspected) = (session.frontend, session.status.inspected);
+        let top = self.views.get(&inspected).is_none_or(|view| view.rounded_top);
+        self.set_corner_radius(frontend, radius);
+        self.set_top_corners_rounded(frontend, top);
+    }
+
     pub fn set_inspector_visible(&mut self, inspector: InspectorId, visible: bool) {
         if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_visible(session.frontend, visible); }
     }

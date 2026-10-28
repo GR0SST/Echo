@@ -757,6 +757,8 @@ pub struct BrowserWindow {
     pub(crate) restore_window: Option<browser_core::window_restore::RestoredWindow>,
     pub(crate) restore_dormant: bool,
     sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
+    /// The DevTools divider is being dragged.
+    pub(crate) devtools_resizing: bool,
     sidebar_resize_generation: u64,
     sidebar_resize_focus_on_activation: Option<(crate::pages::ResizePageFocus, u64)>,
     pub(crate) sidebar_render_width: Option<f32>,
@@ -1123,6 +1125,7 @@ impl BrowserWindow {
             sidebar_width: SIDEBAR_WIDTH,
             restore_window: None, restore_dormant: false,
             sidebar_resize: None,
+            devtools_resizing: false,
             sidebar_resize_generation: 0,
             sidebar_resize_focus_on_activation: None,
             sidebar_render_width: None,
@@ -4417,10 +4420,7 @@ impl BrowserWindow {
                             },
                             move |_, _, window, _| {
                                 if let Some(divider) = divider_pages.borrow().devtools_divider() {
-                                    window.paint_quad(gpui::fill(Bounds::new(
-                                        point(px(divider.x as f32), px(divider.y as f32)),
-                                        size(px(divider.width as f32), px(divider.height as f32)),
-                                    ), hsla(0., 0., 0.5, 0.3)));
+                                    window.paint_quad(crate::devtools::grip(divider));
                                 }
                             },
                         )
@@ -5342,6 +5342,7 @@ impl Render for BrowserWindow {
             .child(div().id("native-action-scope").absolute().size_0().track_focus(&self.native_action_focus))
             .child(content)
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
+            .when(!library_open, |this| this.children(self.render_devtools_divider(cx)))
             .when_some(library, |this, library| this.child(library))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))

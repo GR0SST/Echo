@@ -356,6 +356,8 @@ struct FakeState {
     calls: Vec<Call>,
     /// Latest bounds given to each view.
     bounds: std::collections::HashMap<u64, Bounds>,
+    /// Every actual bounds change, in order (a native resize each).
+    bounds_changes: Vec<(u64, Bounds)>,
     viewport_clips: std::collections::HashMap<u64, Option<Bounds>>,
     rounded_top: std::collections::HashMap<u64, bool>,
     next_view: u64,
@@ -637,7 +639,8 @@ impl WebEngine for FakeEngine {
         Some(ViewId::from_raw(id))
     }
     fn set_bounds(&mut self, view: ViewId, bounds: Bounds) {
-        self.0.borrow_mut().bounds.insert(raw(view), bounds);
+        let mut state = self.0.borrow_mut();
+        if state.bounds.insert(raw(view), bounds) != Some(bounds) { state.bounds_changes.push((raw(view), bounds)); }
     }
     fn set_viewport_clip(&mut self, view: ViewId, clip: Option<Bounds>) { self.0.borrow_mut().viewport_clips.insert(raw(view), clip); }
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
@@ -8044,7 +8047,7 @@ fn devtools_native_frames_and_mouse_holes_exclude_gpui_divider(cx: &mut TestAppC
     cx.run_until_parked();
     let status = inspector_status(&view, cx).unwrap();
     let original = layout.iter().find(|(id, _)| *id == tab).unwrap().1;
-    let (page, divider, frontend) = crate::devtools::frames(original).unwrap();
+    let (page, divider, frontend) = crate::devtools::frames(original, None).unwrap();
     assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], page);
     assert_eq!(fake.0.borrow().inspector_bounds, Some(frontend));
     view.read_with(cx, |view, _| {
@@ -8067,6 +8070,39 @@ fn devtools_native_frames_and_mouse_holes_exclude_gpui_divider(cx: &mut TestAppC
     cx.run_until_parked();
     assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], original);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(_) | Call::Close(_))));
+}
+
+#[gpui::test]
+fn devtools_divider_drag_resizes_the_dock_and_keeps_the_page_frame_stable(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    accept_recording_inspector(&view, cx, &fake);
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let status = inspector_status(&view, cx).unwrap();
+    let before = fake.0.borrow().inspector_bounds.unwrap();
+    let page = fake.0.borrow().bounds[&raw(status.inspected)];
+    // Hovering re-renders without resizing the docked page.
+    fake.0.borrow_mut().bounds_changes.clear();
+    for step in 0..3 {
+        cx.simulate_mouse_move(gpui::point(gpui::px(page.x as f32 + 40. + step as f32), gpui::px(page.y as f32 + 40.)), None, Modifiers::none());
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert_eq!(fake.0.borrow().bounds_changes, vec![]);
+    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], page);
+    let divider = cx.debug_bounds("devtools-divider").unwrap();
+    let start = divider.center();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    let end = start - gpui::point(gpui::px(100.), gpui::px(0.));
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let after = fake.0.borrow().inspector_bounds.unwrap();
+    assert_eq!(after.width, before.width + 100.);
+    assert_eq!(after.x + after.width, before.x + before.width);
+    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)].width, page.width - 100.);
+    assert!(!view.read_with(cx, |view, _| view.devtools_resizing));
 }
 
 #[gpui::test]

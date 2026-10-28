@@ -150,6 +150,7 @@ pub trait WebEngine {
     fn inspector_status(&self, _id: engine::InspectorId) -> Option<engine::InspectorStatus> { None }
     fn set_inspector_frame(&mut self, _id: engine::InspectorId, _bounds: Bounds) {}
     fn set_inspector_visible(&mut self, _id: engine::InspectorId, _visible: bool) {}
+    fn set_inspector_corners(&mut self, _id: engine::InspectorId, _radius: f64) {}
     fn send_inspector_probe_message(&mut self, _id: engine::InspectorId, _message: &str) -> bool { false }
     fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { Vec::new() }
     fn close_inspector(&mut self, _id: engine::InspectorId) {}
@@ -425,6 +426,7 @@ impl WebEngine for Chromium {
     fn inspector_status(&self, id: engine::InspectorId) -> Option<engine::InspectorStatus> { self.engine.inspector_status(id) }
     fn set_inspector_frame(&mut self, id: engine::InspectorId, bounds: Bounds) { self.engine.set_inspector_frame(id, bounds); }
     fn set_inspector_visible(&mut self, id: engine::InspectorId, visible: bool) { self.engine.set_inspector_visible(id, visible); }
+    fn set_inspector_corners(&mut self, id: engine::InspectorId, radius: f64) { self.engine.set_inspector_corners(id, radius); }
     fn send_inspector_probe_message(&mut self, id: engine::InspectorId, message: &str) -> bool { self.engine.send_inspector_probe_message(id, message) }
     fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { self.engine.take_inspector_events() }
     fn close_inspector(&mut self, id: engine::InspectorId) { self.engine.close_inspector(id); }
@@ -635,6 +637,8 @@ struct PageStore {
     clock: Option<gpui::BackgroundExecutor>,
     inspector_probe: Option<InspectorProbe>,
     devtools: Option<devtools::Dock>,
+    /// Dragged DevTools width; `None` keeps the default third.
+    devtools_width: Option<f64>,
     devtools_restore: HashSet<u64>,
     next_inspector_eval: u64,
     engine: Box<dyn WebEngine>,
@@ -873,7 +877,7 @@ impl Pages {
             store: Rc::new(RefCell::new(PageStore {
                 #[cfg(test)]
                 clock: None,
-                devtools_restore: HashSet::new(), devtools: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+                devtools_restore: HashSet::new(), devtools: None, devtools_width: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
                 events: Vec::new(), next_event: 0, metadata: BTreeMap::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             viewport: PageViewport::Content,
             viewport_generation: 0,
@@ -1577,7 +1581,11 @@ impl Pages {
         let waiting: HashSet<_> = wanted.iter().filter_map(|(intent, _)| {
             (active && !self.parent.is_null() && !store.prepare_handoff(intent.tab, self.host)).then_some(intent.tab)
         }).collect();
-        let PageStore { engine, pages, .. } = &mut *store;
+        let PageStore { engine, pages, devtools, devtools_width, .. } = &mut *store;
+        // A docked page keeps its narrowed frame; resetting it to the pane on
+        // every sync resized the document twice per pointer move.
+        let docked = devtools.filter(|dock| dock.host == self.host).map(|dock| (dock.tab, dock.view));
+        let devtools_width = *devtools_width;
         let ids: HashSet<_> = wanted.iter().map(|(intent, _)| intent.tab).collect();
         let hidden: Vec<_> = self.visible.difference(&ids).copied().collect();
         for tab in hidden {
@@ -1617,6 +1625,9 @@ impl Pages {
                         engine.navigate(page.view, &url);
                         page.url = url;
                     }
+                    let bounds = if docked == Some((tab, page.view)) {
+                        devtools::frames(bounds, devtools_width).map_or(bounds, |(page, _, _)| page)
+                    } else { bounds };
                     engine.set_bounds(page.view, bounds);
                     page.frame = bounds;
                 }
@@ -1701,7 +1712,7 @@ impl Pages {
         let mut surfaces: Vec<_> = self.surface_layout().into_iter().map(|(_, bounds)| bounds).collect();
         let store = self.store.borrow();
         if let Some(dock) = store.devtools.filter(|dock| dock.host == self.host) {
-            if let Some((_, _, frontend)) = store.layouts.get(&self.host).and_then(|layout| layout.get(&dock.tab)).copied().and_then(devtools::frames) {
+            if let Some((_, _, frontend)) = store.layouts.get(&self.host).and_then(|layout| layout.get(&dock.tab)).copied().and_then(|frame| devtools::frames(frame, store.devtools_width)) {
                 surfaces.push(frontend);
             }
         }
