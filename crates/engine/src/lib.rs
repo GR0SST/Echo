@@ -2249,6 +2249,14 @@ wrap_app! {
                     Some(&CefString::from(self.shutdown_marker.as_str())),
                 );
                 command_line.append_switch(Some(&CefString::from("echo-video-only-pip")));
+                // Show the newest page frame instead of waiting up to four
+                // frames for each resized surface: pointer-rate resizes
+                // (DevTools divider, window edges) queued seconds of stale
+                // frames that kept reflowing after the drag ended.
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("deadline-to-synchronize-surfaces")),
+                    Some(&CefString::from("0")),
+                );
                 #[cfg(target_os = "linux")]
                 command_line.append_switch_with_value(Some(&CefString::from("ozone-platform")), Some(&CefString::from("x11")));
                 if cfg!(debug_assertions) && !developer_id_signed() {

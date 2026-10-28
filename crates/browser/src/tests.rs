@@ -8077,6 +8077,40 @@ fn devtools_native_frames_and_mouse_holes_exclude_gpui_divider(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn devtools_divider_drag_resizes_chromium_at_most_once_per_frame(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    accept_recording_inspector(&view, cx, &fake);
+    cx.simulate_keystrokes("cmd-alt-i");
+    cx.run_until_parked();
+    let page = raw(inspector_status(&view, cx).unwrap().inspected);
+    let start = cx.debug_bounds("devtools-divider").unwrap().center();
+    let resizes = |fake: &FakeEngine| fake.0.borrow().bounds_changes.iter().filter(|(view, _)| *view == page).count();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    fake.0.borrow_mut().bounds_changes.clear();
+    // Pointer-rate moves within one interval reach Chromium as one resize.
+    for step in 1..=8 {
+        cx.simulate_mouse_move(start - gpui::point(gpui::px(step as f32 * 5.), gpui::px(0.)), gpui::MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    }
+    assert_eq!(resizes(&fake), 1);
+    cx.executor().advance_clock(Duration::from_millis(16));
+    cx.run_until_parked();
+    assert_eq!(resizes(&fake), 2);
+    // Release applies the final width at once.
+    let end = start - gpui::point(gpui::px(80.), gpui::px(0.));
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(resizes(&fake), 3);
+    let final_width = fake.0.borrow().bounds_changes.last().unwrap().1.width;
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert_eq!(resizes(&fake), 3);
+    assert_eq!(fake.0.borrow().bounds[&page].width, final_width);
+}
+
+#[gpui::test]
 fn devtools_divider_drag_resizes_the_dock_and_keeps_the_page_frame_stable(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     accept_recording_inspector(&view, cx, &fake);

@@ -761,6 +761,7 @@ pub struct BrowserWindow {
     pub(crate) devtools_resizing: bool,
     /// Latest dragged divider x, applied once per frame.
     pub(crate) devtools_resize_target: Option<f64>,
+    pub(crate) devtools_resized_at: Option<std::time::Instant>,
     sidebar_resize_generation: u64,
     sidebar_resize_focus_on_activation: Option<(crate::pages::ResizePageFocus, u64)>,
     pub(crate) sidebar_render_width: Option<f32>,
@@ -1129,6 +1130,7 @@ impl BrowserWindow {
             sidebar_resize: None,
             devtools_resizing: false,
             devtools_resize_target: None,
+            devtools_resized_at: None,
             sidebar_resize_generation: 0,
             sidebar_resize_focus_on_activation: None,
             sidebar_render_width: None,

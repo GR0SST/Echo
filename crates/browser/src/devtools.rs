@@ -47,6 +47,8 @@ pub(super) struct Dock {
 
 /// The GPUI gap between the page card and the DevTools card, as in Arc.
 pub(crate) const DIVIDER_WIDTH: f64 = crate::pages::CONTENT_INSET as f64;
+/// One native resize per frame; pointer events can arrive several times faster.
+const RESIZE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 /// Neither card shrinks below this while the divider is dragged.
 const MIN_PANE: f64 = 160.;
 
@@ -112,11 +114,13 @@ impl BrowserWindow {
                 if phase != gpui::DispatchPhase::Capture { return; }
                 let _ = moving.update(cx, |this, cx| {
                     if !event.dragging() { this.devtools_resizing = false; cx.notify(); return; }
-                    // One native resize per frame: pointer events outpace
-                    // Chromium, which kept resizing after the release.
                     let scheduled = this.devtools_resize_target.replace(f64::from(f32::from(event.position.x))).is_some();
                     if !scheduled {
-                        cx.on_next_frame(window, |this, _, cx| this.apply_devtools_resize(cx));
+                        let wait = RESIZE_INTERVAL.saturating_sub(this.devtools_resized_at.map_or(RESIZE_INTERVAL, |at| at.elapsed()));
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor().timer(wait).await;
+                            let _ = this.update(cx, |this, cx| this.apply_devtools_resize(cx));
+                        }).detach();
                     }
                 });
             });
@@ -153,6 +157,7 @@ impl BrowserWindow {
 
     fn apply_devtools_resize(&mut self, cx: &mut Context<Self>) {
         let Some(x) = self.devtools_resize_target.take() else { return; };
+        self.devtools_resized_at = Some(std::time::Instant::now());
         if let Some(pages) = &self.pages { pages.borrow_mut().resize_devtools(x); }
         cx.notify();
     }
