@@ -518,6 +518,36 @@ mod mac {
         }
     }
 
+    /// Accessibility clients (window managers such as ModDrag) climb from
+    /// the element under the pointer to the first AXWindow and move that.
+    /// An overlay reports itself as a group inside the browser window, so
+    /// such tools move the whole browser, as with Arc's Command Bar.
+    unsafe fn present_as_part_of_parent(overlay: *mut AnyObject) {
+        use objc2::runtime::{AnyClass, ClassBuilder};
+        unsafe extern "C-unwind" fn role(_: &AnyObject, _: Sel) -> *mut AnyObject {
+            unsafe { msg_send![objc2::class!(NSString), stringWithUTF8String: c"AXGroup".as_ptr()] }
+        }
+        unsafe extern "C-unwind" fn parent(this: &AnyObject, _: Sel) -> *mut AnyObject {
+            let owner: *mut AnyObject = unsafe { msg_send![this, parentWindow] };
+            if !owner.is_null() { return owner; }
+            unsafe { msg_send![objc2::class!(NSApplication), sharedApplication] }
+        }
+        unsafe {
+            let class: &AnyClass = msg_send![overlay, class];
+            let name = class.name().to_string_lossy();
+            if name.starts_with("EchoOverlay") { return; }
+            let sub = format!("EchoOverlay{name}\0");
+            let sub_name = std::ffi::CStr::from_bytes_with_nul(sub.as_bytes()).unwrap();
+            let subclass = AnyClass::get(sub_name).unwrap_or_else(|| {
+                let mut builder = ClassBuilder::new(sub_name, class).expect("overlay subclass");
+                builder.add_method(sel!(accessibilityRole), role as unsafe extern "C-unwind" fn(_, _) -> _);
+                builder.add_method(sel!(accessibilityParent), parent as unsafe extern "C-unwind" fn(_, _) -> _);
+                builder.register()
+            });
+            objc2::ffi::object_setClass(overlay.cast(), (subclass as *const AnyClass).cast());
+        }
+    }
+
     pub fn attach_overlay(parent_view: *mut c_void, overlay_view: *mut c_void, traffic_lights: bool) {
         let (parent, overlay) = (window(parent_view), window(overlay_view));
         if parent.is_null() || overlay.is_null() {
@@ -548,6 +578,7 @@ mod mac {
             let _: () = msg_send![overlay, setMovable: Bool::NO];
             let _: () = msg_send![overlay, setMovableByWindowBackground: Bool::NO];
             let _: () = msg_send![parent, addChildWindow: overlay, ordered: WINDOW_ABOVE];
+            present_as_part_of_parent(overlay);
         }
     }
 
