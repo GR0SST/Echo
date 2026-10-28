@@ -322,6 +322,7 @@ fn open_incognito_with(url: Option<String>, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     let handle = cx.open_window(
         WindowOptions {
+            window_min_size: window::window_min_size(),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
                 title: Some("Echo — Incognito".into()),

@@ -79,6 +79,9 @@ const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
 const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
 /// How long a revealed sidebar waits for the pointer before hiding.
 const FLOATING_SIDEBAR_GRACE: Duration = Duration::from_millis(800);
+/// Arc's smallest browser window, measured in points.
+pub const WINDOW_MIN_SIZE: (f32, f32) = (470., 382.);
+pub(crate) fn window_min_size() -> Option<gpui::Size<gpui::Pixels>> { Some(size(px(WINDOW_MIN_SIZE.0), px(WINDOW_MIN_SIZE.1))) }
 pub const TRAFFIC_LIGHT_X: f32 = 12.5;
 pub const TRAFFIC_LIGHT_Y: f32 = 17.0;
 /// Critical spring fitted to the installed Arc's keyboard slide (24.7/s).

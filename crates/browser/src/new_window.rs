@@ -235,6 +235,7 @@ fn open_with(request: NewWindow, command_bar: bool, cx: &mut App) {
     let handle = cx
         .open_window(
             WindowOptions {
+                window_min_size: window::window_min_size(),
                 window_bounds: Some(bounds),
                 display_id,
                 focus: focused && !welcome,

@@ -24,6 +24,7 @@ fn open_for_source_with_url(source: UserProfileId, url:Option<String>, cx: &mut 
     if !normal.profile.read_settings(|b|b.user_profile(source).is_some()){return;}
     let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
     let handle = cx.open_window(WindowOptions {
+        window_min_size: window::window_min_size(),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some(crate::APP_NAME.into()), appears_transparent: true,
             traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))), }),
