@@ -9,7 +9,7 @@ impl BrowserWindow {
             .w(px(28.)).h(px(28.)).flex_none().rounded(px(5.)).flex().items_center().justify_center()
             .cursor_pointer().hover(|button|button.bg(hsla(0.,0.,1.,0.08))).child(if icon=="extension-puzzle-outline" { extension_icon() } else { crate::icons::ionicon(icon,16.,1.) });
         let divider = |margin| div().mx(px(margin)).w(px(1.)).h(px(18.)).bg(hsla(0.,0.,1.,0.1));
-        div().debug_selector(||"developer-toolbar".into()).absolute().top_0().left_0().right_0().h(px(40.))
+        div().debug_selector(||"developer-toolbar".into()).absolute().top_0().left_0().right_0().h(px(40.)).rounded_t(px(crate::pages::CONTENT_CORNER_RADIUS))
             .flex().items_center().px(px(4.)).bg(gpui::rgb(0x3e43cf)).text_color(gpui::rgb(0xe8e7ff))
             .child(gpui::canvas(|_,_,_|(), |bounds,_,window,_| {
                 for x in (-40..f32::from(bounds.size.width) as i32+40).step_by(44) {
