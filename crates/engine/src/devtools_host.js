@@ -4,6 +4,10 @@
   'use strict';
   let live = true, bound = false, queued = [], queuedBytes = 0;
   const preferences = Object.create(null);
+  // The frontend builds its dock controller from these; the parent releases
+  // them with the remembered dock side.
+  let preferencesReady = false, waitingPreferences = [];
+  const docks = ['right', 'left', 'bottom', 'undocked'];
   const emit = (kind, payload = '') => live && send(kind, payload);
   const api = () => globalThis.InspectorFrontendAPI;
   const dispatch = message => {
@@ -15,10 +19,13 @@
   const host = {
     platform() { return navigator.userAgent.includes('Windows NT') ? 'windows' : navigator.userAgent.includes('Mac OS X') ? 'mac' : 'linux'; },
     isHostedMode() { return false; },
-    getPreferences(callback) { callback({...preferences}); },
-    getPreference(name, callback) { callback(preferences[name]); },
+    getPreferences(callback) { if (preferencesReady) callback({...preferences}); else waitingPreferences.push(() => callback({...preferences})); },
+    getPreference(name, callback) { if (preferencesReady) callback(preferences[name]); else waitingPreferences.push(() => callback(preferences[name])); },
     registerPreference() {},
     setPreference(name, value) {
+      if (live && name === 'currentDockState') {
+        try { const dock = JSON.parse(value); if (docks.includes(dock) && preferences[name] !== value) emit('dock', dock); } catch {}
+      }
       if (live && name === 'panel-selected-tab') {
         try { const panel = JSON.parse(value); if (typeof panel === 'string') emit('selected', panel); } catch {}
       }
@@ -49,6 +56,12 @@
     readyForTest() { emit('ready'); },
     zoomFactor() { return 1; },
     setIsDocked(_docked, callback) { callback?.(); },
+    // Docked, the frontend fills its pane and reserves this rectangle for the
+    // inspected page, which the parent places above it.
+    setInspectedPageBounds(bounds) {
+      const values = [bounds?.x, bounds?.y, bounds?.width, bounds?.height].map(Math.round);
+      if (values.every(value => Number.isFinite(value) && value >= 0 && value <= 100000)) emit('bounds', values.join(','));
+    },
     initialTargetId() { return Promise.resolve(null); },
     requestFileSystems() { api().fileSystemsLoaded([]); },
     isolatedFileSystem() { return null; },
@@ -66,7 +79,7 @@
   // Explicit, version-matched optional ABI. These features need parent-owned
   // integrations; none is silently borrowed from the hosted implementation.
   for (const name of [
-    'setInspectedPageBounds','inspectElementCompleted',
+    'inspectElementCompleted',
     'setInjectedScriptForOrigin','inspectedURLChanged','copyText','openInNewTab',
     'openSearchResultsInNewTab','showItemInFolder','save','append','close',
     'recordCountHistogram','recordEnumeratedHistogram','recordPerformanceHistogram',
@@ -101,5 +114,10 @@
       } else { emit('release'); live = false; }
     } else if (kind === 'panel' && ['elements','console','network'].includes(payload)) api().showPanel(payload);
     else if (kind === 'inspect') api().enterInspectElementMode();
+    else if (kind === 'preferences' && docks.includes(payload) && !preferencesReady) {
+      preferences.currentDockState = JSON.stringify(payload);
+      preferencesReady = true;
+      for (const resume of waitingPreferences.splice(0)) resume();
+    }
   };
 })

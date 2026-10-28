@@ -198,6 +198,18 @@ pub fn create_clip_view(parent: *mut c_void, radius: f64) -> *mut c_void {
     }
 }
 
+/// Orders `view` directly below its sibling `above`, keeping CEF alive.
+pub fn place_below(view: *mut c_void, above: *mut c_void) {
+    const BELOW: isize = -1; // NSWindowBelow
+    unsafe {
+        let parent: *mut AnyObject = msg_send![above as *mut AnyObject, superview];
+        let current: *mut AnyObject = msg_send![view as *mut AnyObject, superview];
+        if parent.is_null() || current != parent { return; }
+        let _: () = msg_send![view as *mut AnyObject, removeFromSuperview];
+        let _: () = msg_send![parent, addSubview: view as *mut AnyObject, positioned: BELOW, relativeTo: above as *mut AnyObject];
+    }
+}
+
 /// Moves the retained clip host, keeping CEF's browser and renderer alive.
 pub fn move_clip_view(view: *mut c_void, parent: *mut c_void) {
     unsafe {
@@ -243,13 +255,13 @@ pub fn set_corner_radius(view: *mut c_void, radius: f64) {
 }
 
 /// The clip host is an unflipped NSView: minimum-Y corners are its bottom edge.
-/// A split header squares the top pair; a docked inspector squares one side.
-pub fn set_rounded_corners(view: *mut c_void, top: bool, (left, right): (bool, bool)) {
+/// A split header squares the top pair; a docked inspector squares its joint.
+pub fn set_rounded_corners(view: *mut c_void, top: bool, [top_left, top_right, bottom_left, bottom_right]: [bool; 4]) {
     // kCALayerMinXMinYCorner, MaxXMinY, MinXMaxY, MaxXMaxY.
-    let corners = [(1usize, left, false), (2, right, false), (4, left, true), (8, right, true)]
+    let corners = [(1usize, bottom_left), (2, bottom_right), (4, top_left && top), (8, top_right && top)]
         .into_iter()
-        .filter(|&(_, side, upper)| side && (top || !upper))
-        .fold(0, |mask, (bit, _, _)| mask | bit);
+        .filter(|&(_, open)| open)
+        .fold(0, |mask, (bit, _)| mask | bit);
     unsafe {
         let layer: *mut AnyObject = msg_send![view as *mut AnyObject, layer];
         if !layer.is_null() {

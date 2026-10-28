@@ -88,7 +88,7 @@ pub use printing::{PrintDispatch, PrintRequest};
 mod paste_style;
 pub use paste_style::{PasteDispatch, PasteRequest};
 mod devtools_renderer;
-pub use devtools::{InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
+pub use devtools::{InspectorDock, InspectorEvent, InspectorId, InspectorPanel, InspectorPhase, InspectorStatus, INSPECTOR_FRONTEND_URL};
 mod host;
 #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 mod x11_key_event;
@@ -263,8 +263,9 @@ struct View<B = Browser, C = RequestContext> {
     native_scale: f64,
     focus_state: native_geometry::FocusState,
     rounded_top: bool,
-    /// Left and right corner pairs; a docked inspector squares the joint.
-    rounded_sides: (bool, bool),
+    /// Corners not joined to a docked inspector: top-left, top-right,
+    /// bottom-left, bottom-right.
+    open_corners: [bool; 4],
     link_policy: Arc<Mutex<PeekPolicy>>,
 }
 
@@ -974,7 +975,7 @@ impl Engine {
                 native_scale: host::scale(parent),
                 focus_state: Default::default(),
                 rounded_top: true,
-                rounded_sides: (true, true),
+                open_corners: [true; 4],
                 link_policy: policy,
             },
         );
@@ -1105,17 +1106,17 @@ impl Engine {
         if view.rounded_top == rounded { return; }
         view.rounded_top = rounded;
         #[cfg(target_os = "macos")]
-        mac::set_rounded_corners(view.host, view.rounded_top, view.rounded_sides);
+        mac::set_rounded_corners(view.host, view.rounded_top, view.open_corners);
     }
 
-    /// A docked inspector joins the page squarely: the page keeps its left
-    /// corners, the inspector its right ones.
-    pub fn set_side_corners_rounded(&mut self, id: ViewId, left: bool, right: bool) {
+    /// A docked inspector joins its page squarely: each keeps only the
+    /// corners away from the joint (top-left, top-right, bottom-left, bottom-right).
+    pub fn set_open_corners(&mut self, id: ViewId, corners: [bool; 4]) {
         let Some(view) = self.views.get_mut(&id) else { return; };
-        if view.rounded_sides == (left, right) { return; }
-        view.rounded_sides = (left, right);
+        if view.open_corners == corners { return; }
+        view.open_corners = corners;
         #[cfg(target_os = "macos")]
-        mac::set_rounded_corners(view.host, view.rounded_top, view.rounded_sides);
+        mac::set_rounded_corners(view.host, view.rounded_top, view.open_corners);
     }
 
     pub fn frame(&self, id: ViewId) -> Option<Bounds> {
@@ -1422,15 +1423,38 @@ impl Engine {
         if let Some(session) = self.inspectors.sessions.get(&inspector) { self.set_frame(session.frontend, frame); }
     }
 
-    /// A docked inspector rounds only its outer (right) corners, sharing the
+    /// Round the inspector card's corners away from its page, sharing the
     /// page's top-corner treatment when a split header owns those.
-    pub fn set_inspector_corners(&mut self, inspector: InspectorId, radius: f64) {
+    pub fn set_inspector_corners(&mut self, inspector: InspectorId, radius: f64, corners: [bool; 4]) {
         let Some(session) = self.inspectors.sessions.get(&inspector) else { return; };
         let (frontend, inspected) = (session.frontend, session.status.inspected);
         let top = self.views.get(&inspected).is_none_or(|view| view.rounded_top);
         self.set_corner_radius(frontend, radius);
         self.set_top_corners_rounded(frontend, top);
-        self.set_side_corners_rounded(frontend, false, true);
+        self.set_open_corners(frontend, corners);
+    }
+
+    /// Docked, the frontend fills the pane and the inspected page sits above it.
+    pub fn place_inspector_below_page(&mut self, inspector: InspectorId) {
+        let Some(session) = self.inspectors.sessions.get(&inspector) else { return; };
+        let (Some(frontend), Some(page)) = (self.views.get(&session.frontend), self.views.get(&session.status.inspected)) else { return; };
+        #[cfg(target_os = "macos")]
+        mac::place_below(frontend.host, page.host);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (frontend, page);
+    }
+
+    /// The placement the frontend restores into its preferences when it
+    /// (re)creates its document.
+    pub fn set_inspector_dock(&mut self, inspector: InspectorId, dock: InspectorDock) {
+        if let Some(session) = self.inspectors.sessions.get_mut(&inspector) { session.dock = dock; }
+    }
+
+    /// Moves the live frontend into another UI host (a separate DevTools
+    /// window, or back beside its page) without reloading it.
+    pub fn move_inspector(&mut self, inspector: InspectorId, ui_view: *mut c_void, frame: Bounds) -> bool {
+        let Some(frontend) = self.inspectors.sessions.get(&inspector).map(|session| session.frontend) else { return false; };
+        self.move_view(frontend, ui_view, frame)
     }
 
     pub fn set_inspector_visible(&mut self, inspector: InspectorId, visible: bool) {
@@ -1529,6 +1553,21 @@ impl Engine {
     /// Drops the observer and closes only the frontend. The inspected document
     /// remains alive and is neither navigated nor reloaded.
     pub fn close_inspector(&mut self, inspector: InspectorId) {
+        // The frontend shares the page's protocol session, so its node picker
+        // and highlight would outlive it.
+        let page = self.inspectors.sessions.get(&inspector)
+            .filter(|session| matches!(session._binding, devtools::NativeBinding::Page { .. }))
+            .is_some();
+        if page {
+            for method in ["Overlay.setInspectMode", "Overlay.hideHighlight", "Overlay.disable"] {
+                let Some(id) = self.message_ids.next() else { break; };
+                let params = if method == "Overlay.setInspectMode" {
+                    serde_json::json!({ "mode": "none", "highlightConfig": {} })
+                } else { serde_json::json!({}) };
+                let message = serde_json::json!({ "id": id, "method": method, "params": params });
+                self.send_inspector_backend(inspector, message.to_string().as_bytes());
+            }
+        }
         if let Some(frontend) = self.inspectors.close(inspector) { self.close(frontend); }
     }
 
@@ -2524,7 +2563,7 @@ mod view_storage_lifetime_tests {
             native_scale: 1.,
             focus_state: Default::default(),
             rounded_top: true,
-            rounded_sides: (true, true),
+            open_corners: [true; 4],
             link_policy: Arc::default(),
         }
     }

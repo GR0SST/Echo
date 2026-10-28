@@ -117,17 +117,20 @@ isolation is retained; native regular/private cookie isolation still needs the
 parent acceptance test.
 
 The sole trusted frontend URL is now
-`devtools://devtools/bundled/devtools_app.html` (no query or fragment).
+`devtools://devtools/bundled/devtools_app.html?can_dock=true` (exactly this
+query, no fragment).
 The former `inspector.html` entrypoint imports the desktop module plus
 `screencast-meta.js`, whose order-1 ScreencastApp overrides the order-10 SimpleApp
 and starts with screencast enabled. This is a remote-device presentation, not a
 GPUI docking setting. The original desktop entrypoint uses SimpleApp directly,
 showing InspectorView in RootView without the remote preview/navigation panel.
-No `can_dock`, `dockSide`, synthetic preference, hidden DOM or custom frontend
-is needed: GPUI owns the containing dock. The Bun regression checks the exact
+`can_dock=true` selects the frontend's own docked presentation, including its
+toolbar close button (`Host.closeWindow`), as in Arc; GPUI still owns the
+containing dock and only the right side is laid out. No `dockSide`, synthetic
+preference, hidden DOM or custom frontend is needed. The Bun regression checks the exact
 installed entrypoint resources and executes the original SimpleApp registration
 and presentation. The URL allowlist remains exact equality, rejecting the old
-entrypoint, query parameters, fragments and lookalike hosts.
+entrypoint, the bare URL, other query parameters, fragments and lookalike hosts.
 
 Original frontend modules create InspectorFrontendAPI. The engine never
 substitutes that dispatcher or the frontend UI. Static host bootstrap is the

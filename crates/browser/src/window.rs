@@ -757,11 +757,8 @@ pub struct BrowserWindow {
     pub(crate) restore_window: Option<browser_core::window_restore::RestoredWindow>,
     pub(crate) restore_dormant: bool,
     sidebar_resize: Option<sidebar_resize::SidebarResizeGesture>,
-    /// The DevTools divider is being dragged.
-    pub(crate) devtools_resizing: bool,
-    /// Latest dragged divider x, applied once per frame.
-    pub(crate) devtools_resize_target: Option<f64>,
-    pub(crate) devtools_resized_at: Option<std::time::Instant>,
+    /// Separate windows of undocked DevTools.
+    pub(crate) devtools_windows: HashMap<engine::InspectorId, gpui::WindowHandle<crate::devtools::DevToolsWindow>>,
     sidebar_resize_generation: u64,
     sidebar_resize_focus_on_activation: Option<(crate::pages::ResizePageFocus, u64)>,
     pub(crate) sidebar_render_width: Option<f32>,
@@ -1128,9 +1125,7 @@ impl BrowserWindow {
             sidebar_width: SIDEBAR_WIDTH,
             restore_window: None, restore_dormant: false,
             sidebar_resize: None,
-            devtools_resizing: false,
-            devtools_resize_target: None,
-            devtools_resized_at: None,
+            devtools_windows: HashMap::new(),
             sidebar_resize_generation: 0,
             sidebar_resize_focus_on_activation: None,
             sidebar_render_width: None,
@@ -4387,8 +4382,6 @@ impl BrowserWindow {
         let mouse_tracking = self.mouse_tracking.clone();
         self.pages.clone().and_then(|pages| {
                         let generation = pages.try_borrow().ok()?.viewport_generation();
-                        let divider_pages = pages.clone();
-                        let divider_dark = self.theme_is_dark();
                         // Reports the card's bounds so the native page view can sit on it.
                         Some(canvas(
                             move |bounds, window, cx| {
@@ -4424,11 +4417,7 @@ impl BrowserWindow {
                                     });
                                 }
                             },
-                            move |_, _, window, _| {
-                                if let Some(divider) = divider_pages.borrow().devtools_divider() {
-                                    crate::devtools::paint_divider(window, divider, divider_dark);
-                                }
-                            },
+                            |_, _, _, _| {},
                         )
                         .absolute()
                         .top_0()
@@ -5073,6 +5062,7 @@ impl Render for SidebarView {
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = crate::native::view_of(window);
+        self.sync_devtools_windows(cx);
         if let Some(pages)=&self.pages { pages.borrow_mut().sync_shortcuts(crate::shortcuts::page(cx)); }
         if window.is_window_active() {
             let sidebar = self.command_bar.is_none() && self.tab_rename.is_none() && self.folder_rename.is_none() && self.folder_rename_pending.is_none()
@@ -5348,7 +5338,6 @@ impl Render for BrowserWindow {
             .child(div().id("native-action-scope").absolute().size_0().track_focus(&self.native_action_focus))
             .child(content)
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
-            .when(!library_open, |this| this.children(self.render_devtools_divider(cx)))
             .when_some(library, |this, library| this.child(library))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))

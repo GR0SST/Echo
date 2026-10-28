@@ -67,7 +67,7 @@ fn fixture_for_tab(inspector: bool, tab: TabId) -> (Pages, Rc<RefCell<FocusState
         });
         if inspector {
             let id = engine::InspectorId::from_raw(11);
-            store.devtools = Some(devtools::Dock { id, tab, view, host: pages.host });
+            store.devtools.insert(tab, devtools::Dock { id, tab, view, host: pages.host, side: engine::InspectorDock::Right, page_bounds: None, applied: None });
             state.borrow_mut().frontend = Some(engine::InspectorStatus {
                 id, inspected: view, generation: 13, panel: engine::InspectorPanel::Elements,
                 selected_panel: Some(engine::InspectorPanel::Elements), phase: engine::InspectorPhase::FrontendReady,
@@ -272,16 +272,22 @@ fn stale_frontend_does_not_fall_back_to_page_focus() {
         let snapshot = pages.capture_resize_focus();
         pages.request_ui_focus();
         match mutation {
-            0 => pages.store.borrow_mut().devtools = None,
-            1 => pages.store.borrow_mut().devtools.as_mut().unwrap().id = engine::InspectorId::from_raw(99),
+            0 => pages.store.borrow_mut().devtools.clear(),
+            1 => pages.store.borrow_mut().devtools.values_mut().next().unwrap().id = engine::InspectorId::from_raw(99),
             2 => state.borrow_mut().frontend.as_mut().unwrap().generation += 1,
             3 => state.borrow_mut().frontend.as_mut().unwrap().inspected = ViewId::from_raw(99),
             4 => state.borrow_mut().frontend.as_mut().unwrap().phase = engine::InspectorPhase::Detached,
             5 => state.borrow_mut().frontend.as_mut().unwrap().phase = engine::InspectorPhase::LoadFailed,
             6 => state.borrow_mut().frontend = None,
-            7 => pages.store.borrow_mut().devtools.as_mut().unwrap().host += 1,
-            8 => pages.store.borrow_mut().devtools.as_mut().unwrap().tab = serde_json::from_str("2").unwrap(),
-            9 => pages.store.borrow_mut().devtools.as_mut().unwrap().view = ViewId::from_raw(99),
+            7 => pages.store.borrow_mut().devtools.values_mut().next().unwrap().host += 1,
+            8 => {
+                // The dock now belongs to another pane's tab.
+                let mut store = pages.store.borrow_mut();
+                let mut dock = store.devtools.drain().next().unwrap().1;
+                dock.tab = serde_json::from_str("2").unwrap();
+                store.devtools.insert(dock.tab, dock);
+            }
+            9 => pages.store.borrow_mut().devtools.values_mut().next().unwrap().view = ViewId::from_raw(99),
             10 => state.borrow_mut().frontend.as_mut().unwrap().id = engine::InspectorId::from_raw(99),
             _ => unreachable!(),
         }

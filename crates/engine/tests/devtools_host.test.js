@@ -23,7 +23,11 @@ test('host callbacks unblock bootstrap, preferences stay in document memory, men
   a.host.setPreference('secret', 'private');
   a.host.getPreferences(value => preferences = value);
   expect(config.devToolsVeLogging.enabled).toBe(false);
+  // Bootstrap waits for the parent's dock placement before reading preferences.
+  expect(preferences).toBeUndefined();
+  a.receive('preferences', 'right');
   expect(preferences.secret).toBe('private');
+  b.receive('preferences', 'right');
   b.host.getPreferences(value => expect(value.secret).toBeUndefined());
   a.host.clearPreferences();
   a.host.getPreferences(value => expect(Object.keys(value)).toHaveLength(0));
@@ -31,6 +35,25 @@ test('host callbacks unblock bootstrap, preferences stay in document memory, men
   expect(a.menus).toEqual([true]);
   expect(a.calls).toContainEqual(['loaded', '']);
   expect(() => a.host.showContextMenuAtPoint()).toThrow('soft menus');
+});
+test('dock side is restored once from the parent and menu choices are reported', () => {
+  const s = setup();
+  let preferences, single;
+  s.host.getPreferences(value => preferences = value);
+  s.host.getPreference('currentDockState', value => single = value);
+  s.receive('preferences', 'evil');
+  expect(preferences).toBeUndefined();
+  s.receive('preferences', 'bottom');
+  expect(preferences.currentDockState).toBe('"bottom"');
+  expect(single).toBe('"bottom"');
+  s.receive('preferences', 'left');
+  s.host.getPreferences(value => preferences = value);
+  expect(preferences.currentDockState).toBe('"bottom"');
+  // Restoring the same side is not a request; a menu choice is.
+  s.host.setPreference('currentDockState', '"bottom"');
+  s.host.setPreference('currentDockState', '"undocked"');
+  s.host.setPreference('currentDockState', '"top"');
+  expect(s.calls.filter(([kind]) => kind === 'dock')).toEqual([['dock', 'undocked']]);
 });
 test('backend data remains data, buffers until first bound send, and reports successful delivery', () => {
   const s = setup();
@@ -144,7 +167,7 @@ test.skipIf(!cef)('native host survives exact compatibility then original host-m
 test.skipIf(!cef)('desktop entrypoint selects original SimpleApp without remote screencast layout', async () => {
   const html = resource(51409), desktop = resource(51412), remote = resource(51418);
   const engine = readFileSync(new URL('../src/devtools.rs', import.meta.url), 'utf8');
-  expect(engine).toContain('pub const INSPECTOR_FRONTEND_URL: &str = "devtools://devtools/bundled/devtools_app.html";');
+  expect(engine).toContain('pub const INSPECTOR_FRONTEND_URL: &str = "devtools://devtools/bundled/devtools_app.html?can_dock=true";');
   expect(html).toContain('src="./entrypoints/devtools_app/devtools_app.js"');
   expect(desktop).toContain('import"../shell/shell.js"');
   expect(desktop).not.toContain('screencast');

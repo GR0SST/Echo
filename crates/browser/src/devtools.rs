@@ -3,8 +3,9 @@
 use super::{PageStore, Pages};
 use crate::window::BrowserWindow;
 use browser_core::TabId;
-use engine::{Bounds, InspectorId, InspectorPanel, InspectorStatus, ViewId};
-use gpui::Context;
+use engine::{Bounds, InspectorDock, InspectorId, InspectorPanel, InspectorStatus, ViewId};
+use gpui::{AppContext as _, Context, Styled as _};
+use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -43,125 +44,56 @@ pub(super) struct Dock {
     pub tab: TabId,
     pub view: ViewId,
     pub host: u64,
+    pub side: InspectorDock,
+    /// The frontend's reserved page rectangle, relative to the pane.
+    pub page_bounds: Option<[u32; 4]>,
+    /// Last native layout (pane, page, shown); unchanged layouts are skipped.
+    pub applied: Option<(Bounds, Bounds, bool)>,
 }
 
-/// The GPUI gap between the page card and the DevTools card, as in Arc.
-pub(crate) const DIVIDER_WIDTH: f64 = crate::pages::CONTENT_INSET as f64;
-/// One native resize per frame; pointer events can arrive several times faster.
-const RESIZE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
-/// Neither card shrinks below this while the divider is dragged.
-const MIN_PANE: f64 = 160.;
-
-/// Keep both native children strictly within the owner pane, with a GPUI gap.
-/// Without a dragged width the dock takes the observed third of the content.
-pub(crate) fn frames(frame: Bounds, dock_width: Option<f64>) -> Option<(Bounds, Bounds, Bounds)> {
-    if ![frame.x, frame.y, frame.width, frame.height]
-        .iter()
-        .all(|v| v.is_finite())
-        || frame.width < DIVIDER_WIDTH + 2.
-        || frame.height < 1.
-    {
-        return None;
+/// Docked, the original frontend fills the pane and lays out its own
+/// splitter (resizing, dock side, close button) around a reserved rectangle;
+/// the inspected page is placed there, above it. Until the frontend reports
+/// it, the default third keeps the frontend visible beside the page.
+pub(crate) fn page_frame(pane: Bounds, side: InspectorDock, reserved: Option<[u32; 4]>) -> Bounds {
+    if side == InspectorDock::Undocked { return pane; }
+    if let Some([x, y, width, height]) = reserved {
+        let x = f64::from(x).min(pane.width);
+        let y = f64::from(y).min(pane.height);
+        let page = Bounds { x: pane.x + x, y: pane.y + y, width: f64::from(width).min(pane.width - x).max(1.), height: f64::from(height).min(pane.height - y).max(1.) };
+        return reveal_resizer(pane, page);
     }
-    let available = frame.width - DIVIDER_WIDTH;
-    let min = MIN_PANE.min(available / 2.).max(1.);
-    let dock_width = dock_width
-        .filter(|width| width.is_finite())
-        .unwrap_or(frame.width / 3.)
-        .clamp(min, available - min)
-        .floor();
-    let page_width = available - dock_width;
-    Some((
-        Bounds {
-            width: page_width,
-            ..frame
-        },
-        Bounds {
-            x: frame.x + page_width,
-            width: DIVIDER_WIDTH,
-            ..frame
-        },
-        Bounds {
-            x: frame.x + page_width + DIVIDER_WIDTH,
-            width: dock_width,
-            ..frame
-        },
-    ))
+    let (width, height) = ((pane.width * 2. / 3.).floor(), (pane.height * 2. / 3.).floor());
+    match side {
+        InspectorDock::Left => Bounds { x: pane.x + pane.width - width, width, ..pane },
+        InspectorDock::Bottom => Bounds { height, ..pane },
+        _ => Bounds { width, ..pane },
+    }
 }
 
-/// Arc's opaque divider gap with its small round grip centered.
-pub(crate) fn paint_divider(window: &mut gpui::Window, divider: Bounds, dark: bool) {
-    use gpui::{point, px, size};
-    const GRIP: f32 = 5.;
-    let gap = gpui::Bounds::new(point(px(divider.x as f32), px(divider.y as f32)), size(px(divider.width as f32), px(divider.height as f32)));
-    window.paint_quad(gpui::fill(gap, gpui::hsla(0., 0., if dark { 0.13 } else { 0.91 }, 1.)));
-    let center = gap.center();
-    window.paint_quad(gpui::fill(gpui::Bounds::new(center - point(px(GRIP / 2.), px(GRIP / 2.)), size(px(GRIP), px(GRIP))), gpui::hsla(0., 0., 0.5, 0.25))
-        .corner_radii(px(GRIP / 2.)));
+/// The frontend's splitter straddles the page edge; the page sits above the
+/// frontend, so pull its joined edges back to keep the whole splitter usable.
+const RESIZER_HALF: f64 = 4.;
+fn reveal_resizer(pane: Bounds, page: Bounds) -> Bounds {
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+    let left = if near(page.x, pane.x) { 0. } else { RESIZER_HALF };
+    let top = if near(page.y, pane.y) { 0. } else { RESIZER_HALF };
+    let right = if near(page.x + page.width, pane.x + pane.width) { 0. } else { RESIZER_HALF };
+    let bottom = if near(page.y + page.height, pane.y + pane.height) { 0. } else { RESIZER_HALF };
+    Bounds { x: page.x + left, y: page.y + top, width: (page.width - left - right).max(1.), height: (page.height - top - bottom).max(1.) }
+}
+
+/// The page keeps rounded only the corners it shares with its pane
+/// (top-left, top-right, bottom-left, bottom-right).
+pub(crate) fn page_corners(pane: Bounds, page: Bounds) -> [bool; 4] {
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+    let (left, top) = (near(page.x, pane.x), near(page.y, pane.y));
+    let right = near(page.x + page.width, pane.x + pane.width);
+    let bottom = near(page.y + page.height, pane.y + pane.height);
+    [left && top, right && top, left && bottom, right && bottom]
 }
 
 impl BrowserWindow {
-    /// The divider gap is GPUI's own surface between the two native cards, so
-    /// it owns the resize cursor and drag; window listeners keep the drag
-    /// while the pointer crosses either native view.
-    pub(crate) fn render_devtools_divider(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        use gpui::{prelude::*, px};
-        let divider = self.pages.as_ref()?.try_borrow().ok()?.devtools_divider()?;
-        let owner = cx.entity().downgrade();
-        let tracking = self.devtools_resizing.then(|| gpui::canvas(|_, _, _| (), move |_, _, window, _| {
-            let moving = owner.clone();
-            window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
-                if phase != gpui::DispatchPhase::Capture { return; }
-                let _ = moving.update(cx, |this, cx| {
-                    if !event.dragging() { this.devtools_resizing = false; cx.notify(); return; }
-                    let scheduled = this.devtools_resize_target.replace(f64::from(f32::from(event.position.x))).is_some();
-                    if !scheduled {
-                        let wait = RESIZE_INTERVAL.saturating_sub(this.devtools_resized_at.map_or(RESIZE_INTERVAL, |at| at.elapsed()));
-                        cx.spawn_in(window, async move |this, cx| {
-                            cx.background_executor().timer(wait).await;
-                            let _ = this.update(cx, |this, cx| this.apply_devtools_resize(cx));
-                        }).detach();
-                    }
-                });
-            });
-            let ending = owner.clone();
-            window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
-                if phase != gpui::DispatchPhase::Capture || event.button != gpui::MouseButton::Left { return; }
-                let _ = ending.update(cx, |this, cx| {
-                    this.devtools_resize_target = Some(f64::from(f32::from(event.position.x)));
-                    this.apply_devtools_resize(cx);
-                    this.devtools_resizing = false;
-                    cx.notify();
-                });
-            });
-        }).absolute().size_0());
-        Some(gpui::div()
-            .id("devtools-divider")
-            .debug_selector(|| "devtools-divider".into())
-            .absolute()
-            .left(px(divider.x as f32))
-            .top(px(divider.y as f32))
-            .w(px(divider.width as f32))
-            .h(px(divider.height as f32))
-            .cursor(gpui::CursorStyle::ResizeLeftRight)
-            .capture_any_mouse_down(cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                if event.button != gpui::MouseButton::Left { return; }
-                window.prevent_default();
-                cx.stop_propagation();
-                this.devtools_resizing = true;
-                cx.notify();
-            }))
-            .children(tracking)
-            .into_any_element())
-    }
-
-    fn apply_devtools_resize(&mut self, cx: &mut Context<Self>) {
-        let Some(x) = self.devtools_resize_target.take() else { return; };
-        self.devtools_resized_at = Some(std::time::Instant::now());
-        if let Some(pages) = &self.pages { pages.borrow_mut().resize_devtools(x); }
-        cx.notify();
-    }
-
     pub(crate) fn devtools_available(&self) -> bool {
         if !self.page_content_visible() { return false; }
         let Some(tab) = self
@@ -236,14 +168,14 @@ impl Pages {
             .copied()
             .filter(|parent| !parent.is_null())?;
         let frame = *store.layouts.get(&self.host)?.get(&tab)?;
-        frames(frame, store.devtools_width)?;
-        Some((page.view, parent, frame))
+        (frame.width >= 3. && frame.height >= 3.).then_some((page.view, parent, frame))
     }
 
     pub fn devtools_available(&self, tab: TabId) -> bool {
         self.devtools_target(tab).is_some()
     }
 
+    /// Each pane (tab) owns its own DevTools; toggling one never closes another.
     pub(crate) fn run_devtools(&mut self, tab: TabId, command: Command) -> Result<(), String> {
         let (view, parent, frame) = self
             .devtools_target(tab)
@@ -255,9 +187,8 @@ impl Pages {
         }
         let current = store
             .devtools
-            .filter(|dock| {
-                dock.host == self.host && (dock.view == view || command == Command::Toggle)
-            })
+            .get(&tab)
+            .filter(|dock| dock.host == self.host && dock.view == view)
             .and_then(|dock| {
                 store
                     .engine
@@ -270,25 +201,20 @@ impl Pages {
             current.as_ref().and_then(|status| status.selected_panel),
         );
         if operation == Operation::Close {
-            store.close_devtools();
+            store.close_devtools(tab);
             drop(store);
             self.page_has_focus = false;
             self.apply();
             return Ok(());
         }
-        if store
-            .devtools
-            .is_some_and(|dock| dock.view != view || dock.host != self.host)
-        {
-            store.close_devtools();
+        if store.devtools.get(&tab).is_some_and(|dock| dock.view != view || dock.host != self.host) {
+            store.close_devtools(tab);
         }
         let Operation::Open(panel, inspect) = operation else {
             unreachable!()
         };
-        let (_, _, dock_frame) = frames(frame, store.devtools_width).unwrap();
-        let id = store
-            .engine
-            .open_inspector(view, parent, dock_frame, panel, inspect)?;
+        // An open frontend is reused (the engine switches its panel).
+        let id = store.engine.open_inspector(view, parent, frame, panel, inspect)?;
         // An engine must not attach a frontend to a different inspected page.
         if !store
             .engine
@@ -296,15 +222,16 @@ impl Pages {
             .is_some_and(|status| status.inspected == view)
         {
             store.engine.close_inspector(id);
+            store.devtools.remove(&tab);
             return Err("Inspector owner did not match the focused page".into());
         }
+        if !store.devtools.contains_key(&tab) {
+            let side = store.devtools_side;
+            store.engine.set_inspector_dock(id, side);
+            store.engine.place_inspector_below_page(id);
+            store.devtools.insert(tab, Dock { id, tab, view, host: self.host, side, page_bounds: None, applied: None });
+        }
         store.devtools_restore.remove(&self.host);
-        store.devtools = Some(Dock {
-            id,
-            tab,
-            view,
-            host: self.host,
-        });
         store.mirror_revision = store.mirror_revision.wrapping_add(1);
         store.layout_devtools();
         store.engine.focus_inspector(id);
@@ -312,9 +239,12 @@ impl Pages {
         Ok(())
     }
 
+    /// The focused pane's DevTools, else any open in this window.
     pub fn devtools_status(&self) -> Option<InspectorStatus> {
         let store = self.store.borrow();
-        let dock = store.devtools.filter(|dock| dock.host == self.host)?;
+        let mut docks: Vec<_> = store.devtools.values().filter(|dock| dock.host == self.host).copied().collect();
+        docks.sort_by_key(|dock| (Some(dock.tab) != self.wanted_focus, dock.id.raw()));
+        let dock = docks.first()?;
         store
             .engine
             .inspector_status(dock.id)
@@ -345,25 +275,116 @@ impl Pages {
             _ => None,
         }
     }
+}
 
-    pub(crate) fn devtools_divider(&self) -> Option<Bounds> {
-        let store = self.store.borrow();
-        let dock = store.devtools.filter(|dock| dock.host == self.host)?;
-        frames(*store.layouts.get(&self.host)?.get(&dock.tab)?, store.devtools_width).map(|(_, divider, _)| divider)
+/// A separate DevTools window owned by the page's browser window.
+pub(crate) struct DevToolsWindow {
+    pages: std::rc::Weak<std::cell::RefCell<Pages>>,
+    id: InspectorId,
+    attached: Option<Bounds>,
+}
+
+impl gpui::Render for DevToolsWindow {
+    fn render(&mut self, window: &mut gpui::Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        let size = window.viewport_size();
+        let frame = Bounds { x: 0., y: 0., width: f64::from(f32::from(size.width)), height: f64::from(f32::from(size.height)) };
+        if self.attached != Some(frame) {
+            if let (Some(pages), Some(view)) = (self.pages.upgrade(), crate::native::view_of(window)) {
+                if let Ok(pages) = pages.try_borrow() {
+                    if pages.show_devtools_window(self.id, view, frame, self.attached.is_none()) { self.attached = Some(frame); }
+                }
+            }
+        }
+        gpui::div().size_full().bg(gpui::rgb(0x282828))
+    }
+}
+
+impl BrowserWindow {
+    /// Open a window for each DevTools the frontend undocked, and return
+    /// re-docked or closed ones to their page.
+    /// Called from `render`: opening or closing a window while drawing
+    /// corrupts GPUI's element arena, so the change is deferred.
+    pub(crate) fn sync_devtools_windows(&mut self, cx: &mut Context<Self>) {
+        let Some(pages) = self.pages.as_ref() else { return; };
+        let Ok(undocked) = pages.try_borrow().map(|pages| pages.undocked_devtools()) else { return; };
+        let changed = undocked.len() != self.devtools_windows.len()
+            || undocked.iter().any(|(id, _)| !self.devtools_windows.contains_key(id));
+        if changed {
+            let this = cx.entity().downgrade();
+            cx.defer(move |cx| { let _ = this.update(cx, |this, cx| this.apply_devtools_windows(cx)); });
+        }
     }
 
-    /// Drag the divider so its center follows `x`; the width persists for
-    /// every later dock in this session.
-    pub(crate) fn resize_devtools(&mut self, x: f64) {
+    fn apply_devtools_windows(&mut self, cx: &mut Context<Self>) {
+        let Some(pages) = self.pages.clone() else { return; };
+        let Ok(undocked) = pages.try_borrow().map(|pages| pages.undocked_devtools()) else { return; };
+        let stale: Vec<_> = self.devtools_windows.keys().filter(|id| !undocked.iter().any(|(open, _)| open == *id)).copied().collect();
+        for id in stale {
+            if let Some(handle) = self.devtools_windows.remove(&id) {
+                if let Ok(mut pages) = pages.try_borrow_mut() { pages.redock_devtools(id); }
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
+        }
+        for (id, title) in undocked {
+            if self.devtools_windows.contains_key(&id) { continue; }
+            let weak = Rc::downgrade(&pages);
+            let bounds = gpui::Bounds::centered(None, gpui::size(gpui::px(960.), gpui::px(640.)), cx);
+            let closing = Rc::downgrade(&pages);
+            let Ok(handle) = cx.open_window(gpui::WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                titlebar: Some(gpui::TitlebarOptions { title: Some(format!("DevTools - {title}").into()), ..Default::default() }),
+                ..Default::default()
+            }, move |window, cx| {
+                window.on_window_should_close(cx, move |_, _| {
+                    if let Some(pages) = closing.upgrade() { if let Ok(mut pages) = pages.try_borrow_mut() { pages.close_devtools_by_id(id); } }
+                    true
+                });
+                cx.new(|_| DevToolsWindow { pages: weak, id, attached: None })
+            }) else { continue; };
+            self.devtools_windows.insert(id, handle);
+        }
+    }
+}
+
+impl Pages {
+    /// Undocked DevTools of this window with their page URL (for the title).
+    pub(crate) fn undocked_devtools(&self) -> Vec<(InspectorId, String)> {
+        let store = self.store.borrow();
+        store.devtools.values().filter(|dock| dock.host == self.host && dock.side == InspectorDock::Undocked)
+            .map(|dock| (dock.id, store.pages.get(&dock.tab).map(|page| page.url.clone()).unwrap_or_default())).collect()
+    }
+
+    /// Move (first) or resize an undocked frontend inside its own window.
+    pub(crate) fn show_devtools_window(&self, id: InspectorId, view: *mut std::ffi::c_void, frame: Bounds, attach: bool) -> bool {
+        let Ok(mut store) = self.store.try_borrow_mut() else { return false; };
+        if !store.devtools.values().any(|dock| dock.id == id && dock.side == InspectorDock::Undocked) { return false; }
+        if attach {
+            if !store.engine.move_inspector(id, view, frame) { return false; }
+            store.engine.set_inspector_corners(id, 0., [true; 4]);
+        }
+        store.engine.set_inspector_frame(id, frame);
+        store.engine.set_inspector_visible(id, true);
+        true
+    }
+
+    /// Bring a re-docked frontend back beneath its page in this window.
+    pub(crate) fn redock_devtools(&mut self, id: InspectorId) {
         let mut store = self.store.borrow_mut();
-        let Some(dock) = store.devtools.filter(|dock| dock.host == self.host) else { return; };
-        let Some(frame) = store.layouts.get(&self.host).and_then(|layout| layout.get(&dock.tab)).copied() else { return; };
-        let width = frame.x + frame.width - x - DIVIDER_WIDTH / 2.;
-        let Some((_, _, frontend)) = frames(frame, Some(width)) else { return; };
-        if store.devtools_width == Some(frontend.width) { return; }
-        store.devtools_width = Some(frontend.width);
-        store.mirror_revision = store.mirror_revision.wrapping_add(1);
+        let Some(dock) = store.devtools.values().copied().find(|dock| dock.id == id) else { return; };
+        let Some(parent) = store.hosts.get(&dock.host).copied().filter(|parent| !parent.is_null()) else { return; };
+        let pane = store.layouts.get(&dock.host).and_then(|layout| layout.get(&dock.tab)).copied().unwrap_or_default();
+        if store.engine.move_inspector(id, parent, pane) {
+            store.engine.place_inspector_below_page(id);
+        }
+        if let Some(entry) = store.devtools.get_mut(&dock.tab) { entry.applied = None; }
         store.layout_devtools();
+    }
+
+    pub(crate) fn close_devtools_by_id(&mut self, id: InspectorId) {
+        let mut store = self.store.borrow_mut();
+        if let Some(tab) = store.devtools.values().find(|dock| dock.id == id).map(|dock| dock.tab) { store.close_devtools(tab); }
+        drop(store);
+        self.apply();
     }
 }
 
@@ -378,20 +399,36 @@ impl PageStore {
                 eprintln!("[inspector-event] {event:?}");
             }
             match event {
-                engine::InspectorEvent::CloseRequested { inspector }
-                    if self.inspector_event_owner(inspector).is_some() =>
-                {
-                    self.close_devtools();
+                engine::InspectorEvent::CloseRequested { inspector } => {
+                    if let Some(dock) = self.inspector_event_owner(inspector) { self.close_devtools(dock.tab); }
                 }
                 engine::InspectorEvent::FocusRequested { inspector }
                     if self.inspector_event_owner(inspector).is_some() && allow_focus =>
                 {
                     self.engine.focus_inspector(inspector);
                 }
+                engine::InspectorEvent::DockRequested { inspector, dock: side } => {
+                    if let Some(dock) = self.devtools.values_mut().find(|dock| dock.id == inspector) {
+                        dock.side = side;
+                        dock.page_bounds = None;
+                        // The next DevTools opens where this one was put.
+                        self.devtools_side = side;
+                        self.mirror_revision = self.mirror_revision.wrapping_add(1);
+                    }
+                }
+                engine::InspectorEvent::PageBounds { inspector, bounds } => {
+                    if let Some(dock) = self.devtools.values_mut().find(|dock| dock.id == inspector) {
+                        if dock.page_bounds != Some(bounds) {
+                            dock.page_bounds = Some(bounds);
+                            self.mirror_revision = self.mirror_revision.wrapping_add(1);
+                        }
+                    }
+                }
                 // Inspector title, URL and focus must never become tab metadata.
                 _ => {}
             }
         }
+        self.layout_devtools();
     }
 
     pub(super) fn inspector_input_owner(&self, event: &engine::InspectorEvent) -> Option<Dock> {
@@ -426,12 +463,12 @@ impl PageStore {
         (true, view.is_some())
     }
 
-    pub(super) fn close_devtools(&mut self) {
-        let Some(dock) = self.devtools.take() else {
+    pub(super) fn close_devtools(&mut self, tab: TabId) {
+        let Some(dock) = self.devtools.remove(&tab) else {
             return;
         };
         self.engine.close_inspector(dock.id);
-        self.engine.set_side_corners_rounded(dock.view, true, true);
+        self.engine.set_open_corners(dock.view, [true; 4]);
         self.devtools_restore.insert(dock.host);
         self.mirror_revision = self.mirror_revision.wrapping_add(1);
         if let Some(page) = self
@@ -451,47 +488,54 @@ impl PageStore {
         }
     }
 
-    /// Returns the closed host so its Pages can restore focus, unless an overlay
-    /// currently owns the responder. Never reload or recreate the inspected page.
-    pub(super) fn layout_devtools(&mut self) -> Option<u64> {
-        let dock = self.devtools?;
-        let valid = self.active_host == dock.host
-            && self.hosts.contains_key(&dock.host)
-            && self.pages.get(&dock.tab).is_some_and(|page| {
-                page.owner == dock.host && page.view == dock.view && page.visible
-            })
-            && self.engine.inspector_status(dock.id).is_some_and(|status| {
-                status.inspected == dock.view
-                    && !matches!(
-                        status.phase,
-                        engine::InspectorPhase::Detached | engine::InspectorPhase::LoadFailed
-                    )
-            });
-        let layout = self
-            .layouts
-            .get(&dock.host)
-            .and_then(|layout| layout.get(&dock.tab))
-            .copied()
-            .and_then(|frame| frames(frame, self.devtools_width));
-        let Some((page_frame, _, frontend)) = layout.filter(|_| valid) else {
-            self.close_devtools();
-            return Some(dock.host);
-        };
-        self.engine.set_bounds(dock.view, page_frame);
-        self.engine.set_side_corners_rounded(dock.view, true, false);
-        self.pages.get_mut(&dock.tab).unwrap().frame = page_frame;
-        self.engine.set_inspector_frame(dock.id, frontend);
-        self.engine.set_inspector_corners(dock.id, f64::from(crate::pages::CONTENT_CORNER_RADIUS));
-        self.engine.set_inspector_visible(dock.id, true);
-        None
+    pub(super) fn close_host_devtools(&mut self, host: u64) {
+        let tabs: Vec<_> = self.devtools.values().filter(|dock| dock.host == host).map(|dock| dock.tab).collect();
+        for tab in tabs { self.close_devtools(tab); }
+    }
+
+    /// A docked frontend fills its pane beneath the page; a hidden pane hides
+    /// its DevTools without closing it. Never reload or recreate the page.
+    pub(super) fn layout_devtools(&mut self) {
+        let docks: Vec<Dock> = self.devtools.values().copied().collect();
+        for dock in docks {
+            let alive = self.hosts.contains_key(&dock.host)
+                && self.pages.get(&dock.tab).is_some_and(|page| page.owner == dock.host && page.view == dock.view)
+                && self.engine.inspector_status(dock.id).is_some_and(|status| {
+                    status.inspected == dock.view
+                        && !matches!(status.phase, engine::InspectorPhase::Detached | engine::InspectorPhase::LoadFailed)
+                });
+            if !alive {
+                self.close_devtools(dock.tab);
+                continue;
+            }
+            let shown = self.active_host == dock.host && self.pages.get(&dock.tab).is_some_and(|page| page.visible);
+            let pane = self.layouts.get(&dock.host).and_then(|layout| layout.get(&dock.tab)).copied();
+            let page = pane.map(|pane| page_frame(pane, dock.side, dock.page_bounds));
+            let applied = pane.zip(page).map(|(pane, page)| (pane, page, shown));
+            if applied.is_some() && applied == dock.applied { continue; }
+            if let Some(entry) = self.devtools.get_mut(&dock.tab) { entry.applied = applied; }
+            let (Some(pane), Some(page), true) = (pane, page, shown) else {
+                // A separate DevTools window stays up while its tab is hidden.
+                self.engine.set_inspector_visible(dock.id, dock.side == InspectorDock::Undocked);
+                continue;
+            };
+            self.engine.set_bounds(dock.view, page);
+            self.engine.set_open_corners(dock.view, page_corners(pane, page));
+            self.pages.get_mut(&dock.tab).unwrap().frame = page;
+            if dock.side != InspectorDock::Undocked {
+                self.engine.set_inspector_frame(dock.id, pane);
+                self.engine.set_inspector_corners(dock.id, f64::from(crate::pages::CONTENT_CORNER_RADIUS), [true; 4]);
+            }
+            self.engine.set_inspector_visible(dock.id, true);
+        }
     }
 
     pub(super) fn inspector_event_owner(&self, id: InspectorId) -> Option<Dock> {
-        self.devtools.filter(|dock| {
+        self.devtools.values().copied().find(|dock| {
             dock.id == id
                 && dock.host == self.active_host
                 && self.pages.get(&dock.tab).is_some_and(|page| {
-                    page.owner == dock.host && page.view == dock.view && page.visible
+                    page.owner == dock.host && page.view == dock.view && (page.visible || dock.side == InspectorDock::Undocked)
                 })
                 && self
                     .engine
@@ -538,28 +582,5 @@ mod tests {
                 }
             );
         }
-    }
-    #[test]
-    fn right_third_native_frames_leave_only_the_gpui_divider_uncovered() {
-        for width in [DIVIDER_WIDTH + 2., 31., 899.5, 1200.] {
-            let frame = Bounds { x: 248., y: 8., width, height: 700. };
-            for dock in [None, Some(0.), Some(250.), Some(1e6)] {
-                let (page, divider, frontend) = frames(frame, dock).unwrap();
-                assert_eq!(page.x, frame.x);
-                assert_eq!(page.x + page.width, divider.x);
-                assert_eq!(divider.width, DIVIDER_WIDTH);
-                assert_eq!(divider.x + divider.width, frontend.x);
-                assert_eq!(frontend.x + frontend.width, frame.x + width);
-                assert!(page.width >= 1. && frontend.width >= 1.);
-            }
-        }
-        let frame = Bounds { x: 0., y: 0., width: 1200., height: 700. };
-        assert_eq!(frames(frame, None).unwrap().2.width, 400.);
-        assert_eq!(frames(frame, Some(250.)).unwrap().2.width, 250.);
-        // Neither card collapses while dragging.
-        assert_eq!(frames(frame, Some(0.)).unwrap().2.width, MIN_PANE);
-        assert_eq!(frames(frame, Some(1e6)).unwrap().0.width, MIN_PANE);
-        assert!(frames(Bounds { width: 2., height: 700., ..Bounds::default() }, None).is_none());
-        assert!(frames(Bounds { width: f64::NAN, height: 700., ..Bounds::default() }, None).is_none());
     }
 }

@@ -360,7 +360,7 @@ struct FakeState {
     bounds_changes: Vec<(u64, Bounds)>,
     viewport_clips: std::collections::HashMap<u64, Option<Bounds>>,
     rounded_top: std::collections::HashMap<u64, bool>,
-    side_corners: std::collections::HashMap<u64, (bool, bool)>,
+    open_corners: std::collections::HashMap<u64, [bool; 4]>,
     next_view: u64,
     focused_page: Option<ViewId>,
     events: Vec<Event>,
@@ -374,6 +374,8 @@ struct FakeState {
     inspector_accept: bool,
     next_inspector: u64,
     inspector: Option<engine::InspectorStatus>,
+    /// Frontends of other panes, displaced by a newer `inspector`.
+    other_inspectors: Vec<engine::InspectorStatus>,
     inspector_events: Vec<engine::InspectorEvent>,
     inspector_bounds: Option<Bounds>,
     reject_create: bool,
@@ -585,9 +587,17 @@ impl WebEngine for FakeEngine {
         self.call(Call::InspectorOpen(raw(view), parent as usize, bounds, panel, inspect));
         let mut state = self.0.borrow_mut();
         if !state.inspector_accept { return Err("Recording engine rejected inspector creation".into()); }
+        if let Some(index) = state.other_inspectors.iter().position(|status| status.inspected == view) {
+            let reused = state.other_inspectors.remove(index);
+            if let Some(current) = state.inspector.replace(reused) { state.other_inspectors.push(current); }
+        }
         let id = match &state.inspector {
             Some(status) if status.inspected == view => status.id,
-            _ => { state.next_inspector += 1; engine::InspectorId::from_raw(state.next_inspector) }
+            _ => {
+                if let Some(current) = state.inspector.take() { state.other_inspectors.push(current); }
+                state.next_inspector += 1;
+                engine::InspectorId::from_raw(state.next_inspector)
+            }
         };
         state.inspector = Some(engine::InspectorStatus {
             id, inspected: view, generation: state.next_inspector, panel,
@@ -599,7 +609,8 @@ impl WebEngine for FakeEngine {
     }
 
     fn inspector_status(&self, id: engine::InspectorId) -> Option<engine::InspectorStatus> {
-        self.0.borrow().inspector.clone().filter(|status| status.id == id)
+        let state = self.0.borrow();
+        state.inspector.iter().chain(&state.other_inspectors).find(|status| status.id == id).cloned()
     }
     fn focus_inspector(&mut self, id: engine::InspectorId) { self.call(Call::InspectorFocus(id)); }
     fn set_inspector_frame(&mut self, _id: engine::InspectorId, bounds: Bounds) { self.0.borrow_mut().inspector_bounds = Some(bounds); }
@@ -608,6 +619,7 @@ impl WebEngine for FakeEngine {
         self.call(Call::InspectorClose(id));
         let mut state = self.0.borrow_mut();
         if state.inspector.as_ref().is_some_and(|status| status.id == id) { state.inspector = None; state.inspector_bounds = None; }
+        state.other_inspectors.retain(|status| status.id != id);
     }
     fn supports_snapshots(&self) -> bool { self.0.borrow().capture_supported }
     fn request_snapshot(&mut self, view: ViewId, request: u64) -> bool {
@@ -644,8 +656,8 @@ impl WebEngine for FakeEngine {
         if state.bounds.insert(raw(view), bounds) != Some(bounds) { state.bounds_changes.push((raw(view), bounds)); }
     }
     fn set_viewport_clip(&mut self, view: ViewId, clip: Option<Bounds>) { self.0.borrow_mut().viewport_clips.insert(raw(view), clip); }
-    fn set_side_corners_rounded(&mut self, view: ViewId, left: bool, right: bool) {
-        self.0.borrow_mut().side_corners.insert(raw(view), (left, right));
+    fn set_open_corners(&mut self, view: ViewId, corners: [bool; 4]) {
+        self.0.borrow_mut().open_corners.insert(raw(view), corners);
     }
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
         let mut state = self.0.borrow_mut();
@@ -8043,134 +8055,59 @@ fn devtools_switches_observed_panels_repeats_inspect_and_closes_only_frontend(cx
 }
 
 #[gpui::test]
-fn devtools_native_frames_and_mouse_holes_exclude_gpui_divider(cx: &mut TestAppContext) {
+fn devtools_frontend_fills_the_pane_and_places_the_page_in_its_reserved_rect(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_split_pages(cx, 2);
     accept_recording_inspector(&view, cx, &fake);
     let (tab, layout) = view.read_with(cx, |view, _| (view.browser.active_tab().unwrap().id, view.pages.as_ref().unwrap().borrow().surface_layout()));
     cx.simulate_keystrokes("cmd-alt-i");
     cx.run_until_parked();
     let status = inspector_status(&view, cx).unwrap();
-    let original = layout.iter().find(|(id, _)| *id == tab).unwrap().1;
-    let (page, divider, frontend) = crate::devtools::frames(original, None).unwrap();
+    let pane = layout.iter().find(|(id, _)| *id == tab).unwrap().1;
+    // Until the frontend reports its splitter, the page keeps two thirds.
+    let page = crate::devtools::page_frame(pane, engine::InspectorDock::Right, None);
+    assert_eq!(page.width, (pane.width * 2. / 3.).floor());
     assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], page);
-    assert_eq!(fake.0.borrow().inspector_bounds, Some(frontend));
+    assert_eq!(fake.0.borrow().inspector_bounds, Some(pane));
     view.read_with(cx, |view, _| {
-        let pages = view.pages.as_ref().unwrap().borrow();
-        let actual = pages.surface_layout();
-        assert_eq!(actual.iter().find(|(id, _)| *id == tab).unwrap().1, page);
+        let actual = view.pages.as_ref().unwrap().borrow().surface_layout();
         for (other, bounds) in layout.iter().filter(|(id, _)| *id != tab) {
             assert_eq!(actual.iter().find(|(id, _)| id == other).unwrap().1, *bounds);
         }
-        let holes = pages.surface_bounds();
-        assert_eq!(holes.len(), 3);
-        assert!(holes.contains(&page) && holes.contains(&frontend));
-        let x = divider.x + divider.width / 2.;
-        let y = divider.y + divider.height / 2.;
-        assert!(!holes.iter().any(|hole| x >= hole.x && x < hole.x + hole.width && y >= hole.y && y < hole.y + hole.height));
-        assert_eq!(pages.devtools_divider(), Some(divider));
     });
+    // The frontend's reported rectangle places the page; the splitter stays exposed.
+    inspector_event(&fake, cx, engine::InspectorEvent::PageBounds { inspector: status.id, bounds: [0, 0, 200, pane.height as u32] });
+    let moved = fake.0.borrow().bounds[&raw(status.inspected)];
+    assert_eq!(moved, Bounds { width: 196., ..pane });
+    assert_eq!(fake.0.borrow().open_corners.get(&raw(status.inspected)), Some(&[true, false, true, false]));
     fake.take_calls();
     cx.simulate_keystrokes("cmd-alt-i");
     cx.run_until_parked();
-    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], original);
+    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], pane);
+    assert_eq!(fake.0.borrow().open_corners.get(&raw(status.inspected)), Some(&[true; 4]));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..) | Call::Reload(_) | Call::Close(_))));
 }
 
 #[gpui::test]
-fn devtools_divider_drag_resizes_chromium_at_most_once_per_frame(cx: &mut TestAppContext) {
-    let (view, cx, fake) = open_pages(cx);
+fn split_panes_keep_independent_devtools(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_split_pages(cx, 2);
     accept_recording_inspector(&view, cx, &fake);
-    cx.simulate_keystrokes("cmd-alt-i");
-    cx.run_until_parked();
-    let page = raw(inspector_status(&view, cx).unwrap().inspected);
-    let start = cx.debug_bounds("devtools-divider").unwrap().center();
-    let resizes = |fake: &FakeEngine| fake.0.borrow().bounds_changes.iter().filter(|(view, _)| *view == page).count();
-    cx.simulate_mouse_move(start, None, Modifiers::none());
-    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
-    fake.0.borrow_mut().bounds_changes.clear();
-    // Pointer-rate moves within one interval reach Chromium as one resize.
-    for step in 1..=8 {
-        cx.simulate_mouse_move(start - gpui::point(gpui::px(step as f32 * 5.), gpui::px(0.)), gpui::MouseButton::Left, Modifiers::none());
+    let open_views = |fake: &FakeEngine| {
+        let state = fake.0.borrow();
+        let mut views: Vec<_> = state.inspector.iter().chain(&state.other_inspectors).map(|status| raw(status.inspected)).collect();
+        views.sort();
+        views
+    };
+    let toggle = |cx: &mut VisualTestContext, fake: &FakeEngine, pane: u64| {
+        fake.send(cx, Event::Focused { view: page(pane) });
+        cx.simulate_keystrokes("cmd-alt-i");
         cx.run_until_parked();
-    }
-    assert_eq!(resizes(&fake), 1);
-    cx.executor().advance_clock(Duration::from_millis(16));
-    cx.run_until_parked();
-    assert_eq!(resizes(&fake), 2);
-    // Release applies the final width at once.
-    let end = start - gpui::point(gpui::px(80.), gpui::px(0.));
-    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(resizes(&fake), 3);
-    let final_width = fake.0.borrow().bounds_changes.last().unwrap().1.width;
-    cx.executor().advance_clock(Duration::from_millis(200));
-    cx.run_until_parked();
-    assert_eq!(resizes(&fake), 3);
-    assert_eq!(fake.0.borrow().bounds[&page].width, final_width);
-}
-
-#[gpui::test]
-fn devtools_divider_drag_resizes_the_dock_and_keeps_the_page_frame_stable(cx: &mut TestAppContext) {
-    let (view, cx, fake) = open_pages(cx);
-    accept_recording_inspector(&view, cx, &fake);
-    cx.simulate_keystrokes("cmd-alt-i");
-    cx.run_until_parked();
-    let status = inspector_status(&view, cx).unwrap();
-    let before = fake.0.borrow().inspector_bounds.unwrap();
-    let page = fake.0.borrow().bounds[&raw(status.inspected)];
-    // Hovering re-renders without resizing the docked page.
-    fake.0.borrow_mut().bounds_changes.clear();
-    for step in 0..3 {
-        cx.simulate_mouse_move(gpui::point(gpui::px(page.x as f32 + 40. + step as f32), gpui::px(page.y as f32 + 40.)), None, Modifiers::none());
-        view.update(cx, |_, cx| cx.notify());
-        cx.run_until_parked();
-    }
-    assert_eq!(fake.0.borrow().bounds_changes, vec![]);
-    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)], page);
-    let divider = cx.debug_bounds("devtools-divider").unwrap();
-    let start = divider.center();
-    cx.simulate_mouse_move(start, None, Modifiers::none());
-    cx.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
-    let end = start - gpui::point(gpui::px(100.), gpui::px(0.));
-    cx.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
-    cx.run_until_parked();
-    let after = fake.0.borrow().inspector_bounds.unwrap();
-    assert_eq!(after.width, before.width + 100.);
-    assert_eq!(after.x + after.width, before.x + before.width);
-    assert_eq!(fake.0.borrow().bounds[&raw(status.inspected)].width, page.width - 100.);
-    assert!(!view.read_with(cx, |view, _| view.devtools_resizing));
-    // The page squares only the joint with the dock, and rounds it again on close.
-    assert_eq!(fake.0.borrow().side_corners.get(&raw(status.inspected)), Some(&(true, false)));
-    cx.simulate_keystrokes("cmd-alt-i");
-    cx.run_until_parked();
-    assert_eq!(fake.0.borrow().side_corners.get(&raw(status.inspected)), Some(&(true, true)));
-}
-
-#[gpui::test]
-fn devtools_frontend_shortcuts_validate_owner_and_preserve_command_bar_focus(cx: &mut TestAppContext) {
-    let (view, cx, fake) = open_pages(cx);
-    accept_recording_inspector(&view, cx, &fake);
-    cx.simulate_keystrokes("cmd-alt-i");
-    cx.run_until_parked();
-    let inspector = inspector_status(&view, cx).unwrap().id;
-    let shortcut = |key: &str, alt| engine::Shortcut { cmd: true, alt, key: key.into(), ..Default::default() };
-    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut { inspector: engine::InspectorId::from_raw(999), shortcut: shortcut("j", true) });
-    assert_eq!(inspector_status(&view, cx).unwrap().selected_panel, Some(engine::InspectorPanel::Elements));
-    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut { inspector, shortcut: shortcut("j", true) });
-    assert_eq!(inspector_status(&view, cx).unwrap().selected_panel, Some(engine::InspectorPanel::Console));
-    inspector_event(&fake, cx, engine::InspectorEvent::Shortcut { inspector, shortcut: shortcut("t", false) });
-    assert!(bar_text(&view, cx).is_some());
-    fake.take_calls();
-    inspector_event(&fake, cx, engine::InspectorEvent::FocusRequested { inspector });
-    inspector_event(&fake, cx, engine::InspectorEvent::CloseRequested { inspector });
-    let calls = fake.take_calls();
-    assert!(!calls.iter().any(|call| matches!(call, Call::FocusPage(_) | Call::InspectorFocus(_))), "{calls:?}");
-    assert!(bar_text(&view, cx).is_some());
-    bar(&view, cx).simulate_input("overlay still owns input");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some("overlay still owns input"));
-    assert!(inspector_status(&view, cx).is_none());
+    };
+    toggle(cx, &fake, 1);
+    assert_eq!(open_views(&fake), vec![1]);
+    toggle(cx, &fake, 2);
+    assert_eq!(open_views(&fake), vec![1, 2], "opening in the second pane keeps the first");
+    toggle(cx, &fake, 1);
+    assert_eq!(open_views(&fake), vec![2], "toggling one pane closes only its DevTools");
 }
 
 #[gpui::test]

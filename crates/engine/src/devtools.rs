@@ -8,7 +8,9 @@ use serde_json::Value;
 
 use crate::{Shortcut, ViewId};
 
-pub const INSPECTOR_FRONTEND_URL: &str = "devtools://devtools/bundled/devtools_app.html";
+/// `can_dock` is the frontend's own docked presentation: its toolbar close
+/// button (Host.closeWindow) appears, as in Arc. GPUI still owns the dock.
+pub const INSPECTOR_FRONTEND_URL: &str = "devtools://devtools/bundled/devtools_app.html?can_dock=true";
 pub(crate) const WORKER_FRONTEND_URL: &str = "devtools://devtools/bundled/worker_app.html";
 
 /// Separate from tab/page identity. Never add this to browser sessions/history.
@@ -20,6 +22,9 @@ impl InspectorId {
     /// validate the identifier against their live inspector sessions.
     pub fn from_raw(raw: u64) -> Self {
         Self(raw)
+    }
+    pub fn raw(self) -> u64 {
+        self.0
     }
 }
 
@@ -39,6 +44,25 @@ pub enum InspectorPhase {
     FrontendReady,
     LoadFailed,
     Detached,
+}
+
+/// Where the original frontend's dock-side menu places DevTools. The parent
+/// owns the layout; the frontend only reports and restores the choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum InspectorDock {
+    #[default]
+    Right,
+    Left,
+    Bottom,
+    Undocked,
+}
+impl InspectorDock {
+    pub fn name(self) -> &'static str {
+        match self { Self::Right => "right", Self::Left => "left", Self::Bottom => "bottom", Self::Undocked => "undocked" }
+    }
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Right, Self::Left, Self::Bottom, Self::Undocked].into_iter().find(|dock| dock.name() == name)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +100,18 @@ pub enum InspectorEvent {
     },
     FocusRequested {
         inspector: InspectorId,
+    },
+    /// The frontend's dock-side menu chose a placement.
+    DockRequested {
+        inspector: InspectorId,
+        dock: InspectorDock,
+    },
+    /// Docked, the frontend fills its pane and reserves these bounds (relative
+    /// to itself) for the inspected page; its own splitter resizes them.
+    PageBounds {
+        inspector: InspectorId,
+        /// x, y, width, height in logical points.
+        bounds: [u32; 4],
     },
     Status(InspectorStatus),
     Protocol {
@@ -202,6 +238,8 @@ pub(crate) enum NativeBinding {
 pub(crate) struct Session<Binding> {
     pub(crate) status: InspectorStatus,
     pub(crate) frontend: ViewId,
+    /// Placement restored into the frontend's preferences at startup.
+    pub(crate) dock: InspectorDock,
     pub(crate) _binding: Binding,
     protocol: Protocol,
     pub(crate) renderer_protocol: Protocol,
@@ -272,6 +310,7 @@ impl<Binding> Inspectors<Binding> {
             Session {
                 status,
                 frontend,
+                dock: InspectorDock::default(),
                 _binding: binding,
                 protocol: Protocol::default(),
                 renderer_protocol: Protocol::default(),
@@ -370,6 +409,11 @@ impl<Binding> Inspectors<Binding> {
                     let Some(action) = session.bridge.accept(&input) else {
                         continue;
                     };
+                    if input.kind == "context" {
+                        // The frontend awaits its preferences before building
+                        // the dock controller; release them with the placement.
+                        self.actions.push((id, epoch, BridgeAction::Deliver("preferences", session.dock.name().into())));
+                    }
                     if input.kind == "context" || input.kind == "release" {
                         session.renderer_protocol.pending.clear();
                         let previous = session.status.clone();
@@ -404,6 +448,17 @@ impl<Binding> Inspectors<Binding> {
                     if input.kind == "close" {
                         self.ready
                             .push(InspectorEvent::CloseRequested { inspector: id });
+                    }
+                    if input.kind == "bounds" {
+                        if let Some(bounds) = parse_bounds(&input.payload) {
+                            self.ready.push(InspectorEvent::PageBounds { inspector: id, bounds });
+                        }
+                    }
+                    if input.kind == "dock" {
+                        if let Some(dock) = InspectorDock::parse(&input.payload) {
+                            session.dock = dock;
+                            self.ready.push(InspectorEvent::DockRequested { inspector: id, dock });
+                        }
                     }
                     if let Some(action) = action {
                         self.actions.push((id, epoch, action));
@@ -530,7 +585,9 @@ impl<Binding> Inspectors<Binding> {
             | InspectorEvent::PanelChanged { inspector, .. }
             | InspectorEvent::Shortcut { inspector, .. }
             | InspectorEvent::Focused { inspector }
-            | InspectorEvent::FocusRequested { inspector } => *inspector != id,
+            | InspectorEvent::FocusRequested { inspector }
+            | InspectorEvent::DockRequested { inspector, .. }
+            | InspectorEvent::PageBounds { inspector, .. } => *inspector != id,
         });
         self.queue
             .lock()
@@ -911,7 +968,9 @@ mod tests {
         assert!(expected_frontend(WORKER_FRONTEND_URL));
         for url in [
             "devtools://devtools/bundled/inspector.html",
-            "devtools://devtools/bundled/devtools_app.html?can_dock=true",
+            "devtools://devtools/bundled/devtools_app.html",
+            "devtools://devtools/bundled/devtools_app.html?can_dock=false",
+            "devtools://devtools/bundled/devtools_app.html?can_dock=true&ws=evil",
             "devtools://devtools/bundled/devtools_app.html?ws=evil",
             "devtools://devtools/bundled/worker_app.html?ws=evil",
             "devtools://devtools.evil/bundled/worker_app.html",
@@ -1007,6 +1066,8 @@ pub(crate) fn renderer_kind(kind: &str, payload: &str) -> bool {
         "context" | "release" | "loaded" | "connected" | "ready" | "close" | "focus" => {
             payload.is_empty()
         }
+        "dock" => InspectorDock::parse(payload).is_some(),
+        "bounds" => parse_bounds(payload).is_some(),
         "selected" => {
             !payload.is_empty()
                 && payload.len() <= 128
@@ -1045,6 +1106,11 @@ pub(crate) fn renderer_kind(kind: &str, payload: &str) -> bool {
         _ => false,
     }
 }
+/// `x,y,width,height` in frontend coordinates: four bounded integers.
+fn parse_bounds(payload: &str) -> Option<[u32; 4]> {
+    let values: Vec<u32> = payload.split(',').map(|value| value.parse().ok().filter(|value| *value <= 100_000)).collect::<Option<_>>()?;
+    values.try_into().ok()
+}
 pub(crate) fn browser_kind(kind: &str, payload: &str) -> bool {
     match kind {
         "protocol" => {
@@ -1054,6 +1120,7 @@ pub(crate) fn browser_kind(kind: &str, payload: &str) -> bool {
                     .is_some_and(|v| v.is_object())
         }
         "panel" => ["elements", "console", "network"].contains(&payload),
+        "preferences" => InspectorDock::parse(payload).is_some(),
         "inspect" | "revoke" => payload.is_empty(),
         _ => false,
     }
@@ -1126,7 +1193,7 @@ impl BridgeState {
                 self.roundtrip = true;
                 self.proof = None;
             }
-            "selected" | "close" | "focus" => {}
+            "selected" | "close" | "focus" | "dock" | "bounds" => {}
             "loaded" => self.loaded = true,
             "connected" if self.loaded => self.connected = true,
             "ready" if self.connected => self.tested = true,
@@ -1338,6 +1405,8 @@ mod bridge_tests {
             enqueue(&state.queue, id, Backend::Frontend(forged));
         }
         state.take();
+        // A new context also delivers the saved dock preferences.
+        state.actions.retain(|(_, _, action)| !matches!(action, BridgeAction::Deliver("preferences", _)));
         assert!(state.actions.is_empty());
         push(&mut state, id, 2, "release", "");
         push(&mut state, id, 2, "context", ""); // Cannot resurrect released context.
@@ -1348,6 +1417,7 @@ mod bridge_tests {
         push(&mut state, id, 3, "context", "");
         push(&mut state, id, 3, "protocol", command);
         state.take();
+        state.actions.retain(|(_, _, action)| !matches!(action, BridgeAction::Deliver("preferences", _)));
         assert_eq!(state.actions.len(), 1);
         state.actions.clear();
         enqueue(&state.queue, id, Backend::Revoke);
@@ -1393,6 +1463,7 @@ mod bridge_tests {
             Backend::Message(format!(r#"{{"id":{old},"result":{{}}}}"#).into_bytes()),
         );
         assert!(state.take().is_empty());
+        state.actions.retain(|(_, _, action)| !matches!(action, BridgeAction::Deliver("preferences", _)));
         assert!(state.actions.is_empty());
         enqueue(
             &state.queue,
@@ -1648,6 +1719,7 @@ mod navigation_tests {
             state.sessions[&id].status.phase,
             InspectorPhase::FrontendReady
         );
+        state.actions.retain(|(_, _, action)| !matches!(action, BridgeAction::Deliver("preferences", _)));
         assert!(matches!(
             state.actions.as_slice(),
             [(_, 1, BridgeAction::Submit(_))]

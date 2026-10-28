@@ -150,7 +150,10 @@ pub trait WebEngine {
     fn inspector_status(&self, _id: engine::InspectorId) -> Option<engine::InspectorStatus> { None }
     fn set_inspector_frame(&mut self, _id: engine::InspectorId, _bounds: Bounds) {}
     fn set_inspector_visible(&mut self, _id: engine::InspectorId, _visible: bool) {}
-    fn set_inspector_corners(&mut self, _id: engine::InspectorId, _radius: f64) {}
+    fn set_inspector_corners(&mut self, _id: engine::InspectorId, _radius: f64, _corners: [bool; 4]) {}
+    fn set_inspector_dock(&mut self, _id: engine::InspectorId, _dock: engine::InspectorDock) {}
+    fn move_inspector(&mut self, _id: engine::InspectorId, _parent: *mut c_void, _bounds: Bounds) -> bool { false }
+    fn place_inspector_below_page(&mut self, _id: engine::InspectorId) {}
     fn send_inspector_probe_message(&mut self, _id: engine::InspectorId, _message: &str) -> bool { false }
     fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { Vec::new() }
     fn close_inspector(&mut self, _id: engine::InspectorId) {}
@@ -169,7 +172,7 @@ pub trait WebEngine {
     fn set_page_palette(&mut self, _view: ViewId, _palette: Option<engine::PagePalette>) -> bool { true }
     fn set_viewport_clip(&mut self, _view: ViewId, _clip: Option<Bounds>) {}
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool);
-    fn set_side_corners_rounded(&mut self, _view: ViewId, _left: bool, _right: bool) {}
+    fn set_open_corners(&mut self, _view: ViewId, _corners: [bool; 4]) {}
     fn copy_context_image(&mut self, _view:ViewId, _request:u64, _page_url:&str, _url:&str)->bool {false}
     fn apply_context_media(&mut self, _view:ViewId, _epoch:u64, _target:&engine::page_context::MediaTarget, _operation:engine::page_context::MediaOperation)->bool {false}
     fn set_page_context_policy(&mut self, _view: ViewId, _policy: engine::page_context::Policy) {}
@@ -427,7 +430,10 @@ impl WebEngine for Chromium {
     fn inspector_status(&self, id: engine::InspectorId) -> Option<engine::InspectorStatus> { self.engine.inspector_status(id) }
     fn set_inspector_frame(&mut self, id: engine::InspectorId, bounds: Bounds) { self.engine.set_inspector_frame(id, bounds); }
     fn set_inspector_visible(&mut self, id: engine::InspectorId, visible: bool) { self.engine.set_inspector_visible(id, visible); }
-    fn set_inspector_corners(&mut self, id: engine::InspectorId, radius: f64) { self.engine.set_inspector_corners(id, radius); }
+    fn set_inspector_corners(&mut self, id: engine::InspectorId, radius: f64, corners: [bool; 4]) { self.engine.set_inspector_corners(id, radius, corners); }
+    fn set_inspector_dock(&mut self, id: engine::InspectorId, dock: engine::InspectorDock) { self.engine.set_inspector_dock(id, dock); }
+    fn move_inspector(&mut self, id: engine::InspectorId, parent: *mut c_void, bounds: Bounds) -> bool { self.engine.move_inspector(id, parent, bounds) }
+    fn place_inspector_below_page(&mut self, id: engine::InspectorId) { self.engine.place_inspector_below_page(id); }
     fn send_inspector_probe_message(&mut self, id: engine::InspectorId, message: &str) -> bool { self.engine.send_inspector_probe_message(id, message) }
     fn take_inspector_events(&mut self) -> Vec<engine::InspectorEvent> { self.engine.take_inspector_events() }
     fn close_inspector(&mut self, id: engine::InspectorId) { self.engine.close_inspector(id); }
@@ -456,8 +462,8 @@ impl WebEngine for Chromium {
     fn set_top_corners_rounded(&mut self, view: ViewId, rounded: bool) {
         self.engine.set_top_corners_rounded(view, rounded)
     }
-    fn set_side_corners_rounded(&mut self, view: ViewId, left: bool, right: bool) {
-        self.engine.set_side_corners_rounded(view, left, right)
+    fn set_open_corners(&mut self, view: ViewId, corners: [bool; 4]) {
+        self.engine.set_open_corners(view, corners)
     }
     fn set_visible(&mut self, view: ViewId, visible: bool) {
         self.engine.set_visible(view, visible)
@@ -640,9 +646,10 @@ struct PageStore {
     #[cfg(test)]
     clock: Option<gpui::BackgroundExecutor>,
     inspector_probe: Option<InspectorProbe>,
-    devtools: Option<devtools::Dock>,
-    /// Dragged DevTools width; `None` keeps the default third.
-    devtools_width: Option<f64>,
+    /// One DevTools per inspected tab; Split View panes each keep their own.
+    devtools: HashMap<TabId, devtools::Dock>,
+    /// Where the next DevTools opens: the frontend's last dock-side choice.
+    devtools_side: engine::InspectorDock,
     devtools_restore: HashSet<u64>,
     next_inspector_eval: u64,
     engine: Box<dyn WebEngine>,
@@ -732,7 +739,7 @@ pub(crate) fn take_shutdown_engines() -> Result<Vec<Box<dyn WebEngine>>, String>
         store.identities.clear();
         store.events.clear();
         store.metadata.clear();
-        store.devtools = None;
+        store.devtools.clear();
         store.inspector_probe = None;
         store.handoffs.clear();
         store.frozen.clear();
@@ -881,7 +888,7 @@ impl Pages {
             store: Rc::new(RefCell::new(PageStore {
                 #[cfg(test)]
                 clock: None,
-                devtools_restore: HashSet::new(), devtools: None, devtools_width: None, inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
+                devtools_restore: HashSet::new(), devtools: HashMap::new(), devtools_side: engine::InspectorDock::default(), inspector_probe: None, next_inspector_eval: 0, engine, pages: HashMap::new(), identities: HashMap::new(), next_generation: 0, hosts: HashMap::from([(1, std::ptr::null_mut())]), next_host: 1, active_host: 1,
                 events: Vec::new(), next_event: 0, metadata: BTreeMap::new(), next_snapshot: 0, handoffs: HashMap::new(), layouts: HashMap::new(), frozen: HashMap::new(), mirror_revision: 0 })),
             viewport: PageViewport::Content,
             viewport_generation: 0,
@@ -1141,7 +1148,7 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         store.capture_pending_engine_events();
         for (_,view) in self.extension_hosts.drain() {store.engine.close(view);}
-        if store.devtools.is_some_and(|dock| dock.host == self.host) { store.close_devtools(); }
+        store.close_host_devtools(self.host);
         if store.inspector_probe.is_some_and(|probe| probe.host == self.host) { store.close_inspector_probe(); }
         if store.hosts.remove(&self.host).is_none() { return; }
         store.layouts.remove(&self.host);
@@ -1585,11 +1592,10 @@ impl Pages {
         let waiting: HashSet<_> = wanted.iter().filter_map(|(intent, _)| {
             (active && !self.parent.is_null() && !store.prepare_handoff(intent.tab, self.host)).then_some(intent.tab)
         }).collect();
-        let PageStore { engine, pages, devtools, devtools_width, .. } = &mut *store;
-        // A docked page keeps its narrowed frame; resetting it to the pane on
-        // every sync resized the document twice per pointer move.
-        let docked = devtools.filter(|dock| dock.host == self.host).map(|dock| (dock.tab, dock.view));
-        let devtools_width = *devtools_width;
+        let PageStore { engine, pages, devtools, .. } = &mut *store;
+        // A docked page keeps its frame inside the DevTools pane; resetting it
+        // to the pane on every sync resized the document twice per pointer move.
+        let docked: Vec<devtools::Dock> = devtools.values().filter(|dock| dock.host == self.host).copied().collect();
         let ids: HashSet<_> = wanted.iter().map(|(intent, _)| intent.tab).collect();
         let hidden: Vec<_> = self.visible.difference(&ids).copied().collect();
         for tab in hidden {
@@ -1629,9 +1635,8 @@ impl Pages {
                         engine.navigate(page.view, &url);
                         page.url = url;
                     }
-                    let bounds = if docked == Some((tab, page.view)) {
-                        devtools::frames(bounds, devtools_width).map_or(bounds, |(page, _, _)| page)
-                    } else { bounds };
+                    let bounds = docked.iter().find(|dock| dock.tab == tab && dock.view == page.view)
+                        .map_or(bounds, |dock| devtools::page_frame(bounds, dock.side, dock.page_bounds));
                     engine.set_bounds(page.view, bounds);
                     page.frame = bounds;
                 }
@@ -1715,11 +1720,7 @@ impl Pages {
     pub fn surface_bounds(&self) -> Vec<Bounds> {
         let mut surfaces: Vec<_> = self.surface_layout().into_iter().map(|(_, bounds)| bounds).collect();
         let store = self.store.borrow();
-        if let Some(dock) = store.devtools.filter(|dock| dock.host == self.host) {
-            if let Some((_, _, frontend)) = store.layouts.get(&self.host).and_then(|layout| layout.get(&dock.tab)).copied().and_then(|frame| devtools::frames(frame, store.devtools_width)) {
-                surfaces.push(frontend);
-            }
-        }
+        // A docked frontend fills its pane, which is already a surface.
         surfaces
     }
 
@@ -1751,10 +1752,8 @@ impl Pages {
     pub fn surface_layout(&self) -> Vec<(TabId, Bounds)> {
         self.wanted.iter().zip(self.pane_bounds()).filter(|(intent, _)| self.is_visible(intent.tab)).map(|(intent, frame)| {
             let store = self.store.borrow();
-            let bounds = if store.devtools.is_some_and(|dock| dock.host == self.host && dock.tab == intent.tab) {
-                store.pages.get(&intent.tab).map_or(frame.page, |page| page.frame)
-            } else { frame.page };
-            (intent.tab, bounds)
+            let _ = &store;
+            (intent.tab, frame.page)
         }).collect()
     }
 
@@ -1800,7 +1799,7 @@ impl Pages {
                     && page.owner == self.host && page.visible)
                 .and_then(|page| {
                     let frontend = if self.devtools_focused {
-                        let dock = store.devtools.filter(|dock| dock.host == self.host && dock.tab == page.identity.tab && dock.view == page.view)?;
+                        let dock = store.devtools.get(&page.identity.tab).copied().filter(|dock| dock.host == self.host && dock.view == page.view)?;
                         let status = store.engine.inspector_status(dock.id).filter(|status|
                             status.id == dock.id && status.inspected == page.view
                                 && !matches!(status.phase, engine::InspectorPhase::Detached | engine::InspectorPhase::LoadFailed))?;
@@ -1864,8 +1863,8 @@ impl Pages {
                     && page.input_attachment == origin.attachment && page.view == view)
         { return false; }
         if let Some((id, generation)) = frontend {
-            if !store.devtools.is_some_and(|dock| dock.id == id && dock.host == self.host
-                && dock.tab == origin.identity.tab && dock.view == view)
+            if !store.devtools.get(&origin.identity.tab).is_some_and(|dock| dock.id == id && dock.host == self.host
+                && dock.view == view)
                 || !store.engine.inspector_status(id).is_some_and(|status|
                     status.id == id && status.inspected == view && status.generation == generation
                         && !matches!(status.phase, engine::InspectorPhase::Detached | engine::InspectorPhase::LoadFailed))
@@ -2103,7 +2102,7 @@ impl Pages {
         let page = store.pages.get(&tab).filter(|page| page.owner == self.host && page.visible)
             .ok_or("Focused page is not owned by this host")?;
         if store.active_host != self.host { return Err("Inspector host is inactive".into()); }
-        if store.devtools.is_some() { return Err("Product inspector is already open".into()); }
+        if !store.devtools.is_empty() { return Err("Product inspector is already open".into()); }
         let view = page.view;
         let parent = store.hosts.get(&page.owner).copied().filter(|parent| !parent.is_null())
             .ok_or("Focused page has no native GPUI parent")?;
@@ -2370,7 +2369,7 @@ impl PageStore {
 
     fn retire(&mut self, tab: TabId) {
         self.metadata.retain(|_, (event, _)| event.identity.tab != tab);
-        if self.devtools.is_some_and(|dock| dock.tab == tab) { self.close_devtools(); }
+        self.close_devtools(tab);
         if self.inspector_probe.is_some_and(|probe| probe.tab == tab) { self.close_inspector_probe(); }
         self.cancel_handoff(tab);
         if let Some(page) = self.pages.remove(&tab) { self.engine.close(page.view); }
@@ -2435,7 +2434,7 @@ impl PageStore {
     fn prepare_handoff(&mut self, tab: TabId, target: u64) -> bool {
         // The temporary dock belongs to its original GPUI parent. Restore the
         // full viewport before snapshotting or transferring the inspected view.
-        if self.devtools.is_some_and(|dock| dock.tab == tab && dock.host != target) { self.close_devtools(); }
+        if self.devtools.get(&tab).is_some_and(|dock| dock.host != target) { self.close_devtools(tab); }
         if self.inspector_probe.is_some_and(|probe| probe.tab == tab && probe.host != target) { self.close_inspector_probe(); }
         let Some(page) = self.pages.get(&tab) else { return true; };
         if page.owner == target || !self.engine.supports_snapshots() { return true; }
