@@ -340,6 +340,7 @@ impl BrowserWindow {
         let Some(e) = &mut self.theme_editor else {
             return;
         };
+        let mut haptic = false;
         match e.dragging {
             Some(Drag::Color) => {
                 if let Some(b) = e.color_bounds.get() {
@@ -354,19 +355,27 @@ impl BrowserWindow {
             }
             Some(Drag::Intensity) => {
                 if let Some(b) = e.intensity_bounds.get() {
-                    e.draft.intensity =
-                        ((f32::from(position.x - b.left()) - 6.) / 212.).clamp(0., 1.);
+                    let value = ((f32::from(position.x - b.left()) - 6.) / 212.).clamp(0., 1.);
+                    // Tactile detents do not quantize the continuous preview.
+                    haptic = (e.draft.intensity * 50.).round() != (value * 50.).round();
+                    e.draft.intensity = value;
                 }
             }
             Some(Drag::Noise) => {
                 if let Some(b) = e.noise_bounds.get() {
                     let delta = position - b.center();
                     let angle = f32::from(delta.y).atan2(f32::from(delta.x));
-                    e.draft.noise = (angle + std::f32::consts::FRAC_PI_2)
+                    let value = (angle + std::f32::consts::FRAC_PI_2)
                         .rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+                    // Match the dial's 24 visible ring positions.
+                    haptic = (e.draft.noise * 24.).round() != (value * 24.).round();
+                    e.draft.noise = value;
                 }
             }
             None => {}
+        }
+        if haptic && crate::feedback::enabled(self, browser_core::settings::Toggle::HapticFeedback, cx) {
+            crate::native::reorder_haptic();
         }
         cx.notify();
     }

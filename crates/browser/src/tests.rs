@@ -12647,3 +12647,51 @@ fn library_theme_editor_blocks_retired_popup_and_sidebar_focus_restoration(cx: &
         assert!(view.theme_editor.is_none());
     });
 }
+
+
+#[gpui::test]
+fn theme_adjustment_haptics_follow_detents_and_leave_colors_silent(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    dispatch_menu(cx, "Spaces", "Edit Theme…");
+    let mut editor = space_theme_editor(&view, cx);
+    crate::native::HAPTIC_PULSES.with(|n| n.set(0));
+    click(&mut editor, "theme-preset-2");
+    click(&mut editor, "theme-palette-next");
+    let field = editor.debug_bounds("theme-color-field").unwrap();
+    let start = field.center();
+    let end = start + gpui::point(gpui::px(40.), gpui::px(20.));
+    editor.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+    editor.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+    editor.simulate_mouse_up(end, gpui::MouseButton::Left, Modifiers::none());
+    editor.run_until_parked();
+    assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 0);
+    for selector in ["theme-intensity", "theme-noise"] {
+        let bounds = editor.debug_bounds(selector).unwrap();
+        let (start, end) = if selector == "theme-intensity" {
+            (gpui::point(bounds.left() + gpui::px(6.), bounds.center().y),
+             gpui::point(bounds.left() + gpui::px(112.), bounds.center().y))
+        } else {
+            (bounds.center() + gpui::point(gpui::px(0.), gpui::px(-32.)),
+             bounds.center() + gpui::point(gpui::px(32.), gpui::px(0.)))
+        };
+        editor.simulate_mouse_move(start, None, Modifiers::none());
+        editor.simulate_mouse_down(start, gpui::MouseButton::Left, Modifiers::none());
+        editor.run_until_parked();
+        crate::native::HAPTIC_PULSES.with(|n| n.set(0));
+        editor.simulate_mouse_move(end, gpui::MouseButton::Left, Modifiers::none());
+        editor.run_until_parked();
+        assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 1, "{selector}");
+        editor.simulate_mouse_move(end + gpui::point(gpui::px(0.1), gpui::px(0.1)), gpui::MouseButton::Left, Modifiers::none());
+        editor.run_until_parked();
+        assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 1, "same detent: {selector}");
+        view.update(cx, |view, _| view.edit_profile(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::HapticFeedback, false)));
+        editor.simulate_mouse_move(start, gpui::MouseButton::Left, Modifiers::none());
+        editor.simulate_mouse_up(start, gpui::MouseButton::Left, Modifiers::none());
+        editor.run_until_parked();
+        assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 1, "disabled: {selector}");
+        editor.simulate_mouse_move(end, None, Modifiers::none());
+        editor.run_until_parked();
+        assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 1, "released: {selector}");
+        view.update(cx, |view, _| view.edit_profile(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::HapticFeedback, true)));
+    }
+}
