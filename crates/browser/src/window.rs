@@ -2816,9 +2816,11 @@ impl BrowserWindow {
     fn close_focused_tab(&mut self, cx: &mut Context<Self>) {
         if !self.page_content_visible() { return; }
         if self.split_draft.is_some() { self.close_command_bar(cx); return; }
-        if let Some(id) = self.browser.space().active_tab {
-            if self.browser.split_for(id).is_some() { self.close_split_pane(id, cx); }
-            else { self.close_tab(id, cx); }
+        match self.browser.space().active_tab {
+            Some(id) if self.browser.split_for(id).is_some() => self.close_split_pane(id, cx),
+            Some(id) => self.close_tab(id, cx),
+            // With no tab left to close, Cmd+W closes the window, as in Arc.
+            None => self.close_window(cx),
         }
     }
 

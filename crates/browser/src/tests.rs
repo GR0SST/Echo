@@ -2296,6 +2296,17 @@ fn closing_a_browser_removes_both_incoming_and_retiring_toast_windows(cx: &mut T
 }
 
 #[gpui::test]
+fn cmd_w_closes_the_window_once_no_tab_is_left(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    // The second Space is empty: nothing to close but the window.
+    cx.simulate_keystrokes("ctrl-2");
+    assert!(view.read_with(cx, |w, _| w.browser.space().active_tab.is_none()));
+    cx.simulate_keystrokes("cmd-w");
+    cx.run_until_parked();
+    assert_eq!(cx.cx.update(|cx| cx.windows().len()), 0);
+}
+
+#[gpui::test]
 fn toast_share_button_uses_the_copied_url_after_switching_spaces(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     let copied = browser_core::links::clean_url(&active_url(&view, cx).unwrap());
