@@ -543,6 +543,10 @@ mod mac {
         }
         unsafe {
             let _: () = msg_send![overlay, setHasShadow: Bool::NO];
+            // Overlays stand in for parts of the browser window: a drag on one
+            // must never detach it, and edge drags must reach the parent.
+            let _: () = msg_send![overlay, setMovable: Bool::NO];
+            let _: () = msg_send![overlay, setMovableByWindowBackground: Bool::NO];
             let _: () = msg_send![parent, addChildWindow: overlay, ordered: WINDOW_ABOVE];
         }
     }
