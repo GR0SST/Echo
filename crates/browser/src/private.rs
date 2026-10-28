@@ -40,7 +40,8 @@ impl BrowserWindow {
                 .children(space.today.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).map(|tab| {
                     let active = space.active_tab.is_some_and(|id| self.browser.item_anchor(id) == tab.id);
                     self.render_tab(tab, Section::Today, active, 0., cx)
-                })))
+                }))
+                .child(self.render_tab_list_end(space.id, true, cx)))
             .into_any_element()
     }
 }

@@ -3384,6 +3384,8 @@ impl BrowserWindow {
         let id = tab.id;
         let painted_space = self.browser.space().id;
         let painted_profile = self.browser.active_user_profile_id();
+        let last_today = section == Section::Today && self.browser.space().today.last()
+            .is_some_and(|tab| self.browser.item_anchor(tab.id) == self.browser.item_anchor(id));
         let key = id.get() as usize;
         let private = self.theme_uses_light_ink_for(self.browser.space().id);
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
@@ -3426,15 +3428,18 @@ impl BrowserWindow {
                 drag.start_at(drag_owner.clone(),offset,drag_row_width,if segmented {36.} else {SIDEBAR_ROW_HEIGHT},cx)
             })
             .can_drop(move |value, _, _| value.downcast_ref::<crate::tab_drag::TabDrag>().is_some_and(|drag| drag.id != id))
-            .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this,event:&gpui::DragMoveEvent<crate::tab_drag::TabDrag>,_,cx| {
+            .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(move |this,event:&gpui::DragMoveEvent<crate::tab_drag::TabDrag>,window,cx| {
                 let drag=event.drag(cx);
                 let valid = drag_moves_active && this.accepts_tab_drag(drag) && this.browser.item_anchor(id) != drag.id;
                 // Include half the inter-row gap on each side. The midpoint belongs
                 // to the lower row, so exactly one insertion indicator is active.
                 let position = event.event.position;
+                let bottom = if last_today {
+                    this.sidebar_scrolls.get(&painted_space).filter(|scrolls| scrolls.list.bounds().size.height > px(0.)).map_or(window.viewport_size().height, |scrolls| scrolls.list.bounds().bottom())
+                } else { event.bounds.bottom() + px(SIDEBAR_ROW_GAP / 2.) };
                 let inside = valid && position.x >= event.bounds.left() && position.x < event.bounds.right()
                     && position.y >= event.bounds.top() - px(SIDEBAR_ROW_GAP / 2.)
-                    && position.y < event.bounds.bottom() + px(SIDEBAR_ROW_GAP / 2.);
+                    && position.y < bottom;
                 let target = inside.then_some(position.y > event.bounds.center().y);
                 if let Some(after) = target { this.reorder_feedback(drag,Some((id,after)),cx); }
                 if move_edge.replace(target) != target { cx.notify(); }
@@ -4210,7 +4215,8 @@ impl BrowserWindow {
                     .gap(px(SIDEBAR_ROW_GAP))
                     .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "today-list".into())())))
                     .children(today),
-            ))
+            )
+            .child(self.render_tab_list_end(space_id, current && interactive, cx)))
     }
 
     fn render_space_switcher(&self, cx: &mut Context<Self>) -> gpui::Div {

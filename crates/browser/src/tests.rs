@@ -9408,7 +9408,9 @@ fn leaving_the_page_cancels_the_split_preview(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(gpui::point(frame.right()-gpui::px(12.),frame.center().y),gpui::MouseButton::Left,Modifiers::none());
     cx.run_until_parked();
     assert!(view.read_with(cx,|w,_|w.split_drop.is_some()));
-    finish_sidebar_drag(cx,gpui::point(gpui::px(100.),frame.center().y));
+    // Blank space below Today accepts append drops; the address remains a cancel target.
+    let cancel = cx.debug_bounds("address").unwrap().center();
+    finish_sidebar_drag(cx, cancel);
     assert!(view.read_with(cx,|w,_|w.split_drop.is_none() && w.browser.active_split().is_none() && w.browser.space().active_tab==Some(anchor)));
 }
 

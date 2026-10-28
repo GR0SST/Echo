@@ -96,6 +96,27 @@ impl BrowserWindow {
         if target.is_some() { crate::native::reorder_haptic(); }
     }
 
+    pub(crate) fn render_tab_list_end(&self, space: SpaceId, interactive: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let owner = cx.entity().downgrade();
+        div().id(gpui::SharedString::from(format!("tab-list-end-{space:?}")))
+            .debug_selector(|| self.sidebar_debug_name("tab-list-end".into()))
+            .flex_1().min_h_0().mt(px(-crate::window::SIDEBAR_ROW_GAP))
+            .can_drop(move |value, _, cx| interactive && value.downcast_ref::<TabDrag>().is_some_and(|drag|
+                owner.read_with(cx, |this, _| this.accepts_tab_drag(drag)
+                    && this.browser.spaces.iter().any(|entry| entry.id == space && entry.user_profile_id == drag.profile)).unwrap_or(false)))
+            .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                if !interactive { return; }
+                cx.stop_propagation();
+                let last = this.browser.spaces.iter().find(|entry| entry.id == space)
+                    .and_then(|space| space.today.last()).map(|tab| this.browser.item_anchor(tab.id));
+                if let Some(last) = last {
+                    this.drop_tab_relative(drag, last, true, cx);
+                } else {
+                    this.drop_tab_on_section(drag, space, Section::Today, cx);
+                }
+            }))
+    }
+
     pub(crate) fn accepts_tab_drag(&self, drag: &TabDrag) -> bool {
         self.profile.handle.same_workspace(&drag.workspace)
             && self.browser.user_profile_id_for_tab(drag.id) == Some(drag.profile)

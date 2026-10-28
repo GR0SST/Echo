@@ -100,3 +100,49 @@ fn pinned_siblings_share_the_gap_even_with_haptics_disabled(cx: &mut TestAppCont
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
 }
+
+#[gpui::test]
+fn dropping_far_below_today_appends_and_keeps_one_end_boundary(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let before = active_url(&view, cx);
+    fake.take_calls();
+    begin_sidebar_drag(cx, "tab-8");
+    let last = cx.debug_bounds("tab-6").unwrap();
+    let end = cx.debug_bounds("tab-list-end").unwrap();
+    assert!(end.size.height > gpui::px(100.));
+    let near = gpui::point(last.center().x, last.bottom() - gpui::px(3.));
+    let far = gpui::point(end.center().x, end.bottom() - gpui::px(20.));
+    crate::native::HAPTIC_PULSES.with(|n| n.set(0));
+    for point in [near, end.center(), far] {
+        cx.simulate_mouse_move(point, gpui::MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(crate::native::HAPTIC_PULSES.with(|n| n.get()), 1);
+        assert_eq!(cx.debug_bounds("tab-insertion-line-6").unwrap().center().y, last.bottom() + gpui::px(1.5));
+    }
+    finish_sidebar_drag(cx, far);
+    view.read_with(cx, |view, _| assert_eq!(view.browser.space().today.iter().map(|tab| tab.id.get()).collect::<Vec<_>>(), vec![7, 6, 8]));
+    assert_eq!(active_url(&view, cx), before);
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn private_tabs_also_append_when_dropped_in_the_empty_tail(cx: &mut TestAppContext) {
+    cx.update(init);
+    let (view, visual) = cx.add_window_view(|window, cx| {
+        let mut browser = browser_core::Browser::new_private();
+        for _ in 0..3 { browser.new_tab("about:blank", std::time::SystemTime::now()); }
+        let view = BrowserWindow::new(browser, None, window, cx);
+        view.focus(window);
+        view
+    });
+    visual.run_until_parked();
+    let ids = view.read_with(visual, |view, _| view.browser.space().today.iter().map(|tab| tab.id).collect::<Vec<_>>());
+    begin_sidebar_drag(visual, test_selector(format!("tab-{}", ids[0].get())));
+    let tail = visual.debug_bounds("tab-list-end").unwrap();
+    let far = gpui::point(tail.center().x, tail.bottom() - gpui::px(20.));
+    visual.simulate_mouse_move(far, gpui::MouseButton::Left, Modifiers::none());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds(test_selector(format!("tab-insertion-line-{}", ids[2].get()))).is_some());
+    finish_sidebar_drag(visual, far);
+    view.read_with(visual, |view, _| assert_eq!(view.browser.space().today.last().unwrap().id, ids[0]));
+}
