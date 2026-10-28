@@ -257,6 +257,9 @@ fn library_spaces_plus_uses_the_library_origin_and_cancel_returns_to_it(cx: &mut
     click(visual, "space-creation-name");
     visual.simulate_input("Discard me");
     click(visual, "space-creation-cancel");
+    // Cancellation keeps the departing form and dock mark until the spring ends.
+    visual.executor().advance_clock(std::time::Duration::from_secs(1));
+    visual.run_until_parked();
     view.read_with(visual, |view, _| {
         assert_eq!(
             view.sidebar_navigation.controller.selected(),
@@ -619,6 +622,9 @@ fn creation_return_keeps_the_draft_and_two_escapes_cancel_without_allocating(
             .selected()),
         SidebarPage::Space(origin)
     );
+    assert!(view.read_with(visual, |view, _| view.sidebar_navigation.creation_exiting));
+    visual.executor().advance_clock(std::time::Duration::from_secs(1));
+    visual.run_until_parked();
     assert!(view.read_with(visual, |view, _| view.sidebar_navigation.form.is_none()));
     assert_eq!(session(&view, visual), before);
 }

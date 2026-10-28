@@ -146,7 +146,7 @@ Echo must share that live page identity, in addition to the sidebar model.
 
 | Feature | Arc shortcut | Status | What's missing |
 |---|---|---|---|
-| New Space… | — | partial | Sidebar creation page from the dock + menu, Spaces menu, Command Bar, Library Spaces and right-edge pager. Drafts stay window-local; atomic creation inserts after the origin. Icon, theme and profile pickers, and exact swipe/visual parity remain incomplete |
+| New Space… | — | partial | Sidebar creation page from the dock + menu, Spaces menu, Command Bar, Library Spaces and right-edge pager. Drafts stay window-local; atomic creation inserts after the origin. Pulling into the creation edge shows a primary-theme circular plus with reversible fill, threshold color/bounce feedback, and a provisional dock dot. Only a fully armed finger release opens the form; flick speed cannot bypass it. Swiping back or cancelling keeps the dock dot only while the departing form is visible, then discards the draft when the return spring finishes. Icon, theme and profile pickers, and exact swipe/visual parity remain incomplete |
 | Edit Theme… | — | partial | Opens the Space Style Editor; see "Space themes" |
 | Rename Space | — | done | Command Bar action opens a focused name editor; Escape cancels |
 | Change Profile | — | partial | Captured-Space routing and storage replacement work; warning conditions and exact sheet presentation still need matching |

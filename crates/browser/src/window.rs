@@ -7,6 +7,8 @@ mod pinned_url;
 mod suggestions_notice;
 #[path = "sidebar_scroll.rs"]
 mod sidebar_scroll;
+#[path = "space_creation_swipe.rs"]
+mod space_creation_swipe;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -330,6 +332,8 @@ pub struct Pager {
     /// movement never scrolls the tabs while Spaces slide.
     list_offsets: Vec<(gpui::ScrollHandle, gpui::Point<gpui::Pixels>)>,
     lock_lists: bool,
+    creation_pull: Option<space_creation_swipe::CreationPull>,
+    creation_gesture: u64,
 }
 
 /// Analytic critically damped spring, in pages and pages/second. Keeping the
@@ -891,6 +895,7 @@ impl BrowserWindow {
     pub(crate) fn reset_profile_pager(&mut self, index: usize) {
         self.pager.settle = None;
         self.pager.drag = None;
+        self.pager.creation_pull = None;
         self.pager.velocity = 0.;
         self.pager.position = if self.browser.is_blank() || self.browser.is_private() {
             index
@@ -920,7 +925,7 @@ impl BrowserWindow {
         self.popup_focus_pending = 0;
     }
     pub(crate) fn settle_sidebar_pager(&mut self, cx: &mut Context<Self>) { self.settle_pager(cx); }
-    pub(crate) fn reset_sidebar_motion(&mut self) { self.pager.drag = None; self.pager.settle = None; self.pager.velocity = 0.; }
+    pub(crate) fn reset_sidebar_motion(&mut self) { self.pager.creation_pull = None; self.pager.drag = None; self.pager.settle = None; self.pager.velocity = 0.; }
 
     pub fn new(
         browser: Browser,
@@ -3174,6 +3179,8 @@ impl BrowserWindow {
             self.pager.list_offsets = self.sidebar_scrolls.values()
                 .map(|scrolls| (scrolls.list.clone(), scrolls.list.offset())).collect();
             self.pager.lock_lists = false;
+            self.pager.creation_pull = None;
+            self.pager.creation_gesture = self.pager.creation_gesture.wrapping_add(1);
             self.pager.settle = None;
             self.pager.velocity = 0.;
             self.pager.drag = Some(Drag {
@@ -3200,7 +3207,20 @@ impl BrowserWindow {
             drag.travel += dx;
             drag.samples.push((now, dx));
             let raw = drag.start - drag.travel / sidebar_width.max(1.);
-            self.pager.position = rubber_band(one_page_reach(raw, drag.start.round()), page_count);
+            let start = drag.start.round();
+            let pages = self.sidebar_navigation.controller.pages(&self.browser);
+            let edge_origin = if !self.browser.is_private() && raw > start
+                && pages.get(start as usize + 1) == Some(&crate::sidebar_pages::SidebarPage::CreateSpace) {
+                match pages.get(start as usize) { Some(crate::sidebar_pages::SidebarPage::Space(id)) => Some(*id), _ => None }
+            } else { None };
+            if let Some(origin) = edge_origin {
+                let progress = (raw - start) / SPACE_SWIPE_COMMIT;
+                self.pager.position = self.creation_pull_position(start, progress);
+                self.update_creation_pull(origin, progress, cx);
+            } else {
+                self.pager.creation_pull = None;
+                self.pager.position = rubber_band(one_page_reach(raw, start), page_count);
+            }
             cx.notify();
         }
         match event.touch_phase {
@@ -3227,13 +3247,31 @@ impl BrowserWindow {
                     0.0
                 };
                 let last = page_count.saturating_sub(1) as f32;
-                let target = (start + step).clamp(0.0, last) as usize;
+                let mut target = (start + step).clamp(0.0, last) as usize;
+                let pages = self.sidebar_navigation.controller.pages(&self.browser);
+                if pages.get(target) == Some(&crate::sidebar_pages::SidebarPage::CreateSpace)
+                    && pages.get(start as usize) != Some(&crate::sidebar_pages::SidebarPage::CreateSpace)
+                    && self.space_creation_pull_progress() < 1. {
+                    target = start as usize;
+                    self.pager.velocity = 0.;
+                }
+                // A completed pull commits independently of flick velocity; reversal
+                // below the threshold disarms it until the fingers lift.
+                if self.pager.creation_pull.is_some() {
+                    target = if self.space_creation_pull_progress() >= 1. { (start as usize + 1).min(page_count - 1) } else { start as usize };
+                }
                 if self.browser.is_private() {
                     self.switch_space(target, cx);
                 } else if let Some(page) = self.sidebar_navigation.controller.pages(&self.browser).get(target).copied() {
                     if page == crate::sidebar_pages::SidebarPage::CreateSpace {
-                        self.begin_space_creation(self.browser.space().id, cx);
+                        if self.sidebar_navigation.controller.selected() != crate::sidebar_pages::SidebarPage::CreateSpace {
+                            self.begin_space_creation(self.browser.space().id, cx);
+                        }
+                        self.pager.creation_pull = None;
                     } else {
+                        if pages.get(start as usize) == Some(&crate::sidebar_pages::SidebarPage::CreateSpace) {
+                            self.sidebar_navigation.creation_exiting = true;
+                        }
                         self.select_sidebar_page(page, cx);
                     }
                 }
@@ -3257,6 +3295,8 @@ impl BrowserWindow {
             self.pager.position = target;
             self.pager.velocity = 0.;
             self.pager.settle = None;
+            self.settle_creation_pull(true);
+            self.finish_space_creation_exit();
             return;
         }
         let from = self.pager.position;
@@ -3276,6 +3316,8 @@ impl BrowserWindow {
                     pager.position = position;
                     pager.velocity = velocity;
                 }
+                this.settle_creation_pull(finished);
+                if finished { this.finish_space_creation_exit(); }
                 cx.notify();
                 finished
             });
@@ -3671,14 +3713,10 @@ impl BrowserWindow {
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.browser.is_blank() || self.browser.is_private() { return div().h_full().on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))).child(self.render_workspace_sidebar(None, cx)).into_any_element(); }
-        if self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::CreateSpace {
-            return div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(self.sidebar_width())).h_full().overflow_hidden()
-                .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
-                .when_some(self.sidebar_navigation.form.clone(), |this, form| this.child(form))
-                .child(div().absolute().bottom_0().left_0().right_0().child(self.render_space_switcher(cx)))
-                .into_any_element();
-        }
         let pages = self.sidebar_navigation.controller.pages(&self.browser);
+        let form_page = pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::CreateSpace);
+        let form = (self.sidebar_navigation.creation_exiting || self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::CreateSpace)
+            .then(|| self.sidebar_navigation.form.clone()).flatten();
         let saved = self.browser.clone();
         let saved_namespace = self.sidebar_debug_namespace.clone();
         let saved_interactive = self.sidebar_page_interactive;
@@ -3706,6 +3744,13 @@ impl BrowserWindow {
         div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(self.sidebar_width())).h_full().overflow_hidden()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .child(self.render_workspace_sidebar(Some((rendered, -self.pager.position * self.sidebar_width())), cx))
+            .when_some(form, |root, form| root
+                .child(div().absolute().top_0().left(px((form_page.unwrap_or(0) as f32 - self.pager.position) * self.sidebar_width()))
+                    .w(px(self.sidebar_width())).h_full().block_mouse_except_scroll()
+                    .child(self.theme_window_field()).child(form))
+                .child(div().absolute().bottom_0().left_0().right_0()
+                    .child(self.theme_window_field()).child(self.render_space_switcher(cx))))
+            .children(self.render_creation_pull())
             .into_any_element()
     }
 
@@ -4301,13 +4346,16 @@ impl BrowserWindow {
                         this.open_space_menu(space_id, event.position, window, cx);
                     }));
                 let mut marks = vec![real_mark.into_any_element()];
-                if self.sidebar_navigation.controller.draft().is_some_and(|draft| draft.origin == space_id) {
+                let draft_here = self.sidebar_navigation.controller.draft().is_some_and(|draft| draft.origin == space_id)
+                    && (selected == crate::sidebar_pages::SidebarPage::CreateSpace || self.sidebar_navigation.creation_exiting);
+                if self.space_creation_mark_visible(space_id) {
                     marks.push(div().id("space-creation-mark").debug_selector(|| "space-creation-mark".into())
                         .flex_none().size(px(22.)).rounded_md().flex().items_center().justify_center()
                         .text_color(hsla(0., 0., ink, 0.6))
-                        .when(selected == crate::sidebar_pages::SidebarPage::CreateSpace, |mark| mark.bg(hsla(0., 0., 1., 0.3)))
-                        .on_click(cx.listener(move |this, _, _, cx| this.begin_space_creation(space_id, cx)))
-                        .child(crate::icons::control_sized(crate::icons::Icon::NewSpace, 16.)).into_any_element());
+                        .when(draft_here, |mark| mark.on_click(cx.listener(move |this, _, _, cx| this.begin_space_creation(space_id, cx))))
+                        .child(div().size(px(8.)).rounded_full().border_1().border_color(hsla(0., 0., ink, 0.5))
+                            .when(draft_here || self.space_creation_pull_progress() >= 1., |dot| dot.bg(hsla(0., 0., ink, 0.65))))
+                        .into_any_element());
                 }
                 marks
             })))

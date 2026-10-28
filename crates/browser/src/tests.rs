@@ -29,6 +29,8 @@ mod crashed_tab_tests;
 
 #[path = "reorder_haptics_tests.rs"]
 mod reorder_haptics_tests;
+#[path = "space_creation_swipe_tests.rs"]
+mod space_creation_swipe_tests;
 
 #[path = "little_archive_tests.rs"]
 mod little_archive_tests;
@@ -2076,6 +2078,8 @@ fn create_and_rename_space_actions_keep_focus_and_can_be_cancelled(cx: &mut Test
     cx.simulate_input("Cancelled Space");
     assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.draft().unwrap().name.clone()), "Cancelled Space");
     click(cx, "space-creation-cancel");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(browser_core::session::to_json(&w.browser), before_cancel);
         assert!(w.sidebar_navigation.form.is_none());
@@ -7158,8 +7162,10 @@ fn new_menu_offers_reference_items_and_opens_the_matching_editor(cx: &mut TestAp
     assert!(cx.update(|window, cx| {
         view.read(cx).sidebar_navigation.form.as_ref().unwrap().read(cx).focus_handle(cx).is_focused(window)
     }));
-    // Only Escape from the root cancels creation.
+    // Only Escape from the root cancels creation; the visual exit finishes first.
     cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.sidebar_navigation.form.is_none() && w.sidebar_navigation.controller.draft().is_none()));
     assert_eq!(view.read_with(cx, |w, _| w.browser.spaces.len()), 3);

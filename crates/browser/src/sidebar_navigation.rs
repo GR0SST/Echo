@@ -58,6 +58,7 @@ pub(crate) struct SidebarNavigation {
     preview_native_intent: Option<PreviewNativeResponder>,
     events: Option<Subscription>,
     generation: u64,
+    pub(crate) creation_exiting: bool,
     pub(crate) normal_content_size: gpui::Size<gpui::Pixels>,
     normal_content_left: f32,
     library_slide_amount: f32,
@@ -89,6 +90,7 @@ impl SidebarNavigation {
             preview_native_intent: None,
             events: None,
             generation: 0,
+            creation_exiting: false,
             normal_content_size: Default::default(),
             normal_content_left: 0.,
             library_slide_amount: 0.,
@@ -330,6 +332,8 @@ impl BrowserWindow {
         {
             return;
         }
+        if self.space_creation_pull_progress() == 0. { self.pager.position = self.sidebar_page_index() as f32; }
+        self.sidebar_navigation.creation_exiting = false;
         self.close_navigation_peers(false, cx);
         self.sidebar_visible = true;
         if self.sidebar_navigation.form.is_none() {
@@ -415,10 +419,20 @@ impl BrowserWindow {
     }
     pub(crate) fn cancel_space_creation(&mut self, cx: &mut Context<Self>) {
         self.refresh_profile_projection();
-        let destination = self.sidebar_navigation.controller.cancel(&self.browser);
+        let Some(origin) = self.sidebar_navigation.controller.draft().map(|draft| draft.origin) else { return; };
+        self.sidebar_navigation.creation_exiting = true;
+        self.select_sidebar_page(SidebarPage::Space(origin), cx);
+    }
+
+    pub(crate) fn finish_space_creation_exit(&mut self) {
+        if !self.sidebar_navigation.creation_exiting { return; }
+        self.sidebar_navigation.creation_exiting = false;
+        let selected = self.sidebar_navigation.controller.selected();
+        self.sidebar_navigation.controller.cancel(&self.browser);
+        self.sidebar_navigation.controller.select(&self.browser, selected);
         self.sidebar_navigation.form = None;
         self.sidebar_navigation.events = None;
-        self.select_sidebar_page(destination, cx);
+        self.pager.position = self.sidebar_page_index() as f32;
     }
     pub(crate) fn submit_space_creation(&mut self, cx: &mut Context<Self>) {
         if self.sidebar_navigation.controller.selected() != SidebarPage::CreateSpace {
