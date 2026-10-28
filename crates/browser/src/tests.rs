@@ -1456,6 +1456,41 @@ fn swipe(cx: &mut VisualTestContext, over: &'static str, dx: f32, steps: usize) 
 }
 
 #[gpui::test]
+fn horizontal_swipes_never_scroll_the_tab_list(cx: &mut TestAppContext) {
+    use gpui::{point, px, ScrollDelta, ScrollWheelEvent, TouchPhase};
+    let (_view, cx, _) = open_long_sidebar(cx, false);
+    cx.run_until_parked();
+    let position = cx.debug_bounds("new-tab").unwrap().center();
+    let mut wheel = |cx: &mut VisualTestContext, dx: f32, dy: f32, touch_phase| {
+        cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
+            modifiers: Modifiers::none(),
+            touch_phase,
+        });
+        cx.run_until_parked();
+    };
+    // Scroll part way down so the list could move either way.
+    wheel(cx, 0., 0., TouchPhase::Started);
+    wheel(cx, 0., -150., TouchPhase::Moved);
+    wheel(cx, 0., 0., TouchPhase::Ended);
+    let row = |cx: &mut VisualTestContext| cx.debug_bounds("new-tab").map(|b| b.origin.y);
+    let before = row(cx);
+    assert!(before.is_some());
+    // A short sideways swipe with vertical drift, a pure sideways release and momentum.
+    wheel(cx, 0., 0., TouchPhase::Started);
+    wheel(cx, -12., 6., TouchPhase::Moved);
+    wheel(cx, -12., -5., TouchPhase::Moved);
+    wheel(cx, -6., 0., TouchPhase::Ended);
+    for _ in 0..5 {
+        wheel(cx, -8., 4., TouchPhase::Moved);
+    }
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(row(cx), before);
+}
+
+#[gpui::test]
 fn swiping_the_sidebar_switches_one_space_per_gesture(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let space = |cx: &mut VisualTestContext| view.read_with(cx, |w, _| w.browser.active_space);

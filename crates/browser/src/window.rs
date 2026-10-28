@@ -322,6 +322,11 @@ pub struct Pager {
     velocity: f32,
     drag: Option<Drag>,
     settle: Option<Task<()>>,
+    /// Tab list offsets at the start of the current gesture. A horizontal
+    /// swipe, including its momentum, pins every list here so stray vertical
+    /// movement never scrolls the tabs while Spaces slide.
+    list_offsets: Vec<(gpui::ScrollHandle, gpui::Point<gpui::Pixels>)>,
+    lock_lists: bool,
 }
 
 /// Analytic critically damped spring, in pages and pages/second. Keeping the
@@ -3158,6 +3163,9 @@ impl BrowserWindow {
         };
         let now = cx.background_executor().now();
         if matches!(event.touch_phase, TouchPhase::Started) {
+            self.pager.list_offsets = self.sidebar_scrolls.values()
+                .map(|scrolls| (scrolls.list.clone(), scrolls.list.offset())).collect();
+            self.pager.lock_lists = false;
             self.pager.settle = None;
             self.pager.velocity = 0.;
             self.pager.drag = Some(Drag {
@@ -3167,11 +3175,18 @@ impl BrowserWindow {
                 samples: Vec::new(),
             });
         }
+        if self.pager.lock_lists {
+            for (list, offset) in &self.pager.list_offsets { list.set_offset(*offset); }
+        }
         // Include movement in both the initial and release events. Ignore
         // inertial events after release, which no longer have a finger drag.
         let Some(drag) = &mut self.pager.drag else { return; };
         if drag.horizontal.is_none() && (dx != 0. || dy != 0.) {
             drag.horizontal = Some(dx.abs() > dy.abs());
+            if drag.horizontal == Some(true) {
+                self.pager.lock_lists = true;
+                for (list, offset) in &self.pager.list_offsets { list.set_offset(*offset); }
+            }
         }
         if drag.horizontal == Some(true) && dx != 0. {
             drag.travel += dx;
@@ -4066,6 +4081,8 @@ impl BrowserWindow {
             .child(div().id(("sidebar-content", index))
                 .when(current, |this| this.debug_selector(|| self.sidebar_debug_name((|| "sidebar-content".into())())))
                 .flex().flex_col().flex_1().min_h_0().gap(px(SIDEBAR_ROW_GAP)).overflow_y_scroll()
+                // GPUI otherwise turns a purely horizontal swipe into vertical scrolling.
+                .map(|mut this| { this.style().restrict_scroll_to_axis = Some(true); this })
                 // The native viewport starts 4 px above its first row's layout
                 // origin. Preserve the rows while matching the upper drag edge.
                 .mt(px(-4.)).pt(px(4.))
