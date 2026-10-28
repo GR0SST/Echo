@@ -739,6 +739,26 @@ impl BrowserWindow {
         self.defer_sidebar_focus(cx);
         cx.notify();
     }
+    /// A Space card's themed background, baked off the main thread.
+    fn library_card_image(&mut self, id: SpaceId, cx: &mut Context<Self>) -> Option<std::sync::Arc<gpui::RenderImage>> {
+        let space = self.browser.spaces.iter().find(|space| space.id == id)?;
+        let surface = self.theme_surface_for(space);
+        let height = (f32::from(self.sidebar_navigation.normal_content_size.height) - 76.).max(2.) as u32;
+        self.sidebar_navigation.card_images.entry(id).or_default().image_async(surface, 240, height,
+            |this| this.sidebar_navigation.controller.selected() == SidebarPage::Library, cx)
+    }
+    /// Bake Library cards while Library is closed, so opening it (and its
+    /// slide) never waits on pixel work.
+    pub(crate) fn warm_library_cards(&mut self, cx: &mut Context<Self>) {
+        if self.browser.is_private() || self.browser.is_blank()
+            || f32::from(self.sidebar_navigation.normal_content_size.height) <= 0. {
+            return;
+        }
+        let ids: Vec<SpaceId> = self.browser.spaces.iter().map(|space| space.id).collect();
+        for id in ids {
+            self.library_card_image(id, cx);
+        }
+    }
     pub(crate) fn render_library_host(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(mut projection) =
             LibraryProjection::from_browser(&self.browser, self.sidebar_navigation.library_origin)
@@ -750,11 +770,9 @@ impl BrowserWindow {
                 id: card.id, workspace: self.profile.handle.clone(), name: card.name.clone(),
                 icon: card.icon.clone(), hue: card.hue,
             });
-            if let Some(space) = self.browser.spaces.iter().find(|space| space.id == card.id) {
-                let surface = self.theme_surface_for(space);
-                let height = (f32::from(self.sidebar_navigation.normal_content_size.height) - 76.).max(2.) as u32;
+            if self.browser.spaces.iter().any(|space| space.id == card.id) {
                 card.bounds = self.sidebar_navigation.card_bounds.entry(card.id).or_default().clone();
-                card.theme_image = Some(self.sidebar_navigation.card_images.entry(card.id).or_default().image_sized(surface, 240, height));
+                card.theme_image = self.library_card_image(card.id, cx);
                 card.foreground = Some(self.theme_foreground_for(card.id));
             }
         }

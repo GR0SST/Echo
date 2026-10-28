@@ -5176,6 +5176,7 @@ impl Render for BrowserWindow {
             let tick = self.loading_tick.clone();
             self.loading_view.get_or_insert_with(|| cx.new(|_| crate::page_loading::LoadingView { browser, tick })).clone()
         };
+        if !library_open { self.warm_library_cards(cx); }
         let library = library_open.then(|| self.render_library_host(cx));
         let compact = self.transient.is_some();
         let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(window, cx).into_any_element() };

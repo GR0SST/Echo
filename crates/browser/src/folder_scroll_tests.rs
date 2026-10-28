@@ -78,8 +78,12 @@ fn held_folder_scrolls_with_tab_physics_and_renderer_escape_cancels_without_a_dr
         }),
     );
     cx.run_until_parked();
+    // A step already computed before Escape may still paint; after that the
+    // list must not move again.
+    let stopped = cx.debug_bounds("today-list").unwrap().top();
+    assert!((stopped - shifted).abs() <= gpui::px(2.), "after escape {stopped:?} vs {shifted:?}");
     advance(cx, 60);
-    assert_eq!(cx.debug_bounds("today-list").unwrap().top(), shifted);
+    assert_eq!(cx.debug_bounds("today-list").unwrap().top(), stopped);
     finish_sidebar_drag(cx, edge);
     assert_eq!(active_url(&view, cx), selection);
     assert_eq!(

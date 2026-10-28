@@ -223,7 +223,9 @@ fn veil_pigment(color: ThemeColor, alpha: f32) -> ThemeColor {
     mix(ThemeColor { red: 1., green: 1., blue: 1. }, color, kept)
 }
 fn default_grain(surface: &Surface, x: u32, y: u32) -> (ThemeColor, f32) {
-    let reference = surface.sample(0.1, 0.5);
+    default_grain_over(surface, surface.sample(0.1, 0.5), x, y)
+}
+fn default_grain_over(surface: &Surface, reference: ThemeColor, x: u32, y: u32) -> (ThemeColor, f32) {
     let luminance = reference.red * 0.2126 + reference.green * 0.7152 + reference.blue * 0.0722;
     let value = hash(x, y);
     let amplitude = if surface.dark { 1.50 } else { 1.80 } / 255.;
@@ -403,37 +405,102 @@ fn panel_corners(surface: &Surface, translucent: bool, width: u32, height: u32, 
     });
     images
 }
-/// The profile sheet previews each Space's actual pigments and texture.
-/// It uses the sidebar's field and noise functions rather than a hue swatch.
+/// Grid resolution of a card's field. The field is a smooth blend, so a
+/// coarse grid interpolates it without visible difference at card size.
+const CARD_GRID: usize = 64;
+/// A Space card's pigments and texture, from the sidebar's field and noise
+/// functions rather than a hue swatch. Pure and thread-safe, so Library
+/// cards bake on the background executor instead of stalling a frame.
+pub(crate) fn card_image(surface: &Surface, width: u32, height: u32) -> Arc<RenderImage> {
+    let (width, height) = (width.max(2), height.max(2));
+    let last = (CARD_GRID - 1) as f32;
+    let grid: Vec<ThemeColor> = (0..CARD_GRID * CARD_GRID)
+        .map(|i| surface.sample((i % CARD_GRID) as f32 / last, (i / CARD_GRID) as f32 / last))
+        .collect();
+    let at = |x: usize, y: usize| grid[y * CARD_GRID + x];
+    let reference = surface.sample(0.1, 0.5);
+    let grain: Vec<(ThemeColor, f32)> = (0..NOISE_TILE * NOISE_TILE).map(|i| {
+        let (x, y) = (i % NOISE_TILE, i / NOISE_TILE);
+        if surface.default_style { default_grain_over(surface, reference, x, y) } else { speckle(surface.theme.texture, x, y, surface.theme.noise) }
+    }).collect();
+    let image = image::RgbaImage::from_fn(width, height, |x, y| {
+        let (gx, gy) = (x as f32 / (width - 1) as f32 * last, y as f32 / (height - 1) as f32 * last);
+        let (x0, y0) = (gx.floor() as usize, gy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(CARD_GRID - 1), (y0 + 1).min(CARD_GRID - 1));
+        let (fx, fy) = (gx - x0 as f32, gy - y0 as f32);
+        let base = mix(mix(at(x0, y0), at(x1, y0), fx), mix(at(x0, y1), at(x1, y1), fx), fy);
+        let (tint, alpha) = grain[((y % NOISE_TILE) * NOISE_TILE + x % NOISE_TILE) as usize];
+        let color = mix(base, tint, alpha);
+        image::Rgba([
+            quantize(color.blue, true),
+            quantize(color.green, true),
+            quantize(color.red, true),
+            255,
+        ])
+    });
+    Arc::new(RenderImage::new(vec![image::Frame::new(image)]))
+}
+type CardKey = (Surface, u32, u32);
+#[derive(Default)]
+struct CardState {
+    image: Option<(CardKey, Arc<RenderImage>)>,
+    pending: bool,
+}
 #[derive(Clone, Default)]
-pub(crate) struct ProfileCardPreview(Rc<RefCell<Option<(Surface, u32, u32, Arc<RenderImage>)>>>);
+pub(crate) struct ProfileCardPreview(Rc<RefCell<CardState>>);
 impl ProfileCardPreview {
     pub(crate) fn image(&self, surface: Surface) -> Arc<RenderImage> {
         self.image_sized(surface, 64, 96)
     }
     pub(crate) fn image_sized(&self, surface: Surface, width: u32, height: u32) -> Arc<RenderImage> {
-        let (width, height) = (width.max(2), height.max(2));
-        if let Some((_, _, _, image)) = self.0.borrow().as_ref().filter(|(key, w, h, _)| key == &surface && *w == width && *h == height) {
-            return image.clone();
+        let key = (surface, width.max(2), height.max(2));
+        if let Some(image) = self.ready(&key) {
+            return image;
         }
-        let image = image::RgbaImage::from_fn(width, height, |x, y| {
-            let base = surface.sample(x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32);
-            let (tint, alpha) = if surface.default_style {
-                default_grain(&surface, x, y)
-            } else {
-                speckle(surface.theme.texture, x % NOISE_TILE, y % NOISE_TILE, surface.theme.noise)
-            };
-            let color = mix(base, tint, alpha);
-            image::Rgba([
-                quantize(color.blue, true),
-                quantize(color.green, true),
-                quantize(color.red, true),
-                255,
-            ])
-        });
-        let image = Arc::new(RenderImage::new(vec![image::Frame::new(image)]));
-        *self.0.borrow_mut() = Some((surface, width, height, image.clone()));
+        let image = card_image(&key.0, key.1, key.2);
+        self.0.borrow_mut().image = Some((key, image.clone()));
         image
+    }
+    fn ready(&self, key: &CardKey) -> Option<Arc<RenderImage>> {
+        self.0.borrow().image.as_ref().filter(|(k, _)| k == key).map(|(_, image)| image.clone())
+    }
+    /// The image for `surface` at this size, baking it in the background when
+    /// missing. Until it lands the previous image (any size) stands in, so a
+    /// resize or theme change never flashes the flat fallback. A landed image
+    /// redraws the owner only while `shown` says the card is on screen.
+    pub(crate) fn image_async<T: 'static>(
+        &self,
+        surface: Surface,
+        width: u32,
+        height: u32,
+        shown: fn(&T) -> bool,
+        cx: &mut gpui::Context<T>,
+    ) -> Option<Arc<RenderImage>> {
+        let key = (surface, width.max(2), height.max(2));
+        if let Some(image) = self.ready(&key) {
+            return Some(image);
+        }
+        let mut state = self.0.borrow_mut();
+        // One bake in flight: during a live resize the result may already be
+        // stale; it still stands in, and the next frame requests the new size.
+        if !state.pending {
+            state.pending = true;
+            let preview = self.clone();
+            let task = cx.background_spawn(async move {
+                let image = card_image(&key.0, key.1, key.2);
+                (key, image)
+            });
+            cx.spawn(async move |owner, cx| {
+                let baked = task.await;
+                {
+                    let mut state = preview.0.borrow_mut();
+                    state.pending = false;
+                    state.image = Some(baked);
+                }
+                let _ = owner.update(cx, |owner, cx| if shown(owner) { cx.notify() });
+            }).detach();
+        }
+        state.image.as_ref().map(|(_, image)| image.clone())
     }
 }
 
@@ -1029,6 +1096,27 @@ fn field_layer(gradient: Arc<RenderImage>, texture: Arc<RenderImage>, private: b
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_card_coarse_field_matches_the_exact_field() {
+        let mut theme = SpaceTheme::from_hue(200.);
+        theme.colors.push(ThemeColor::from_hsv(20., 0.7, 0.8));
+        theme.texture = NoiseTexture::None;
+        let picked = Surface { theme: theme.clone(), dark: true, picked: true, default_style: false };
+        let default = Surface { theme, dark: false, picked: false, default_style: true };
+        for surface in [picked, default] {
+            let (width, height) = (240, 664);
+            let image = card_image(&surface, width, height);
+            let bytes = image.as_bytes(0).unwrap();
+            for (x, y) in [(0, 0), (239, 0), (120, 332), (17, 600), (239, 663)] {
+                let exact = surface.sample(x as f32 / (width - 1) as f32, y as f32 / (height - 1) as f32);
+                let at = ((y * width + x) * 4) as usize;
+                // BGRA; default grain adds at most a couple of levels.
+                for (got, want) in bytes[at..at + 3].iter().zip([exact.blue, exact.green, exact.red]) {
+                    assert!((*got as i32 - quantize(want, true) as i32).abs() <= 3, "{x},{y}: {got} vs {want}");
+                }
+            }
+        }
+    }
     #[test]
     fn command_bar_shadow_excludes_the_translucent_rounded_interior() {
         for y in 0..50 {
