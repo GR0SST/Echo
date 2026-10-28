@@ -79,6 +79,9 @@ pub struct Settings {
     pub little_window_archive: LittleWindowArchive,
     /// Browser appearance is shared across Spaces and normal windows.
     pub theme_appearance: crate::themes::ThemeAppearance,
+    /// How many times the "⌘Z to Undo" tab-close hint has been shown. It is
+    /// onboarding only: after a couple of closes it never appears again.
+    pub archive_undo_hints: u8,
 }
 impl Settings {
     pub fn routing(&self) -> crate::routing::AirTrafficControl {

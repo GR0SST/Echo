@@ -2349,6 +2349,23 @@ fn current_toast(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Vi
 }
 
 #[gpui::test]
+fn archive_undo_hint_is_onboarding_only_and_cmd_z_still_restores(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_pages(cx);
+    let original = active_url(&view, cx);
+    let undo_toast = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _|
+        w.toast.as_ref().is_some_and(|toast| toast.message.ends_with(". ⌘Z to Undo.")));
+    for shown in [true, true, false, false] {
+        cx.simulate_keystrokes("cmd-w");
+        assert_eq!(undo_toast(&view, cx), shown);
+        cx.simulate_keystrokes("cmd-z");
+        cx.executor().advance_clock(Duration::from_secs(5));
+        cx.run_until_parked();
+        assert_eq!(active_url(&view, cx), original);
+        assert!(!undo_toast(&view, cx));
+    }
+}
+
+#[gpui::test]
 fn archive_toast_undo_restores_its_transaction_and_rejects_a_later_pin(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     let original = active_url(&view, cx);

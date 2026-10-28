@@ -42,6 +42,8 @@ enum ToastAction {
 pub(crate) const TOAST_LIFETIME: Duration = Duration::from_secs(5);
 const ENTER_SETTLED: Duration = Duration::from_millis(650);
 const EXIT: Duration = Duration::from_millis(200);
+/// Tab closes that still show the "⌘Z to Undo" hint.
+const ARCHIVE_UNDO_HINTS: u8 = 2;
 const FRAME: Duration = Duration::from_millis(16);
 const PAD_X: f32 = 12.;
 const PAD_Y: f32 = 8.;
@@ -137,6 +139,10 @@ impl BrowserWindow {
 
     pub(crate) fn show_archive_undo(&mut self, title: &str, cx: &mut Context<Self>) {
         if self.browser.is_blank() && self.browser.all_tabs().next().is_none() { return; }
+        // Onboarding hint only; ⌘Z keeps working without it.
+        let shown = self.profile.handle.read_settings(|b| b.settings.archive_undo_hints);
+        if shown >= ARCHIVE_UNDO_HINTS { return; }
+        self.profile.handle.edit_settings(|b| b.settings.archive_undo_hints = shown + 1);
         // Arc ToastController's generic Undo template, ARC_PARITY section 18.
         self.show_toast(format!("“{title}”. ⌘Z to Undo."), cx);
         self.attach_archive_undo();
