@@ -232,6 +232,25 @@ fn stroke_svg(size: f32, width: f32, paths: &[Vec<(f32, f32)>]) -> String {
 
 pub(crate) fn control(icon: Icon) -> AnyElement { control_sized(icon, 18.) }
 
+/// A pinned row's control: the catalog minus at `spread` 0. Unloading turns
+/// two copies of it ±45° apart until, at 1, they cross into the remove mark.
+pub(crate) fn pin_control(size: f32, spread: f32) -> AnyElement {
+    let path: gpui::SharedString = format!("{ICON_ASSET_PREFIX}ionicon/remove-outline.svg").into();
+    gpui::canvas(|_, _, _| (), move |bounds, _, window, cx| {
+        let color = window.text_style().color;
+        let (middle, scale) = (bounds.center(), window.scale_factor());
+        let (center, back) = (middle.scale(scale), gpui::point(-middle.x, -middle.y).scale(scale));
+        let copies: &[f32] = if spread == 0. { &[0.] } else { &[1., -1.] };
+        for sign in copies {
+            let matrix = gpui::TransformationMatrix::unit()
+                .translate(center)
+                .rotate(gpui::radians(sign * spread * std::f32::consts::FRAC_PI_4))
+                .translate(back);
+            let _ = window.paint_svg(bounds, path.clone(), matrix, color, cx);
+        }
+    }).size(px(size)).flex_none().into_any_element()
+}
+
 /// Inline tab audio control; its geometry stays fixed when the title elides.
 pub(crate) fn speaker(muted: bool) -> AnyElement {
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {

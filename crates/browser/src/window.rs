@@ -769,6 +769,8 @@ pub struct BrowserWindow {
     pub(crate) split_drop_generation: u64,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub(crate) hovered_row: Option<TabId>,
+    /// The pinned row whose minus just unloaded it, with a unique animation key.
+    pin_cross: Option<(TabId, u64)>,
     pub(crate) sidebar_selection: crate::multi_selection::SidebarSelection,
     /// Layout that changes on sidebar hover (Today actions) needs state:
     /// hover styles alone repaint without a new layout.
@@ -1132,6 +1134,7 @@ impl BrowserWindow {
             split_drop_generation: 0,
             split_draft: None,
             hovered_row: None,
+            pin_cross: None,
             sidebar_selection: Default::default(),
             sidebar_hovered: false,
             traffic_lights_hovered: false,
@@ -3381,6 +3384,11 @@ impl BrowserWindow {
         let segmented = self.browser.split_for(id).is_some_and(|split| split.title.is_none());
         let renaming = self.tab_rename.as_ref().is_some_and(|editor| editor.tab == id);
         let reserve_close = !segmented && !renaming;
+        // Arc offers unload (minus) only while a pinned page is live; an
+        // unloaded pinned row offers removal (cross) instead.
+        let pinned_live = section == Section::Pinned
+            && self.pages.as_ref().is_some_and(|pages| pages.try_borrow().is_ok_and(|pages| pages.has_page(id)));
+        let pin_cross = self.pin_cross.filter(|(tab, _)| *tab == id).map(|(_, generation)| generation);
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
@@ -3492,12 +3500,25 @@ impl BrowserWindow {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
-                        this.close_tab(id, cx);
+                        match section {
+                            Section::Pinned if !pinned_live => this.remove_pin(id, cx),
+                            Section::Pinned => {
+                                this.close_tab(id, cx);
+                                let generation = this.pin_cross.map_or(0, |(_, generation)| generation + 1);
+                                this.pin_cross = Some((id, generation));
+                            }
+                            Section::Today => this.close_tab(id, cx),
+                        }
                     }))
-                    .child(crate::icons::control_sized(match section {
-                        Section::Pinned => crate::icons::Icon::Minus,
-                        Section::Today => crate::icons::Icon::Close,
-                    }, if !segmented && matches!(section, Section::Today) { 22. } else { 18. })),
+                    .child(match (section, pin_cross) {
+                        (Section::Today, _) => crate::icons::control_sized(crate::icons::Icon::Close, if segmented { 18. } else { 22. }),
+                        (Section::Pinned, _) if pinned_live => crate::icons::pin_control(18., 0.),
+                        (Section::Pinned, Some(generation)) => div().size(px(18.)).flex_none()
+                            .with_animation(SharedString::from(format!("pin-cross-{key}-{generation}")), pin_cross_animation(),
+                                |this, delta| this.child(crate::icons::pin_control(18., delta)))
+                            .into_any_element(),
+                        (Section::Pinned, None) => crate::icons::pin_control(18., 1.),
+                    }),
             ))
     }
 
@@ -3545,9 +3566,13 @@ impl BrowserWindow {
                 if this.select_sidebar_item(id, event.modifiers(), cx) { return; }
                 if let Some(pages) = &this.pages { pages.borrow_mut().request_page_focus(); }
                 this.edit_browser(|browser| browser.activate_sidebar_item(id, SystemTime::now()));
-                if event.click_count() == 2 {
-                    let title = this.browser.item_title(id);
-                    this.open_command_bar(Target::RenameTab(id), &title, window, cx);
+                // Arc's double click sends a Favorite back to its original URL.
+                if event.click_count() == 2 && this.edit_browser(|browser| browser.reset_pinned_tab(id)) {
+                    if let Some(pages) = &this.pages {
+                        let mut pages = pages.borrow_mut();
+                        for id in this.browser.related_tabs(id) { pages.discard(id); }
+                        pages.sync(&this.browser, this.page_content_visible());
+                    }
                 }
                 cx.notify();
             }))
@@ -5339,6 +5364,11 @@ fn press_scale(t: f32, dip: f32) -> f32 {
 
 /// Hover-only controls fade like the reference instead of popping in.
 const HOVER_FADE: Duration = Duration::from_millis(160);
+
+fn pin_cross_animation() -> Animation {
+    let duration = if crate::native::prefers_reduced_motion() { Duration::from_millis(1) } else { Duration::from_millis(260) };
+    Animation::new(duration).with_easing(gpui::ease_out_quint())
+}
 
 fn hover_animation() -> Animation {
     let duration = if crate::native::prefers_reduced_motion() { Duration::from_millis(1) } else { HOVER_FADE };

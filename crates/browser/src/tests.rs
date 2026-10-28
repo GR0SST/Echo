@@ -1084,15 +1084,27 @@ fn cmd_shift_k_clears_background_today_and_preserves_the_selected_page(cx: &mut 
 
 #[gpui::test]
 fn closing_a_pinned_tab_keeps_it_pinned(cx: &mut TestAppContext) {
-    let (view, cx) = open(cx);
+    let (view, cx, fake) = open_pages(cx);
     let pinned = view.read_with(cx, |w, _| w.browser.space().pinned[0].id.get());
+    let row: &'static str = Box::leak(format!("tab-{pinned}").into_boxed_str());
     let close: &'static str = Box::leak(format!("close-{pinned}").into_boxed_str());
+    click(cx, row);
+    fake.take_calls();
+    // A live pinned page offers the minus, which only unloads it.
     click(cx, close);
+    assert!(fake.take_calls().iter().any(|call| matches!(call, Call::Close(..))));
     let urls: Vec<String> = view.read_with(cx, |w, _| {
         w.browser.space().pinned.iter().map(|t| t.url.clone()).collect()
     });
     assert_eq!(urls, vec!["https://github.com", "https://mail.google.com"]);
     assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+    // Unloaded, the same control is the cross and removes the pin.
+    cx.executor().advance_clock(Duration::from_secs(1));
+    click(cx, close);
+    let urls: Vec<String> = view.read_with(cx, |w, _| {
+        w.browser.space().pinned.iter().map(|t| t.url.clone()).collect()
+    });
+    assert_eq!(urls, vec!["https://mail.google.com"]);
 }
 
 #[gpui::test]
@@ -3478,6 +3490,19 @@ fn favorites_are_shared_and_keep_the_loaded_page_across_spaces(cx: &mut TestAppC
     assert!(view.read_with(cx, |w, cx| w.suggestions(cx).iter().any(|s| matches!(s, Suggestion::SwitchToTab { space, .. } if space == "Favorites"))));
     bar(&view, cx).simulate_keystrokes("down enter");
     assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+}
+
+#[gpui::test]
+fn double_clicking_a_favorite_returns_it_to_its_original_url(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let original = active_url(&view, cx).unwrap();
+    cx.dispatch_action(crate::window::ToggleFavorite);
+    cx.simulate_keystrokes("ctrl-2 cmd-1");
+    fake.send(cx, Event::UrlChanged { view: page(1), url: "https://example.com/elsewhere".into() });
+    assert_eq!(active_url(&view, cx).as_deref(), Some("https://example.com/elsewhere"));
+    double_click(cx, "favorite-8");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(original.as_str()));
+    assert!(view.read_with(cx, |w, _| w.tab_rename.is_none() && w.command_bar.is_none()));
 }
 
 #[gpui::test]
