@@ -144,3 +144,36 @@ fn leaving_the_page_disarms_the_split_target_before_reentering_its_center(cx: &m
     assert!(view.read_with(cx, |w, _| w.split_drop.is_none()
         && w.browser.active_split().is_none()));
 }
+
+#[gpui::test]
+fn sidebar_drag_ghost_is_a_row_and_tab_on_tab_joins_a_split_in_place(cx: &mut TestAppContext) {
+    let (view, cx, _fake) = open_split_pages(cx, 1);
+    let target = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    let source = view.update(cx, |w, cx| {
+        let source = w.edit_browser(|b| b.new_tab("https://dragged.example", std::time::SystemTime::now()));
+        // Keep the target in Pinned: a sidebar split stays where the target row is.
+        w.edit_browser(|b| b.move_tab(target, b.space().id, browser_core::Section::Pinned));
+        cx.notify();
+        source
+    });
+    cx.run_until_parked();
+    let row = cx.debug_bounds(test_selector(format!("tab-{}", target.get()))).unwrap();
+    begin_sidebar_drag(cx, test_selector(format!("tab-{}", source.get())));
+    let ghost = cx.debug_bounds("tab-drag-row").unwrap();
+    assert_eq!(ghost.size.height, gpui::px(crate::window::SIDEBAR_ROW_HEIGHT));
+    // Upper band reorders, middle band offers the right half for a split.
+    cx.simulate_mouse_move(gpui::point(row.right() - gpui::px(20.), row.top() + gpui::px(5.)), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(test_selector(format!("tab-split-half-{}", target.get()))).is_none());
+    let middle = gpui::point(row.right() - gpui::px(20.), row.center().y);
+    cx.simulate_mouse_move(middle, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let half = cx.debug_bounds(test_selector(format!("tab-split-half-{}", target.get()))).unwrap();
+    assert!(half.left() >= row.center().x - gpui::px(1.));
+    finish_sidebar_drag(cx, middle);
+    view.read_with(cx, |w, _| {
+        let split = w.browser.split_for(target).expect("joined in the sidebar");
+        assert_eq!(split.panes, vec![target, source]);
+        assert!(w.browser.space().pinned.iter().any(|tab| tab.id == source), "the group stays in Pinned");
+    });
+}

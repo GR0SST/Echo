@@ -18,12 +18,17 @@ pub(crate) struct TabDrag {
     icon: Option<String>,
     favicon: Option<Vec<u8>>,
     split: bool,
+    ink: gpui::Hsla,
+    dark: bool,
+    fill: gpui::Hsla,
+    row: std::rc::Rc<std::cell::Cell<gpui::Size<gpui::Pixels>>>,
     pub(crate) reorder_target: std::rc::Rc<std::cell::Cell<Option<(TabId,bool)>>>,
 }
 
 impl TabDrag {
 
     pub(crate) fn start_at(&self, owner: gpui::WeakEntity<BrowserWindow>, offset: gpui::Point<gpui::Pixels>, width: f32, height: f32, cx: &mut gpui::App) -> gpui::Entity<Self> {
+        self.row.set(gpui::size(px(width), px(height)));
         self.card_hotspot.set(gpui::point(px((f32::from(offset.x) / width).clamp(0.,1.) * 128.), px((f32::from(offset.y) / height).clamp(0.,1.) * 250. - 5.)));
         self.start(owner,cx)
     }
@@ -297,7 +302,37 @@ impl BrowserWindow {
             icon: self.browser.item_icon(tab.id).map(str::to_string),
             favicon: self.browser.favicon(self.browser.active_user_profile_id(), &tab.url).map(|bytes| bytes.to_vec()),
             split: self.browser.split_for(tab.id).is_some(),
+            ink: self.theme_foreground_for(self.browser.space().id),
+            dark: self.theme_uses_light_ink_for(self.browser.space().id),
+            fill: self.theme_tab_selection_for(self.browser.space().id),
+            row: std::rc::Rc::new(std::cell::Cell::new(gpui::size(px(212.), px(crate::window::SIDEBAR_ROW_HEIGHT)))),
         }
+    }
+
+    /// A standalone page held over another standalone page of the same profile
+    /// can join it as a two-page Split View in place.
+    pub(crate) fn can_split_in_sidebar(&self, drag: &TabDrag, target: TabId) -> bool {
+        self.accepts_tab_drag(drag) && !drag.split && target != drag.id
+            && self.browser.split_for(target).is_none() && self.browser.split_for(drag.id).is_none()
+            && !self.browser.is_favorite(target)
+            && self.browser.user_profile_id_for_tab(target) == Some(drag.profile)
+            && self.can_add_split(target) && self.can_add_split(drag.id)
+    }
+
+    /// Unlike a drop on the page, joining rows in the sidebar keeps the group
+    /// where the target row is, including inside Pinned and its folders.
+    pub(crate) fn drop_tab_split_in_sidebar(&mut self, drag: &TabDrag, target: TabId, right: bool, cx: &mut Context<Self>) {
+        if !self.can_split_in_sidebar(drag, target) { return; }
+        let placement = if right { browser_core::splits::Placement::Right } else { browser_core::splits::Placement::Left };
+        let now = SystemTime::now();
+        // A Favorite stays in the dock; the split takes an independent copy.
+        let page = if self.browser.is_favorite(drag.id) {
+            let Some(copy) = self.edit_browser(|browser| browser.copy_item_to_today(drag.id, now)) else { return; };
+            copy
+        } else { drag.id };
+        if self.edit_browser(|browser| browser.add_split(target, page, placement, now)).is_err() { return; }
+        if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
+        cx.notify();
     }
 
     pub(crate) fn drop_tab_in_folder(
@@ -338,27 +373,40 @@ impl Render for TabDrag {
                 gpui::ImageFormat::Png,
                 bytes.clone(),
             )))
-            .size(px(18.))
+            .size(px(16.))
             .flex_none()
             .into_any_element()
         } else {
-            crate::icons::control(crate::icons::Icon::External)
+            crate::window::favicon_placeholder(self.dark).into_any_element()
         };
+        let icon = div().size(px(18.)).flex_none().flex().items_center().justify_center().child(icon);
+        // Arc lifts a copy of the sidebar row: a translucent fill under crisp
+        // icon and title, the same size as the row it left.
+        let row = self.row.get();
         div()
             .debug_selector(|| "tab-drag-row".into())
+            .w(row.width)
+            .h(row.height)
             .flex()
             .items_center()
-            .gap_2()
-            .h(px(34.))
-            .max_w(px(240.))
-            .px_2()
-            .rounded_lg()
-            .shadow_md()
-            .bg(hsla(0., 0., 0.98, 0.96))
-            .text_color(hsla(0., 0., 0.1, 1.))
-            .text_sm()
-            .child(icon)
-            .child(div().min_w_0().truncate().child(self.title.clone()))
+            .child(div()
+                .relative()
+                .flex()
+                .items_center()
+                .gap(px(9.))
+                .w_full()
+                .h(px(crate::window::SIDEBAR_TAB_HEIGHT))
+                .pl(px(9.))
+                .pr(px(6.))
+                .rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
+                .bg(gpui::Hsla { a: (self.fill.a * 0.85).max(0.12), ..self.fill })
+                .shadow(vec![gpui::BoxShadow { color: hsla(0., 0., 0., 0.12), offset: gpui::point(px(0.), px(2.)), blur_radius: px(8.), spread_radius: px(0.) }])
+                .text_color(self.ink)
+                .text_size(px(14.))
+                .line_height(px(18.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(icon)
+                .child(div().min_w_0().truncate().child(self.title.clone())))
             .into_any_element()
     }
 }

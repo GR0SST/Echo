@@ -44,7 +44,7 @@ const SIDEBAR_INSET: f32 = 8.0;
 const SIDEBAR_TOOLBAR_HEIGHT: f32 = 47.0;
 pub(crate) const TOP_TOOLBAR_HEIGHT: f32 = 33.;
 pub(crate) const SIDEBAR_ROW_HEIGHT: f32 = 38.0;
-const SIDEBAR_TAB_HEIGHT: f32 = 36.0;
+pub(crate) const SIDEBAR_TAB_HEIGHT: f32 = 36.0;
 pub(crate) const SIDEBAR_ROW_GAP: f32 = 3.0;
 pub(crate) const SIDEBAR_ROW_RADIUS: f32 = 10.0;
 const FAVORITE_HEIGHT: f32 = 47.0;
@@ -782,6 +782,8 @@ pub struct BrowserWindow {
     pub(crate) folder_peeks: HashMap<browser_core::folders::FolderId, Vec<browser_core::folders::PinnedItem>>,
     pub(crate) peek_reveals: HashMap<browser_core::folders::PinnedItem, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<Option<bool>>>>>,
+    /// The half of a row a held tab would join as a Split View (true = right).
+    tab_split_sides: RefCell<HashMap<TabId, Rc<Cell<Option<bool>>>>>,
     pub(crate) tab_drag_active: bool,
     tab_drag_press: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
     sidebar_press: Option<(TabId, f32, f32, Instant)>,
@@ -1157,6 +1159,7 @@ impl BrowserWindow {
             folder_peeks: HashMap::new(),
             peek_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
+            tab_split_sides: RefCell::new(HashMap::new()),
             tab_drag_active: false,
             tab_drag_press: Rc::new(Cell::new(None)),
             sidebar_press: None,
@@ -3156,7 +3159,8 @@ impl BrowserWindow {
         let Some(floating) = &mut self.floating_sidebar else { return; };
         if (0. ..=right).contains(&x) && (0. ..=floating.height).contains(&y) { floating.entered = true; }
         if floating.entered && (x > right + SIDEBAR_DISMISS_BUFFER || y < 0. || y > floating.height)
-            && self.tab_menu.is_none() && self.command_bar.is_none() {
+            // A held sidebar drag keeps the panel open until it is released.
+            && self.tab_menu.is_none() && self.command_bar.is_none() && !self.tab_drag_active && !cx.has_active_drag() {
             self.close_floating_sidebar(cx);
         }
     }
@@ -3487,6 +3491,9 @@ impl BrowserWindow {
         let group = SharedString::from(format!("tab-{key}"));
         // Keep the current edge across view refreshes caused by drag hover.
         let edge = self.tab_drop_edges.borrow_mut().entry(id).or_default().clone();
+        let split_side = self.tab_split_sides.borrow_mut().entry(id).or_default().clone();
+        let move_split_side = split_side.clone();
+        let drop_split_side = split_side.clone();
         let drag_moves_active = self.sidebar_page_interactive;
         let move_edge = edge.clone();
         let drag_owner = cx.entity().downgrade();
@@ -3528,9 +3535,16 @@ impl BrowserWindow {
                 let inside = valid && position.x >= event.bounds.left() && position.x < event.bounds.right()
                     && position.y >= event.bounds.top() - px(SIDEBAR_ROW_GAP / 2.)
                     && position.y < bottom;
-                let target = inside.then_some(position.y > event.bounds.center().y);
+                // The middle band of a row joins the two pages as a Split View
+                // on the half under the pointer; the outer bands reorder.
+                let row_top = event.bounds.top() + px((SIDEBAR_ROW_HEIGHT - SIDEBAR_TAB_HEIGHT) / 2.);
+                let band = (position.y - row_top) / px(SIDEBAR_TAB_HEIGHT);
+                let side = (inside && (0.28..0.72).contains(&band) && this.can_split_in_sidebar(drag, id))
+                    .then_some(position.x > event.bounds.center().x);
+                let target = (inside && side.is_none()).then_some(position.y > event.bounds.center().y);
                 if let Some(after) = target { this.reorder_feedback(drag,Some((id,after)),cx); }
-                if move_edge.replace(target) != target { cx.notify(); }
+                let changed = move_split_side.replace(side) != side;
+                if move_edge.replace(target) != target || changed { cx.notify(); }
             }))
             // Paint from the drag position: the floating card may occlude hover hitboxes.
             .when(cx.has_active_drag() && edge.get().is_some(), |row| {
@@ -3546,7 +3560,24 @@ impl BrowserWindow {
                         .absolute().left_0().right_0().top(px((SIDEBAR_ROW_GAP - 2.) / 2.))
                         .h(px(2.)).bg(hsla(0., 0., 0.2, 0.6))))
             })
-            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| { if this.prepare_sidebar_target(painted_space, painted_profile) { this.drop_tab_relative(drag, id, edge.get().unwrap_or(false), cx); } }))
+            .when(cx.has_active_drag() && split_side.get().is_some(), |row| {
+                let right = split_side.get().unwrap();
+                row.child(div().debug_selector(move || format!("tab-split-half-{key}"))
+                    .absolute().w(gpui::relative(0.5))
+                    .top(px((SIDEBAR_ROW_HEIGHT - SIDEBAR_TAB_HEIGHT) / 2.)).bottom(px((SIDEBAR_ROW_HEIGHT - SIDEBAR_TAB_HEIGHT) / 2.))
+                    .when(right, |half| half.right_0()).when(!right, |half| half.left_0())
+                    .rounded(px(SIDEBAR_ROW_RADIUS))
+                    // Visible over the selected fill as well as an idle row.
+                    .bg(if private { hsla(0., 0., 1., 0.22) } else { hsla(0., 0., 0., 0.12) })
+                    .with_animation(SharedString::from(format!("tab-split-half-{key}-{right}")),
+                        gpui::Animation::new(Duration::from_millis(120)).with_easing(gpui::ease_out_quint()),
+                        |half, delta| half.opacity(delta)))
+            })
+            .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| {
+                if !this.prepare_sidebar_target(painted_space, painted_profile) { return; }
+                if let Some(right) = drop_split_side.take() { this.drop_tab_split_in_sidebar(drag, id, right, cx); }
+                else { this.drop_tab_relative(drag, id, edge.get().unwrap_or(false), cx); }
+            }))
             .flex_none()
             .flex()
             .items_center()
@@ -3908,14 +3939,15 @@ impl BrowserWindow {
                                     this.copy_feedback = Some((this.copy_feedback.map_or(0, |(generation, _)| generation + 1), Instant::now()));
                                 }))
                                 .child(self.render_copy_icon()))
-                            .child(address_action("address-site-controls", controls_open)
+                            // A Split View holds several sites; each pane header has its own control.
+                            .when(self.browser.active_split().is_none(), |this| this.child(address_action("address-site-controls", controls_open)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.press_control("address-site-controls");
                                     this.toggle_site_controls(window, cx);
                                 }))
                                 .child(self.render_pressed_icon("address-site-controls", crate::icons::Icon::SiteControls))
-                                .child(canvas(|_, _, _| (), move |bounds, _, _, _| anchor.set(Some(bounds))).absolute().inset_0())),
+                                .child(canvas(|_, _, _| (), move |bounds, _, _, _| anchor.set(Some(bounds))).absolute().inset_0()))),
                             "address-actions", address_actions_shown))),
                 ),
             ))
@@ -5174,6 +5206,7 @@ impl Render for BrowserWindow {
         self.remember_library_preview_focus(window, cx);
         let open: std::collections::HashSet<_> = self.browser.all_tabs().map(|tab| tab.id).collect();
         self.tab_drop_edges.get_mut().retain(|id, _| open.contains(id));
+        self.tab_split_sides.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
         if self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() && self.live_folders.sheet.is_none() { self.sync_history_focus(window, cx); }
         if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_is_current(menu)) {
@@ -5202,6 +5235,7 @@ impl Render for BrowserWindow {
         self.sync_extension_model_on_render(window, cx);
         if !cx.has_active_drag() {
             for edge in self.tab_drop_edges.get_mut().values() { edge.set(None); }
+            for side in self.tab_split_sides.get_mut().values() { side.set(None); }
             self.sidebar_drag_scroll = None;
             if self.split_drop.is_some() { self.close_split_drop(cx); }
         }
@@ -5436,7 +5470,7 @@ impl Render for BrowserWindow {
 
 /// Arc leaves unknown sites as a quiet, neutral page tile. The placeholder
 /// carries no title initial or Space accent; a cached site icon replaces it.
-fn favicon_placeholder(dark: bool) -> impl IntoElement {
+pub(crate) fn favicon_placeholder(dark: bool) -> impl IntoElement {
     div()
         .debug_selector(|| "favicon-placeholder".into())
         .flex_none()

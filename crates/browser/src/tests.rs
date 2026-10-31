@@ -7153,6 +7153,35 @@ fn floating_sidebar_keeps_a_pointer_buffer_without_covering_the_page(cx: &mut Te
 
 
 #[gpui::test]
+fn floating_sidebar_stays_open_while_a_tab_is_held(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-s");
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    move_mouse(cx, 2., 300.);
+    let mut overlay = floating(&view, cx).unwrap();
+    move_mouse(&mut overlay, 100., 300.);
+    view.update(cx, |w, _| w.tab_drag_active = true);
+    move_mouse(cx, 600., 300.);
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert!(floating(&view, cx).is_some(), "a held drag keeps the panel open");
+    view.update(cx, |w, _| w.tab_drag_active = false);
+    move_mouse(cx, 610., 300.);
+    cx.executor().advance_clock(Duration::from_millis(240));
+    cx.run_until_parked();
+    assert!(floating(&view, cx).is_none(), "release lets it close");
+}
+
+#[gpui::test]
+fn split_view_omits_site_controls_from_the_sidebar_address(cx: &mut TestAppContext) {
+    let (_view, cx, _fake) = open_split_pages(cx, 2);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("address-copy-link").is_some());
+    assert!(cx.debug_bounds("address-site-controls").is_none());
+}
+
+#[gpui::test]
 fn sidebar_toolbar_routes_navigation_and_switches_reload_to_stop(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     fake.take_calls();
