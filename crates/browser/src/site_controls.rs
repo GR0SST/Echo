@@ -947,8 +947,9 @@ impl BrowserWindow {
                                     .child(crate::icons::control_sized(Icon::Share, 22.)),
                             )
                             .child(
+                                // Each press adds another Boost; a site can carry several.
                                 top_tile("site-boost")
-                                    .on_click(cx.listener(|this, _, _, cx| this.customize_page(cx)))
+                                    .on_click(cx.listener(|this, _, _, cx| this.new_boost(cx)))
                                     .child(crate::icons::ionicon("brush", 22., 1.)),
                             )
                             .child(

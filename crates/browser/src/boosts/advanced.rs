@@ -20,6 +20,7 @@ impl BoostEditor {
         let at = window.bounds().origin + point(px(-20.), px(272.));
         let parent = crate::native::view_of(window);
         let owner = cx.entity().downgrade();
+        let owner_handle = owner.clone();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 at,
@@ -33,23 +34,35 @@ impl BoostEditor {
             window_background: WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
-        if let Ok(handle) = cx.open_window(options, |window, cx| {
-            if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
-                crate::native::attach_overlay(parent, child, false);
-            }
-            cx.new(|cx| {
-                let focus = cx.focus_handle();
-                focus.focus(window);
-                Advanced {
-                    owner,
-                    focus,
-                    drag: None,
-                    bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
+        // The popover reads the editor while it first renders, so it opens
+        // once this update has finished.
+        window.defer(cx, move |_, cx| {
+            let Ok(handle) = cx.open_window(options, |window, cx| {
+                if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
+                    crate::native::attach_overlay(parent, child, false);
                 }
-            })
-        }) {
-            self.advanced = Some(handle);
-        }
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    focus.focus(window);
+                    Advanced {
+                        owner,
+                        focus,
+                        drag: None,
+                        bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
+                    }
+                })
+            }) else {
+                return;
+            };
+            let kept = owner_handle
+                .update(cx, |editor, _| {
+                    editor.advanced.get_or_insert(handle) == &handle
+                })
+                .unwrap_or(false);
+            if !kept {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
+        });
     }
 }
 impl Advanced {

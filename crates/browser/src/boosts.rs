@@ -68,13 +68,14 @@ pub(crate) struct BoostEditor {
     focus: gpui::FocusHandle,
     color_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     /// Where the lagging accent dot was last painted, and when.
-    accent_shown: Rc<Cell<Option<(f32, std::time::Instant)>>>,
+    accent_shown: Rc<Cell<Option<((f32, f32), std::time::Instant)>>>,
     /// Which color dot the current press moves.
     wheel_grip: Option<WheelGrip>,
     _subscriptions: Vec<Subscription>,
 }
-/// Both dots slide along one ring: the main dot sets the page color and the
-/// accent trails it; the accent can also be slid alone and sets the text color.
+/// Both dots move inside the pad's circle (angle = hue, distance =
+/// saturation): the main dot tints the page and the accent, which turns with
+/// it, the text; the accent can also be moved alone.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WheelGrip { Main, Accent }
 
@@ -95,9 +96,8 @@ fn pad_point(bounds: Bounds<gpui::Pixels>, position: gpui::Point<gpui::Pixels>) 
     ((f32::from(local.x) - inset) / browser_core::boosts::PAD_EXTENT, (f32::from(local.y) - inset) / browser_core::boosts::PAD_EXTENT)
 }
 
-fn dot_color(point: (f32, f32)) -> gpui::Hsla {
-    let (hue, strength) = browser_core::boosts::pad_color(point);
-    gpui::hsla(hue / 360., 0.25 + 0.6 * strength, 0.5, 1.)
+fn dot_color((hue, saturation): (f32, f32)) -> gpui::Hsla {
+    gpui::hsla(hue.rem_euclid(360.) / 360., 0.85 * saturation, 0.5, 1.)
 }
 
 impl BoostEditor {
@@ -641,10 +641,11 @@ impl BoostEditor {
         .size(px(18.))
         .into_any_element()
     }
-    fn prohibition() -> AnyElement {
+    /// Arc's "no changes" sign: grey until the Boost changes the page.
+    fn prohibition(active: bool) -> AnyElement {
         gpui::canvas(
             |_, _, _| (),
-            |bounds, _, window, _| {
+            move |bounds, _, window, _| {
                 let mut path = gpui::PathBuilder::stroke(px(1.3));
                 for index in 0..=32 {
                     let angle = index as f32 * std::f32::consts::TAU / 32.;
@@ -659,7 +660,7 @@ impl BoostEditor {
                 path.move_to(bounds.origin + point(px(4.8), px(4.8)));
                 path.line_to(bounds.origin + point(px(13.2), px(13.2)));
                 if let Ok(path) = path.build() {
-                    window.paint_path(path, rgb(0xb4b4b8));
+                    window.paint_path(path, rgb(if active { 0x333333 } else { 0xb4b4b8 }));
                 }
             },
         )
@@ -669,13 +670,13 @@ impl BoostEditor {
     fn draw_wheel(
         appearance: &browser_core::boosts::BoostAppearance,
         measured: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
-        accent_shown: Rc<Cell<Option<(f32, std::time::Instant)>>>,
+        accent_shown: Rc<Cell<Option<((f32, f32), std::time::Instant)>>>,
     ) -> AnyElement {
         let tint = appearance.tint;
         let inset = (148. - browser_core::boosts::PAD_EXTENT) / 2.;
         let at = move |(x, y): (f32, f32)| (inset + x * browser_core::boosts::PAD_EXTENT, inset + y * browser_core::boosts::PAD_EXTENT);
-        let main = appearance.main_point();
-        let accent_target = appearance.accent_angle();
+        let main = appearance.main_color();
+        let accent_target = appearance.accent_color();
         gpui::canvas(
             move |bounds, _, _| {
                 measured.set(Some(bounds));
@@ -767,25 +768,26 @@ impl BoostEditor {
                         ));
                     }
                 }
-                // The accent eases after the main dot along the ring, so it
-                // visibly lags behind a drag.
+                // The accent eases after the main dot, so it visibly lags
+                // behind a drag.
                 let dots = match (main, accent_target) {
                     (Some(main), Some(target)) => {
                         let now = std::time::Instant::now();
+                        let goal = browser_core::boosts::pad_point(target.0, target.1);
                         let shown = match accent_shown.get() {
-                            Some((angle, then)) if !crate::native::prefers_reduced_motion() => {
+                            Some((from, then)) if !crate::native::prefers_reduced_motion() => {
                                 let step = 1. - (-(now - then).as_secs_f32() / ACCENT_LAG).exp();
-                                angle + browser_core::boosts::wrap_degrees(target - angle) * step
+                                (from.0 + (goal.0 - from.0) * step, from.1 + (goal.1 - from.1) * step)
                             }
-                            _ => target,
+                            _ => goal,
                         };
-                        let shown = if browser_core::boosts::wrap_degrees(target - shown).abs() < 0.2 { target } else { window.request_animation_frame(); shown };
+                        let settled = (goal.0 - shown.0).hypot(goal.1 - shown.1) * browser_core::boosts::PAD_EXTENT < 0.3;
+                        let shown = if settled { goal } else { window.request_animation_frame(); shown };
                         accent_shown.set(Some((shown, now)));
-                        let (main_x, main_y) = at(main);
-                        let accent = browser_core::boosts::ring_point(shown);
-                        let (accent_x, accent_y) = at(accent);
+                        let (main_x, main_y) = at(browser_core::boosts::pad_point(main.0, main.1));
+                        let (accent_x, accent_y) = at(shown);
                         [(main_x, main_y, browser_core::boosts::MAIN_DOT_RADIUS, dot_color(main)),
-                         (accent_x, accent_y, browser_core::boosts::ACCENT_DOT_RADIUS, dot_color(accent))]
+                         (accent_x, accent_y, browser_core::boosts::ACCENT_DOT_RADIUS, dot_color(target))]
                     }
                     // Untinted Boosts show the neutral dots in Arc's resting spots.
                     _ => {
@@ -832,6 +834,7 @@ impl Render for BoostEditor {
             .as_ref()
             .map(|boost| boost.appearance.clone())
             .unwrap_or_default();
+        let changed = appearance != Default::default();
         let mut root = div()
             .id("boost-editor")
             .debug_selector(|| "boost-editor".into())
@@ -1074,21 +1077,21 @@ impl Render for BoostEditor {
                                 ]
                                 .into_iter()
                                 .map(|(index, id)| {
-                                    Self::control_hover(
-                                        id,
-                                        if index == 1 && self.advanced.is_some() {
-                                            0x333333
-                                        } else {
-                                            0xdedee1
-                                        },
-                                    )
+                                    // The bulb is dark while the page is inverted, the
+                                    // sliders while their popover is open.
+                                    let on = match index {
+                                        0 => appearance.inverted,
+                                        1 => self.advanced.is_some(),
+                                        _ => false,
+                                    };
+                                    let idle = index == 2 && !changed;
+                                    Self::control_hover(id, if on { 0x333333 } else if idle { 0xebebed } else { 0xdedee1 })
                                     .w(px(44.))
                                     .h(px(38.))
-                                    .when(index == 1 && self.advanced.is_some(), |el| {
-                                        el.bg(rgb(0x333333)).text_color(rgb(0xffffff))
-                                    })
+                                    .when(on, |el| el.bg(rgb(0x333333)).text_color(rgb(0xffffff)))
+                                    .when(idle, |el| el.cursor_default())
                                     .child(if index == 2 {
-                                        Self::prohibition()
+                                        Self::prohibition(changed)
                                     } else {
                                         icons::ionicon(
                                             if index == 0 {
@@ -1111,7 +1114,7 @@ impl Render for BoostEditor {
                                                     boost.appearance.inverted =
                                                         !boost.appearance.inverted;
                                                 } else if index == 2 {
-                                                    boost.appearance.clear_color();
+                                                    boost.appearance = Default::default();
                                                 }
                                             })
                                         },

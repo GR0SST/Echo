@@ -10250,6 +10250,24 @@ fn boost_panel(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Visu
     let visual=VisualTestContext::from_window(handle.into(),&cx.cx);visual.run_until_parked();visual
 }
 #[gpui::test]
+fn boost_advanced_controls_open_without_crashing_and_change_the_boost(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    view.update(cx,|view,cx|view.new_boost(cx));
+    let mut panel=boost_panel(&view,cx);
+    let before=panel.windows().len();
+    click(&mut panel,"boost-advanced");panel.run_until_parked();
+    let windows=panel.windows();
+    assert_eq!(windows.len(),before+1,"the Advanced popover opened");
+    let mut advanced=VisualTestContext::from_window(*windows.last().unwrap(),&panel.cx);advanced.run_until_parked();
+    let slider=advanced.debug_bounds("boost-adjust-0").expect("Contrast slider");
+    advanced.simulate_click(gpui::point(slider.right()-gpui::px(2.),slider.center().y),Modifiers::none());advanced.run_until_parked();
+    let contrast=view.read_with(&advanced,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.contrast);
+    assert!(contrast.is_some_and(|value|value>150),"contrast {contrast:?}");
+    // The same button closes it again.
+    click(&mut panel,"boost-advanced");panel.run_until_parked();
+    assert_eq!(panel.windows().len(),before);
+}
+#[gpui::test]
 fn the_sidebar_address_drops_down_over_its_field(cx:&mut TestAppContext){
     let (view,cx,_fake)=open_pages(cx);
     let field=cx.debug_bounds("address").unwrap();
@@ -10283,35 +10301,49 @@ fn the_boost_editor_hides_on_another_page_and_returns(cx:&mut TestAppContext){
     let _ = other;
 }
 #[gpui::test]
-fn boost_color_dots_slide_along_one_ring_and_the_accent_trails(cx:&mut TestAppContext){
+fn boost_color_dots_move_inside_the_circle_and_the_accent_turns_along(cx:&mut TestAppContext){
     let (view,cx,_fake)=open_pages(cx);
     view.update(cx,|view,cx|view.new_boost(cx));
     let mut panel=boost_panel(&view,cx);
     let pad=panel.debug_bounds("boost-color").unwrap();
     let look=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.clone());
-    // The pad's center sits 74 points in; the ring is 0.47 of its 134 points.
+    // The pad's center sits 74 points in; the circle is 0.47 of its 134 points (63).
     let at=|x:f32,y:f32|pad.origin+gpui::point(gpui::px(74.+x),gpui::px(74.+y));
-    let ring=|p:(f32,f32)|((p.0-0.5).hypot(p.1-0.5)-browser_core::boosts::RING_RADIUS).abs()<0.001;
-    // A press near the center or past the edge still puts the main dot on the ring.
+    // Dragging past the edge holds the main dot on the circle.
     panel.simulate_mouse_down(at(10.,0.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_move(at(40.,40.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(20.,20.),gpui::MouseButton::Left,Modifiers::none());
     panel.simulate_mouse_move(at(0.,90.),gpui::MouseButton::Left,Modifiers::none());
     panel.simulate_mouse_up(at(0.,90.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
     let first=look(&view,&mut panel);
-    assert_eq!(first.tint,Some(90));
-    assert!(ring(first.main_point().unwrap()) && ring(first.accent_point().unwrap()));
-    assert_eq!(first.accent_offset,Some(-26),"clockwise drag leaves the accent behind");
-    // Grabbing the accent slides it alone along the ring.
-    let accent=first.accent_point().unwrap();
+    assert_eq!((first.tint,first.saturation_point),(Some(90),Some(100)));
+    // Halfway in is half saturated.
+    panel.simulate_mouse_down(at(0.,31.5),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(at(0.,31.5),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    let half=look(&view,&mut panel);
+    assert_eq!((half.tint,half.saturation_point),(Some(90),Some(50)));
+    // Grabbing the accent moves it alone, without the main dot.
+    let accent=half.accent_point().unwrap();
     let grip=pad.origin+gpui::point(gpui::px(7.+accent.0*134.),gpui::px(7.+accent.1*134.));
     panel.simulate_mouse_down(grip,gpui::MouseButton::Left,Modifiers::none());
     panel.simulate_mouse_move(at(-30.,10.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_move(at(-60.,0.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_up(at(-60.,0.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    panel.simulate_mouse_move(at(-63.,0.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(at(-63.,0.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
     let turned=look(&view,&mut panel);
-    assert_eq!(turned.tint,first.tint);
-    assert_eq!(turned.accent_offset,Some(90));
-    assert!(ring(turned.accent_point().unwrap()));
+    assert_eq!((turned.tint,turned.saturation_point),(half.tint,half.saturation_point));
+    assert_eq!((turned.accent_offset,turned.accent_saturation),(Some(90),Some(100)));
+}
+#[gpui::test]
+fn boost_color_reset_clears_every_simple_editor_change(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    view.update(cx,|view,cx|view.new_boost(cx));
+    let mut panel=boost_panel(&view,cx);
+    let look=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.clone());
+    click(&mut panel,"boost-invert");panel.run_until_parked();
+    assert!(look(&view,&mut panel).inverted);
+    click(&mut panel,"boost-size");panel.run_until_parked();
+    // The ⊘ button clears every simple-editor change.
+    click(&mut panel,"boost-color-reset");panel.run_until_parked();
+    assert_eq!(look(&view,&mut panel),Default::default());
 }
 #[gpui::test]
 fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut TestAppContext) {
@@ -10590,7 +10622,8 @@ fn dock_native_menu_and_site_controls_use_local_boost_creation(cx:&mut TestAppCo
     assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),2);
     click(cx,"address-site-controls");let controls=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(controls.into(),&cx.cx);controls.run_until_parked();click(&mut controls,"site-boost");
     let mut panel=boost_panel(&view,cx);assert!(panel.debug_bounds("boost-editor").is_some());
-    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),2);
+    // The site's controls add another Boost beside the existing ones.
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().count()),3);
 }
 #[gpui::test]
 fn new_boost_without_a_website_defers_creation_and_can_cancel(cx:&mut TestAppContext){

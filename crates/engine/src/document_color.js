@@ -6,6 +6,29 @@
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 1;
   const context = canvas.getContext('2d', {willReadFrequently: true});
+  const sample = color => {
+    context.fillStyle = '#000';
+    context.fillStyle = color;
+    context.fillRect(0, 0, 1, 1);
+    return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).map(value => value / 255);
+  };
+  // A Boost color recolors the page with two blend layers on the root, picked
+  // by the page's own lightness; chrome takes the recolored page colors.
+  const boosted = (rgb, top) => {
+    const root = document.documentElement;
+    if (!document[Symbol.for('echo.local.boost.stylesheet')]) {
+      root.removeAttribute('data-echo-boost-dark');
+      return [rgb, top];
+    }
+    const dark = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] < 110;
+    if (dark !== root.hasAttribute('data-echo-boost-dark')) root.toggleAttribute('data-echo-boost-dark', dark);
+    const scale = getComputedStyle(root, '::before');
+    const lift = getComputedStyle(root, '::after');
+    if (scale.mixBlendMode !== 'multiply' || lift.mixBlendMode !== 'screen') return [rgb, top];
+    const [m, l] = [sample(scale.backgroundColor), sample(lift.backgroundColor)];
+    const map = color => color.slice(0, 3).map((value, index) => Math.round(255 * (1 - (1 - value / 255 * m[index]) * (1 - l[index]))));
+    return [map(rgb), map(top)];
+  };
   const update = () => {
     if (!document.documentElement || !context) return;
     const root = getComputedStyle(document.documentElement);
@@ -31,8 +54,9 @@
       top = Array.from(context.getImageData(0, 0, 1, 1).data);
       if (document.readyState === 'complete') frozenTop = top;
     }
-    const key = `${location.href}:${rgb[0]},${rgb[1]},${rgb[2]}:${top[0]},${top[1]},${top[2]}`;
-    if (key !== last) { last = key; report(location.href, rgb[0], rgb[1], rgb[2], top[0], top[1], top[2]); }
+    const [page, edge] = boosted(rgb, top);
+    const key = `${location.href}:${page.join(',')}:${edge.join(',')}`;
+    if (key !== last) { last = key; report(location.href, page[0], page[1], page[2], edge[0], edge[1], edge[2]); }
   };
   addEventListener('DOMContentLoaded', update);
   addEventListener('load', () => { frozenTop = null; update(); });

@@ -52,40 +52,47 @@ pub struct BoostAppearance {
     pub contrast: Option<u16>,
     pub brightness: Option<u16>,
     pub saturation: Option<u16>,
-    /// The accent dot's place on the ring, in degrees from the main dot.
+    /// The main dot's distance from the pad's center, 0..=100 (Arc's
+    /// `primarySaturation`): the center is fully desaturated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saturation_point: Option<u8>,
+    /// The accent dot's hue, in degrees from the main dot's (Arc's
+    /// `secondaryHueOffset`); it turns with the main dot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_offset: Option<i16>,
+    /// The accent dot's distance from the center, 0..=100.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_saturation: Option<u8>,
 }
+
+/// Set by the engine on the root of a page whose own background is dark.
+pub const DARK_PAGE_ATTRIBUTE: &str = "data-echo-boost-dark";
 
 /// Color pad geometry, in points: the inner pad and the dots on it.
 pub const PAD_EXTENT: f32 = 134.;
 pub const MAIN_DOT_RADIUS: f32 = 17.;
 pub const ACCENT_DOT_RADIUS: f32 = 11.;
-/// Both dots ride this ring around the pad's center (a fraction of the pad):
-/// never in the middle, never past the edge.
+/// The dots stay within this circle around the pad's center (a fraction of
+/// the pad): full saturation at its edge, none in the middle.
 pub const RING_RADIUS: f32 = 0.47;
-/// The accent trails the main dot by this much until moved on its own.
-const DEFAULT_ACCENT_OFFSET: i16 = -26;
-/// Closest the accent may come to the main dot without overlapping it.
-const MIN_ACCENT_GAP: f32 = 25.;
+/// Arc's resting dots: the accent a little clockwise of the main dot.
+const DEFAULT_ACCENT_OFFSET: i16 = 47;
+const DEFAULT_SATURATION: u8 = 62;
 
-/// Hue (degrees) and strength (0..=1) of a pad point: the angle around the
-/// pad's center and the distance from it.
-pub fn pad_color(point: (f32, f32)) -> (f32, f32) {
-    let (x, y) = (point.0 - 0.5, point.1 - 0.5);
-    (y.atan2(x).to_degrees().rem_euclid(360.), ((x * x + y * y).sqrt() / 0.5).min(1.))
-}
-
-/// The ring point at `angle` degrees (clockwise from the right).
-pub fn ring_point(angle: f32) -> (f32, f32) {
+/// The pad point at `angle` degrees (clockwise from the right) and
+/// `saturation` (0..=1, the distance out to the circle's edge).
+pub fn pad_point(angle: f32, saturation: f32) -> (f32, f32) {
     let angle = angle.to_radians();
-    (0.5 + RING_RADIUS * angle.cos(), 0.5 + RING_RADIUS * angle.sin())
+    let reach = RING_RADIUS * saturation.clamp(0., 1.);
+    (0.5 + reach * angle.cos(), 0.5 + reach * angle.sin())
 }
 
-/// The angle of a pad point around the center; the center itself has none.
-fn pad_angle(point: (f32, f32)) -> Option<f32> {
+/// Angle (degrees) and saturation (0..=1) of a pad point. The center has
+/// no angle of its own.
+fn pad_polar(point: (f32, f32)) -> (Option<f32>, f32) {
     let (x, y) = (point.0 - 0.5, point.1 - 0.5);
-    (x.hypot(y) > f32::EPSILON).then(|| y.atan2(x).to_degrees().rem_euclid(360.))
+    let reach = x.hypot(y);
+    ((reach > 0.001).then(|| y.atan2(x).to_degrees().rem_euclid(360.)), (reach / RING_RADIUS).min(1.))
 }
 
 /// `degrees` folded into -180..=180.
@@ -94,56 +101,97 @@ pub fn wrap_degrees(degrees: f32) -> f32 {
     if folded > 180. { folded - 360. } else { folded }
 }
 
-impl BoostAppearance {
-    /// The main dot's angle on the ring, once a color is chosen.
-    pub fn main_angle(&self) -> Option<f32> { self.tint.map(f32::from) }
+/// sRGB channels (0..=1) of an HSL color; `hue` in degrees.
+fn hsl_rgb(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
+    let chroma = (1. - (2. * lightness - 1.).abs()) * saturation;
+    let h = hue.rem_euclid(360.) / 60.;
+    let x = chroma * (1. - (h % 2. - 1.).abs());
+    let (r, g, b) = match h as u8 {
+        0 => (chroma, x, 0.), 1 => (x, chroma, 0.), 2 => (0., chroma, x),
+        3 => (0., x, chroma), 4 => (x, 0., chroma), _ => (chroma, 0., x),
+    };
+    let m = lightness - chroma / 2.;
+    [r + m, g + m, b + m]
+}
 
-    pub fn accent_angle(&self) -> Option<f32> {
-        Some(self.main_angle()? + f32::from(self.accent_offset.unwrap_or(DEFAULT_ACCENT_OFFSET)))
+fn css_rgb([r, g, b]: [f32; 3]) -> String {
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    format!("rgb({} {} {})", channel(r), channel(g), channel(b))
+}
+
+/// The two blend layers that send the page's black to `dark` and its white
+/// to `light`: multiply scales every color, then screen lifts it.
+fn color_layers(dark: [f32; 3], light: [f32; 3]) -> (String, String) {
+    let scale = std::array::from_fn(|index| 1. - (1. - light[index]) / (1. - dark[index]).max(0.001));
+    (css_rgb(scale), css_rgb(dark))
+}
+
+impl BoostAppearance {
+    /// The main dot's hue and saturation (0..=1), once a color is chosen.
+    pub fn main_color(&self) -> Option<(f32, f32)> {
+        Some((f32::from(self.tint?), f32::from(self.saturation_point.unwrap_or(DEFAULT_SATURATION)) / 100.))
+    }
+
+    pub fn accent_color(&self) -> Option<(f32, f32)> {
+        let (hue, saturation) = self.main_color()?;
+        Some((hue + f32::from(self.accent_offset.unwrap_or(DEFAULT_ACCENT_OFFSET)),
+            self.accent_saturation.map_or(saturation, |value| f32::from(value) / 100.)))
     }
 
     /// The main dot, 0..=1 per axis, once a color is chosen.
-    pub fn main_point(&self) -> Option<(f32, f32)> { self.main_angle().map(ring_point) }
+    pub fn main_point(&self) -> Option<(f32, f32)> { self.main_color().map(|(hue, saturation)| pad_point(hue, saturation)) }
 
-    /// The accent dot, on the same ring a little behind the main dot.
-    pub fn accent_point(&self) -> Option<(f32, f32)> { self.accent_angle().map(ring_point) }
+    /// The accent dot, which turns around the center with the main dot.
+    pub fn accent_point(&self) -> Option<(f32, f32)> { self.accent_color().map(|(hue, saturation)| pad_point(hue, saturation)) }
 
-    /// Slides the main dot along the ring toward `point`; the accent follows
-    /// on the side it came from, so it always trails the motion.
+    /// Moves the main dot toward `point`, held inside the circle; the accent
+    /// keeps its hue offset and so turns with it.
     pub fn set_main_point(&mut self, point: (f32, f32)) {
-        let Some(angle) = pad_angle(point) else { return; };
-        let angle = angle.round() as u16 % 360;
-        if let Some(previous) = self.tint {
-            let motion = wrap_degrees(f32::from(angle) - f32::from(previous));
-            if motion.abs() >= 1. {
-                let gap = self.accent_offset.unwrap_or(DEFAULT_ACCENT_OFFSET).abs();
-                self.accent_offset = Some(if motion > 0. { -gap } else { gap });
-            }
-        }
-        self.tint = Some(angle);
+        let (angle, saturation) = pad_polar(point);
+        let angle = angle.or(self.tint.map(f32::from)).unwrap_or(0.);
+        self.tint = Some(angle.round() as u16 % 360);
+        self.saturation_point = Some((saturation * 100.).round() as u8);
     }
 
-    /// Slides the accent along the ring toward `point`, short of the main dot.
+    /// Moves the accent dot alone toward `point`, held inside the circle.
     pub fn turn_accent_toward(&mut self, point: (f32, f32)) {
-        let (Some(main), Some(angle)) = (self.main_angle(), pad_angle(point)) else { return; };
-        let offset = wrap_degrees(angle - main);
-        let gap = offset.abs().max(MIN_ACCENT_GAP).round() as i16;
-        self.accent_offset = Some(if offset < 0. { -gap } else { gap });
+        let Some((main, _)) = self.main_color() else { return; };
+        let (angle, saturation) = pad_polar(point);
+        if let Some(angle) = angle {
+            self.accent_offset = Some(wrap_degrees(angle - main).round() as i16);
+        }
+        self.accent_saturation = Some((saturation * 100.).round() as u8);
     }
 
     pub fn clear_color(&mut self) {
         self.tint = None;
+        self.saturation_point = None;
         self.accent_offset = None;
+        self.accent_saturation = None;
+    }
+
+    /// Blend layer colors for light pages and for dark pages. The main dot
+    /// tints the page's own background, the accent its text.
+    fn color_scheme(&self) -> Option<[(String, String); 2]> {
+        let ((hue, saturation), (accent_hue, accent_saturation)) = (self.main_color()?, self.accent_color()?);
+        let light_page = color_layers(hsl_rgb(accent_hue, 0.6 * accent_saturation, 0.14), hsl_rgb(hue, 0.75 * saturation, 0.93 - 0.05 * saturation));
+        let dark_page = color_layers(hsl_rgb(hue, 0.5 * saturation, 0.08 + 0.1 * saturation), hsl_rgb(accent_hue, 0.6 * accent_saturation, 0.93));
+        Some([light_page, dark_page])
     }
 
     pub fn stylesheet(&self) -> String {
         let mut css = String::new();
-        // The main dot colors the page, the accent dot its text.
-        if let (Some(main), Some(accent)) = (self.main_point(), self.accent_point()) {
-            let (hue, strength) = pad_color(main);
-            let (text_hue, text_strength) = pad_color(accent);
-            css.push_str(&format!("html, body {{ background-color: hsl({:.0}, {:.0}%, 88%) !important; color: hsl({:.0}, {:.0}%, 18%) !important; }}\n",
-                hue, 20. + 50. * strength, text_hue, 30. + 40. * text_strength));
+        // Like Arc's page color filter, every painted color is remapped: two
+        // fixed blend layers over the whole page, chosen by the page's own
+        // lightness (the engine marks dark pages on the root).
+        if let Some([light, dark]) = self.color_scheme() {
+            css.push_str(&format!(concat!(
+                "html::before, html::after {{ content: \"\" !important; position: fixed !important; inset: 0 !important; display: block !important; pointer-events: none !important; z-index: 2147483647 !important; }}\n",
+                "html::before {{ background: {} !important; mix-blend-mode: multiply !important; }}\n",
+                "html::after {{ background: {} !important; mix-blend-mode: screen !important; }}\n",
+                "html[{dark}]::before {{ background: {} !important; }}\n",
+                "html[{dark}]::after {{ background: {} !important; }}\n"),
+                light.0, light.1, dark.0, dark.1, dark = DARK_PAGE_ATTRIBUTE));
         }
         if let Some(font) = &self.font {
             // Font names are CSS string data, never raw source.
@@ -290,7 +338,7 @@ mod tests {
         boost.css = "body { color: red; }".into();
         boost.javascript = "window.example = true".into();
         boost.zap_selectors.push(".advert".into());
-        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80),accent_offset:Some(45)};
+        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80),saturation_point:Some(80),accent_offset:Some(45),accent_saturation:Some(30)};
         let appearance=boost.appearance.clone();
         let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
         assert_eq!(
@@ -318,35 +366,45 @@ mod tests {
         assert_ne!(boosts.create("https://example.com").unwrap(), id);
     }
     #[test]
-    fn both_dots_ride_one_ring_and_the_accent_trails_the_main_dot() {
+    fn the_dots_stay_in_the_circle_and_the_accent_turns_with_the_main_dot() {
         let mut look = BoostAppearance::default();
         assert!(look.main_point().is_none() && look.accent_point().is_none() && look.stylesheet().is_empty());
-        let on_ring = |p: (f32, f32)| ((p.0 - 0.5).hypot(p.1 - 0.5) - RING_RADIUS).abs() < 0.001;
-        // A press anywhere, even near the center or outside the pad, lands on the ring.
-        look.set_main_point((0.55, 0.5));
-        assert_eq!(look.tint, Some(0));
-        assert!(on_ring(look.main_point().unwrap()) && on_ring(look.accent_point().unwrap()));
+        let reach = |p: (f32, f32)| (p.0 - 0.5).hypot(p.1 - 0.5);
+        // Distance from the center is saturation, capped at the circle's edge.
+        look.set_main_point((0.5 + RING_RADIUS / 2., 0.5));
+        assert_eq!((look.tint, look.saturation_point), (Some(0), Some(50)));
         look.set_main_point((2., 0.5));
-        assert_eq!(look.tint, Some(0));
+        assert_eq!((look.tint, look.saturation_point), (Some(0), Some(100)));
+        assert!((reach(look.main_point().unwrap()) - RING_RADIUS).abs() < 0.001);
+        // The center is gray and keeps the hue it had.
         look.set_main_point((0.5, 0.5));
-        assert_eq!(look.tint, Some(0), "the center has no angle");
-        // Clockwise motion leaves the accent behind, counterclockwise flips it.
+        assert_eq!((look.tint, look.saturation_point), (Some(0), Some(0)));
+        // The accent keeps its hue offset, so it turns around with the main dot.
         look.set_main_point((0.5, 0.9));
-        assert_eq!((look.tint, look.accent_offset), (Some(90), Some(-26)));
+        assert_eq!(look.tint, Some(90));
+        assert_eq!(look.accent_color().map(|(hue, _)| hue.round()), Some(137.));
+        // Moved alone, it takes its own hue offset and saturation.
+        look.turn_accent_toward((0.5, 0.5 - RING_RADIUS / 4.));
+        assert_eq!((look.tint, look.accent_offset, look.accent_saturation), (Some(90), Some(180), Some(25)));
         look.set_main_point((0.9, 0.5));
-        assert_eq!((look.tint, look.accent_offset), (Some(0), Some(26)));
-        // The accent slides along the ring alone, never onto the main dot.
-        look.turn_accent_toward((0.5, 0.1));
-        assert_eq!((look.tint, look.accent_offset), (Some(0), Some(-90)));
-        look.turn_accent_toward((0.9, 0.51));
-        assert_eq!(look.accent_offset, Some(25));
-        assert!(on_ring(look.accent_point().unwrap()));
-        // The gap it was given survives the next drag of the main dot.
-        look.turn_accent_toward((0.5, 0.1));
-        look.set_main_point((0.5, 0.9));
-        assert_eq!(look.accent_offset, Some(-90));
+        assert_eq!(look.accent_color().map(|(hue, _)| hue.round()), Some(180.));
+        // Light and dark pages get their own pair of blend layers.
+        let css = look.stylesheet();
+        assert!(css.contains("mix-blend-mode: multiply") && css.contains("mix-blend-mode: screen") && css.contains(DARK_PAGE_ATTRIBUTE));
         look.clear_color();
         assert!(look.main_point().is_none() && look.stylesheet().is_empty());
+    }
+    #[test]
+    fn the_blend_layers_send_black_and_white_to_the_chosen_colors() {
+        let dark = [0.1, 0.3, 0.25];
+        let light = [0.95, 0.9, 0.92];
+        let (scale, lift) = color_layers(dark, light);
+        let parse = |css: &str| -> Vec<f32> { css.trim_start_matches("rgb(").trim_end_matches(')').split(' ').map(|v| v.parse::<f32>().unwrap() / 255.).collect() };
+        let (scale, lift) = (parse(&scale), parse(&lift));
+        for index in 0..3 {
+            let white = 1. - (1. - scale[index]) * (1. - lift[index]);
+            assert!((white - light[index]).abs() < 0.01 && (lift[index] - dark[index]).abs() < 0.01);
+        }
     }
     #[test]
     fn rename_and_delete_target_only_the_captured_profile_and_survive_sessions() {
