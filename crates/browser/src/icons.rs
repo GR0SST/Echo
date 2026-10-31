@@ -567,17 +567,21 @@ pub(crate) fn folder(custom: Option<&str>) -> AnyElement { folder_state(custom, 
 
 /// Reference folder: a pale back panel with a tab behind a solid body.
 /// `open` (0 closed, 1 open) morphs the back to lean left and the body into
-/// a slanted front flap. Both shapes share point counts; the closed back's
-/// extra points lie under the body.
+/// a slanted front flap. Both shapes share vertices and corner radii, so the
+/// rounded outlines interpolate point for point; the closed back's extra
+/// vertices lie under the body. Proportions follow the reference: nearly
+/// square, with the body filling the lower two thirds.
 fn folder_glyph(open: f32, pigment: gpui::Hsla) -> AnyElement {
     const BACK: [[(f32, f32); 8]; 2] = [
-        [(1.5,3.5),(6.5,3.5),(8.,5.),(16.5,5.),(16.5,7.),(6.,7.),(1.5,15.),(1.5,15.)],
-        [(1.5,3.5),(6.,3.5),(7.5,5.),(13.,5.),(13.,7.),(6.,7.),(4.,15.),(1.5,15.)],
+        [(1.5,1.5),(6.8,1.5),(8.6,3.3),(16.5,3.3),(16.5,9.),(6.,9.),(1.5,16.5),(1.5,16.5)],
+        [(1.5,1.5),(6.3,1.5),(8.1,3.3),(13.,3.3),(13.,6.4),(6.,6.4),(3.9,16.5),(1.5,16.5)],
     ];
+    const BACK_RADII: [f32; 8] = [1.6, 1.2, 1.2, 1.8, 0., 0., 0., 1.8];
     const BODY: [[(f32, f32); 4]; 2] = [
-        [(1.5,6.5),(16.5,6.5),(16.5,15.),(1.5,15.)],
-        [(6.,7.),(16.5,7.),(14.5,15.),(4.,15.)],
+        [(1.5,5.8),(16.5,5.8),(16.5,16.5),(1.5,16.5)],
+        [(5.8,6.4),(16.9,6.4),(14.7,16.5),(3.6,16.5)],
     ];
+    const BODY_RADII: [f32; 4] = [1.4, 1.4, 1.8, 1.8];
     let open = open.clamp(0., 1.);
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let at = |(x, y): (f32, f32)| bounds.origin + gpui::point(px(x), px(y));
@@ -586,7 +590,11 @@ fn folder_glyph(open: f32, pigment: gpui::Hsla) -> AnyElement {
         // The theme's primary color fills the body; the back is its pale tint.
         let back = gpui::hsla(pigment.h, pigment.s, pigment.l + (1. - pigment.l) * 0.55, pigment.a);
         let edge = gpui::hsla(0., 0., 1., 0.55);
-        for (points, color) in [(mix(&BACK[0], &BACK[1]), back), (mix(&BODY[0], &BODY[1]), pigment)] {
+        let shapes = [
+            (rounded_polygon(&mix(&BACK[0], &BACK[1]), &BACK_RADII), back),
+            (rounded_polygon(&mix(&BODY[0], &BODY[1]), &BODY_RADII), pigment),
+        ];
+        for (points, color) in shapes {
             for stroke in [false, true] {
                 let mut path = if stroke { gpui::PathBuilder::stroke(px(1.)) } else { gpui::PathBuilder::fill() };
                 for (index, point) in points.iter().enumerate() {
@@ -597,6 +605,43 @@ fn folder_glyph(open: f32, pigment: gpui::Hsla) -> AnyElement {
             }
         }
     }).size(px(18.)).flex_none().into_any_element()
+}
+
+/// Rounds each vertex with a quadratic fillet of the given radius. Every
+/// vertex yields the same number of points, even when its radius is zero or
+/// an edge collapses, so two shapes with equal vertices morph smoothly.
+fn rounded_polygon(points: &[(f32, f32)], radii: &[f32]) -> Vec<(f32, f32)> {
+    const STEPS: usize = 6;
+    let count = points.len();
+    let mut out = Vec::with_capacity(count * (STEPS + 1));
+    for index in 0..count {
+        let corner = points[index];
+        let previous = points[(index + count - 1) % count];
+        let next = points[(index + 1) % count];
+        let length = |(x, y): (f32, f32)| (x * x + y * y).sqrt();
+        let to_previous = (previous.0 - corner.0, previous.1 - corner.1);
+        let to_next = (next.0 - corner.0, next.1 - corner.1);
+        let (l1, l2) = (length(to_previous), length(to_next));
+        let mut start = corner;
+        let mut end = corner;
+        if l1 > 1e-3 && l2 > 1e-3 {
+            let d1 = (to_previous.0 / l1, to_previous.1 / l1);
+            let d2 = (to_next.0 / l2, to_next.1 / l2);
+            let cos = (d1.0 * d2.0 + d1.1 * d2.1).clamp(-1., 1.);
+            let half = cos.acos() / 2.;
+            if half > 1e-3 && half < std::f32::consts::FRAC_PI_2 - 1e-3 {
+                let reach = (radii[index] / half.tan()).min(l1 / 2.).min(l2 / 2.);
+                start = (corner.0 + d1.0 * reach, corner.1 + d1.1 * reach);
+                end = (corner.0 + d2.0 * reach, corner.1 + d2.1 * reach);
+            }
+        }
+        for step in 0..=STEPS {
+            let t = step as f32 / STEPS as f32;
+            let (a, b, c) = ((1. - t) * (1. - t), 2. * (1. - t) * t, t * t);
+            out.push((a * start.0 + b * corner.0 + c * end.0, a * start.1 + b * corner.1 + c * end.1));
+        }
+    }
+    out
 }
 
 /// The default theme's folder blue.
