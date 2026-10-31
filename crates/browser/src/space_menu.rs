@@ -153,16 +153,7 @@ impl BrowserWindow {
                 let icon = space.custom_icon.clone().unwrap_or_default();
                 self.open_command_bar(Target::Icon(IconTarget::Space(id)), &icon, window, cx);
             }
-            Command::SpaceNewFolder => self.open_command_bar(
-                Target::NewFolder {
-                    space: id,
-                    parent: None,
-                    tab: None,
-                },
-                "",
-                window,
-                cx,
-            ),
+            Command::SpaceNewFolder => self.create_folder_inline_in(id, None, None, cx),
             _ => {}
         }
         cx.notify();

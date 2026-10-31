@@ -1458,6 +1458,14 @@ fn next_and_previous_tab_cycle_in_sidebar_order(cx: &mut TestAppContext) {
     assert_eq!(active_url(&view, cx), Some(order[(start + order.len() - 1) % order.len()].clone()));
 }
 
+/// Types a name into the sidebar row's inline folder editor and commits it.
+fn name_inline(cx: &mut VisualTestContext, name: &str) {
+    cx.run_until_parked();
+    cx.simulate_input(name);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+}
+
 fn swipe(cx: &mut VisualTestContext, over: &'static str, dx: f32, steps: usize) {
     use gpui::{point, px, ScrollDelta, ScrollWheelEvent, TouchPhase};
     cx.run_until_parked();
@@ -5109,23 +5117,28 @@ fn folder_creation_and_nested_creation_keep_the_page_and_cancel_without_creating
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
     fake.take_calls();
+    // Arc adds "Untitled" at once and edits its name in the row; Escape keeps it.
     run_named_command(&view, cx, "new folder");
-    assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
-    bar(&view, cx).simulate_keystrokes("escape");
-    assert!(view.read_with(cx, |w, _| w.browser.space().folders.is_empty()));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none() && w.folder_rename.is_some()));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.browser.space().folders.iter().map(|folder| folder.name.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+        assert!(w.folder_rename.is_none());
+    });
+    let untitled = view.read_with(cx, |w, _| w.browser.space().folders[0].id);
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.delete_empty_folder(untitled)); cx.notify(); });
     dispatch_menu(cx, "Spaces", "New Folder…");
-    bar(&view, cx).simulate_input("Projects");
-    bar(&view, cx).simulate_keystrokes("enter");
-    right_click(cx, "folder-9");
+    name_inline(cx, "Projects");
+    right_click(cx, "folder-10");
     click(&mut tab_menu(&view, cx), "tab-menu-folder-new");
-    bar(&view, cx).simulate_input("Research");
-    bar(&view, cx).simulate_keystrokes("enter");
+    name_inline(cx, "Research");
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.space().folders.len(), 2);
         assert_eq!(w.browser.folder_path(w.browser.space().folders[1].id), "Projects / Research");
     });
-    assert!(cx.debug_bounds("folder-10").unwrap().origin.x > cx.debug_bounds("folder-9").unwrap().origin.x);
+    assert!(cx.debug_bounds("folder-11").unwrap().origin.x > cx.debug_bounds("folder-10").unwrap().origin.x);
     assert_eq!(active_url(&view, cx), active);
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Close(..) | Call::Navigate(..))));
 }
@@ -5139,8 +5152,7 @@ fn context_new_folder_pins_the_clicked_tab_while_preserving_the_other_active_pag
     let mut menu = tab_menu(&view, cx);
     click(&mut menu, "tab-menu-move-to");
     click(&mut menu, "tab-menu-new-folder-with-tab");
-    bar(&view, cx).simulate_input("Reading");
-    bar(&view, cx).simulate_keystrokes("enter");
+    name_inline(cx, "Reading");
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         let folder = &w.browser.space().folders[0];
@@ -5221,16 +5233,45 @@ fn moving_a_split_to_a_closed_folder_in_another_space_keeps_its_engine_pages(cx:
 }
 
 #[gpui::test]
+fn folders_open_and_close_with_motion_instead_of_jumping(cx: &mut TestAppContext) {
+    crate::folders::ANIMATE_FOLDER_REVEAL.with(|animate| animate.set(true));
+    let (view, cx, _fake) = open_folder_pages(cx);
+    let space = view.read_with(cx, |w, _| w.browser.space().id);
+    let partial = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _| {
+        w.folder_row_weights(space).iter().filter(|(_, weight)| *weight > 0. && *weight < 1.).count()
+    });
+    let height = |cx: &mut VisualTestContext| cx.debug_bounds("pinned-reveal").unwrap().size.height;
+    let open = height(cx);
+    click(cx, "folder-2");
+    cx.executor().advance_clock(Duration::from_millis(80));
+    cx.run_until_parked();
+    assert!(partial(&view, cx) > 0, "children shrink instead of disappearing");
+    let middle = height(cx);
+    assert!(middle < open);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(partial(&view, cx), 0);
+    assert!(height(cx) < middle);
+    click(cx, "folder-2");
+    cx.executor().advance_clock(Duration::from_millis(80));
+    cx.run_until_parked();
+    assert!(partial(&view, cx) > 0, "children grow back in");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(height(cx), open);
+}
+
+#[gpui::test]
 fn folder_context_actions_rename_customize_and_omit_unobserved_copy_items(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_folder_pages(cx);
     let active = active_url(&view, cx);
     fake.take_calls();
     right_click(cx, "folder-3");
     click(&mut tab_menu(&view, cx), "tab-menu-folder-rename");
-    assert_eq!(bar_text(&view, cx).as_deref(), Some("Research"));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none() && w.folder_rename.as_ref().is_some_and(|editor| editor.id.get() == 3)));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::FocusPage(_))), "the closing menu must not focus Chromium behind its replacement editor");
-    bar(&view, cx).simulate_input("References");
-    bar(&view, cx).simulate_keystrokes("enter");
+    name_inline(cx, "References");
     right_click(cx, "folder-3");
     click(&mut tab_menu(&view, cx), "tab-menu-folder-icon");
     assert_eq!(bar(&view, cx).debug_bounds("icon-picker").unwrap().size, gpui::size(gpui::px(272.), gpui::px(144.)));
@@ -5271,8 +5312,7 @@ fn folder_destination_picker_rejects_cycles_and_empty_folder_deletion_keeps_othe
     });
     bar(&view, cx).simulate_keystrokes("escape");
     run_named_command(&view, cx, "new folder");
-    bar(&view, cx).simulate_input("Empty");
-    bar(&view, cx).simulate_keystrokes("enter");
+    name_inline(cx, "Empty");
     right_click(cx, "folder-8");
     click(&mut tab_menu(&view, cx), "tab-menu-folder-delete");
     assert_eq!(view.read_with(cx, |w, _| w.browser.space().folders.len()), 2);
@@ -5302,10 +5342,9 @@ fn moving_to_a_folder_when_none_exist_creates_one_around_the_active_page(cx: &mu
     let active = active_url(&view, cx);
     fake.take_calls();
     run_named_command(&view, cx, "move to folder");
-    assert!(bar_input_focused(&view, cx));
-    assert!(view.read_with(cx, |w, _| matches!(w.command_bar.as_ref().unwrap().target, crate::window::Target::NewFolder { .. })));
-    bar(&view, cx).simulate_input("Current project");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none() && w.folder_rename.is_some()));
+    name_inline(cx, "Current project");
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.active_tab().unwrap().id.get(), 8);
@@ -5362,8 +5401,7 @@ fn duplicating_an_empty_folder_preserves_the_active_page_and_can_be_deleted_inde
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);
     run_named_command(&view, cx, "new folder");
-    bar(&view, cx).simulate_input("Empty");
-    bar(&view, cx).simulate_keystrokes("enter");
+    name_inline(cx, "Empty");
     cx.run_until_parked();
     fake.take_calls();
     right_click(cx, "folder-9");
@@ -5406,8 +5444,7 @@ fn turning_an_empty_folder_into_a_space_leaves_other_tabs_and_their_engine_views
     let (view, cx, fake) = open_pages(cx);
     let original = active_url(&view, cx);
     run_named_command(&view, cx, "new folder");
-    bar(&view, cx).simulate_input("Empty");
-    bar(&view, cx).simulate_keystrokes("enter");
+    name_inline(cx, "Empty");
     cx.run_until_parked();
     fake.take_calls();
     right_click(cx, "folder-9");
@@ -5454,14 +5491,9 @@ fn pin_to_new_folder_edits_a_name_then_pins_the_current_page_without_reloading(c
     let active = active_url(&view, cx);
     fake.take_calls();
     run_named_command(&view, cx, "pin to new folder");
-    assert!(bar_input_focused(&view, cx));
-    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
-    bar(&view, cx).simulate_input("Reading");
-    bar(&view, cx).simulate_keystrokes("escape");
-    assert!(view.read_with(cx, |w, _| w.browser.space().folders.is_empty()));
-    run_named_command(&view, cx, "pin to new folder");
-    bar(&view, cx).simulate_input("Reading");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.command_bar.is_none() && w.folder_rename.is_some()));
+    name_inline(cx, "Reading");
     view.read_with(cx, |w, _| {
         let folder = &w.browser.space().folders[0];
         assert_eq!(folder.name, "Reading");
@@ -5577,10 +5609,10 @@ fn new_folder_from_an_inactive_space_menu_uses_that_space_and_retains_the_source
     fake.take_calls();
     right_click(cx, "space-1");
     click(&mut tab_menu(&view, cx), "tab-menu-space-new-folder");
-    assert!(bar_input_focused(&view, cx));
-    assert_eq!(active_url(&view, cx), original);
-    bar(&view, cx).simulate_input("Projects");
-    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    // The folder is named in its own row, so its Space is shown at once.
+    assert!(view.read_with(cx, |w, _| w.folder_rename.is_some() && w.browser.space().name == "Work"));
+    name_inline(cx, "Projects");
     cx.run_until_parked();
     view.read_with(cx, |w, _| {
         assert_eq!(w.browser.space().name, "Work");

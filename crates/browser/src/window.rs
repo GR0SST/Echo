@@ -386,10 +386,10 @@ impl Drag {
     }
 }
 
-struct PinnedReveal {
-    amount: f32,
-    collapsed: bool,
-    _task: Task<()>,
+pub(crate) struct PinnedReveal {
+    pub(crate) amount: f32,
+    pub(crate) collapsed: bool,
+    pub(crate) _task: Task<()>,
 }
 
 /// Where a command bar URL is loaded.
@@ -773,6 +773,7 @@ pub struct BrowserWindow {
     pub(crate) icon_anchors: Rc<RefCell<HashMap<crate::icons::IconTarget, Bounds<gpui::Pixels>>>>,
     pub(crate) last_icon_catalog: crate::icon_catalog::Catalog,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
+    pub(crate) folder_reveals: HashMap<browser_core::folders::FolderId, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<Option<bool>>>>>,
     pub(crate) tab_drag_active: bool,
     tab_drag_press: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
@@ -1140,6 +1141,7 @@ impl BrowserWindow {
             icon_anchors: Default::default(),
             last_icon_catalog: Default::default(),
             pinned_reveals: HashMap::new(),
+            folder_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
             tab_drag_active: false,
             tab_drag_press: Rc::new(Cell::new(None)),
@@ -2482,8 +2484,8 @@ impl BrowserWindow {
         if !self.blank_allows_command(command) || !self.private_allows_command(command) { return; }
         match command {
             Command::NewBoost => self.new_boost(cx),
-            Command::NewFolder => self.edit_new_folder(None, None, cx),
-            Command::NewFolderWithTab => { if let Some(id) = self.browser.space().active_tab { self.edit_new_folder(None, Some(id), cx); } }
+            Command::NewFolder => self.create_folder_inline(None, None, cx),
+            Command::NewFolderWithTab => { if let Some(id) = self.browser.space().active_tab { self.create_folder_inline(None, Some(id), cx); } }
             Command::PinToFolder(folder) => {
                 if let (Some(tab), Some(space)) = (self.browser.space().active_tab, self.browser.folder_space(folder)) {
                     self.confirm_folder_destination(Target::MoveToFolder(tab), space, Some(folder), cx);
@@ -2492,7 +2494,7 @@ impl BrowserWindow {
             Command::MoveToFolder => { if let Some(id) = self.browser.space().active_tab { self.edit_folder_destination(Target::MoveToFolder(id), cx); } }
             Command::CollapseAllFolders => { self.edit_browser(|browser| browser.set_all_folders_collapsed(browser.space().id, true)); }
             Command::ExpandAllFolders => { self.edit_browser(|browser| browser.set_all_folders_collapsed(browser.space().id, false)); }
-            Command::RenameFolder(id) => self.edit_folder_name(id, cx),
+            Command::RenameFolder(id) => { self.close_command_bar(cx); self.rename_folder_inline(id, cx); }
             Command::ExpandFolder(id) => self.expand_folder(id, cx),
             Command::AddSplit(placement) => self.edit_split(placement, cx),
             Command::CloseSplitPane => { if let Some(id) = self.browser.space().active_tab { self.close_split_pane(id, cx); } }
@@ -2777,6 +2779,7 @@ impl BrowserWindow {
     pub(crate) fn open_command_action(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         if !self.blank_allows_command(command) || !self.private_allows_command(command) { return; }
         if command == Command::NewSpace { self.begin_space_creation(self.browser.space().id, cx); return; }
+        if command == Command::NewFolder { self.create_folder_inline(None, None, cx); return; }
         self.open_command_bar(Target::NewTab, "", window, cx);
         self.run_command(command, cx);
     }
@@ -4143,7 +4146,9 @@ impl BrowserWindow {
             PinnedItem::Folder(id) => self.browser.folder(id).filter(|f| !f.collapsed).and_then(|f|f.live.as_ref()).map(|live|live.visible_items().count()),
             _ => None,
         }).sum();
-        let pinned_height = (pinned.len() + live_rows) as f32 * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
+        // Rows inside an opening or closing folder count by their visible part.
+        let pinned_rows: f32 = self.folder_row_weights(space.id).iter().map(|(_, weight)| weight).sum();
+        let pinned_height = (pinned_rows + live_rows as f32) * (SIDEBAR_ROW_HEIGHT + SIDEBAR_ROW_GAP) - SIDEBAR_ROW_GAP;
         let header_group = SharedString::from(format!("space-header-{index}"));
         let has_today = !space.today.is_empty();
         let can_tidy = self.browser.can_tidy_tabs(space.id);
