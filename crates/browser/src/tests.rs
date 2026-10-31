@@ -1763,6 +1763,50 @@ fn reversing_a_sidebar_flick_wins_over_the_earlier_drag_distance(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn sidebar_swipe_slides_library_over_the_space_with_the_fingers(cx: &mut TestAppContext) {
+    crate::sidebar_navigation::ANIMATE_LIBRARY_SLIDE.with(|animate| animate.set(true));
+    use crate::sidebar_pages::SidebarPage;
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    let space = view.read_with(cx, |w, _| w.browser.space().id);
+    scroll(cx, "sidebar", Started, 0., 0.);
+    scroll(cx, "sidebar", Moved, 120., 0.);
+    // The Space stays in the pager; only Library's slide follows the fingers.
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.pager.position, 1.);
+        assert!((w.library_slide_amount() - 0.25).abs() < 0.001, "{}", w.library_slide_amount());
+        assert!(w.library_in_motion());
+        assert_eq!(w.sidebar_navigation.controller.selected(), SidebarPage::Space(space));
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("library-layer").is_some());
+    assert!(cx.debug_bounds("sidebar").is_some(), "the fading Space stays visible");
+    scroll(cx, "sidebar", Moved, 200., 0.);
+    cx.executor().advance_clock(Duration::from_millis(200));
+    scroll(cx, "sidebar", Ended, 0., 0.);
+    assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected()), SidebarPage::Library);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.library_slide_amount(), 1.);
+        assert_eq!(w.pager.position, 0.);
+        assert!(!w.library_in_motion());
+    });
+    // A short swipe back follows the fingers, then returns into Library.
+    scroll(cx, "library", Started, 0., 0.);
+    scroll(cx, "library", Moved, -100., 0.);
+    assert!(view.read_with(cx, |w, _| w.library_slide_amount() < 1. && w.library_in_motion()));
+    cx.executor().advance_clock(Duration::from_millis(200));
+    scroll(cx, "library", Ended, 0., 0.);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.sidebar_navigation.controller.selected(), SidebarPage::Library);
+        assert_eq!(w.library_slide_amount(), 1.);
+    });
+}
+
+#[gpui::test]
 fn long_input_scrolls_inside_the_command_bar(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-t");

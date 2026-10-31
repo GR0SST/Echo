@@ -79,6 +79,8 @@ const FLOATING_SIDEBAR_INSET: f32 = 6.0;
 /// Room for the floating sidebar's shadow inside its window.
 const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
 const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
+/// The docked Space drifts right this far as Library covers it (reference).
+const LIBRARY_SIDEBAR_DRIFT: f32 = 16.;
 /// How long a revealed sidebar waits for the pointer before hiding.
 const FLOATING_SIDEBAR_GRACE: Duration = Duration::from_millis(800);
 /// Arc's smallest browser window, measured in points.
@@ -3212,17 +3214,32 @@ impl BrowserWindow {
             let raw = drag.start - drag.travel / sidebar_width.max(1.);
             let start = drag.start.round();
             let pages = self.sidebar_navigation.controller.pages(&self.browser);
-            let edge_origin = if !self.browser.is_private() && raw > start
-                && pages.get(start as usize + 1) == Some(&crate::sidebar_pages::SidebarPage::CreateSpace) {
-                match pages.get(start as usize) { Some(crate::sidebar_pages::SidebarPage::Space(id)) => Some(*id), _ => None }
-            } else { None };
-            if let Some(origin) = edge_origin {
-                let progress = (raw - start) / SPACE_SWIPE_COMMIT;
-                self.pager.position = self.creation_pull_position(start, progress);
-                self.update_creation_pull(origin, progress, cx);
-            } else {
+            let library = Some(&crate::sidebar_pages::SidebarPage::Library);
+            let library_edge = if self.browser.is_private() { None }
+                else if raw < start && start >= 1. && pages.get(start as usize - 1) == library { Some(true) }
+                else if raw > start && pages.get(start as usize) == library { Some(false) }
+                else { None };
+            if let Some(entering) = library_edge {
+                // Library is not a sidebar page: the Space stays and fades
+                // while Library slides in, as in the reference.
+                let reach = (raw - start).abs().min(1.);
                 self.pager.creation_pull = None;
-                self.pager.position = rubber_band(one_page_reach(raw, start), page_count);
+                self.pager.position = start;
+                self.drag_library(entering, if entering { reach } else { 1. - reach }, cx);
+            } else {
+                self.rest_library_drag(cx);
+                let edge_origin = if !self.browser.is_private() && raw > start
+                    && pages.get(start as usize + 1) == Some(&crate::sidebar_pages::SidebarPage::CreateSpace) {
+                    match pages.get(start as usize) { Some(crate::sidebar_pages::SidebarPage::Space(id)) => Some(*id), _ => None }
+                } else { None };
+                if let Some(origin) = edge_origin {
+                    let progress = (raw - start) / SPACE_SWIPE_COMMIT;
+                    self.pager.position = self.creation_pull_position(start, progress);
+                    self.update_creation_pull(origin, progress, cx);
+                } else {
+                    self.pager.creation_pull = None;
+                    self.pager.position = rubber_band(one_page_reach(raw, start), page_count);
+                }
             }
             cx.notify();
         }
@@ -3237,8 +3254,12 @@ impl BrowserWindow {
                     return;
                 }
                 let start = drag.start.round();
-                let moved = self.pager.position - drag.start;
                 let speed = drag.speed(cx.background_executor().now());
+                if self.release_library_drag(speed, start as usize, SPACE_FLICK_SPEED, SPACE_SWIPE_COMMIT, cx) {
+                    self.pager.velocity = 0.;
+                    return;
+                }
+                let moved = self.pager.position - drag.start;
                 self.pager.velocity = -speed / sidebar_width.max(1.);
                 let step = if speed.abs() > SPACE_FLICK_SPEED {
                     -speed.signum()
@@ -3746,7 +3767,7 @@ impl BrowserWindow {
         // window-local Space contents follow the fingers between real IDs.
         div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(self.sidebar_width())).h_full().overflow_hidden()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
-            .child(self.render_workspace_sidebar(Some((rendered, -self.pager.position * self.sidebar_width())), cx))
+            .child(self.render_workspace_sidebar(Some((rendered, -self.sidebar_display_position() * self.sidebar_width())), cx))
             .when_some(form, |root, form| root
                 .child(div().absolute().top_0().left(px((form_page.unwrap_or(0) as f32 - self.pager.position) * self.sidebar_width()))
                     .w(px(self.sidebar_width())).h_full().block_mouse_except_scroll()
@@ -4489,7 +4510,8 @@ impl BrowserWindow {
             .when(empty_canvas || (has_page && !split_open), |this| this.child(div()
                 .debug_selector(|| "empty-space-panel-shadow".into())
                 .absolute().top(px(CONTENT_INSET)).bottom(px(CONTENT_INSET))
-                .right(px(CONTENT_INSET)).left(px(CONTENT_INSET * (1. - self.sidebar_amount())))
+                // Follows the page while Library translates it.
+                .right(px(CONTENT_INSET - self.library_page_offset())).left(px(CONTENT_INSET * (1. - self.sidebar_amount()) + self.library_page_offset()))
                 .child(self.theme_page_edge_shadow())))
             .child(
                 div()
@@ -4558,6 +4580,9 @@ impl BrowserWindow {
         };
         let closing = floating.closing;
         let width = self.sidebar_width();
+        // Unpinned, Arc's floating card leaves to the left as Library enters.
+        let library_selected = self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library;
+        let library = if library_selected && !closing && !self.library_in_motion() { 0. } else { self.library_slide_amount() };
         let panel = div()
             .id("floating-sidebar")
             .debug_selector(|| self.sidebar_debug_name((|| "floating-sidebar".into())()))
@@ -4611,7 +4636,7 @@ impl BrowserWindow {
                 slide,
                 move |panel, delta| {
                     let shown = if closing { 1.0 - delta } else { delta };
-                    panel.left(px(FLOATING_SIDEBAR_INSET - travel * (1.0 - shown)))
+                    panel.left(px(FLOATING_SIDEBAR_INSET - travel * (1.0 - shown * (1.0 - library))))
                 },
             ))
             .into_any_element()
@@ -5156,7 +5181,11 @@ impl Render for BrowserWindow {
 
         let library_open = !self.page_content_visible() && self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::Library;
         let animation_only = self.loading_tick.replace(false) && !self.window_notified.replace(false);
-        let sidebar = (!library_open && sidebar_amount > 0.).then(|| {
+        // Between a Space and Library both are visible: Library slides in from
+        // the left over the fading sidebar while the page translates right.
+        let library_motion = self.transient.is_none() && self.library_in_motion();
+        let library_amount = self.library_slide_amount();
+        let sidebar = ((!library_open || library_motion) && sidebar_amount > 0.).then(|| {
             let entity = cx.entity();
             let notified = self.window_notified.clone();
             let view = self.sidebar_view.get_or_insert_with(|| cx.new(|cx| SidebarView::new(&entity, notified, cx))).clone();
@@ -5173,7 +5202,11 @@ impl Render for BrowserWindow {
             self.loading_view.get_or_insert_with(|| cx.new(|_| crate::page_loading::LoadingView { browser, tick })).clone()
         };
         if !library_open { self.warm_library_cards(cx); }
-        let library = library_open.then(|| self.render_library_host(cx));
+        let library = (library_open || library_motion).then(|| {
+            let shift = self.library_layer_shift();
+            div().debug_selector(|| "library-layer".into()).absolute().top_0().bottom_0().left(px(shift)).right(px(-shift))
+                .child(self.render_library_host(library_open, cx))
+        });
         let compact = self.transient.is_some();
         let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(window, cx).into_any_element() };
         div()
@@ -5331,14 +5364,15 @@ impl Render for BrowserWindow {
 
             .when(self.browser.is_private(), |this| this.bg(hsla(210. / 360., 0.06, 0.05, 1.)))
             .child(self.theme_surface(theme_blurred))
-            .when(!compact && !library_open, |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
+            .when(!compact && (!library_open || library_motion), |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
                 .relative().flex_none().h_full().w(px(self.sidebar_width() * sidebar_amount)).overflow_hidden()
-                .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset)).top_0().bottom_0().child(sidebar)))))
+                .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset + if library_motion { LIBRARY_SIDEBAR_DRIFT * library_amount } else { 0. })).top_0().bottom_0()
+                    .when(library_motion, |this| this.opacity(1. - library_amount)).child(sidebar)))))
+            .when_some(library, |this, library| this.child(library))
             .child(self.render_sidebar_resize_tracking(cx))
             .child(div().id("native-action-scope").absolute().size_0().track_focus(&self.native_action_focus))
             .child(content)
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
-            .when_some(library, |this, library| this.child(library))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
             .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))
             .child(loading)

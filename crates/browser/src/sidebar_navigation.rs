@@ -65,6 +65,8 @@ pub(crate) struct SidebarNavigation {
     library_slide_target: bool,
     library_slide_generation: u64,
     library_slide_task: Option<gpui::Task<()>>,
+    /// Fingers own the Library slide: `Some(true)` toward Library.
+    library_drag: Option<bool>,
 }
 impl SidebarNavigation {
     pub(crate) fn new(browser: &Browser) -> Self {
@@ -97,8 +99,16 @@ impl SidebarNavigation {
             library_slide_target: false,
             library_slide_generation: 0,
             library_slide_task: None,
+            library_drag: None,
         }
     }
+}
+// GPUI tests act on Library without advancing the clock; motion tests opt in.
+#[cfg(test)]
+thread_local! { pub(crate) static ANIMATE_LIBRARY_SLIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+fn library_slide_animates() -> bool {
+    #[cfg(test)] { ANIMATE_LIBRARY_SLIDE.with(|animate| animate.get()) }
+    #[cfg(not(test))] { true }
 }
 impl BrowserWindow {
     /// Arc translates the original page viewport into Library without reflow.
@@ -115,15 +125,71 @@ impl BrowserWindow {
             self.animate_library_slide(entering, cx);
         }
     }
-    pub(crate) fn library_page_offset(&self) -> f32 {
-        let target = if self.sidebar_navigation.library_section == LibrarySection::Spaces {
+    /// Right edge of Library's leading column, where the page settles.
+    fn library_column_right(&self) -> f32 {
+        if self.sidebar_navigation.library_section == LibrarySection::Spaces {
             self.sidebar_navigation.normal_content_left + f32::from(self.sidebar_navigation.normal_content_size.width)
                 - 46.
-        } else { 112. + library::media::MEDIA_REFERENCE_COLUMN_WIDTH };
-        (target - self.sidebar_navigation.normal_content_left) * self.sidebar_navigation.library_slide_amount
+        } else { 112. + library::media::MEDIA_REFERENCE_COLUMN_WIDTH }
     }
+    pub(crate) fn library_page_offset(&self) -> f32 {
+        (self.library_column_right() - self.sidebar_navigation.normal_content_left) * self.sidebar_navigation.library_slide_amount
+    }
+    /// Arc slides Library's columns in from the left edge with the page.
+    pub(crate) fn library_layer_shift(&self) -> f32 {
+        -(1. - self.sidebar_navigation.library_slide_amount) * self.library_column_right()
+    }
+    /// Within the shifted layer, so the page itself never jumps.
     pub(crate) fn library_preview_left(&self) -> f32 {
-        self.sidebar_navigation.normal_content_left + self.library_page_offset() - 112.
+        self.sidebar_navigation.normal_content_left + self.library_page_offset() - 112. - self.library_layer_shift()
+    }
+    /// While Library is selected the sidebar still shows the Space beside it.
+    pub(crate) fn sidebar_display_position(&self) -> f32 {
+        if self.sidebar_navigation.controller.selected() != SidebarPage::Library { return self.pager.position; }
+        self.sidebar_navigation.controller.pages(&self.browser).iter()
+            .position(|page| matches!(page, SidebarPage::Space(_))).unwrap_or(1) as f32
+    }
+    pub(crate) fn library_slide_amount(&self) -> f32 { self.sidebar_navigation.library_slide_amount }
+    /// Library and the Space sidebar are both visible between the two pages.
+    pub(crate) fn library_in_motion(&self) -> bool {
+        let amount = self.sidebar_navigation.library_slide_amount;
+        amount > 0. && (amount < 1. || self.sidebar_navigation.library_drag.is_some())
+    }
+    /// Sidebar swipe across the Library edge: the slide follows the fingers.
+    pub(crate) fn drag_library(&mut self, entering: bool, amount: f32, cx: &mut Context<Self>) {
+        if self.sidebar_navigation.library_drag.is_none() && entering {
+            self.sidebar_navigation.library_section = LibrarySection::Media;
+        }
+        self.sidebar_navigation.library_drag = Some(entering);
+        self.sidebar_navigation.library_slide_generation = self.sidebar_navigation.library_slide_generation.wrapping_add(1);
+        self.sidebar_navigation.library_slide_task = None;
+        self.sidebar_navigation.library_slide_amount = amount.clamp(0., 1.);
+        cx.notify();
+    }
+    /// Fingers went back past their start: the slide rests where it began.
+    pub(crate) fn rest_library_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(entering) = self.sidebar_navigation.library_drag.take() {
+            self.sidebar_navigation.library_slide_amount = if entering { 0. } else { 1. };
+            cx.notify();
+        }
+    }
+    /// Release commits past the swipe threshold or with a flick toward the
+    /// destination; otherwise the slide returns from where the fingers left it.
+    pub(crate) fn release_library_drag(&mut self, speed: f32, start: usize, flick: f32, commit_at: f32, cx: &mut Context<Self>) -> bool {
+        let Some(entering) = self.sidebar_navigation.library_drag.take() else { return false; };
+        let amount = self.sidebar_navigation.library_slide_amount;
+        let progress = if entering { amount } else { 1. - amount };
+        // Fingers moving right reveal Library.
+        let toward = if entering { speed } else { -speed };
+        let commit = if speed.abs() > flick { toward > 0. } else { progress > commit_at };
+        let page = if entering { Some(SidebarPage::Library) } else {
+            self.sidebar_navigation.controller.pages(&self.browser).get(start + 1).copied()
+        };
+        match page.filter(|_| commit) {
+            Some(page) => self.select_sidebar_page(page, cx),
+            None => self.animate_library_slide(!entering, cx),
+        }
+        true
     }
     fn animate_library_slide(&mut self, entering: bool, cx: &mut Context<Self>) {
         self.sidebar_navigation.library_slide_target = entering;
@@ -132,7 +198,7 @@ impl BrowserWindow {
         self.sidebar_navigation.library_slide_generation = self.sidebar_navigation.library_slide_generation.wrapping_add(1);
         let generation = self.sidebar_navigation.library_slide_generation;
         self.sidebar_navigation.library_slide_task = None;
-        if crate::native::prefers_reduced_motion() || from == to {
+        if crate::native::prefers_reduced_motion() || from == to || !library_slide_animates() {
             self.sidebar_navigation.library_slide_amount = to;
             return;
         }
@@ -295,6 +361,11 @@ impl BrowserWindow {
         self.sidebar_navigation
             .controller
             .select(&self.browser, page);
+        if was_library != (page == SidebarPage::Library) {
+            // The Library slide replaces paging: the sidebar keeps its Space.
+            self.reset_sidebar_motion();
+            self.pager.position = self.sidebar_page_index() as f32;
+        }
         if let SidebarPage::Space(id) = page {
             if let Some(pages) = &self.pages {
                 pages.borrow_mut().request_page_focus();
@@ -759,7 +830,9 @@ impl BrowserWindow {
             self.library_card_image(id, cx);
         }
     }
-    pub(crate) fn render_library_host(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// `open`: Library owns the page preview. Otherwise the page stays in
+    /// the normal content while this layer only slides alongside it.
+    pub(crate) fn render_library_host(&mut self, open: bool, cx: &mut Context<Self>) -> AnyElement {
         let Some(mut projection) =
             LibraryProjection::from_browser(&self.browser, self.sidebar_navigation.library_origin)
         else {
@@ -795,7 +868,7 @@ impl BrowserWindow {
         };
         let section = self.sidebar_navigation.library_section;
         let preview_left = self.library_preview_left();
-        let preview = (section == LibrarySection::Media).then(|| self.render_library_page_preview(cx));
+        let preview = (open && section == LibrarySection::Media).then(|| self.render_library_page_preview(cx));
         let mut empty = (section == LibrarySection::Media).then(|| {
             // Reuse existing host semantic surfaces; never change App appearance.
             let media_colors = library::media::MediaColors {
@@ -847,7 +920,7 @@ impl BrowserWindow {
             self.sidebar_navigation.media_selected=selected;
             self.sync_page_viewport();
             div().relative().size_full().child(media)
-                .when(!selected,|v|v.child(library::media::render_preview_at(media_colors.preview, preview, preview_left)))
+                .when(open && !selected,|v|v.child(library::media::render_preview_at(media_colors.preview, preview, preview_left)))
                 .into_any_element()
         });
         if section == LibrarySection::Downloads {
@@ -864,12 +937,12 @@ impl BrowserWindow {
             let fill = self.theme_empty_panel_fill();
             let view = self.sidebar_navigation.archive.get_or_insert_with(|| cx.new(|cx| crate::library_archive::ArchiveLibrary::new(owner, colors, cx))).clone();
             view.update(cx, |view, _| view.set_colors(colors));
-            let preview = self.render_library_page_preview(cx);
+            let preview = open.then(|| self.render_library_page_preview(cx));
             empty = Some(div().relative().size_full().child(view)
-                .child(library::media::render_preview_at(fill, Some(preview), preview_left))
+                .when_some(preview, |this, preview| this.child(library::media::render_preview_at(fill, Some(preview), preview_left)))
                 .into_any_element());
         }
-        if section == LibrarySection::Spaces && self.browser.active_tab().is_some() {
+        if section == LibrarySection::Spaces && open && self.browser.active_tab().is_some() {
             let preview = self.render_library_page_preview(cx);
             empty = Some(library::media::render_preview_at(self.theme_empty_panel_fill(), Some(preview), preview_left));
         }

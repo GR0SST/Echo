@@ -310,7 +310,8 @@ fn media_preserves_native_source_and_existing_split_layout_contracts(cx: &mut Te
     for tab in [left, right] {
         let selector: &'static str = Box::leak(format!("split-pane-{}", tab.get()).into_boxed_str());
         let pane = cx.debug_bounds(selector).unwrap();
-        assert!(pane.origin.x >= preview.origin.x && pane.right() <= preview.right());
+        // The page keeps its width and is clipped at the window edge.
+        assert!(pane.origin.x >= preview.origin.x && pane.origin.x < preview.right(), "{pane:?} {preview:?}");
         assert!(pane.origin.y >= preview.origin.y && pane.bottom() <= preview.bottom());
     }
     view.read_with(cx, |view, _| {
@@ -644,6 +645,7 @@ fn library_from_an_empty_space_never_leaks_the_other_spaces_live_page(cx: &mut T
 
 #[gpui::test]
 fn library_slides_the_same_page_without_hiding_or_reflow_and_returns_it(cx: &mut TestAppContext) {
+    crate::sidebar_navigation::ANIMATE_LIBRARY_SLIDE.with(|animate| animate.set(true));
     let (view, cx, fake) = open_pages(cx);
     cx.simulate_resize(gpui::size(px(1000.), px(760.)));
     cx.run_until_parked();
