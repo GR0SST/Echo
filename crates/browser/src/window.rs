@@ -75,7 +75,7 @@ const PAGER_FRAME: Duration = Duration::from_millis(16);
 const SIDEBAR_REVEAL_EDGE: f32 = 8.0;
 /// Logical pixels beyond the revealed panel; this does not intercept page input.
 const SIDEBAR_DISMISS_BUFFER: f32 = 100.0;
-const FLOATING_SIDEBAR_INSET: f32 = 6.0;
+pub(crate) const FLOATING_SIDEBAR_INSET: f32 = 6.0;
 /// Room for the floating sidebar's shadow inside its window.
 const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
 const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
@@ -624,6 +624,8 @@ pub enum OverlayKind {
     ExtensionPrompt,
     Capture,
     NewMenu,
+    /// Pages in a hovered folder, beside the sidebar.
+    FolderPreview,
     UserProfileDialog,
     PasswordPrompt,
     PasswordAccounts,
@@ -709,6 +711,7 @@ impl Render for Overlay {
                     OverlayKind::ExtensionPrompt => browser.render_extension_prompt(window, cx),
                     OverlayKind::Capture => browser.render_capture(window, cx),
                     OverlayKind::NewMenu => browser.render_new_menu(cx),
+                    OverlayKind::FolderPreview => browser.render_folder_preview(cx),
                     OverlayKind::ThemeEditor => { browser.sync_theme_editor_backdrop(window); browser.render_theme_editor(cx) },
                     OverlayKind::GitHubConnection => browser.render_live_connection(cx),
                     OverlayKind::UserProfileDialog => browser.render_user_profile_dialog(),
@@ -844,6 +847,9 @@ pub struct BrowserWindow {
     pub(crate) capture: Option<crate::capture::Capture>,
     pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     pub(crate) new_menu: Option<crate::new_menu::NewMenu>,
+    pub(crate) folder_preview: Option<crate::folder_preview::FolderPreview>,
+    /// Last pointer position GPUI saw over this window's own surfaces.
+    pub(crate) last_pointer: Option<gpui::Point<gpui::Pixels>>,
     pub(crate) boost_editor: Option<WindowHandle<crate::boosts::BoostEditor>>,
     pub(crate) boost_creation_pending: bool,
     pub(crate) new_menu_anchor: crate::site_controls::Anchor,
@@ -891,6 +897,8 @@ impl BrowserWindow {
         let png = self.browser.favicon(profile, &tab.url)?;
         Some(self.favicon_styles.borrow_mut().get(png).image)
     }
+
+    pub(crate) fn sidebar_resizing(&self) -> bool { self.sidebar_resize.is_some() }
 
     pub(crate) fn window_controls_offset(&self) -> f32 {
         if self.transient.is_some() || !self.page_content_visible() { 0. } else { self.sidebar_width() * (self.sidebar_amount() - 1.) }
@@ -1210,6 +1218,8 @@ impl BrowserWindow {
             capture: None,
             site_controls_anchor: Default::default(),
             new_menu: None,
+            folder_preview: None,
+            last_pointer: None,
             boost_editor: None,
             boost_creation_pending: false,
             new_menu_anchor: Default::default(),
@@ -4648,6 +4658,8 @@ impl BrowserWindow {
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                // The floating card's window shares the main window's origin.
+                this.last_pointer = Some(event.position);
                 if this.sidebar_resize.is_some() { return; }
                 this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);
             }))
@@ -5260,6 +5272,7 @@ impl Render for BrowserWindow {
             }))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.last_pointer = Some(event.position);
                 if this.sidebar_resize.is_some() { return; }
                 this.close_link_status(cx);
                 this.on_floating_sidebar_pointer(f32::from(event.position.x), f32::from(event.position.y), cx);

@@ -5113,6 +5113,73 @@ fn open_folder_pages(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut Vi
 }
 
 #[gpui::test]
+fn resting_on_a_folder_previews_its_flattened_pages_newest_first_with_search(cx: &mut TestAppContext) {
+    use std::time::{Duration as Span, SystemTime};
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new();
+    let space = browser.space().id;
+    let root = browser.create_folder(space, None, "Reading").unwrap();
+    let nested = browser.create_folder(space, Some(root), "Later").unwrap();
+    let base = SystemTime::now() - Span::from_secs(3 * 3600);
+    let mut add = |browser: &mut browser_core::Browser, url: &str, title: &str, minutes: u64, folder| {
+        let id = browser.new_tab(url, base);
+        browser.set_title(id, title);
+        browser.toggle_pin(id);
+        browser.move_item_to_folder(id, folder);
+        browser.activate_tab(id, base + Span::from_secs(minutes * 60));
+        id
+    };
+    let old = add(&mut browser, "https://old.example", "Old", 0, root);
+    let newest = add(&mut browser, "https://newest.example", "Newest", 120, nested);
+    let middle = add(&mut browser, "https://middle.example", "Middle", 60, root);
+    browser.new_tab("https://outside.example", SystemTime::now());
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    cx.run_until_parked();
+    let row: &'static str = Box::leak(format!("folder-{}", root.get()).into_boxed_str());
+    let center = cx.debug_bounds(row).unwrap().center();
+    cx.simulate_mouse_move(center, None, Modifiers::none());
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.folder_preview.as_ref().is_some_and(|p| p.overlay.is_none())), "not before the dwell");
+    cx.executor().advance_clock(Duration::from_millis(400));
+    cx.run_until_parked();
+    let overlay = view.read_with(cx, |w, _| w.folder_preview.as_ref().and_then(|p| p.overlay)).expect("preview after half a second");
+    // Subfolders flatten into one list ordered by last opened.
+    assert_eq!(view.read_with(cx, |w, _| w.folder_preview_items(root, "")), vec![newest, middle, old]);
+    let mut card = VisualTestContext::from_window(overlay.into(), cx);
+    card.run_until_parked();
+    assert!(card.debug_bounds("folder-preview-search").is_some());
+    for id in [newest, middle, old] {
+        assert!(card.debug_bounds(Box::leak(format!("folder-preview-item-{}", id.get()).into_boxed_str())).is_some());
+    }
+    assert_eq!(crate::folder_preview::ago(SystemTime::now() - Span::from_secs(31 * 60), SystemTime::now()), "31 minutes ago");
+    assert_eq!(view.read_with(cx, |w, _| w.folder_preview_items(root, "mid")), vec![middle]);
+    click(&mut card, "folder-preview-search");
+    card.simulate_input("old");
+    card.run_until_parked();
+    let query = view.read_with(cx, |w, cx| w.folder_preview.as_ref().map(|p| p.query(cx))).unwrap();
+    assert_eq!(view.read_with(cx, |w, _| w.folder_preview_items(root, &query)), vec![old]);
+    card.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.folder_preview.is_none());
+        assert_eq!(w.browser.space().active_tab, Some(old));
+    });
+    // Leaving the row before the dwell cancels it.
+    cx.simulate_mouse_move(center, None, Modifiers::none());
+    let far = gpui::point(gpui::px(600.), gpui::px(400.));
+    cx.simulate_mouse_move(far, None, Modifiers::none());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |w, _| w.folder_preview.is_none()));
+}
+
+#[gpui::test]
 fn folder_creation_and_nested_creation_keep_the_page_and_cancel_without_creating_items(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let active = active_url(&view, cx);

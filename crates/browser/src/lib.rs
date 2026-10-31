@@ -45,6 +45,7 @@ mod material;
 mod favicon_style;
 mod window_snapshots;
 mod new_menu;
+mod folder_preview;
 mod new_window;
 mod window_restore;
 mod setup;
@@ -178,6 +179,7 @@ pub fn init(cx: &mut App) {
     boosts::bind_keys(cx);
     capture::bind_keys(cx);
     new_menu::bind_keys(cx);
+    folder_preview::bind_keys(cx);
     theme_editor::bind_keys(cx);
     live_folders::bind_keys(cx);
     user_profile_dialog::bind_keys(cx);

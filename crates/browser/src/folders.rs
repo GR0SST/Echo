@@ -428,6 +428,8 @@ impl BrowserWindow {
                     let folder_pigment = self.theme_primary_for(space);
                     Some(div().pl(px(indent)).flex_none().min_w_0().flex().flex_col().gap(px(crate::window::SIDEBAR_ROW_GAP)).child(div().id(("folder", key)).debug_selector(|| self.sidebar_debug_name((move || format!("folder-{key}"))()))
                         .relative().child(self.track_icon_anchor(IconTarget::Folder(id)))
+                        // Resting on a folder previews its pages after a short dwell.
+                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| { if *hovered && this.sidebar_page_interactive { this.hover_folder(id, cx); } }))
                         .flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
                         .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
                         .when(active || self.sidebar_folder_selected(id), |this| this.bg(hsla(0., 0., 1., 0.25))).hover(move |this| this.bg(hsla(0., 0., 1., if dark { 0.1 } else { 0.3 })))
