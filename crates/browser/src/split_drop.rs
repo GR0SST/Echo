@@ -9,6 +9,8 @@ use gpui::{div, prelude::*, px, AnyElement, Bounds, Context, Pixels, Point, Wind
 use std::time::SystemTime;
 
 const OVERLAY_MARGIN: f32 = 200.;
+/// Preview geometry eases between targets instead of jumping.
+const PREVIEW_MOTION: std::time::Duration = std::time::Duration::from_millis(180);
 
 pub(crate) struct SplitDropPreview {
     pub source: TabId,
@@ -21,6 +23,37 @@ pub(crate) struct SplitDropPreview {
     hotspot: Point<Pixels>,
     pub overlay: Option<WindowHandle<Overlay>>,
     bounds: Bounds<Pixels>,
+    /// Where the cover and outline were painted when this target took over.
+    pub(crate) from_cover: Bounds<Pixels>,
+    pub(crate) from_outline: Bounds<Pixels>,
+    since: std::time::Instant,
+}
+
+fn lerp(a: Bounds<Pixels>, b: Bounds<Pixels>, t: f32) -> Bounds<Pixels> {
+    let mix = |x: Pixels, y: Pixels| x + (y - x) * t;
+    Bounds::new(gpui::point(mix(a.origin.x, b.origin.x), mix(a.origin.y, b.origin.y)),
+        gpui::size(mix(a.size.width, b.size.width), mix(a.size.height, b.size.height)))
+}
+
+/// A zero-thickness cover on the edge a new pane slides in from.
+fn collapsed(cover: Bounds<Pixels>, placement: Option<Placement>) -> Bounds<Pixels> {
+    match placement {
+        Some(Placement::Left) => Bounds::new(cover.origin, gpui::size(px(0.), cover.size.height)),
+        Some(Placement::Right) => Bounds::new(gpui::point(cover.right(), cover.top()), gpui::size(px(0.), cover.size.height)),
+        Some(Placement::Above) => Bounds::new(cover.origin, gpui::size(cover.size.width, px(0.))),
+        Some(Placement::Below) => Bounds::new(gpui::point(cover.left(), cover.bottom()), gpui::size(cover.size.width, px(0.))),
+        None => cover,
+    }
+}
+
+impl SplitDropPreview {
+    fn progress(&self) -> f32 {
+        if crate::native::prefers_reduced_motion() { return 1.; }
+        let t = (self.since.elapsed().as_secs_f32() / PREVIEW_MOTION.as_secs_f32()).clamp(0., 1.);
+        1. - (1. - t).powi(3)
+    }
+    fn painted_cover(&self) -> Bounds<Pixels> { lerp(self.from_cover, self.cover, self.progress()) }
+    fn painted_outline(&self) -> Bounds<Pixels> { lerp(self.from_outline, self.outline, self.progress()) }
 }
 
 impl BrowserWindow {
@@ -53,6 +86,7 @@ impl BrowserWindow {
         let preview = |placement, cover, outline, retained| SplitDropPreview {
             source: drag.id, anchor, placement, cover: convert(cover), outline: convert(outline),
             retained: convert(retained), pointer: position, hotspot: drag.card_hotspot.get(), overlay: None, bounds: window.bounds(),
+            from_cover: collapsed(convert(cover), placement), from_outline: convert(outline), since: std::time::Instant::now(),
         };
         let direct = if split.is_some() && axis == Axis::Vertical {
             if y < 0.25 { Some((Placement::Above, false)) } else if y > 0.75 { Some((Placement::Below, false)) } else { None }
@@ -94,6 +128,16 @@ impl BrowserWindow {
         let Some(mut next) = self.split_drop_target(drag, position, window) else { self.close_split_drop(cx); return; };
         if self.split_drop.as_ref().is_some_and(|old| old.source == next.source && old.anchor == next.anchor
             && old.placement == next.placement && old.outline == next.outline && old.bounds == next.bounds && old.pointer == next.pointer) { return; }
+        if let Some(old) = &self.split_drop {
+            if old.source == next.source && old.anchor == next.anchor && old.placement == next.placement && old.outline == next.outline {
+                // Only the pointer moved: keep the running motion.
+                next.from_cover = old.from_cover; next.from_outline = old.from_outline; next.since = old.since;
+            } else {
+                // Start from what is on screen now, mid-motion included.
+                next.from_outline = old.painted_outline();
+                next.from_cover = if old.placement.is_some() && next.placement.is_some() { old.painted_cover() } else { next.from_cover };
+            }
+        }
         next.overlay = self.split_drop.as_mut().and_then(|old| old.overlay.take());
         self.split_drop = Some(next);
         self.split_drop_generation += 1;
@@ -155,18 +199,23 @@ impl BrowserWindow {
         let Some(preview) = &self.split_drop else { return div().into_any_element(); };
         let margin = gpui::point(px(OVERLAY_MARGIN),px(OVERLAY_MARGIN));
         let viewport = preview.bounds.size;
-        let masks = preview.placement.map(|placement| corner_tiles(preview.retained,placement,window.scale_factor())).unwrap_or_default();
+        let settled = preview.progress() >= 1.;
+        if !settled { window.request_animation_frame(); }
+        let cover = preview.painted_cover();
+        let outline = preview.painted_outline();
+        // The rounded retained edge belongs to the final geometry only.
+        let masks = preview.placement.filter(|_| settled).map(|placement| corner_tiles(preview.retained,placement,window.scale_factor())).unwrap_or_default();
         let tab = self.browser.all_tabs().find(|tab| tab.id == preview.source);
         div().size_full()
-            .when(preview.placement.is_some(), |overlay| overlay.child(div().absolute().left(preview.cover.origin.x + margin.x).top(preview.cover.origin.y + margin.y)
-                .w(preview.cover.size.width).h(preview.cover.size.height)
-                .child(self.theme_region(preview.cover,viewport))))
+            .when(preview.placement.is_some(), |overlay| overlay.child(div().absolute().left(cover.origin.x + margin.x).top(cover.origin.y + margin.y)
+                .w(cover.size.width).h(cover.size.height).overflow_hidden()
+                .child(self.theme_region(cover,viewport))))
             .children(masks.into_iter().map(|(bounds,alpha)| div().absolute()
                 .left(bounds.origin.x + margin.x).top(bounds.origin.y + margin.y)
                 .w(bounds.size.width).h(bounds.size.height).opacity(alpha)
                 .child(self.theme_region(bounds,viewport))))
             .child(div().debug_selector(|| "split-drop-outline".into()).absolute()
-                .left(preview.outline.origin.x + margin.x).top(preview.outline.origin.y + margin.y).w(preview.outline.size.width).h(preview.outline.size.height)
+                .left(outline.origin.x + margin.x).top(outline.origin.y + margin.y).w(outline.size.width).h(outline.size.height)
                 .rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).border_2().border_color(if preview.placement.is_some() { gpui::hsla(0.,0.,1.,0.55).into() } else { gpui::rgb(0x2f39ff) }))
             .children(tab.map(|_| gpui::img(shadow::image()).absolute()
                 .left(preview.pointer.x - preview.hotspot.x + margin.x - px(shadow::PAD))

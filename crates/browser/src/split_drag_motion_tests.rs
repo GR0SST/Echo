@@ -177,3 +177,32 @@ fn sidebar_drag_ghost_is_a_row_and_tab_on_tab_joins_a_split_in_place(cx: &mut Te
         assert!(w.browser.space().pinned.iter().any(|tab| tab.id == source), "the group stays in Pinned");
     });
 }
+
+#[gpui::test]
+fn the_split_preview_slides_the_new_pane_in_from_the_edge(cx: &mut TestAppContext) {
+    let (view, cx, _fake) = open_split_pages(cx, 1);
+    let anchor = view.read_with(cx, |w, _| w.browser.space().active_tab.unwrap());
+    let source = view.update(cx, |w, cx| {
+        let source = w.edit_browser(|b| b.new_tab("https://dragged.example", std::time::SystemTime::now()));
+        w.edit_browser(|b| b.activate_tab(anchor, std::time::SystemTime::now()));
+        cx.notify();
+        source
+    });
+    cx.run_until_parked();
+    let frame = cx.debug_bounds("page-surface").unwrap();
+    begin_sidebar_drag(cx, test_selector(format!("tab-{}", source.get())));
+    cx.simulate_mouse_move(frame.center(), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let center = view.read_with(cx, |w, _| w.split_drop.as_ref().unwrap().outline);
+    cx.simulate_mouse_move(gpui::point(frame.right() - gpui::px(12.), frame.center().y), gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        let preview = w.split_drop.as_ref().unwrap();
+        assert_eq!(preview.placement, Some(browser_core::splits::Placement::Right));
+        // The pane grows from the right edge and the contour starts from the whole page.
+        assert_eq!(preview.from_cover.size.width, gpui::px(0.));
+        assert_eq!(preview.from_cover.right(), preview.cover.right());
+        assert_eq!(preview.from_outline, center);
+    });
+    finish_sidebar_drag(cx, gpui::point(frame.right() - gpui::px(12.), frame.center().y));
+}
