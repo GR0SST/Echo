@@ -10283,35 +10283,35 @@ fn the_boost_editor_hides_on_another_page_and_returns(cx:&mut TestAppContext){
     let _ = other;
 }
 #[gpui::test]
-fn boost_color_dots_drag_together_and_the_accent_turns_alone(cx:&mut TestAppContext){
+fn boost_color_dots_slide_along_one_ring_and_the_accent_trails(cx:&mut TestAppContext){
     let (view,cx,_fake)=open_pages(cx);
     view.update(cx,|view,cx|view.new_boost(cx));
     let mut panel=boost_panel(&view,cx);
     let pad=panel.debug_bounds("boost-color").unwrap();
     let look=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.clone());
-    let at=|x:f32,y:f32|pad.origin+gpui::point(gpui::px(x),gpui::px(y));
-    // Press anywhere on the pad puts the main dot there, then it follows the drag.
-    panel.simulate_mouse_down(at(40.,40.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_move(at(60.,50.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_move(at(90.,60.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_up(at(90.,60.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    // The pad's center sits 74 points in; the ring is 0.47 of its 134 points.
+    let at=|x:f32,y:f32|pad.origin+gpui::point(gpui::px(74.+x),gpui::px(74.+y));
+    let ring=|p:(f32,f32)|((p.0-0.5).hypot(p.1-0.5)-browser_core::boosts::RING_RADIUS).abs()<0.001;
+    // A press near the center or past the edge still puts the main dot on the ring.
+    panel.simulate_mouse_down(at(10.,0.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(40.,40.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(0.,90.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(at(0.,90.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
     let first=look(&view,&mut panel);
-    let main=first.main_point().unwrap();
-    assert!((main.0*134.+7.-90.).abs()<1.5 && (main.1*134.+7.-60.).abs()<1.5,"main dot under the pointer: {main:?}");
-    assert!(first.tint.is_some());
-    // Grabbing the accent turns it without moving the main dot or the page tint.
+    assert_eq!(first.tint,Some(90));
+    assert!(ring(first.main_point().unwrap()) && ring(first.accent_point().unwrap()));
+    assert_eq!(first.accent_offset,Some(-26),"clockwise drag leaves the accent behind");
+    // Grabbing the accent slides it alone along the ring.
     let accent=first.accent_point().unwrap();
-    let grip=at(accent.0*134.+7.,accent.1*134.+7.);
+    let grip=pad.origin+gpui::point(gpui::px(7.+accent.0*134.),gpui::px(7.+accent.1*134.));
     panel.simulate_mouse_down(grip,gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_move(at(90.,10.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_move(at(90.,5.),gpui::MouseButton::Left,Modifiers::none());
-    panel.simulate_mouse_up(at(90.,5.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    panel.simulate_mouse_move(at(-30.,10.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(-60.,0.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(at(-60.,0.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
     let turned=look(&view,&mut panel);
-    assert_eq!(turned.main_point(),Some(main));
     assert_eq!(turned.tint,first.tint);
-    assert_ne!(turned.accent_angle,first.accent_angle);
-    let after=turned.accent_point().unwrap();
-    assert!(after.1<main.1,"the accent now sits above the main dot");
+    assert_eq!(turned.accent_offset,Some(90));
+    assert!(ring(turned.accent_point().unwrap()));
 }
 #[gpui::test]
 fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut TestAppContext) {

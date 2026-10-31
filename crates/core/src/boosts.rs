@@ -52,22 +52,22 @@ pub struct BoostAppearance {
     pub contrast: Option<u16>,
     pub brightness: Option<u16>,
     pub saturation: Option<u16>,
-    /// The main dot on the color pad, 0..=1000 per axis. Older Boosts only
-    /// stored `tint`; their dot is derived from it.
+    /// The accent dot's place on the ring, in degrees from the main dot.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub color_point: Option<[u16; 2]>,
-    /// The accent dot's angle around the main dot, in degrees.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accent_angle: Option<u16>,
+    pub accent_offset: Option<i16>,
 }
 
 /// Color pad geometry, in points: the inner pad and the dots on it.
 pub const PAD_EXTENT: f32 = 134.;
 pub const MAIN_DOT_RADIUS: f32 = 17.;
 pub const ACCENT_DOT_RADIUS: f32 = 11.;
-/// The accent dot keeps this distance from the main dot's center.
-pub const ACCENT_DISTANCE: f32 = 31.;
-const DEFAULT_ACCENT_ANGLE: f32 = 112.;
+/// Both dots ride this ring around the pad's center (a fraction of the pad):
+/// never in the middle, never past the edge.
+pub const RING_RADIUS: f32 = 0.47;
+/// The accent trails the main dot by this much until moved on its own.
+const DEFAULT_ACCENT_OFFSET: i16 = -26;
+/// Closest the accent may come to the main dot without overlapping it.
+const MIN_ACCENT_GAP: f32 = 25.;
 
 /// Hue (degrees) and strength (0..=1) of a pad point: the angle around the
 /// pad's center and the distance from it.
@@ -76,41 +76,64 @@ pub fn pad_color(point: (f32, f32)) -> (f32, f32) {
     (y.atan2(x).to_degrees().rem_euclid(360.), ((x * x + y * y).sqrt() / 0.5).min(1.))
 }
 
+/// The ring point at `angle` degrees (clockwise from the right).
+pub fn ring_point(angle: f32) -> (f32, f32) {
+    let angle = angle.to_radians();
+    (0.5 + RING_RADIUS * angle.cos(), 0.5 + RING_RADIUS * angle.sin())
+}
+
+/// The angle of a pad point around the center; the center itself has none.
+fn pad_angle(point: (f32, f32)) -> Option<f32> {
+    let (x, y) = (point.0 - 0.5, point.1 - 0.5);
+    (x.hypot(y) > f32::EPSILON).then(|| y.atan2(x).to_degrees().rem_euclid(360.))
+}
+
+/// `degrees` folded into -180..=180.
+pub fn wrap_degrees(degrees: f32) -> f32 {
+    let folded = degrees.rem_euclid(360.);
+    if folded > 180. { folded - 360. } else { folded }
+}
+
 impl BoostAppearance {
+    /// The main dot's angle on the ring, once a color is chosen.
+    pub fn main_angle(&self) -> Option<f32> { self.tint.map(f32::from) }
+
+    pub fn accent_angle(&self) -> Option<f32> {
+        Some(self.main_angle()? + f32::from(self.accent_offset.unwrap_or(DEFAULT_ACCENT_OFFSET)))
+    }
+
     /// The main dot, 0..=1 per axis, once a color is chosen.
-    pub fn main_point(&self) -> Option<(f32, f32)> {
-        if let Some([x, y]) = self.color_point { return Some((f32::from(x) / 1000., f32::from(y) / 1000.)); }
-        let angle = f32::from(self.tint?).to_radians();
-        Some((0.5 + 0.35 * angle.cos(), 0.5 + 0.35 * angle.sin()))
-    }
+    pub fn main_point(&self) -> Option<(f32, f32)> { self.main_angle().map(ring_point) }
 
-    /// The accent dot, which travels with the main dot at a fixed distance.
-    pub fn accent_point(&self) -> Option<(f32, f32)> {
-        let (x, y) = self.main_point()?;
-        let angle = self.accent_angle.map_or(DEFAULT_ACCENT_ANGLE, f32::from).to_radians();
-        let reach = ACCENT_DISTANCE / PAD_EXTENT;
-        Some(((x + reach * angle.cos()).clamp(0., 1.), (y + reach * angle.sin()).clamp(0., 1.)))
-    }
+    /// The accent dot, on the same ring a little behind the main dot.
+    pub fn accent_point(&self) -> Option<(f32, f32)> { self.accent_angle().map(ring_point) }
 
-    /// Moves the main dot (the accent follows), keeping it inside the pad.
+    /// Slides the main dot along the ring toward `point`; the accent follows
+    /// on the side it came from, so it always trails the motion.
     pub fn set_main_point(&mut self, point: (f32, f32)) {
-        let margin = MAIN_DOT_RADIUS / PAD_EXTENT;
-        let (x, y) = (point.0.clamp(margin, 1. - margin), point.1.clamp(margin, 1. - margin));
-        self.color_point = Some([(x * 1000.).round() as u16, (y * 1000.).round() as u16]);
-        self.tint = Some(pad_color((x, y)).0.round() as u16 % 360);
+        let Some(angle) = pad_angle(point) else { return; };
+        let angle = angle.round() as u16 % 360;
+        if let Some(previous) = self.tint {
+            let motion = wrap_degrees(f32::from(angle) - f32::from(previous));
+            if motion.abs() >= 1. {
+                let gap = self.accent_offset.unwrap_or(DEFAULT_ACCENT_OFFSET).abs();
+                self.accent_offset = Some(if motion > 0. { -gap } else { gap });
+            }
+        }
+        self.tint = Some(angle);
     }
 
-    /// Turns the accent dot around the main dot toward `point`.
+    /// Slides the accent along the ring toward `point`, short of the main dot.
     pub fn turn_accent_toward(&mut self, point: (f32, f32)) {
-        let Some((x, y)) = self.main_point() else { return; };
-        if (point.0 - x).abs() < f32::EPSILON && (point.1 - y).abs() < f32::EPSILON { return; }
-        self.accent_angle = Some((point.1 - y).atan2(point.0 - x).to_degrees().rem_euclid(360.).round() as u16 % 360);
+        let (Some(main), Some(angle)) = (self.main_angle(), pad_angle(point)) else { return; };
+        let offset = wrap_degrees(angle - main);
+        let gap = offset.abs().max(MIN_ACCENT_GAP).round() as i16;
+        self.accent_offset = Some(if offset < 0. { -gap } else { gap });
     }
 
     pub fn clear_color(&mut self) {
         self.tint = None;
-        self.color_point = None;
-        self.accent_angle = None;
+        self.accent_offset = None;
     }
 
     pub fn stylesheet(&self) -> String {
@@ -267,7 +290,7 @@ mod tests {
         boost.css = "body { color: red; }".into();
         boost.javascript = "window.example = true".into();
         boost.zap_selectors.push(".advert".into());
-        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80),color_point:Some([200,700]),accent_angle:Some(45)};
+        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80),accent_offset:Some(45)};
         let appearance=boost.appearance.clone();
         let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
         assert_eq!(
@@ -295,29 +318,33 @@ mod tests {
         assert_ne!(boosts.create("https://example.com").unwrap(), id);
     }
     #[test]
-    fn the_accent_dot_follows_the_main_dot_and_turns_on_its_own() {
+    fn both_dots_ride_one_ring_and_the_accent_trails_the_main_dot() {
         let mut look = BoostAppearance::default();
         assert!(look.main_point().is_none() && look.accent_point().is_none() && look.stylesheet().is_empty());
-        look.set_main_point((0.3, 0.4));
-        let reach = ACCENT_DISTANCE / PAD_EXTENT;
-        let (main, accent) = (look.main_point().unwrap(), look.accent_point().unwrap());
-        assert!((((accent.0 - main.0).powi(2) + (accent.1 - main.1).powi(2)).sqrt() - reach).abs() < 0.01);
-        // Moving the main dot carries the accent by the same offset.
-        look.set_main_point((0.6, 0.5));
-        let (moved, carried) = (look.main_point().unwrap(), look.accent_point().unwrap());
-        assert!(((carried.0 - moved.0) - (accent.0 - main.0)).abs() < 0.01 && ((carried.1 - moved.1) - (accent.1 - main.1)).abs() < 0.01);
-        // Turning the accent leaves the main dot and the page tint alone.
-        let tint = look.tint;
-        look.turn_accent_toward((0.6, 0.1));
-        assert_eq!(look.main_point(), Some(moved));
-        assert_eq!(look.tint, tint);
-        assert_eq!(look.accent_angle, Some(270));
-        let turned = look.accent_point().unwrap();
-        assert!((turned.0 - moved.0).abs() < 0.01 && turned.1 < moved.1);
-        // The main dot stays inside the pad; reset clears both dots.
-        look.set_main_point((-1., 2.));
-        let margin = MAIN_DOT_RADIUS / PAD_EXTENT;
-        assert_eq!(look.main_point().map(|(x, y)| ((x * 1000.).round(), (y * 1000.).round())), Some(((margin * 1000.).round(), ((1. - margin) * 1000.).round())));
+        let on_ring = |p: (f32, f32)| ((p.0 - 0.5).hypot(p.1 - 0.5) - RING_RADIUS).abs() < 0.001;
+        // A press anywhere, even near the center or outside the pad, lands on the ring.
+        look.set_main_point((0.55, 0.5));
+        assert_eq!(look.tint, Some(0));
+        assert!(on_ring(look.main_point().unwrap()) && on_ring(look.accent_point().unwrap()));
+        look.set_main_point((2., 0.5));
+        assert_eq!(look.tint, Some(0));
+        look.set_main_point((0.5, 0.5));
+        assert_eq!(look.tint, Some(0), "the center has no angle");
+        // Clockwise motion leaves the accent behind, counterclockwise flips it.
+        look.set_main_point((0.5, 0.9));
+        assert_eq!((look.tint, look.accent_offset), (Some(90), Some(-26)));
+        look.set_main_point((0.9, 0.5));
+        assert_eq!((look.tint, look.accent_offset), (Some(0), Some(26)));
+        // The accent slides along the ring alone, never onto the main dot.
+        look.turn_accent_toward((0.5, 0.1));
+        assert_eq!((look.tint, look.accent_offset), (Some(0), Some(-90)));
+        look.turn_accent_toward((0.9, 0.51));
+        assert_eq!(look.accent_offset, Some(25));
+        assert!(on_ring(look.accent_point().unwrap()));
+        // The gap it was given survives the next drag of the main dot.
+        look.turn_accent_toward((0.5, 0.1));
+        look.set_main_point((0.5, 0.9));
+        assert_eq!(look.accent_offset, Some(-90));
         look.clear_color();
         assert!(look.main_point().is_none() && look.stylesheet().is_empty());
     }

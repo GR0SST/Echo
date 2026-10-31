@@ -67,12 +67,14 @@ pub(crate) struct BoostEditor {
     js: Entity<TextInput>,
     focus: gpui::FocusHandle,
     color_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
+    /// Where the lagging accent dot was last painted, and when.
+    accent_shown: Rc<Cell<Option<(f32, std::time::Instant)>>>,
     /// Which color dot the current press moves.
     wheel_grip: Option<WheelGrip>,
     _subscriptions: Vec<Subscription>,
 }
-/// The main dot sets the page color and carries the accent; the accent dot
-/// turns around it on its own and sets the text color.
+/// Both dots slide along one ring: the main dot sets the page color and the
+/// accent trails it; the accent can also be slid alone and sets the text color.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WheelGrip { Main, Accent }
 
@@ -82,6 +84,9 @@ struct WheelDrag;
 impl Render for WheelDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
 }
+
+/// How long the accent dot takes to catch up with the main dot, in seconds.
+const ACCENT_LAG: f32 = 0.09;
 
 /// Pad point (0..=1) under a window position.
 fn pad_point(bounds: Bounds<gpui::Pixels>, position: gpui::Point<gpui::Pixels>) -> (f32, f32) {
@@ -386,6 +391,7 @@ impl BoostEditor {
             js,
             focus,
             color_bounds: Rc::new(Cell::new(None)),
+            accent_shown: Rc::new(Cell::new(None)),
             wheel_grip: None,
             _subscriptions: subscriptions,
         }
@@ -663,17 +669,13 @@ impl BoostEditor {
     fn draw_wheel(
         appearance: &browser_core::boosts::BoostAppearance,
         measured: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
+        accent_shown: Rc<Cell<Option<(f32, std::time::Instant)>>>,
     ) -> AnyElement {
         let tint = appearance.tint;
         let inset = (148. - browser_core::boosts::PAD_EXTENT) / 2.;
-        // Untinted Boosts show the neutral dots in Arc's resting spots.
-        let dots = match (appearance.main_point(), appearance.accent_point()) {
-            (Some(main), Some(accent)) => [
-                (inset + main.0 * browser_core::boosts::PAD_EXTENT, inset + main.1 * browser_core::boosts::PAD_EXTENT, browser_core::boosts::MAIN_DOT_RADIUS, dot_color(main)),
-                (inset + accent.0 * browser_core::boosts::PAD_EXTENT, inset + accent.1 * browser_core::boosts::PAD_EXTENT, browser_core::boosts::ACCENT_DOT_RADIUS, dot_color(accent)),
-            ],
-            _ => [(113., 73., 17., rgb(0x6f6f6f).into()), (101., 102., 11., rgb(0x343434).into())],
-        };
+        let at = move |(x, y): (f32, f32)| (inset + x * browser_core::boosts::PAD_EXTENT, inset + y * browser_core::boosts::PAD_EXTENT);
+        let main = appearance.main_point();
+        let accent_target = appearance.accent_angle();
         gpui::canvas(
             move |bounds, _, _| {
                 measured.set(Some(bounds));
@@ -765,7 +767,32 @@ impl BoostEditor {
                         ));
                     }
                 }
-                // The accent dot is drawn last, above the main dot it orbits.
+                // The accent eases after the main dot along the ring, so it
+                // visibly lags behind a drag.
+                let dots = match (main, accent_target) {
+                    (Some(main), Some(target)) => {
+                        let now = std::time::Instant::now();
+                        let shown = match accent_shown.get() {
+                            Some((angle, then)) if !crate::native::prefers_reduced_motion() => {
+                                let step = 1. - (-(now - then).as_secs_f32() / ACCENT_LAG).exp();
+                                angle + browser_core::boosts::wrap_degrees(target - angle) * step
+                            }
+                            _ => target,
+                        };
+                        let shown = if browser_core::boosts::wrap_degrees(target - shown).abs() < 0.2 { target } else { window.request_animation_frame(); shown };
+                        accent_shown.set(Some((shown, now)));
+                        let (main_x, main_y) = at(main);
+                        let accent = browser_core::boosts::ring_point(shown);
+                        let (accent_x, accent_y) = at(accent);
+                        [(main_x, main_y, browser_core::boosts::MAIN_DOT_RADIUS, dot_color(main)),
+                         (accent_x, accent_y, browser_core::boosts::ACCENT_DOT_RADIUS, dot_color(accent))]
+                    }
+                    // Untinted Boosts show the neutral dots in Arc's resting spots.
+                    _ => {
+                        accent_shown.set(None);
+                        [(113., 73., 17., rgb(0x6f6f6f).into()), (101., 102., 11., rgb(0x343434).into())]
+                    }
+                };
                 for (x, y, r, color) in dots {
                     let at = bounds.origin + point(px(x - r), px(y - r));
                     let circle = Bounds::new(at, size(px(r * 2.), px(r * 2.)));
@@ -1032,7 +1059,7 @@ impl Render for BoostEditor {
                                 .debug_selector(|| "boost-color".into())
                                 .size(px(148.))
                                 .cursor_pointer()
-                                .child(Self::draw_wheel(&appearance, self.color_bounds.clone()))
+                                .child(Self::draw_wheel(&appearance, self.color_bounds.clone(), self.accent_shown.clone()))
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| this.grab_wheel(event.position, cx)))
                                 .on_drag(WheelDrag, |drag, _, _, cx| cx.new(|_| drag.clone()))
                                 .on_drag_move::<WheelDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<WheelDrag>, _, cx| this.steer_wheel(event.event.position, cx)))
