@@ -571,7 +571,7 @@ pub(crate) fn folder(custom: Option<&str>) -> AnyElement { folder_state(custom, 
 /// rounded outlines interpolate point for point; the closed back's extra
 /// vertices lie under the body. Proportions follow the reference: nearly
 /// square, with the body filling the lower two thirds.
-fn folder_glyph(open: f32, pigment: gpui::Hsla) -> AnyElement {
+fn folder_glyph(open: f32, pigment: gpui::Hsla, dots: f32) -> AnyElement {
     const BACK: [[(f32, f32); 8]; 2] = [
         [(1.5,1.5),(6.8,1.5),(8.6,3.3),(16.5,3.3),(16.5,9.),(6.,9.),(1.5,16.5),(1.5,16.5)],
         [(1.5,1.5),(6.3,1.5),(8.1,3.3),(13.,3.3),(13.,6.4),(6.,6.4),(3.9,16.5),(1.5,16.5)],
@@ -602,6 +602,12 @@ fn folder_glyph(open: f32, pigment: gpui::Hsla) -> AnyElement {
                 }
                 path.close();
                 if let Ok(path) = path.build() { window.paint_path(path, if stroke { edge } else { color }); }
+            }
+        }
+        // Three dots on the closed body mark a folder holding the current page.
+        if dots > 0. {
+            for x in [5.4, 8.4, 11.4] {
+                window.paint_quad(gpui::fill(gpui::Bounds::new(at((x, 9.9)), gpui::size(px(1.8), px(1.8))), gpui::hsla(0., 0., 1., 0.8 * dots)).corner_radii(px(0.4)));
             }
         }
     }).size(px(18.)).flex_none().into_any_element()
@@ -648,13 +654,13 @@ fn rounded_polygon(points: &[(f32, f32)], radii: &[f32]) -> Vec<(f32, f32)> {
 pub(crate) const FOLDER_BLUE: u32 = 0x343bfa;
 
 pub(crate) fn folder_state(custom: Option<&str>, open: bool) -> AnyElement {
-    folder_tinted(custom, if open { 1. } else { 0. }, gpui::rgb(FOLDER_BLUE).into())
+    folder_tinted(custom, if open { 1. } else { 0. }, gpui::rgb(FOLDER_BLUE).into(), 0.)
 }
 
-pub(crate) fn folder_tinted(custom: Option<&str>, open: f32, pigment: gpui::Hsla) -> AnyElement {
+pub(crate) fn folder_tinted(custom: Option<&str>, open: f32, pigment: gpui::Hsla, dots: f32) -> AnyElement {
     // A custom symbol sits on the closed body, which stays put while open.
     let folder = div().size(px(18.)).flex_none().relative()
-        .child(div().absolute().inset_0().child(folder_glyph(if custom.is_none() { open } else { 0. }, pigment)));
+        .child(div().absolute().inset_0().child(folder_glyph(if custom.is_none() { open } else { 0. }, pigment, if custom.is_none() { dots } else { 0. })));
     folder.when_some(custom, |this, icon| this.child(div().absolute().inset_0().pt(px(2.)).flex().items_center().justify_center().text_color(gpui::white())
         .child(if icon == "shape:circle" { div().size(px(7.)).rounded_full().bg(gpui::white()).into_any_element() }
             else if let Some(name) = icon.strip_prefix("ion:") { ionicon(name, 10., 1.) }

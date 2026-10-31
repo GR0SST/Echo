@@ -96,6 +96,8 @@ impl BrowserWindow {
     pub(crate) fn hover_folder(&mut self, folder: FolderId, cx: &mut Context<Self>) {
         if self.folder_preview.as_ref().is_some_and(|preview| preview.folder == folder) { return; }
         if self.folder_preview_blocked(cx) { return; }
+        // An open folder already shows its pages.
+        if !self.browser.folder(folder).is_some_and(|folder| folder.collapsed) { return; }
         let Some(icon) = self.icon_anchors.borrow().get(&crate::icons::IconTarget::Folder(folder)).copied() else { return; };
         self.close_folder_preview(cx);
         let edge = self.sidebar_edge();

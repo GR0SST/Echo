@@ -777,6 +777,10 @@ pub struct BrowserWindow {
     pub(crate) last_icon_catalog: crate::icon_catalog::Catalog,
     pinned_reveals: HashMap<SpaceId, PinnedReveal>,
     pub(crate) folder_reveals: HashMap<browser_core::folders::FolderId, PinnedReveal>,
+    /// Pages opened inside a closed folder stay listed under it, in order of
+    /// opening, until the folder is opened or closed again.
+    pub(crate) folder_peeks: HashMap<browser_core::folders::FolderId, Vec<browser_core::folders::PinnedItem>>,
+    pub(crate) peek_reveals: HashMap<browser_core::folders::PinnedItem, PinnedReveal>,
     tab_drop_edges: RefCell<HashMap<TabId, Rc<Cell<Option<bool>>>>>,
     pub(crate) tab_drag_active: bool,
     tab_drag_press: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
@@ -1150,6 +1154,8 @@ impl BrowserWindow {
             last_icon_catalog: Default::default(),
             pinned_reveals: HashMap::new(),
             folder_reveals: HashMap::new(),
+            folder_peeks: HashMap::new(),
+            peek_reveals: HashMap::new(),
             tab_drop_edges: RefCell::new(HashMap::new()),
             tab_drag_active: false,
             tab_drag_press: Rc::new(Cell::new(None)),
@@ -5200,6 +5206,7 @@ impl Render for BrowserWindow {
             if self.split_drop.is_some() { self.close_split_drop(cx); }
         }
         self.sync_live_folders(cx);
+        self.sync_folder_peeks(cx);
         self.sync_max_previews(window,cx);
         self.sync_link_status(window, cx);
         self.sync_navigation_history(cx);

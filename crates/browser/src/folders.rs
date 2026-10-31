@@ -447,7 +447,7 @@ impl BrowserWindow {
                         .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.65)))
                         .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_folder(drag, id, cx)))
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-icon-{key}"))())).size(px(18.)).flex_none()
-                            .child(if folder.live.is_some() && folder.custom_icon.is_none() { crate::live_folders::folder_icon(!folder.collapsed) } else { crate::icons::folder_tinted(folder.custom_icon.as_deref(), self.folder_reveal(id, !folder.collapsed), folder_pigment) }))
+                            .child(if folder.live.is_some() && folder.custom_icon.is_none() { crate::live_folders::folder_icon(!folder.collapsed) } else { crate::icons::folder_tinted(folder.custom_icon.as_deref(), self.folder_reveal(id, !folder.collapsed), folder_pigment, self.folder_dots(id, !folder.collapsed)) }))
                         .child(self.render_inline_folder_name(id,cx).unwrap_or_else(||div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-name-{key}"))())).flex_1().min_w_0().truncate().child(folder.name.clone()).into_any_element()))
                         .when_some(folder.live.as_ref().filter(|l|l.unread_count()>0), |r,live|r.child(div().text_size(px(11.)).text_color(hsla(0.,0.,0.6,1.)).child(live.unread_count().to_string()))))
                         .children(self.render_live_items(id,cx))
@@ -481,8 +481,12 @@ impl BrowserWindow {
             settled.truncate(row.depth);
             let parent = fractions.last().copied().unwrap_or(1.);
             let open = settled.last().copied().unwrap_or(true);
-            // A closed folder still shows its active descendant.
-            let weight = if !open && shown.contains(&row.item) { 1. } else { parent };
+            // A closed folder keeps the pages opened in it; each grows in.
+            let peek = self.peek_reveals.get(&row.item).map(|reveal| reveal.amount)
+                .or_else(|| self.folder_peeks.values().any(|items| items.contains(&row.item)).then_some(1.))
+                .or_else(|| (!open && shown.contains(&row.item)).then_some(1.))
+                .unwrap_or(0.);
+            let weight = if open { parent } else { parent.max(peek) };
             if let PinnedItem::Folder(id) = row.item {
                 let folder_open = self.browser.folder(id).is_some_and(|folder| !folder.collapsed);
                 fractions.push(parent * self.folder_reveal(id, folder_open));
@@ -501,6 +505,46 @@ impl BrowserWindow {
         }
     }
 
+    /// Lists the current page under its outermost closed folder, growing it in.
+    pub(crate) fn sync_folder_peeks(&mut self, cx: &mut Context<Self>) {
+        let browser = &self.browser;
+        self.folder_peeks.retain(|id, items| {
+            browser.folder(*id).is_some_and(|folder| folder.collapsed) && {
+                let inside: std::collections::HashSet<PinnedItem> = browser.folder_tabs(*id).into_iter().map(|tab| browser.pinned_item(tab)).collect();
+                items.retain(|item| inside.contains(item));
+                !items.is_empty()
+            }
+        });
+        let Some(active) = self.browser.space().active_tab else { return; };
+        let item = self.browser.pinned_item(active);
+        let Some(folder) = self.browser.folder_ancestors(active).into_iter()
+            .find(|id| self.browser.folder(*id).is_some_and(|folder| folder.collapsed)) else { return; };
+        let items = self.folder_peeks.entry(folder).or_default();
+        if items.contains(&item) { return; }
+        items.push(item);
+        if !crate::native::prefers_reduced_motion() && folder_reveal_animates() {
+            let started = cx.background_executor().now();
+            let task = cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(16)).await;
+                let elapsed = cx.background_executor().now().duration_since(started).as_secs_f32();
+                let progress = (elapsed / FOLDER_REVEAL_SECONDS).clamp(0., 1.);
+                if this.update(cx, |this, cx| {
+                    if progress >= 1. { this.peek_reveals.remove(&item); }
+                    else if let Some(reveal) = this.peek_reveals.get_mut(&item) { reveal.amount = 1. - (1. - progress).powi(3); }
+                    cx.notify();
+                }).is_err() || progress >= 1. { break; }
+            });
+            self.peek_reveals.insert(item, crate::window::PinnedReveal { amount: 0., collapsed: false, _task: task });
+        }
+    }
+
+    /// The closed-folder ellipsis: shown while a closed folder holds the
+    /// current page, fading with the folder's opening.
+    fn folder_dots(&self, id: FolderId, open: bool) -> f32 {
+        let holds_active = self.browser.space().active_tab.is_some_and(|tab| self.browser.folder_ancestors(tab).contains(&id));
+        if holds_active { 1. - self.folder_reveal(id, open) } else { 0. }
+    }
+
     fn folder_reveal(&self, id: FolderId, open: bool) -> f32 {
         self.folder_reveals.get(&id).filter(|reveal| reveal.collapsed != open)
             .map_or(if open { 1. } else { 0. }, |reveal| reveal.amount)
@@ -514,6 +558,15 @@ impl BrowserWindow {
             .map_or(if was_collapsed { 0. } else { 1. }, |reveal| reveal.amount);
         let collapsed = !was_collapsed;
         self.edit_browser(|browser| browser.set_folder_collapsed(id, collapsed));
+        // Opening shows everything; closing starts over, keeping the current page.
+        self.folder_peeks.remove(&id);
+        if collapsed {
+            if let Some(active) = self.browser.space().active_tab.filter(|tab| self.browser.folder_ancestors(*tab).contains(&id)) {
+                let item = self.browser.pinned_item(active);
+                self.peek_reveals.remove(&item);
+                self.folder_peeks.insert(id, vec![item]);
+            }
+        }
         let to = if collapsed { 0. } else { 1. };
         if !crate::native::prefers_reduced_motion() && folder_reveal_animates() {
             let started = cx.background_executor().now();

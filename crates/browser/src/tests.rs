@@ -5113,6 +5113,63 @@ fn open_folder_pages(cx: &mut TestAppContext) -> (Entity<BrowserWindow>, &mut Vi
 }
 
 #[gpui::test]
+fn a_closed_folder_keeps_the_pages_opened_in_it_until_it_is_toggled(cx: &mut TestAppContext) {
+    use browser_core::folders::PinnedItem;
+    use std::time::SystemTime;
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new();
+    let space = browser.space().id;
+    let folder = browser.create_folder(space, None, "Trade").unwrap();
+    let mut pin = |browser: &mut browser_core::Browser, url: &str| {
+        let id = browser.new_tab(url, SystemTime::now());
+        browser.toggle_pin(id);
+        browser.move_item_to_folder(id, folder);
+        id
+    };
+    let first = pin(&mut browser, "https://first.example");
+    let second = pin(&mut browser, "https://second.example");
+    let hidden = pin(&mut browser, "https://hidden.example");
+    let outside = browser.new_tab("https://outside.example", SystemTime::now());
+    browser.set_folder_collapsed(folder, true);
+    let (view, cx) = cx.add_window_view(|window, cx| BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx));
+    cx.run_until_parked();
+    let shown = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _| {
+        w.folder_row_weights(space).into_iter().filter_map(|(row, weight)| match row.item {
+            PinnedItem::Folder(_) => None,
+            item => Some((item, weight)),
+        }).collect::<Vec<_>>()
+    });
+    let item = |id| PinnedItem::Tab(id);
+    let activate = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, id| {
+        view.update(cx, |w, cx| { w.edit_browser(|browser| browser.activate_tab(id, SystemTime::now())); cx.notify(); });
+        cx.run_until_parked();
+    };
+    activate(&view, cx, first);
+    activate(&view, cx, second);
+    // Opened pages add up instead of replacing each other, and stay after
+    // switching to a page outside the folder.
+    activate(&view, cx, outside);
+    assert_eq!(shown(&view, cx), vec![(item(first), 1.), (item(second), 1.)]);
+    assert!(!shown(&view, cx).iter().any(|(entry, _)| *entry == item(hidden)));
+    // Opening and closing again starts over.
+    let row: &'static str = Box::leak(format!("folder-{}", folder.get()).into_boxed_str());
+    click(cx, row);
+    click(cx, row);
+    assert!(shown(&view, cx).is_empty());
+    // A new page grows in rather than appearing at full height.
+    crate::folders::ANIMATE_FOLDER_REVEAL.with(|animate| animate.set(true));
+    activate(&view, cx, hidden);
+    cx.executor().advance_clock(Duration::from_millis(60));
+    cx.run_until_parked();
+    let weight = shown(&view, cx)[0].1;
+    assert!(weight > 0. && weight < 1., "{weight}");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(shown(&view, cx), vec![(item(hidden), 1.)]);
+}
+
+#[gpui::test]
 fn resting_on_a_folder_previews_its_flattened_pages_newest_first_with_search(cx: &mut TestAppContext) {
     use std::time::{Duration as Span, SystemTime};
     cx.update(init);
@@ -5134,6 +5191,8 @@ fn resting_on_a_folder_previews_its_flattened_pages_newest_first_with_search(cx:
     let newest = add(&mut browser, "https://newest.example", "Newest", 120, nested);
     let middle = add(&mut browser, "https://middle.example", "Middle", 60, root);
     browser.new_tab("https://outside.example", SystemTime::now());
+    // Only a closed folder previews its pages.
+    browser.set_folder_collapsed(root, true);
     let (view, cx) = cx.add_window_view(|window, cx| {
         let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
         view.focus(window);
