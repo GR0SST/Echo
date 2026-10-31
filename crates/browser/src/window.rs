@@ -3739,7 +3739,7 @@ impl BrowserWindow {
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if self.browser.is_blank() || self.browser.is_private() { return div().h_full().on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))).child(self.render_workspace_sidebar(None, cx)).into_any_element(); }
+        if self.browser.is_blank() || self.browser.is_private() { return div().h_full().on_scroll_wheel(cx.listener(|this, event, _, cx| { this.on_sidebar_scroll(event, cx); cx.stop_propagation(); })).child(self.render_workspace_sidebar(None, cx)).into_any_element(); }
         let pages = self.sidebar_navigation.controller.pages(&self.browser);
         let form_page = pages.iter().position(|page| *page == crate::sidebar_pages::SidebarPage::CreateSpace);
         let form = (self.sidebar_navigation.creation_exiting || self.sidebar_navigation.controller.selected() == crate::sidebar_pages::SidebarPage::CreateSpace)
@@ -3769,7 +3769,7 @@ impl BrowserWindow {
         // Toolbar, Favorites and Space dock remain stationary while the
         // window-local Space contents follow the fingers between real IDs.
         div().id("sidebar-viewport").debug_selector(|| "sidebar".into()).relative().w(px(self.sidebar_width())).h_full().overflow_hidden()
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| { this.on_sidebar_scroll(event, cx); cx.stop_propagation(); }))
             .child(self.render_workspace_sidebar(Some((rendered, -self.sidebar_display_position() * self.sidebar_width())), cx))
             .when_some(form, |root, form| root
                 .child(div().absolute().top_0().left(px((form_page.unwrap_or(0) as f32 - self.pager.position) * self.sidebar_width()))
@@ -4638,6 +4638,9 @@ impl BrowserWindow {
         let travel = width + FLOATING_SIDEBAR_INSET;
         div()
             .size_full()
+            // The card slides out from under the pointer during a Library
+            // swipe; the rest of its transparent window keeps the gesture.
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.sidebar_resize.is_some() { return; }
@@ -5234,7 +5237,7 @@ impl Render for BrowserWindow {
         div()
             .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             // A floating-card swipe continues here once the card slides from under the pointer.
-            .when(library_open || self.library_dragging(), |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
+            .when(library_open || self.library_dragging(), |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| { this.on_sidebar_scroll(event, cx); cx.stop_propagation(); })))
             .track_focus(&self.focus_handle)
             .on_mouse_down(gpui::MouseButton::Left,cx.listener(|this,_,_,cx|this.close_max_preview(cx)))
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, window, cx| {

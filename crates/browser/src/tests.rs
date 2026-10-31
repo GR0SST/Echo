@@ -1782,6 +1782,9 @@ fn sidebar_swipe_slides_library_over_the_space_with_the_fingers(cx: &mut TestApp
     assert!(cx.debug_bounds("library-layer").is_some());
     assert!(cx.debug_bounds("sidebar").is_some(), "the fading Space stays visible");
     scroll(cx, "sidebar", Moved, 200., 0.);
+    // Counted once even though the window root also listens mid-swipe.
+    let amount = view.read_with(cx, |w, _| w.library_slide_amount());
+    assert!((amount - 160. / 240.).abs() < 0.001, "{amount}");
     cx.executor().advance_clock(Duration::from_millis(200));
     scroll(cx, "sidebar", Ended, 0., 0.);
     assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected()), SidebarPage::Library);
