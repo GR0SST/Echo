@@ -445,7 +445,7 @@ impl BrowserWindow {
                         .drag_over::<crate::tab_drag::TabDrag>(|style, _, _, _| style.bg(hsla(0., 0., 1., 0.65)))
                         .on_drop(cx.listener(move |this, drag: &crate::tab_drag::TabDrag, _, cx| this.drop_tab_in_folder(drag, id, cx)))
                         .child(div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-icon-{key}"))())).size(px(18.)).flex_none()
-                            .child(if folder.live.is_some() && folder.custom_icon.is_none() { crate::live_folders::folder_icon(!folder.collapsed) } else { crate::icons::folder_tinted(folder.custom_icon.as_deref(), !folder.collapsed, folder_pigment) }))
+                            .child(if folder.live.is_some() && folder.custom_icon.is_none() { crate::live_folders::folder_icon(!folder.collapsed) } else { crate::icons::folder_tinted(folder.custom_icon.as_deref(), self.folder_reveal(id, !folder.collapsed), folder_pigment) }))
                         .child(self.render_inline_folder_name(id,cx).unwrap_or_else(||div().debug_selector(|| self.sidebar_debug_name((move || format!("folder-name-{key}"))())).flex_1().min_w_0().truncate().child(folder.name.clone()).into_any_element()))
                         .when_some(folder.live.as_ref().filter(|l|l.unread_count()>0), |r,live|r.child(div().text_size(px(11.)).text_color(hsla(0.,0.,0.6,1.)).child(live.unread_count().to_string()))))
                         .children(self.render_live_items(id,cx))

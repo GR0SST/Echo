@@ -565,27 +565,28 @@ mod catalog_tests {
 
 pub(crate) fn folder(custom: Option<&str>) -> AnyElement { folder_state(custom, false) }
 
-/// Reference folder: a pale back panel with a tab behind a solid blue body.
-/// Open, the back leans left and the body becomes a slanted front flap.
-fn folder_glyph(open: bool, pigment: gpui::Hsla) -> AnyElement {
+/// Reference folder: a pale back panel with a tab behind a solid body.
+/// `open` (0 closed, 1 open) morphs the back to lean left and the body into
+/// a slanted front flap. Both shapes share point counts; the closed back's
+/// extra points lie under the body.
+fn folder_glyph(open: f32, pigment: gpui::Hsla) -> AnyElement {
+    const BACK: [[(f32, f32); 8]; 2] = [
+        [(1.5,3.5),(6.5,3.5),(8.,5.),(16.5,5.),(16.5,7.),(6.,7.),(1.5,15.),(1.5,15.)],
+        [(1.5,3.5),(6.,3.5),(7.5,5.),(13.,5.),(13.,7.),(6.,7.),(4.,15.),(1.5,15.)],
+    ];
+    const BODY: [[(f32, f32); 4]; 2] = [
+        [(1.5,6.5),(16.5,6.5),(16.5,15.),(1.5,15.)],
+        [(6.,7.),(16.5,7.),(14.5,15.),(4.,15.)],
+    ];
+    let open = open.clamp(0., 1.);
     gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
         let at = |(x, y): (f32, f32)| bounds.origin + gpui::point(px(x), px(y));
+        let mix = |closed: &[(f32, f32)], opened: &[(f32, f32)]| closed.iter().zip(opened)
+            .map(|(a, b)| (a.0 + (b.0 - a.0) * open, a.1 + (b.1 - a.1) * open)).collect::<Vec<_>>();
         // The theme's primary color fills the body; the back is its pale tint.
-        let body = pigment;
         let back = gpui::hsla(pigment.h, pigment.s, pigment.l + (1. - pigment.l) * 0.55, pigment.a);
         let edge = gpui::hsla(0., 0., 1., 0.55);
-        let shapes: Vec<(Vec<(f32, f32)>, gpui::Hsla)> = if open {
-            vec![
-                (vec![(1.5,3.5),(6.,3.5),(7.5,5.),(13.,5.),(13.,7.),(6.,7.),(4.,15.),(1.5,15.)], back),
-                (vec![(6.,7.),(16.5,7.),(14.5,15.),(4.,15.)], body),
-            ]
-        } else {
-            vec![
-                (vec![(1.5,3.5),(6.5,3.5),(8.,5.),(16.5,5.),(16.5,15.),(1.5,15.)], back),
-                (rounded_rect(1.5,6.5,15.,8.5,1.5), body),
-            ]
-        };
-        for (points, color) in shapes {
+        for (points, color) in [(mix(&BACK[0], &BACK[1]), back), (mix(&BODY[0], &BODY[1]), pigment)] {
             for stroke in [false, true] {
                 let mut path = if stroke { gpui::PathBuilder::stroke(px(1.)) } else { gpui::PathBuilder::fill() };
                 for (index, point) in points.iter().enumerate() {
@@ -602,13 +603,13 @@ fn folder_glyph(open: bool, pigment: gpui::Hsla) -> AnyElement {
 pub(crate) const FOLDER_BLUE: u32 = 0x343bfa;
 
 pub(crate) fn folder_state(custom: Option<&str>, open: bool) -> AnyElement {
-    folder_tinted(custom, open, gpui::rgb(FOLDER_BLUE).into())
+    folder_tinted(custom, if open { 1. } else { 0. }, gpui::rgb(FOLDER_BLUE).into())
 }
 
-pub(crate) fn folder_tinted(custom: Option<&str>, open: bool, pigment: gpui::Hsla) -> AnyElement {
+pub(crate) fn folder_tinted(custom: Option<&str>, open: f32, pigment: gpui::Hsla) -> AnyElement {
     // A custom symbol sits on the closed body, which stays put while open.
     let folder = div().size(px(18.)).flex_none().relative()
-        .child(div().absolute().inset_0().child(folder_glyph(open && custom.is_none(), pigment)));
+        .child(div().absolute().inset_0().child(folder_glyph(if custom.is_none() { open } else { 0. }, pigment)));
     folder.when_some(custom, |this, icon| this.child(div().absolute().inset_0().pt(px(2.)).flex().items_center().justify_center().text_color(gpui::white())
         .child(if icon == "shape:circle" { div().size(px(7.)).rounded_full().bg(gpui::white()).into_any_element() }
             else if let Some(name) = icon.strip_prefix("ion:") { ionicon(name, 10., 1.) }

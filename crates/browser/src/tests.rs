@@ -5246,6 +5246,8 @@ fn folders_open_and_close_with_motion_instead_of_jumping(cx: &mut TestAppContext
     cx.executor().advance_clock(Duration::from_millis(80));
     cx.run_until_parked();
     assert!(partial(&view, cx) > 0, "children shrink instead of disappearing");
+    // The icon morphs on the same progress.
+    assert!(view.read_with(cx, |w, _| w.folder_reveals.values().any(|reveal| reveal.amount > 0. && reveal.amount < 1.)));
     let middle = height(cx);
     assert!(middle < open);
     cx.executor().advance_clock(Duration::from_secs(1));
