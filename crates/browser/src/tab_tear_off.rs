@@ -1,8 +1,9 @@
-//! A sidebar tab dragged out of the window shows its page under the pointer
+//! A sidebar item dragged out of the window shows its page under the pointer
 //! and, when released there, opens in a window of its own (Arc's tear-off).
-//! Released over another such window, it joins that window instead.
+//! Released over another Echo window holding a different model (a torn
+//! window, or a Space window when the drag left a torn one), it joins it.
 use crate::{tab_drag::TabDrag, window::{BrowserWindow, Overlay, OverlayKind}};
-use browser_core::TabId;
+use browser_core::{splits::SplitView, Tab, TabId};
 use gpui::{div, prelude::*, px, AnyElement, App, Bounds, Context, Pixels, Point, RenderImage, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -26,24 +27,24 @@ impl TearOff {
 }
 
 impl BrowserWindow {
-    /// Standalone pages can leave; Split Views and the last page of a
-    /// standalone window stay.
+    /// Today pages and complete Split Views can leave; Pinned and Favorite
+    /// items leave a copy. The last item of a standalone window can only
+    /// join another window, which then closes the empty one.
     pub(crate) fn can_tear_off(&self, drag: &TabDrag) -> bool {
-        self.accepts_tab_drag(drag) && !drag.is_split() && self.browser.split_for(drag.id).is_none()
-            && !self.browser.is_private()
-            && !(self.browser.is_blank() && self.browser.all_tabs().count() <= 1)
-            && self.browser.all_tabs().any(|tab| tab.id == drag.id && !browser_core::omnibox::is_internal_url(&tab.url))
+        self.accepts_tab_drag(drag) && self.transient.is_none()
+            && self.browser.related_tabs(drag.id).iter().all(|id| self.browser.all_tabs().any(|tab| tab.id == *id && !browser_core::omnibox::is_internal_url(&tab.url)))
     }
 
-    pub(crate) fn update_tear_off(&mut self, drag: &TabDrag, position: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
-        let viewport = window.viewport_size();
-        let outside = position.x < px(0.) || position.y < px(0.) || position.x >= viewport.width || position.y >= viewport.height;
+    fn is_last_item(&self, drag: &TabDrag) -> bool {
+        self.browser.is_blank() && self.browser.space().today.iter().all(|tab| self.browser.item_anchor(tab.id) == drag.id)
+    }
+
+    pub(crate) fn update_tear_off(&mut self, drag: &TabDrag, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let bounds = self.window_bounds;
+        let outside = position.x < px(0.) || position.y < px(0.) || position.x >= bounds.size.width || position.y >= bounds.size.height;
         if !outside || !self.can_tear_off(drag) { self.close_tear_off(cx); return; }
-        let bounds = window.bounds();
         let pointer = bounds.origin + position;
-        let display = cx.displays().into_iter().map(|display| display.bounds()).find(|display| display.contains(&pointer))
-            .or_else(|| window.display(cx).map(|display| display.bounds()))
-            .unwrap_or(bounds);
+        let display = cx.displays().into_iter().map(|display| display.bounds()).find(|display| display.contains(&pointer)).unwrap_or(bounds);
         if self.tear_off.is_none() { self.request_tear_off_snapshot(drag.focus_page()); }
         let overlay = match self.tear_off.take() {
             Some(old) if old.display == display && old.source == drag.id => old.overlay,
@@ -131,7 +132,7 @@ impl BrowserWindow {
     }
 
     /// Called when a tab drag ends for any reason. Only a release outside
-    /// the window, with the tear-off still armed, moves the page.
+    /// the window, with the tear-off still armed, moves the item.
     pub(crate) fn finish_tear_off(&mut self, drag: &TabDrag, cx: &mut Context<Self>) {
         let Some(tear) = self.tear_off.take() else { return; };
         if let Some(overlay) = tear.overlay { remove_overlay(overlay, cx); }
@@ -139,14 +140,16 @@ impl BrowserWindow {
         let tab = drag.id;
         let pointer = tear.pointer;
         let size = tear.size;
+        let last = self.is_last_item(drag);
         let source = cx.entity().downgrade();
         let me = self.main_window;
-        cx.defer(move |cx| {
-            let target = standalone_window_at(pointer, me, cx);
-            match target {
-                Some(target) => { move_into(source, target, tab, cx); }
-                None => open_torn_window(source, tab, pointer, size, cx),
-            }
+        // A torn window borrows its storage and history from this workspace.
+        self.retain_normal_source(cx);
+        cx.defer(move |cx| match window_at(pointer, me, cx) {
+            Some(target) => { if accepts_arrival(&source, &target, cx) { move_into(source, target, tab, false, cx); } }
+            // Tearing the only item of a standalone window off would just move it.
+            None if !last => open_torn_window(source, tab, pointer, size, cx),
+            None => {}
         });
     }
 }
@@ -155,51 +158,65 @@ fn remove_overlay(overlay: WindowHandle<Overlay>, cx: &mut Context<BrowserWindow
     cx.defer(move |cx| { let _ = overlay.update(cx, |_, window, _| window.remove_window()); });
 }
 
-/// Another standalone window of the same workspace under the pointer.
-fn standalone_window_at(pointer: Point<Pixels>, source: gpui::AnyWindowHandle, cx: &mut App) -> Option<WindowHandle<BrowserWindow>> {
-    cx.windows().into_iter().filter(|handle| *handle != source).filter_map(|handle| handle.downcast::<BrowserWindow>())
-        .find(|handle| handle.update(cx, |view, window, _| view.browser.is_blank() && window.bounds().contains(&pointer)).unwrap_or(false))
+/// The frontmost other browser window under the pointer.
+fn window_at(pointer: Point<Pixels>, source: gpui::AnyWindowHandle, cx: &mut App) -> Option<WindowHandle<BrowserWindow>> {
+    let order = cx.window_stack().unwrap_or_else(|| cx.windows());
+    order.into_iter().filter(|handle| *handle != source).filter_map(|handle| handle.downcast::<BrowserWindow>())
+        .find(|handle| handle.update(cx, |_, window, _| window.bounds().contains(&pointer)).unwrap_or(false))
 }
 
-/// What the destination needs to adopt a page from its source window.
+/// Windows sharing one model already show the same items, and private
+/// storage is per window, so a move only crosses between distinct normal models.
+fn accepts_arrival(source: &gpui::WeakEntity<BrowserWindow>, target: &WindowHandle<BrowserWindow>, cx: &mut App) -> bool {
+    let Some((blank, workspace)) = source.read_with(cx, |this, _| (!this.browser.is_private()).then(|| (this.browser.is_blank(), this.profile.handle.clone()))).ok().flatten() else { return false; };
+    target.read(cx).is_ok_and(|view| !view.browser.is_private() && view.transient.is_none()
+        && (view.browser.is_blank() || blank) && view.profile.handle.same_normal_workspace(&workspace))
+}
+
+/// What the destination needs to adopt an item from its source window.
 struct Departure {
-    tab: browser_core::Tab,
+    tabs: Vec<Tab>,
+    split: Option<SplitView>,
     protected: bool,
+    private: bool,
     profile: browser_core::UserProfileId,
-    favicon: Option<Vec<u8>>,
+    favicons: Vec<(String, Vec<u8>)>,
     pages: Option<std::rc::Rc<std::cell::RefCell<crate::pages::Pages>>>,
     space: browser_core::Space,
 }
 
 fn departure(source: &gpui::WeakEntity<BrowserWindow>, tab: TabId, cx: &mut App) -> Option<Departure> {
     source.read_with(cx, |this, _| {
-        let page = this.browser.all_tabs().find(|entry| entry.id == tab)?.clone();
+        let ids = this.browser.related_tabs(tab);
+        let tabs: Vec<Tab> = ids.iter().map(|id| this.browser.all_tabs().find(|entry| entry.id == *id).cloned()).collect::<Option<_>>()?;
         let profile = this.browser.user_profile_id_for_tab(tab)?;
-        let protected = this.browser.is_favorite(tab) || this.browser.spaces.iter().any(|space| space.pinned.iter().any(|entry| entry.id == tab));
+        let protected = ids.iter().any(|id| this.browser.is_favorite(*id) || this.browser.spaces.iter().any(|space| space.pinned.iter().any(|entry| entry.id == *id)));
         let space = this.browser.spaces.iter().find(|space| space.pinned.iter().chain(&space.today).any(|entry| entry.id == tab))
             .unwrap_or(this.browser.space()).clone();
-        Some(Departure { favicon: this.browser.favicon(profile, &page.url).map(Vec::from), tab: page, protected, profile, pages: this.pages.clone(), space })
+        let favicons = tabs.iter().filter_map(|page| this.browser.favicon(profile, &page.url).map(|png| (page.url.clone(), png.to_vec()))).collect();
+        Some(Departure { split: this.browser.split_for(tab).cloned(), tabs, protected, private: this.browser.is_private(), profile, favicons, pages: this.pages.clone(), space })
     }).ok().flatten()
 }
 
-/// Adopts the page into `target`, carrying its live document, then removes
-/// it from the source. Pinned pages and Favorites leave a copy behind
-/// unchanged, so the destination loads its own document.
-fn move_into(source: gpui::WeakEntity<BrowserWindow>, target: WindowHandle<BrowserWindow>, tab: TabId, cx: &mut App) -> bool {
+/// Adopts the item into `target`, carrying live documents, then removes it
+/// from the source. Pinned and Favorite items stay; the destination loads
+/// its own copy. `fresh` marks a window just opened for this item.
+fn move_into(source: gpui::WeakEntity<BrowserWindow>, target: WindowHandle<BrowserWindow>, tab: TabId, fresh: bool, cx: &mut App) -> bool {
     let Some(departure) = departure(&source, tab, cx) else { return false; };
     let adopted = target.update(cx, |view, window, cx| {
-        if view.browser.active_user_profile_id() != departure.profile || view.browser.is_private() { return false; }
+        if view.browser.is_private() != departure.private || (departure.private && !fresh) { return false; }
+        if !departure.private && view.browser.active_user_profile_id() != departure.profile { return false; }
         let pages = view.pages.clone();
         let source_pages = departure.pages.clone();
         let protected = departure.protected;
-        let adopted = view.edit_browser(|browser| browser.adopt_lookup_tab(departure.tab.clone(), SystemTime::now(), |browser, id| {
-            protected || crate::transient::transfer_lookup_document(source_pages.as_ref(), tab, pages.as_ref(), id, browser)
+        let adopted = view.edit_browser(|browser| browser.adopt_today_item(departure.tabs.clone(), departure.split.clone(), SystemTime::now(), |browser, old, new| {
+            // A document that cannot move reloads from its URL in the new window.
+            if !protected { crate::transient::transfer_lookup_document(source_pages.as_ref(), old, pages.as_ref(), new, browser); }
         }).is_some());
-        if !adopted {
-            if let Some(pages) = &pages { pages.borrow_mut().reconcile_inventory(&view.browser); }
-            return false;
-        }
-        if let Some(png) = &departure.favicon { view.edit_browser(|browser| browser.cache_favicon(departure.profile, &departure.tab.url, png.clone())); }
+        if !adopted { return false; }
+        let profile = view.browser.active_user_profile_id();
+        for (url, png) in &departure.favicons { view.edit_browser(|browser| browser.cache_favicon(profile, url, png.clone())); }
+        if let Some(pages) = &pages { pages.borrow_mut().sync(&view.browser, view.page_content_visible()); }
         window.activate_window();
         view.focus(window);
         cx.notify();
@@ -207,8 +224,8 @@ fn move_into(source: gpui::WeakEntity<BrowserWindow>, target: WindowHandle<Brows
     }).unwrap_or(false);
     if adopted && !departure.protected {
         let _ = source.update(cx, |this, cx| {
-            if this.edit_browser(|browser| browser.detach_today_tab(tab)).is_some() {
-                this.recent_items.forget(&[tab]);
+            if this.edit_browser(|browser| browser.detach_today_item(tab)).is_some() {
+                this.recent_items.forget(&departure.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>());
                 if let Some(pages) = &this.pages { pages.borrow_mut().sync(&this.browser, this.page_content_visible()); }
                 this.after_tab_removal(cx);
             }
@@ -218,20 +235,27 @@ fn move_into(source: gpui::WeakEntity<BrowserWindow>, target: WindowHandle<Brows
     adopted
 }
 
-/// Opens a standalone window for the Space the page came from, at the
-/// release point, and moves the page into it.
+/// Opens a standalone window for the Space the item came from, at the
+/// release point, and moves the item into it. Private items open in a new
+/// private window that shares the source's ephemeral storage.
 fn open_torn_window(source: gpui::WeakEntity<BrowserWindow>, tab: TabId, pointer: Point<Pixels>, size: gpui::Size<Pixels>, cx: &mut App) {
     let Some(departure) = departure(&source, tab, cx) else { return; };
     let size = gpui::size(size.width.min(px(1400.)).max(px(700.)), size.height.min(px(900.)).max(px(500.)));
-    // Hold the new window by its sidebar row, where the page left the old one.
+    // Hold the new window by its sidebar row, where the item left the old one.
     let origin = pointer - gpui::point(px(110.), px(110.));
     // Keep the whole window on the display it was dropped on.
     let display = cx.displays().into_iter().map(|display| display.bounds()).find(|display| display.contains(&pointer));
     let origin = display.map_or(origin, |display| gpui::point(
         origin.x.clamp(display.left(), (display.right() - size.width).max(display.left())),
         origin.y.clamp(display.top(), (display.bottom() - size.height).max(display.top()))));
-    let Some(target) = crate::blank_window::open_torn(departure.profile, &departure.space, Bounds::new(origin, size), cx) else { return; };
-    if !move_into(source, target, tab, cx) {
+    let bounds = Bounds::new(origin, size);
+    let target = if departure.private {
+        crate::blank_window::open_torn_private(departure.pages.as_ref(), bounds, cx)
+    } else {
+        crate::blank_window::open_torn(departure.profile, &departure.space, bounds, cx)
+    };
+    let Some(target) = target else { return; };
+    if !move_into(source, target, tab, true, cx) {
         let _ = target.update(cx, |view, _, cx| view.close_window(cx));
     }
 }

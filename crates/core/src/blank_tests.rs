@@ -180,3 +180,25 @@ fn detaching_a_today_tab_removes_it_without_archiving() {
     assert_eq!(browser.space().active_tab, Some(first));
     assert!(browser.detach_today_tab(second).is_none());
 }
+
+#[test]
+fn a_split_view_moves_between_models_as_one_item() {
+    let now = std::time::SystemTime::now();
+    let mut source = Browser::new();
+    let kept = source.new_tab("https://kept.example", now);
+    let left = source.new_tab("https://left.example", now);
+    let right = source.new_tab("https://right.example", now);
+    source.add_split(left, right, Placement::Right, now).unwrap();
+    let (tabs, split) = source.detach_today_item(right).expect("whole group");
+    assert_eq!(tabs.len(), 2);
+    assert!(source.split_for(left).is_none() && source.all_tabs().all(|tab| tab.id != left && tab.id != right));
+    assert_eq!(source.space().active_tab, Some(kept));
+    let mut target = Browser::new_blank();
+    let mut moved = Vec::new();
+    let active = target.adopt_today_item(tabs, split, now, |_, old, new| moved.push((old, new))).unwrap();
+    assert_eq!(moved.len(), 2);
+    let view = target.split_for(active).expect("regrouped");
+    assert_eq!(view.panes.len(), 2);
+    assert_eq!(view.axis, crate::splits::Axis::Horizontal);
+    assert_eq!(target.space().active_tab, Some(active));
+}

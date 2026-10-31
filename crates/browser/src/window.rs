@@ -618,6 +618,8 @@ pub enum OverlayKind {
     SplitDrop,
     /// A tab dragged out of the window, drawn over the whole display.
     TearOff,
+    /// The held sidebar row, above pages and the floating sidebar.
+    DragGhost,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
     TabMenu,
@@ -656,7 +658,10 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn draws_split_drag_card(&self)->bool {matches!(self.kind,OverlayKind::SplitDrop|OverlayKind::TearOff)}
+    pub(crate) fn draws_split_drag_card(&self)->bool {matches!(self.kind,OverlayKind::SplitDrop|OverlayKind::TearOff|OverlayKind::DragGhost)}
+
+    /// The browser's passive ghost window paints the held row instead.
+    pub(crate) fn owner_draws_drag_ghost(&self, cx: &App) -> bool { self.browser.upgrade().is_some_and(|browser| browser.read(cx).drag_ghost_shown()) }
 
     pub(crate) fn belongs_to(&self,owner:gpui::EntityId)->bool {self.browser.entity_id()==owner}
 
@@ -707,6 +712,7 @@ impl Render for Overlay {
                     OverlayKind::PageZoom => browser.render_page_zoom(),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
                     OverlayKind::TearOff => browser.render_tear_off(window),
+                    OverlayKind::DragGhost => browser.render_drag_ghost(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
                     OverlayKind::NavigationHistory => browser.render_navigation_history(cx),
@@ -794,6 +800,10 @@ pub struct BrowserWindow {
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_drop: Option<crate::split_drop::SplitDropPreview>,
     pub(crate) tear_off: Option<crate::tab_tear_off::TearOff>,
+    /// The held row painted above pages, the floating sidebar and window edges.
+    pub(crate) drag_ghost: Option<crate::drag_ghost::DragGhost>,
+    /// Screen bounds of this window as of its last frame or drag move.
+    pub(crate) window_bounds: gpui::Bounds<gpui::Pixels>,
     /// A standalone window torn from a Space shows that Space as its title.
     pub(crate) torn_space: bool,
     pub(crate) split_drop_generation: u64,
@@ -1174,6 +1184,8 @@ impl BrowserWindow {
             split_drop: None,
             split_drop_generation: 0,
             tear_off: None,
+            drag_ghost: None,
+            window_bounds: window.bounds(),
             torn_space: false,
             split_draft: None,
             hovered_row: None,
@@ -4591,7 +4603,7 @@ impl BrowserWindow {
             .child(
                 div()
                     .debug_selector(|| "page-surface".into())
-                    .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, window, cx| this.drop_tab_into_split(drag, window.mouse_position(), window, cx)))
+                    .on_drop(cx.listener(|this, drag: &crate::tab_drag::TabDrag, window, cx| this.drop_tab_into_split(drag, window.mouse_position(), cx)))
                     .left(px(self.library_page_offset()))
                     .size_full()
                     .flex()
@@ -4703,7 +4715,16 @@ impl BrowserWindow {
             // The card slides out from under the pointer during a Library
             // swipe; the rest of its transparent window keeps the gesture.
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx)))
-            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| { this.end_sidebar_resize(f32::from(event.position.x), window, cx); }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
+                // Drops land in this window, never on the page surface below it.
+                this.commit_held_split_drop(cx);
+                this.end_sidebar_resize(f32::from(event.position.x), window, cx);
+            }))
+            // Drag moves arrive here in browser-window coordinates.
+            .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, _, cx| {
+                let drag = event.drag(cx).clone();
+                this.on_tab_drag_move(&drag, event.event.position, cx);
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 // The floating card's window shares the main window's origin.
                 this.last_pointer = Some(event.position);
@@ -5167,6 +5188,7 @@ impl Render for SidebarView {
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = crate::native::view_of(window);
+        self.window_bounds = window.bounds();
         self.sync_devtools_windows(cx);
         if let Some(pages)=&self.pages { pages.borrow_mut().sync_shortcuts(crate::shortcuts::page(cx)); }
         if window.is_window_active() {
@@ -5309,8 +5331,8 @@ impl Render for BrowserWindow {
             .on_mouse_down(gpui::MouseButton::Left,cx.listener(|this,_,_,cx|this.close_max_preview(cx)))
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, window, cx| {
                 let drag = event.drag(cx).clone();
-                this.update_split_drop(&drag, event.event.position, window, cx);
-                this.update_tear_off(&drag, event.event.position, window, cx);
+                this.window_bounds = window.bounds();
+                this.on_tab_drag_move(&drag, event.event.position, cx);
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "escape" && { this.close_tear_off(cx); cx.stop_active_drag(window) } {

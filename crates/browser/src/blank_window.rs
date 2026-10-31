@@ -91,6 +91,28 @@ pub(crate) fn open_torn(source: UserProfileId, space: &browser_core::Space, boun
     Some(handle)
 }
 
+/// A private window for an item torn out of another private window. It
+/// shares the source window's ephemeral storage so the live document and
+/// its session survive the move.
+pub(crate) fn open_torn_private(source: Option<&std::rc::Rc<std::cell::RefCell<Pages>>>, bounds: Bounds<gpui::Pixels>, cx: &mut App) -> Option<gpui::WindowHandle<BrowserWindow>> {
+    if crate::quit::is_quitting() { return None; }
+    let source = source?.clone();
+    let handle = cx.open_window(WindowOptions {
+        window_min_size: window::window_min_size(),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions { title: Some(format!("{} — Incognito", crate::APP_NAME).into()), appears_transparent: true,
+            traffic_light_position: Some(point(px(window::TRAFFIC_LIGHT_X), px(window::TRAFFIC_LIGHT_Y))), }),
+        ..Default::default()
+    }, move |window, cx| {
+        let pages = source.borrow().independent_in_storage(native::view_of(window).unwrap_or(std::ptr::null_mut()), &crate::pages::StorageSelection::Current);
+        let profile = ProfileHandle::new(browser_core::Browser::new_private(), cx);
+        let selection = profile.selection();
+        cx.new(|cx| BrowserWindow::with_profile_pages(profile, Some(selection), pages, window, cx))
+    }).ok()?;
+    cx.activate(true);
+    Some(handle)
+}
+
 impl BrowserWindow {
     pub(crate) fn blank_window(&mut self, cx: &mut Context<Self>) {
     if crate::quit::is_quitting() { return; }

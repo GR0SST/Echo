@@ -159,7 +159,15 @@ fn sidebar_drag_ghost_is_a_row_and_tab_on_tab_joins_a_split_in_place(cx: &mut Te
     cx.run_until_parked();
     let row = cx.debug_bounds(test_selector(format!("tab-{}", target.get()))).unwrap();
     begin_sidebar_drag(cx, test_selector(format!("tab-{}", source.get())));
-    let ghost = cx.debug_bounds("tab-drag-row").unwrap();
+    let held = cx.debug_bounds(test_selector(format!("tab-{}", source.get()))).unwrap().center() + gpui::point(gpui::px(12.), gpui::px(0.));
+    cx.simulate_mouse_move(held, gpui::MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    // The row is painted in a passive window over pages, not in the root.
+    assert!(cx.debug_bounds("tab-drag-hidden").is_some());
+    let overlay = view.read_with(cx, |w, _| w.drag_ghost.as_ref().unwrap().overlay_handle()).expect("ghost window");
+    let mut popup = VisualTestContext::from_window(overlay.into(), &cx.cx);
+    popup.run_until_parked();
+    let ghost = popup.debug_bounds("tab-drag-row").unwrap();
     assert_eq!(ghost.size.height, gpui::px(crate::window::SIDEBAR_ROW_HEIGHT));
     // Upper band reorders, middle band offers the right half for a split.
     cx.simulate_mouse_move(gpui::point(row.right() - gpui::px(20.), row.top() + gpui::px(5.)), gpui::MouseButton::Left, Modifiers::none());

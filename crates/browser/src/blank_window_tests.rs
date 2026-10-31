@@ -260,3 +260,101 @@ fn dragging_a_tab_out_of_the_window_tears_it_into_a_space_window(cx: &mut TestAp
         assert!(view.tear_off.is_none());
     });
 }
+
+fn screen_point(cx: &mut VisualTestContext) -> gpui::Bounds<gpui::Pixels> { cx.update(|window, _| window.bounds()) }
+
+#[gpui::test]
+fn a_split_view_tears_off_whole_and_a_torn_page_drags_back(cx: &mut TestAppContext) {
+    let (normal, visual, _fake) = open_pages(cx);
+    let (left, right) = normal.update(visual, |view, cx| {
+        let now = std::time::SystemTime::now();
+        view.edit_browser(|b| b.new_tab("https://kept.example", now));
+        let left = view.edit_browser(|b| b.new_tab("https://left.example", now));
+        let right = view.edit_browser(|b| b.new_tab("https://right.example", now));
+        view.edit_browser(|b| b.add_split(left, right, browser_core::splits::Placement::Right, now)).unwrap();
+        cx.notify();
+        (left, right)
+    });
+    visual.run_until_parked();
+    let viewport = visual.update(|window, _| window.viewport_size());
+    let outside = gpui::point(viewport.width + gpui::px(80.), gpui::px(200.));
+    let anchor = normal.read_with(visual, |view, _| view.browser.item_anchor(left));
+    begin_sidebar_drag(visual, test_selector(format!("tab-{}", anchor.get())));
+    finish_sidebar_drag(visual, outside);
+    let torn = roots(visual).into_iter().find(|view| view != &normal).expect("a torn window");
+    torn.read_with(visual, |view, _| {
+        let urls: Vec<_> = view.browser.all_tabs().map(|tab| tab.url.clone()).collect();
+        assert_eq!(urls.len(), 2);
+        let split = view.browser.active_split().expect("still one Split View");
+        assert_eq!(split.panes.len(), 2);
+    });
+    normal.read_with(visual, |view, _| assert!(view.browser.all_tabs().all(|tab| tab.id != left && tab.id != right)));
+
+    // Back: a page from the torn window released over the Space window joins it.
+    let mut torn_visual = VisualTestContext::from_window(torn.read_with(visual, |view, _| view.main_window).into(), &visual.cx);
+    let extra = torn.update(&mut torn_visual, |view, cx| {
+        let id = view.edit_browser(|b| b.new_tab("https://back.example", std::time::SystemTime::now()));
+        cx.notify();
+        id
+    });
+    torn_visual.run_until_parked();
+    let main = screen_point(visual);
+    let torn_bounds = screen_point(&mut torn_visual);
+    // A screen point inside the Space window but outside the torn one.
+    let target = [main.origin + gpui::point(gpui::px(20.), gpui::px(20.)), gpui::point(main.right() - gpui::px(20.), main.bottom() - gpui::px(20.))]
+        .into_iter().find(|point| !torn_bounds.contains(point)).expect("windows overlap completely");
+    begin_sidebar_drag(&mut torn_visual, test_selector(format!("tab-{}", extra.get())));
+    torn_visual.simulate_mouse_move(target - torn_bounds.origin, gpui::MouseButton::Left, Modifiers::none());
+    torn_visual.run_until_parked();
+    finish_sidebar_drag(&mut torn_visual, target - torn_bounds.origin);
+    normal.read_with(visual, |view, _| {
+        assert!(view.browser.all_tabs().any(|tab| tab.url == "https://back.example"), "the page arrived in the Space window");
+    });
+    torn.read_with(visual, |view, _| assert!(view.browser.all_tabs().all(|tab| tab.url != "https://back.example")));
+}
+
+#[gpui::test]
+fn a_private_page_tears_off_into_a_private_window_sharing_its_storage(cx: &mut TestAppContext) {
+    cx.update(init);
+    let fake = FakeEngine::default();
+    let mut browser = browser_core::Browser::new_private();
+    let now = std::time::SystemTime::now();
+    browser.new_tab("https://kept.private.example", now);
+    let torn = browser.new_tab("https://torn.private.example", now);
+    let (view, visual) = cx.add_window_view(|window, cx| {
+        let view = BrowserWindow::new(browser, Some(Box::new(fake.clone())), window, cx);
+        view.focus(window);
+        view
+    });
+    visual.run_until_parked();
+    let viewport = visual.update(|window, _| window.viewport_size());
+    begin_sidebar_drag(visual, test_selector(format!("tab-{}", torn.get())));
+    finish_sidebar_drag(visual, gpui::point(viewport.width + gpui::px(80.), gpui::px(200.)));
+    let other = roots(visual).into_iter().find(|root| root != &view).expect("a torn private window");
+    other.read_with(visual, |other, _| {
+        assert!(other.browser.is_private() && !other.browser.is_blank());
+        assert_eq!(other.browser.all_tabs().map(|tab| tab.url.as_str()).collect::<Vec<_>>(), vec!["https://torn.private.example"]);
+    });
+    view.read_with(visual, |view, _| assert!(view.browser.all_tabs().all(|tab| tab.id != torn)));
+    assert!(fake.0.borrow().fork_storage.contains(&crate::pages::StorageSelection::Current), "the new window forks the current private storage");
+}
+
+#[gpui::test]
+fn the_floating_sidebar_drag_moves_through_the_browser_window(cx: &mut TestAppContext) {
+    let (normal, visual, _fake) = open_pages(cx);
+    let torn = normal.update(visual, |view, cx| {
+        view.edit_browser(|b| b.new_tab("https://kept.example", std::time::SystemTime::now()));
+        let torn = view.edit_browser(|b| b.new_tab("https://floating.example", std::time::SystemTime::now()));
+        cx.notify();
+        torn
+    });
+    visual.run_until_parked();
+    let drag = normal.read_with(visual, |view, _| { let tab = view.browser.all_tabs().find(|tab| tab.id == torn).unwrap().clone(); view.tab_drag(&tab) });
+    let viewport = visual.update(|window, _| window.viewport_size());
+    // A move that arrives in the floating sidebar's window uses the same entry point.
+    normal.update(visual, |view, cx| view.on_tab_drag_move(&drag, gpui::point(viewport.width + gpui::px(50.), gpui::px(100.)), cx));
+    visual.run_until_parked();
+    assert!(normal.read_with(visual, |view, _| view.tear_off.is_some()));
+    normal.update(visual, |view, cx| view.on_tab_drag_move(&drag, gpui::point(gpui::px(100.), gpui::px(100.)), cx));
+    assert!(normal.read_with(visual, |view, _| view.tear_off.is_none()));
+}

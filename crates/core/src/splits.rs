@@ -180,6 +180,68 @@ impl Browser {
         Ok(id)
     }
 
+    /// Takes a whole Today item out of its Space without archiving it: one
+    /// page, or every page of a Split View with its layout.
+    pub fn detach_today_item(&mut self, tab: TabId) -> Option<(Vec<Tab>, Option<SplitView>)> {
+        let space_index = self.spaces.iter().position(|space| space.today.iter().any(|entry| entry.id == tab))?;
+        let ids = self.related_tabs(tab);
+        let split = self.split_for(tab).cloned();
+        let space = &mut self.spaces[space_index];
+        if !ids.iter().all(|id| space.today.iter().any(|entry| entry.id == *id)) { return None; }
+        let first = space.today.iter().position(|entry| ids.contains(&entry.id))?;
+        let mut taken = Vec::new();
+        for id in &ids {
+            if let Some(index) = space.today.iter().position(|entry| entry.id == *id) { taken.push(space.today.remove(index)); }
+        }
+        space.splits.retain(|view| !view.panes.iter().any(|id| ids.contains(id)));
+        if space.active_tab.is_some_and(|id| ids.contains(&id)) {
+            space.active_tab = space.today.get(first).or_else(|| first.checked_sub(1).and_then(|i| space.today.get(i)))
+                .or_else(|| space.pinned.first()).map(|entry| entry.id);
+        }
+        // Panes of another group never stand selected alone.
+        if let Some(active) = space.active_tab { if let Some(view) = space.splits.iter().find(|view| view.panes.contains(&active)) { space.active_tab = Some(view.active); } }
+        Some((taken, split))
+    }
+
+    /// Adds pages taken from another model to the top of Today in the active
+    /// Space under fresh ids, regrouping them when they came as a Split View.
+    /// `accept` runs for each page (old id, new id), e.g. to move its document.
+    pub fn adopt_today_item(&mut self, tabs: Vec<Tab>, split: Option<SplitView>, now: SystemTime,
+        mut accept: impl FnMut(&Self, TabId, TabId)) -> Option<TabId> {
+        if tabs.is_empty() { return None; }
+        let mut mapping = HashMap::new();
+        let mut adopted = Vec::new();
+        for mut tab in tabs {
+            let fresh = TabId(self.next_id());
+            mapping.insert(tab.id, fresh);
+            tab.id = fresh;
+            tab.last_active = now;
+            tab.pinned_url = None;
+            tab.pinned_title = None;
+            adopted.push(tab);
+        }
+        let index = self.active_space;
+        let space = &mut self.spaces[index];
+        for (offset, tab) in adopted.into_iter().enumerate() { space.today.insert(offset, tab); }
+        let active = match split {
+            Some(mut view) if view.panes.iter().all(|id| mapping.contains_key(id)) => {
+                view.id = SplitId(self.next_id());
+                view.anchor = mapping[&view.anchor];
+                view.active = mapping[&view.active];
+                view.panes = view.panes.iter().map(|id| mapping[id]).collect();
+                let active = view.active;
+                self.spaces[index].splits.push(view);
+                active
+            }
+            _ => *mapping.values().next().unwrap(),
+        };
+        let mut pairs: Vec<_> = mapping.into_iter().collect();
+        pairs.sort_by_key(|(old, _)| old.0);
+        for (old, fresh) in pairs { accept(self, old, fresh); }
+        self.activate_tab(active, now);
+        Some(active)
+    }
+
     pub(crate) fn note_split_focus(&mut self, tab: TabId) {
         if let Some(split) = self.split_mut(tab) { split.active = tab; }
     }

@@ -286,6 +286,13 @@ impl ProfileHandle {
 
     pub(crate) fn same_workspace(&self, other: &Self) -> bool { Rc::ptr_eq(&self.data, &other.data) }
 
+    /// Standalone windows have their own model but borrow history from the
+    /// normal workspace they were opened from; compare those roots.
+    pub(crate) fn same_normal_workspace(&self, other: &Self) -> bool {
+        let root = |handle: &Self| handle.history_source.as_ref().map_or_else(|| handle.data.clone(), |(source, _)| source.data.clone());
+        Rc::ptr_eq(&root(self), &root(other))
+    }
+
     pub(crate) fn blank_browser(&self, id: UserProfileId) -> Browser {
         self.data.borrow().new_blank_for_user_profile(id).expect("retained normal source profile")
     }

@@ -22,6 +22,7 @@ pub(crate) struct TabDrag {
     dark: bool,
     fill: gpui::Hsla,
     row: std::rc::Rc<std::cell::Cell<gpui::Size<gpui::Pixels>>>,
+    grab: std::rc::Rc<std::cell::Cell<Option<gpui::Point<gpui::Pixels>>>>,
     pub(crate) reorder_target: std::rc::Rc<std::cell::Cell<Option<(TabId,bool)>>>,
 }
 
@@ -32,6 +33,7 @@ impl TabDrag {
 
     pub(crate) fn start_at(&self, owner: gpui::WeakEntity<BrowserWindow>, offset: gpui::Point<gpui::Pixels>, width: f32, height: f32, cx: &mut gpui::App) -> gpui::Entity<Self> {
         self.row.set(gpui::size(px(width), px(height)));
+        self.grab.set(Some(offset));
         self.card_hotspot.set(gpui::point(px((f32::from(offset.x) / width).clamp(0.,1.) * 128.), px((f32::from(offset.y) / height).clamp(0.,1.) * 250. - 5.)));
         self.start(owner,cx)
     }
@@ -42,6 +44,7 @@ impl TabDrag {
     ) -> gpui::Entity<Self> {
         let _ = owner.update(cx, |this, cx| {
             this.tab_drag_active = true;
+            this.start_drag_ghost(self, cx);
             cx.notify();
         });
         cx.new(|cx| {
@@ -52,6 +55,7 @@ impl TabDrag {
                     this.tab_drag_active = false;
                     this.finish_tear_off(drag, cx);
                     this.close_split_drop(cx);
+                    this.close_drag_ghost(cx);
                     cx.notify();
                 });
             })
@@ -310,6 +314,7 @@ impl BrowserWindow {
             dark: self.theme_uses_light_ink_for(self.browser.space().id),
             fill: self.theme_tab_selection_for(self.browser.space().id),
             row: std::rc::Rc::new(std::cell::Cell::new(gpui::size(px(212.), px(crate::window::SIDEBAR_ROW_HEIGHT)))),
+            grab: std::rc::Rc::new(std::cell::Cell::new(None)),
         }
     }
 
@@ -360,14 +365,13 @@ impl BrowserWindow {
     }
 }
 
-impl Render for TabDrag {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // GPUI paints the active drag in every window. The passive page overlay
-        // already owns the tall card, so it must not paint a second row ghost.
-        let page_card = window.root::<BrowserWindow>().flatten().is_some_and(|view| view.read(cx).split_drop.is_some());
-        if page_card || window.root::<crate::window::Overlay>().flatten().is_some_and(|overlay| overlay.read(cx).draws_split_drag_card()) {
-            return div().debug_selector(|| "tab-drag-hidden".into()).into_any_element();
-        }
+impl TabDrag {
+    /// Where the row was held, relative to its top-left corner.
+    pub(crate) fn grab_point(&self) -> gpui::Point<gpui::Pixels> {
+        self.grab.get().unwrap_or_else(|| { let row = self.row.get(); gpui::point(row.width / 2., row.height / 2.) })
+    }
+
+    pub(crate) fn ghost_element(&self) -> gpui::AnyElement {
         let icon = if let Some(icon) = &self.icon {
             crate::icons::glyph(icon)
         } else if self.split {
@@ -412,5 +416,18 @@ impl Render for TabDrag {
                 .child(icon)
                 .child(div().min_w_0().truncate().child(self.title.clone())))
             .into_any_element()
+    }
+}
+
+impl Render for TabDrag {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // GPUI paints the active drag in every window. The passive page overlay
+        // already owns the tall card, and once the passive ghost window exists
+        // it alone paints the row, unclipped by pages or the floating sidebar.
+        let root = window.root::<BrowserWindow>().flatten().is_some_and(|view| { let view = view.read(cx); view.split_drop.is_some() || view.drag_ghost_shown() });
+        if root || window.root::<crate::window::Overlay>().flatten().is_some_and(|overlay| { let overlay = overlay.read(cx); overlay.draws_split_drag_card() || overlay.owner_draws_drag_ghost(cx) }) {
+            return div().debug_selector(|| "tab-drag-hidden".into()).into_any_element();
+        }
+        self.ghost_element()
     }
 }

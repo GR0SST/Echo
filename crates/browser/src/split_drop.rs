@@ -57,14 +57,17 @@ impl SplitDropPreview {
 }
 
 impl BrowserWindow {
-    fn split_drop_target(&self, drag: &TabDrag, position: Point<Pixels>, window: &Window) -> Option<SplitDropPreview> {
+    fn split_drop_target(&self, drag: &TabDrag, position: Point<Pixels>) -> Option<SplitDropPreview> {
+        // Drags from the floating sidebar arrive in its own window; both share
+        // the browser window's origin, so geometry comes from the browser window.
+        let window_bounds = self.window_bounds;
         if !self.page_content_visible() || self.command_bar.is_some() || !self.accepts_tab_drag(drag)
             || self.browser.split_for(drag.id).is_some() { return None; }
         let anchor = self.browser.space().active_tab?;
         if self.browser.user_profile_id_for_tab(anchor) != self.browser.user_profile_id_for_tab(drag.id)
             || self.browser.all_tabs().find(|t| t.id == drag.id).is_none_or(|t| omnibox::is_internal_url(&t.url)) { return None; }
         if !self.can_add_split(anchor) || self.browser.related_tabs(anchor).contains(&drag.id) { return None; }
-        let viewport = window.viewport_size();
+        let viewport = window_bounds.size;
         let left = self.sidebar_width() * self.sidebar_amount() + crate::pages::CONTENT_INSET * (1. - self.sidebar_amount());
         let card = engine::Bounds { x: left.into(), y: crate::pages::CONTENT_INSET.into(),
             width: (f32::from(viewport.width) - left - crate::pages::CONTENT_INSET).max(0.).into(),
@@ -85,7 +88,7 @@ impl BrowserWindow {
         let anchor = split.map_or(anchor, |s| s.panes[index]);
         let preview = |placement, cover, outline, retained| SplitDropPreview {
             source: drag.id, anchor, placement, cover: convert(cover), outline: convert(outline),
-            retained: convert(retained), pointer: position, hotspot: drag.card_hotspot.get(), overlay: None, bounds: window.bounds(),
+            retained: convert(retained), pointer: position, hotspot: drag.card_hotspot.get(), overlay: None, bounds: window_bounds,
             from_cover: collapsed(convert(cover), placement), from_outline: convert(outline), since: std::time::Instant::now(),
         };
         let direct = if split.is_some() && axis == Axis::Vertical {
@@ -95,7 +98,7 @@ impl BrowserWindow {
         else if split.is_none() && y > 0.75 { Some((Placement::Below, false)) } else { None };
         // Arc retains an armed edge target when the pointer returns to the middle.
         // Scope it to this source, pane and window geometry; leaving the page clears it.
-        let armed = self.split_drop.as_ref().filter(|old| old.source == drag.id && old.anchor == anchor && old.bounds == window.bounds())
+        let armed = self.split_drop.as_ref().filter(|old| old.source == drag.id && old.anchor == anchor && old.bounds == window_bounds)
             .and_then(|old| old.placement).map(|placement| (placement, matches!(placement, Placement::Left | Placement::Right)));
         let Some((placement, horizontal)) = direct.or(armed) else {
             return Some(preview(None, frame, frame, frame));
@@ -124,8 +127,8 @@ impl BrowserWindow {
         Some(preview(Some(placement), cover, outline, retained))
     }
 
-    pub(crate) fn update_split_drop(&mut self, drag: &TabDrag, position: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
-        let Some(mut next) = self.split_drop_target(drag, position, window) else { self.close_split_drop(cx); return; };
+    pub(crate) fn update_split_drop(&mut self, drag: &TabDrag, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(mut next) = self.split_drop_target(drag, position) else { self.close_split_drop(cx); return; };
         if self.split_drop.as_ref().is_some_and(|old| old.source == next.source && old.anchor == next.anchor
             && old.placement == next.placement && old.outline == next.outline && old.bounds == next.bounds && old.pointer == next.pointer) { return; }
         if let Some(old) = &self.split_drop {
@@ -181,8 +184,8 @@ impl BrowserWindow {
         }
     }
 
-    pub(crate) fn drop_tab_into_split(&mut self, drag: &TabDrag, position: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
-        let target = self.split_drop_target(drag, position, window);
+    pub(crate) fn drop_tab_into_split(&mut self, drag: &TabDrag, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let target = self.split_drop_target(drag, position);
         self.close_split_drop(cx);
         let Some(target) = target else { return; };
         let Some(placement) = target.placement else { return; };
@@ -193,6 +196,13 @@ impl BrowserWindow {
         self.edit_browser(|b| b.add_split(anchor, other, placement, now)).expect("validated drag split");
         if let Some(pages) = &self.pages { pages.borrow_mut().sync(&self.browser, self.page_content_visible()); }
         cx.notify();
+    }
+
+    /// A release in the floating sidebar's window commits an armed edge.
+    pub(crate) fn commit_held_split_drop(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag_ghost.as_ref().map(|ghost| ghost.drag().clone()) else { return; };
+        let Some(pointer) = self.split_drop.as_ref().filter(|preview| preview.placement.is_some()).map(|preview| preview.pointer) else { return; };
+        self.drop_tab_into_split(&drag, pointer, cx);
     }
 
     pub(crate) fn render_split_drop(&self, window: &Window) -> AnyElement {
