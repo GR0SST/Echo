@@ -62,7 +62,7 @@ const MAX_HISTORY_SUGGESTIONS: usize = 4;
 const MAX_COMMAND_SUGGESTIONS: usize = 12;
 const ENGINE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 /// Fraction of the sidebar width a swipe must travel to change space.
-const SPACE_SWIPE_COMMIT: f32 = 0.5;
+pub(crate) const SPACE_SWIPE_COMMIT: f32 = 0.5;
 /// Arc moves 60 logical pixels for 120 precise scroll units in native captures.
 const SPACE_SCROLL_GAIN: f32 = 0.5;
 /// Finger speed (px/s) that changes space regardless of distance (a flick).
@@ -81,6 +81,9 @@ const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
 const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
 /// The docked Space drifts right this far as Library covers it (reference).
 const LIBRARY_SIDEBAR_DRIFT: f32 = 16.;
+/// Reference frames: the Space stays readable for the first part of the
+/// slide and is gone well before Library settles.
+fn library_sidebar_opacity(amount: f32) -> f32 { (1. - (amount - 0.15) / 0.55).clamp(0., 1.) }
 /// How long a revealed sidebar waits for the pointer before hiding.
 const FLOATING_SIDEBAR_GRACE: Duration = Duration::from_millis(800);
 /// Arc's smallest browser window, measured in points.
@@ -3225,7 +3228,7 @@ impl BrowserWindow {
                 let reach = (raw - start).abs().min(1.);
                 self.pager.creation_pull = None;
                 self.pager.position = start;
-                self.drag_library(entering, if entering { reach } else { 1. - reach }, cx);
+                self.drag_library(entering, if entering { reach } else { 1. - reach }, start as usize, cx);
             } else {
                 self.rest_library_drag(cx);
                 let edge_origin = if !self.browser.is_private() && raw > start
@@ -3983,7 +3986,13 @@ impl BrowserWindow {
     /// Window controls stay native for their behavior, but idle as neutral
     /// dots and show their colors only while the pointer is over them.
     pub(crate) fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let hovered = self.traffic_lights_hovered;
+        self.render_traffic_light_copies(vec![(0., 1.)], cx)
+    }
+    /// `copies` are (x offset, opacity) pairs. Between a Space and Library one
+    /// set leaves with the sidebar while another arrives with Library.
+    pub(crate) fn render_traffic_light_copies(&self, copies: Vec<(f32, f32)>, cx: &mut Context<Self>) -> impl IntoElement {
+        let moving = copies.len() > 1;
+        let hovered = self.traffic_lights_hovered && !moving;
         // Idle controls are the theme's ink over the Space field (measured in
         // the reference: about 10% black on light themes, 31% white on dark).
         let idle = if self.theme_uses_light_ink_for(self.browser.space().id) { hsla(0., 0., 1., 0.31) } else { hsla(0., 0., 0., 0.10) };
@@ -4001,10 +4010,14 @@ impl BrowserWindow {
                 let native_controls = hovered || window.is_fullscreen();
                 crate::native::set_traffic_lights_alpha(view, if native_controls { 1. } else { 0. });
                 let Some(frames) = crate::native::traffic_light_frames(view).filter(|_| !native_controls) else { return; };
-                for frame in frames.iter() {
-                    let diameter = frame[2].min(frame[3]);
-                    let origin = point(px(frame[0] + (frame[2] - diameter) / 2.), px(frame[1] + (frame[3] - diameter) / 2.));
-                    window.paint_quad(gpui::fill(Bounds::new(origin, size(px(diameter), px(diameter))), idle).corner_radii(px(diameter / 2.)));
+                for &(dx, alpha) in &copies {
+                    if alpha <= 0. { continue; }
+                    let color = hsla(idle.h, idle.s, idle.l, idle.a * alpha);
+                    for frame in frames.iter() {
+                        let diameter = frame[2].min(frame[3]);
+                        let origin = point(px(frame[0] + dx + (frame[2] - diameter) / 2.), px(frame[1] + (frame[3] - diameter) / 2.));
+                        window.paint_quad(gpui::fill(Bounds::new(origin, size(px(diameter), px(diameter))), color).corner_radii(px(diameter / 2.)));
+                    }
                 }
             }).size_full())
     }
@@ -5185,6 +5198,11 @@ impl Render for BrowserWindow {
         // the left over the fading sidebar while the page translates right.
         let library_motion = self.transient.is_none() && self.library_in_motion();
         let library_amount = self.library_slide_amount();
+        let sidebar_fade = library_sidebar_opacity(library_amount);
+        let traffic_lights = if library_motion {
+            let drift = if sidebar_amount > 0. { LIBRARY_SIDEBAR_DRIFT * library_amount } else { 0. };
+            vec![(drift, sidebar_fade), (self.library_layer_shift() - self.window_controls_offset(), 1.)]
+        } else { vec![(0., 1.)] };
         let sidebar = ((!library_open || library_motion) && sidebar_amount > 0.).then(|| {
             let entity = cx.entity();
             let notified = self.window_notified.clone();
@@ -5211,7 +5229,8 @@ impl Render for BrowserWindow {
         let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(window, cx).into_any_element() };
         div()
             .key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
-            .when(library_open, |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
+            // A floating-card swipe continues here once the card slides from under the pointer.
+            .when(library_open || self.library_dragging(), |this| this.on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_sidebar_scroll(event, cx))))
             .track_focus(&self.focus_handle)
             .on_mouse_down(gpui::MouseButton::Left,cx.listener(|this,_,_,cx|this.close_max_preview(cx)))
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, window, cx| {
@@ -5367,14 +5386,14 @@ impl Render for BrowserWindow {
             .when(!compact && (!library_open || library_motion), |this| this.child(div().debug_selector(|| self.sidebar_debug_name((|| "sidebar-clip".into())()))
                 .relative().flex_none().h_full().w(px(self.sidebar_width() * sidebar_amount)).overflow_hidden()
                 .when_some(sidebar, |this, sidebar| this.child(div().absolute().left(px(sidebar_offset + if library_motion { LIBRARY_SIDEBAR_DRIFT * library_amount } else { 0. })).top_0().bottom_0()
-                    .when(library_motion, |this| this.opacity(1. - library_amount)).child(sidebar)))))
+                    .when(library_motion, |this| this.opacity(sidebar_fade)).child(sidebar)))))
             .when_some(library, |this, library| this.child(library))
             .child(self.render_sidebar_resize_tracking(cx))
             .child(div().id("native-action-scope").absolute().size_0().track_focus(&self.native_action_focus))
             .child(content)
             .when(!library_open && sidebar_amount > 0., |this| this.child(self.render_sidebar_resize_handle(false, cx)))
             .when(self.native_page_content_visible(), |this| this.children(self.render_window_snapshots()))
-            .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_lights(cx))))
+            .when(!compact, |this| this.child(div().absolute().left(px(window_controls_offset)).top_0().w(px(74.)).h(px(SIDEBAR_TOOLBAR_HEIGHT)).child(self.render_traffic_light_copies(traffic_lights, cx))))
             .child(loading)
             .when(self.page_fullscreen.is_some(), |this| this.children(self.render_document_viewport_canvas()))
             .child(release_hover_on_exit())

@@ -3,7 +3,7 @@ use super::*;
 use crate::sidebar_resize_state::{SidebarResizeOutcome, SidebarResizeState};
 
 /// The exact native hit-strip width remains a visual acceptance gate.
-const RESIZE_HIT_WIDTH: f32 = 4.;
+const RESIZE_HIT_WIDTH: f32 = 8.;
 
 pub(super) struct SidebarResizeGesture {
     state: SidebarResizeState,

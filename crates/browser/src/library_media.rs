@@ -262,6 +262,15 @@ pub(crate) fn render_preview_at(color: Hsla, content: Option<gpui::AnyElement>, 
         .bg(color).children(content).into_any_element()
 }
 
+/// The retained page keeps its own width; the window edge clips it, as in
+/// the reference, so the slide ends without a jump or a right-hand frame.
+pub(crate) fn render_page_preview_at(color: Hsla, content: Option<gpui::AnyElement>, left: f32, width: f32) -> gpui::AnyElement {
+    div().debug_selector(|| "library-media-preview".into())
+        .absolute().left(px(left)).w(px(width))
+        .top(px(10.)).bottom(px(10.)).rounded(px(6.)).shadow_md().overflow_hidden()
+        .bg(color).children(content).into_any_element()
+}
+
 #[cfg(test)]
 #[path = "library_media_tests.rs"]
 mod tests;

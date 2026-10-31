@@ -71,8 +71,8 @@ fn spaces_retains_clipped_document_sliver_without_reflow(cx: &mut TestAppContext
     cx.executor().advance_clock(Duration::from_millis(400));
     cx.run_until_parked();
     assert_preview(&fake, document, cx);
-    let clip = cx.debug_bounds("library-media-preview").unwrap();
-    assert_eq!(clip.size.width, px(46.));
+    // The window edge clips the page, leaving the measured sliver.
+    assert_eq!(fake.0.borrow().viewport_clips[&raw(document)].map(|clip| clip.width), Some(46.));
     unchanged(&fake.take_calls());
     click(cx, "library-nav-media");
     assert_preview(&fake, document, cx);
@@ -752,7 +752,7 @@ fn archive_and_spaces_clip_the_original_viewport_without_document_reflow(cx: &mu
     enter(&view, visual);
     visual.executor().advance_clock(Duration::from_millis(400));
     visual.run_until_parked();
-    for (selector, left, width) in [("library-nav-archive",417.,573.),("library-nav-spaces",944.,46.)] {
+    for (selector, left, width) in [("library-nav-archive",417.,583.),("library-nav-spaces",954.,46.)] {
         click(visual, selector);
         let state = fake.0.borrow();
         assert_eq!(state.bounds[&document].width, original.width);
