@@ -1807,6 +1807,40 @@ fn sidebar_swipe_slides_library_over_the_space_with_the_fingers(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn library_swipe_never_leaves_an_empty_or_stuck_window(cx: &mut TestAppContext) {
+    use crate::sidebar_pages::SidebarPage;
+    use gpui::TouchPhase::*;
+    crate::sidebar_navigation::ANIMATE_LIBRARY_SLIDE.with(|animate| animate.set(true));
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-shift-l");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    // Fingers pulled all the way back: the Space is fully shown, not blank.
+    scroll(cx, "library", Started, 0., 0.);
+    scroll(cx, "library", Moved, -900., 0.);
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| assert!(w.library_slide_amount() == 0. && w.library_in_motion()));
+    assert!(cx.debug_bounds("sidebar").is_some(), "the Space sidebar stays visible");
+    scroll(cx, "library", Ended, 0., 0.);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(matches!(w.sidebar_navigation.controller.selected(), SidebarPage::Space(_)));
+        assert!(!w.library_in_motion());
+    });
+    // A gesture whose end never arrives settles by itself.
+    scroll(cx, "sidebar", Started, 0., 0.);
+    scroll(cx, "sidebar", Moved, 120., 0.);
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(matches!(w.sidebar_navigation.controller.selected(), SidebarPage::Space(_)));
+        assert_eq!(w.library_slide_amount(), 0.);
+        assert!(!w.library_in_motion());
+    });
+}
+
+#[gpui::test]
 fn long_input_scrolls_inside_the_command_bar(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-t");

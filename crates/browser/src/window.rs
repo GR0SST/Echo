@@ -3991,7 +3991,7 @@ impl BrowserWindow {
     /// `copies` are (x offset, opacity) pairs. Between a Space and Library one
     /// set leaves with the sidebar while another arrives with Library.
     pub(crate) fn render_traffic_light_copies(&self, copies: Vec<(f32, f32)>, cx: &mut Context<Self>) -> impl IntoElement {
-        let moving = copies.len() > 1;
+        let moving = copies.iter().any(|&copy| copy != (0., 1.));
         let hovered = self.traffic_lights_hovered && !moving;
         // Idle controls are the theme's ink over the Space field (measured in
         // the reference: about 10% black on light themes, 31% white on dark).
@@ -5199,9 +5199,13 @@ impl Render for BrowserWindow {
         let library_motion = self.transient.is_none() && self.library_in_motion();
         let library_amount = self.library_slide_amount();
         let sidebar_fade = library_sidebar_opacity(library_amount);
+        // Absolute positions relative to the native controls' current origin.
+        // Unpinned, the floating card carries its own set out with it.
         let traffic_lights = if library_motion {
-            let drift = if sidebar_amount > 0. { LIBRARY_SIDEBAR_DRIFT * library_amount } else { 0. };
-            vec![(drift, sidebar_fade), (self.library_layer_shift() - self.window_controls_offset(), 1.)]
+            let base = self.window_controls_offset();
+            let mut copies = vec![(self.library_layer_shift() - base, 1.)];
+            if sidebar_amount > 0. { copies.push((LIBRARY_SIDEBAR_DRIFT * library_amount - base, sidebar_fade)); }
+            copies
         } else { vec![(0., 1.)] };
         let sidebar = ((!library_open || library_motion) && sidebar_amount > 0.).then(|| {
             let entity = cx.entity();
@@ -5222,7 +5226,7 @@ impl Render for BrowserWindow {
         if !library_open { self.warm_library_cards(cx); }
         let library = (library_open || library_motion).then(|| {
             let shift = self.library_layer_shift();
-            div().debug_selector(|| "library-layer".into()).absolute().top_0().bottom_0().left(px(shift)).right(px(-shift))
+            div().debug_selector(|| "library-layer".into()).absolute().top_0().bottom_0().left(px(shift)).right_0()
                 .child(self.render_library_host(library_open, cx))
         });
         let compact = self.transient.is_some();

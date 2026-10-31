@@ -127,7 +127,13 @@ impl BrowserWindow {
             px((f32::from(viewport.height) - 2. * crate::pages::CONTENT_INSET).max(0.)),
         );
         let entering = self.sidebar_navigation.controller.selected() == SidebarPage::Library;
-        if self.sidebar_navigation.library_slide_target != entering {
+        let resting = if entering { 1. } else { 0. };
+        // Never leave the slide between pages without fingers or a running
+        // slide toward the selected page.
+        let idle = self.sidebar_navigation.library_drag.is_none()
+            && self.sidebar_navigation.library_slide_task.as_ref().is_none_or(|_| self.sidebar_navigation.library_slide_target != entering);
+        if self.sidebar_navigation.library_slide_target != entering
+            || (idle && self.sidebar_navigation.library_slide_amount != resting) {
             self.animate_library_slide(entering, cx);
         }
     }
@@ -160,7 +166,7 @@ impl BrowserWindow {
     /// Library and the Space sidebar are both visible between the two pages.
     pub(crate) fn library_in_motion(&self) -> bool {
         let amount = self.sidebar_navigation.library_slide_amount;
-        amount > 0. && (amount < 1. || self.sidebar_navigation.library_drag.is_some())
+        self.sidebar_navigation.library_drag.is_some() || (amount > 0. && amount < 1.)
     }
     /// Sidebar swipe across the Library edge: the slide follows the fingers.
     pub(crate) fn library_dragging(&self) -> bool { self.sidebar_navigation.library_drag.is_some() }
