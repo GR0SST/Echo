@@ -198,6 +198,7 @@ pub trait WebEngine {
     fn audio_muted(&self, view: ViewId) -> Option<bool>;
     fn set_color_scheme(&mut self, _view: ViewId, _dark: Option<bool>) -> bool { true }
     fn zoom(&mut self, view: ViewId, direction: i32);
+    fn set_zoom_percent(&mut self, _view: ViewId, _percent: u16) {}
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool);
     fn stop_finding(&mut self, view: ViewId);
     fn close(&mut self, view: ViewId);
@@ -494,6 +495,7 @@ impl WebEngine for Chromium {
     fn set_color_scheme(&mut self, view: ViewId, dark: Option<bool>) -> bool { self.engine.set_color_scheme(view, dark) }
     fn audio_muted(&self, view: ViewId) -> Option<bool> { self.engine.audio_muted(view) }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.engine.zoom(view, direction) }
+    fn set_zoom_percent(&mut self, view: ViewId, percent: u16) { self.engine.set_zoom_percent(view, percent) }
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.engine.find(view, text, forward, next) }
     fn stop_finding(&mut self, view: ViewId) { self.engine.stop_finding(view) }
     fn close(&mut self, view: ViewId) {
@@ -535,6 +537,8 @@ struct Page {
     state: PageState,
     muted: bool,
     color_scheme: Option<bool>,
+    /// The host zoom a Boost's text size applied, to undo it when it ends.
+    boost_zoom: Option<u16>,
     web_palette: Option<Option<engine::PagePalette>>,
     snapshot: Option<(u64, Arc<Vec<u8>>)>,
     snapshot_pending: Option<u64>,
@@ -857,7 +861,7 @@ impl Pages {
         if item.muted { store.engine.set_audio_muted(view,true); }
         store.pages.insert(tab,Page { input_attachment:0, identity, source_space, owner:self.host,
             frame, visible:false, view, url:item.url.clone(), state:PageState {loading:true,..Default::default()},
-            muted:item.muted,color_scheme:None,web_palette:None,snapshot:None,snapshot_pending:None,snapshot_origin:None,snapshot_good_origin:None });
+            muted:item.muted,color_scheme:None,boost_zoom:None,web_palette:None,snapshot:None,snapshot_pending:None,snapshot_origin:None,snapshot_good_origin:None });
         Ok(true)
     }
     pub(crate) fn navigate_extension_tab(&mut self, tab: TabId, url: &str) {
@@ -1343,6 +1347,7 @@ impl Pages {
         }
         self.reconcile_inventory(browser);
         self.store.borrow_mut().prune();
+        self.sync_boost_zoom(browser);
         let selected=browser.active_tab().map(|tab|tab.id);
         self.wanted.clear();
         self.wanted_focus = None;
@@ -1412,6 +1417,23 @@ impl Pages {
 
     /// Browser appearance applies to every retained page owned by this host.
     /// Changing it neither navigates pages nor transfers their ownership.
+    /// Arc applies a Boost's text size as page zoom for its host. Only zoom
+    /// this module set is reset, so a user's own zoom survives.
+    fn sync_boost_zoom(&mut self, browser: &Browser) {
+        let mut store = self.store.borrow_mut();
+        let store = &mut *store;
+        for page in store.pages.values_mut().filter(|page| page.owner == self.host) {
+            let size = browser.user_profile(page.identity.profile).and_then(|profile| profile.boosts.iter()
+                .find(|boost| boost.matches(&page.url) && boost.appearance.size != 0))
+                .map(|boost| (100 + i16::from(boost.appearance.size.clamp(-5, 10)) * 10) as u16);
+            let wanted = size.or(page.boost_zoom.map(|_| 100));
+            if let Some(percent) = wanted.filter(|percent| page.boost_zoom != Some(*percent) || size.is_none()) {
+                store.engine.set_zoom_percent(page.view, percent);
+            }
+            page.boost_zoom = size;
+        }
+    }
+
     pub(crate) fn sync_color_schemes(&mut self, appearance: browser_core::themes::ThemeAppearance) {
         use browser_core::themes::ThemeAppearance;
         let scheme = match appearance { ThemeAppearance::Automatic => None, ThemeAppearance::Light => Some(false), ThemeAppearance::Dark => Some(true) };
@@ -1653,7 +1675,7 @@ impl Pages {
                     };
                     created = true;
                     if muted { engine.set_audio_muted(view, true); }
-                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, web_palette: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
+                    pages.insert(tab, Page { input_attachment: 0, identity, source_space, owner: self.host, frame: bounds, visible: false, view, url, state: PageState::default(), muted, color_scheme: None, boost_zoom: None, web_palette: None, snapshot: None, snapshot_pending: None, snapshot_origin: None, snapshot_good_origin: None });
                 }
             }
             let clip = self.viewport_clip.filter(|_| self.viewport.retains_library_page()).map(|clip| {

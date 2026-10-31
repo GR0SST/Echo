@@ -52,12 +52,75 @@ pub struct BoostAppearance {
     pub contrast: Option<u16>,
     pub brightness: Option<u16>,
     pub saturation: Option<u16>,
+    /// The main dot on the color pad, 0..=1000 per axis. Older Boosts only
+    /// stored `tint`; their dot is derived from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_point: Option<[u16; 2]>,
+    /// The accent dot's angle around the main dot, in degrees.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_angle: Option<u16>,
 }
+
+/// Color pad geometry, in points: the inner pad and the dots on it.
+pub const PAD_EXTENT: f32 = 134.;
+pub const MAIN_DOT_RADIUS: f32 = 17.;
+pub const ACCENT_DOT_RADIUS: f32 = 11.;
+/// The accent dot keeps this distance from the main dot's center.
+pub const ACCENT_DISTANCE: f32 = 31.;
+const DEFAULT_ACCENT_ANGLE: f32 = 112.;
+
+/// Hue (degrees) and strength (0..=1) of a pad point: the angle around the
+/// pad's center and the distance from it.
+pub fn pad_color(point: (f32, f32)) -> (f32, f32) {
+    let (x, y) = (point.0 - 0.5, point.1 - 0.5);
+    (y.atan2(x).to_degrees().rem_euclid(360.), ((x * x + y * y).sqrt() / 0.5).min(1.))
+}
+
 impl BoostAppearance {
+    /// The main dot, 0..=1 per axis, once a color is chosen.
+    pub fn main_point(&self) -> Option<(f32, f32)> {
+        if let Some([x, y]) = self.color_point { return Some((f32::from(x) / 1000., f32::from(y) / 1000.)); }
+        let angle = f32::from(self.tint?).to_radians();
+        Some((0.5 + 0.35 * angle.cos(), 0.5 + 0.35 * angle.sin()))
+    }
+
+    /// The accent dot, which travels with the main dot at a fixed distance.
+    pub fn accent_point(&self) -> Option<(f32, f32)> {
+        let (x, y) = self.main_point()?;
+        let angle = self.accent_angle.map_or(DEFAULT_ACCENT_ANGLE, f32::from).to_radians();
+        let reach = ACCENT_DISTANCE / PAD_EXTENT;
+        Some(((x + reach * angle.cos()).clamp(0., 1.), (y + reach * angle.sin()).clamp(0., 1.)))
+    }
+
+    /// Moves the main dot (the accent follows), keeping it inside the pad.
+    pub fn set_main_point(&mut self, point: (f32, f32)) {
+        let margin = MAIN_DOT_RADIUS / PAD_EXTENT;
+        let (x, y) = (point.0.clamp(margin, 1. - margin), point.1.clamp(margin, 1. - margin));
+        self.color_point = Some([(x * 1000.).round() as u16, (y * 1000.).round() as u16]);
+        self.tint = Some(pad_color((x, y)).0.round() as u16 % 360);
+    }
+
+    /// Turns the accent dot around the main dot toward `point`.
+    pub fn turn_accent_toward(&mut self, point: (f32, f32)) {
+        let Some((x, y)) = self.main_point() else { return; };
+        if (point.0 - x).abs() < f32::EPSILON && (point.1 - y).abs() < f32::EPSILON { return; }
+        self.accent_angle = Some((point.1 - y).atan2(point.0 - x).to_degrees().rem_euclid(360.).round() as u16 % 360);
+    }
+
+    pub fn clear_color(&mut self) {
+        self.tint = None;
+        self.color_point = None;
+        self.accent_angle = None;
+    }
+
     pub fn stylesheet(&self) -> String {
         let mut css = String::new();
-        if let Some(hue) = self.tint {
-            css.push_str(&format!("html, body {{ background-color: hsl({}, 55%, 88%) !important; color: hsl({}, 35%, 16%) !important; }}\n", hue % 360, hue % 360));
+        // The main dot colors the page, the accent dot its text.
+        if let (Some(main), Some(accent)) = (self.main_point(), self.accent_point()) {
+            let (hue, strength) = pad_color(main);
+            let (text_hue, text_strength) = pad_color(accent);
+            css.push_str(&format!("html, body {{ background-color: hsl({:.0}, {:.0}%, 88%) !important; color: hsl({:.0}, {:.0}%, 18%) !important; }}\n",
+                hue, 20. + 50. * strength, text_hue, 30. + 40. * text_strength));
         }
         if let Some(font) = &self.font {
             // Font names are CSS string data, never raw source.
@@ -70,12 +133,7 @@ impl BoostAppearance {
                 }
             ));
         }
-        if self.size != 0 {
-            css.push_str(&format!(
-                "html {{ font-size: {}% !important; }}\n",
-                100 + i16::from(self.size.clamp(-5, 10)) * 10
-            ));
-        }
+        // Text size is host page zoom in the browser (Arc's Boost text zoom), not CSS.
         let case = match self.case {
             1 => Some("uppercase"),
             2 => Some("lowercase"),
@@ -209,7 +267,7 @@ mod tests {
         boost.css = "body { color: red; }".into();
         boost.javascript = "window.example = true".into();
         boost.zap_selectors.push(".advert".into());
-        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80)};
+        boost.appearance=BoostAppearance{tint:Some(210),font:Some("PT Mono".into()),size:2,case:1,inverted:true,contrast:Some(120),brightness:Some(90),saturation:Some(80),color_point:Some([200,700]),accent_angle:Some(45)};
         let appearance=boost.appearance.clone();
         let mut restored = session::from_json(&session::to_json(&browser)).unwrap();
         assert_eq!(
@@ -235,6 +293,33 @@ mod tests {
         );
         assert!(boosts.remove(id));
         assert_ne!(boosts.create("https://example.com").unwrap(), id);
+    }
+    #[test]
+    fn the_accent_dot_follows_the_main_dot_and_turns_on_its_own() {
+        let mut look = BoostAppearance::default();
+        assert!(look.main_point().is_none() && look.accent_point().is_none() && look.stylesheet().is_empty());
+        look.set_main_point((0.3, 0.4));
+        let reach = ACCENT_DISTANCE / PAD_EXTENT;
+        let (main, accent) = (look.main_point().unwrap(), look.accent_point().unwrap());
+        assert!((((accent.0 - main.0).powi(2) + (accent.1 - main.1).powi(2)).sqrt() - reach).abs() < 0.01);
+        // Moving the main dot carries the accent by the same offset.
+        look.set_main_point((0.6, 0.5));
+        let (moved, carried) = (look.main_point().unwrap(), look.accent_point().unwrap());
+        assert!(((carried.0 - moved.0) - (accent.0 - main.0)).abs() < 0.01 && ((carried.1 - moved.1) - (accent.1 - main.1)).abs() < 0.01);
+        // Turning the accent leaves the main dot and the page tint alone.
+        let tint = look.tint;
+        look.turn_accent_toward((0.6, 0.1));
+        assert_eq!(look.main_point(), Some(moved));
+        assert_eq!(look.tint, tint);
+        assert_eq!(look.accent_angle, Some(270));
+        let turned = look.accent_point().unwrap();
+        assert!((turned.0 - moved.0).abs() < 0.01 && turned.1 < moved.1);
+        // The main dot stays inside the pad; reset clears both dots.
+        look.set_main_point((-1., 2.));
+        let margin = MAIN_DOT_RADIUS / PAD_EXTENT;
+        assert_eq!(look.main_point().map(|(x, y)| ((x * 1000.).round(), (y * 1000.).round())), Some(((margin * 1000.).round(), ((1. - margin) * 1000.).round())));
+        look.clear_color();
+        assert!(look.main_point().is_none() && look.stylesheet().is_empty());
     }
     #[test]
     fn rename_and_delete_target_only_the_captured_profile_and_survive_sessions() {

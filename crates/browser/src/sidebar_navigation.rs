@@ -960,7 +960,13 @@ impl BrowserWindow {
             let owner=cx.weak_entity();
             let view=self.sidebar_navigation.boosts.get_or_insert_with(||cx.new(|cx|crate::boost_library::BoostLibrary::new(owner,colors,cx))).clone();
             view.update(cx,|view,_|view.set_colors(colors));
-            empty=Some(view.into_any_element());
+            // The live page moves into the translated preview beside the list;
+            // unmounted, it keeps its content frame and covers the list.
+            let fill = self.theme_empty_panel_fill();
+            let preview = open.then(|| self.render_library_page_preview(cx));
+            empty=Some(div().relative().size_full().child(view)
+                .when_some(preview, |this, preview| this.child(library::media::render_page_preview_at(fill, Some(preview), preview_left, page_width)))
+                .into_any_element());
         }
         if section == LibrarySection::ArchivedTabs {
             let owner = cx.weak_entity();

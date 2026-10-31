@@ -312,6 +312,7 @@ enum Call {
     Volume(u64, f32),
     ColorScheme(u64, Option<bool>),
     Zoom(u64, i32),
+    ZoomPercent(u64, u16),
     Find(u64, String, bool, bool),
     StopFinding(u64),
     Reload(u64),
@@ -696,6 +697,7 @@ impl WebEngine for FakeEngine {
     }
     fn audio_muted(&self, view: ViewId) -> Option<bool> { Some(self.0.borrow().muted.contains(&raw(view))) }
     fn zoom(&mut self, view: ViewId, direction: i32) { self.call(Call::Zoom(raw(view), direction)); }
+    fn set_zoom_percent(&mut self, view: ViewId, percent: u16) { self.call(Call::ZoomPercent(raw(view), percent)); }
     fn find(&mut self, view: ViewId, text: &str, forward: bool, next: bool) { self.call(Call::Find(raw(view), text.into(), forward, next)); }
     fn stop_finding(&mut self, view: ViewId) { self.call(Call::StopFinding(raw(view))); }
     fn close(&mut self, view: ViewId) {
@@ -10248,6 +10250,70 @@ fn boost_panel(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> Visu
     let visual=VisualTestContext::from_window(handle.into(),&cx.cx);visual.run_until_parked();visual
 }
 #[gpui::test]
+fn the_sidebar_address_drops_down_over_its_field(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    let field=cx.debug_bounds("address").unwrap();
+    click(cx,"address");
+    let mut overlay=bar(&view,cx);
+    let panel=overlay.debug_bounds("command-bar").unwrap();
+    assert_eq!(panel.size.width,gpui::px(420.));
+    assert_eq!(panel.origin.x,field.origin.x);
+    assert!(panel.origin.y<field.origin.y && field.origin.y-panel.origin.y<gpui::px(10.),"drops down from the field: {panel:?} {field:?}");
+    overlay.simulate_keystrokes("escape");cx.run_until_parked();
+    // The New Tab bar stays centered in the window.
+    cx.simulate_keystrokes("cmd-t");
+    let mut overlay=bar(&view,cx);
+    assert!(overlay.debug_bounds("command-bar").unwrap().size.width>gpui::px(420.));
+}
+#[gpui::test]
+fn the_boost_editor_hides_on_another_page_and_returns(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    cx.update(|window,_|window.activate_window());
+    let boosted=view.read_with(cx,|view,_|view.browser.space().active_tab.unwrap());
+    view.update(cx,|view,cx|view.new_boost(cx));
+    let _panel=boost_panel(&view,cx);
+    cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.boost_editor_shown));
+    let other=view.update(cx,|view,cx|{let id=view.edit_browser(|b|b.new_tab("https://other.example",std::time::SystemTime::now()));cx.notify();id});
+    cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|!view.boost_editor_shown && view.boost_editor.is_some()),"hidden, not closed, on another page");
+    view.update(cx,|view,cx|{view.edit_browser(|b|b.activate_tab(boosted,std::time::SystemTime::now()));cx.notify();});
+    cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.boost_editor_shown),"back on the Boosted page it returns");
+    let _ = other;
+}
+#[gpui::test]
+fn boost_color_dots_drag_together_and_the_accent_turns_alone(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    view.update(cx,|view,cx|view.new_boost(cx));
+    let mut panel=boost_panel(&view,cx);
+    let pad=panel.debug_bounds("boost-color").unwrap();
+    let look=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.clone());
+    let at=|x:f32,y:f32|pad.origin+gpui::point(gpui::px(x),gpui::px(y));
+    // Press anywhere on the pad puts the main dot there, then it follows the drag.
+    panel.simulate_mouse_down(at(40.,40.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(60.,50.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(90.,60.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(at(90.,60.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    let first=look(&view,&mut panel);
+    let main=first.main_point().unwrap();
+    assert!((main.0*134.+7.-90.).abs()<1.5 && (main.1*134.+7.-60.).abs()<1.5,"main dot under the pointer: {main:?}");
+    assert!(first.tint.is_some());
+    // Grabbing the accent turns it without moving the main dot or the page tint.
+    let accent=first.accent_point().unwrap();
+    let grip=at(accent.0*134.+7.,accent.1*134.+7.);
+    panel.simulate_mouse_down(grip,gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(90.,10.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_move(at(90.,5.),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(at(90.,5.),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    let turned=look(&view,&mut panel);
+    assert_eq!(turned.main_point(),Some(main));
+    assert_eq!(turned.tint,first.tint);
+    assert_ne!(turned.accent_angle,first.accent_angle);
+    let after=turned.accent_point().unwrap();
+    assert!(after.1<main.1,"the accent now sits above the main dot");
+}
+#[gpui::test]
 fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);
     cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
@@ -10447,6 +10513,34 @@ fn boost_library_filters_and_toggles_profile_owned_records(cx:&mut TestAppContex
     assert!(cx.debug_bounds("boost-library-row-0").is_some());
     click(cx,"boost-library-toggle-0");
     assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().all(|boost|!boost.enabled)));
+}
+#[gpui::test]
+fn boost_library_moves_the_live_page_beside_the_list(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    view.update(cx,|view,cx|{view.edit_browser(|browser|{browser.active_user_profile_mut().boosts.create("https://example.com");});cx.notify();});
+    cx.simulate_keystrokes("cmd-shift-l");cx.run_until_parked();click(cx,"library-nav-boosts");
+    let column=cx.debug_bounds("boost-library-column").unwrap();
+    let layout=view.read_with(cx,|view,_|view.pages.as_ref().unwrap().borrow().surface_layout());
+    assert!(!layout.is_empty(),"the selected page stays live in the preview");
+    // A native page left over the list would swallow every click on it.
+    assert!(layout.iter().all(|(_,frame)|frame.x>=f64::from(f32::from(column.right()))),"page {layout:?} covers the list ending at {:?}",column.right());
+    click(cx,"boost-library-toggle-0");
+    assert!(!view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().enabled));
+}
+#[gpui::test]
+fn boost_text_size_is_host_zoom_and_ending_it_restores_the_page(cx:&mut TestAppContext){
+    let (view,cx,fake)=open_pages(cx);
+    let host=view.read_with(cx,|view,_|view.browser.active_tab().unwrap().url.clone());
+    fake.take_calls();
+    let id=view.update(cx,|view,cx|{let id=view.edit_browser(|browser|{let boosts=&mut browser.active_user_profile_mut().boosts;let id=boosts.create(&host).unwrap();boosts.get_mut(id).unwrap().appearance.size=2;id});cx.notify();id});
+    cx.run_until_parked();
+    let zooms=|fake:&FakeEngine|fake.take_calls().into_iter().filter(|call|matches!(call,Call::ZoomPercent(..))).collect::<Vec<_>>();
+    assert_eq!(zooms(&fake),vec![Call::ZoomPercent(1,120)]);
+    view.update(cx,|view,cx|{view.edit_browser(|browser|browser.active_user_profile_mut().boosts.get_mut(id).unwrap().appearance.size=0);cx.notify();});
+    cx.run_until_parked();
+    assert_eq!(zooms(&fake),vec![Call::ZoomPercent(1,100)]);
+    view.update(cx,|_,cx|cx.notify());cx.run_until_parked();
+    assert!(zooms(&fake).is_empty(),"a user's own zoom is left alone afterwards");
 }
 #[gpui::test]
 fn boost_library_preview_edits_canonical_profile_and_targets_preview_renderer(cx:&mut TestAppContext){

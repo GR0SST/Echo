@@ -67,8 +67,55 @@ pub(crate) struct BoostEditor {
     js: Entity<TextInput>,
     focus: gpui::FocusHandle,
     color_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
+    /// Which color dot the current press moves.
+    wheel_grip: Option<WheelGrip>,
     _subscriptions: Vec<Subscription>,
 }
+/// The main dot sets the page color and carries the accent; the accent dot
+/// turns around it on its own and sets the text color.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WheelGrip { Main, Accent }
+
+/// Marker for GPUI's drag tracking; moves outside the pad keep steering.
+#[derive(Clone)]
+struct WheelDrag;
+impl Render for WheelDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+}
+
+/// Pad point (0..=1) under a window position.
+fn pad_point(bounds: Bounds<gpui::Pixels>, position: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    let inset = (148. - browser_core::boosts::PAD_EXTENT) / 2.;
+    let local = position - bounds.origin;
+    ((f32::from(local.x) - inset) / browser_core::boosts::PAD_EXTENT, (f32::from(local.y) - inset) / browser_core::boosts::PAD_EXTENT)
+}
+
+fn dot_color(point: (f32, f32)) -> gpui::Hsla {
+    let (hue, strength) = browser_core::boosts::pad_color(point);
+    gpui::hsla(hue / 360., 0.25 + 0.6 * strength, 0.5, 1.)
+}
+
+impl BoostEditor {
+    fn grab_wheel(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some(bounds) = self.color_bounds.get() else { return; };
+        let point = pad_point(bounds, position);
+        let accent = self.boost(cx).and_then(|boost| boost.appearance.accent_point());
+        let reach = (browser_core::boosts::ACCENT_DOT_RADIUS + 2.) / browser_core::boosts::PAD_EXTENT;
+        let grip = if accent.is_some_and(|(x, y)| (x - point.0).hypot(y - point.1) <= reach) { WheelGrip::Accent } else { WheelGrip::Main };
+        self.wheel_grip = Some(grip);
+        self.steer_wheel(position, cx);
+    }
+
+    fn steer_wheel(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let (Some(bounds), Some(grip)) = (self.color_bounds.get(), self.wheel_grip) else { return; };
+        let point = pad_point(bounds, position);
+        self.edit(cx, |boost| match grip {
+            WheelGrip::Main => boost.appearance.set_main_point(point),
+            WheelGrip::Accent => boost.appearance.turn_accent_toward(point),
+        });
+    }
+}
+
 impl BrowserWindow {
     pub(crate) fn new_boost(&mut self, cx: &mut Context<Self>) {
         let Some((tab, url)) = self
@@ -203,9 +250,12 @@ impl BrowserWindow {
                 window_background: WindowBackgroundAppearance::Transparent,
                 ..Default::default()
             };
+            let child_view = Rc::new(Cell::new(None));
+            let opened_view = child_view.clone();
             if let Ok(handle) = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
+                    opened_view.set(Some((parent, child)));
                 }
                 cx.new(|cx| {
                     BoostEditor::new(
@@ -222,11 +272,32 @@ impl BrowserWindow {
                 let _ = page_browser.update(cx, |page, _| page.boost_editor = Some(handle));
                 let _ = owner.update(cx, |this, cx| {
                     this.boost_editor = Some(handle);
+                    this.boost_editor_native = child_view.get().map(|(parent, child)| (parent as usize, child as usize, true));
+                    this.boost_editor_shown = true;
                     cx.notify();
                 });
             }
         });
     }
+    /// Arc hides the open editor while the app is in the background or
+    /// another page is selected, and brings it back on return until closed.
+    pub(crate) fn sync_boost_editor_visibility(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.boost_editor.and_then(|handle| handle.read(cx).ok()) else { return; };
+        let (tab, page) = (editor.tab, editor.page_browser.entity_id());
+        // A Peek or other host owns its own selection; only this window's is checked.
+        let on_page = page != cx.entity().entity_id()
+            || self.browser.space().active_tab.is_some_and(|active| self.browser.related_tabs(active).contains(&tab));
+        let wanted = cx.active_window().is_some() && on_page && self.page_content_visible();
+        if wanted == self.boost_editor_shown { return; }
+        self.boost_editor_shown = wanted;
+        if let Some((parent, child, _)) = self.boost_editor_native {
+            let (parent, child) = (parent as *mut std::ffi::c_void, child as *mut std::ffi::c_void);
+            // Ordering a child out detaches it from its parent; attach it again first.
+            if wanted { crate::native::attach_overlay(parent, child, false); }
+            crate::native::set_overlay_visible(parent, child, wanted);
+        }
+    }
+
     pub(crate) fn site_boosts(&self) -> Vec<Boost> {
         let Some(tab) = self.browser.active_tab() else {
             return Vec::new();
@@ -286,6 +357,11 @@ impl BoostEditor {
         if let Some(owner) = browser.upgrade() {
             subscriptions.push(cx.observe(&owner, |_, _, cx| cx.notify()));
         }
+        // Leaving the app from the editor itself must hide it too.
+        subscriptions.push(cx.observe_window_activation(window, |editor: &mut BoostEditor, _, cx| {
+            let owner = editor.browser.clone();
+            cx.defer(move |cx| { let _ = owner.update(cx, |owner, cx| owner.sync_boost_editor_visibility(cx)); });
+        }));
         subscriptions.push(cx.on_release(|editor, cx| {
             if let Some(handle) = editor.picker_bar.take() {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
@@ -310,6 +386,7 @@ impl BoostEditor {
             js,
             focus,
             color_bounds: Rc::new(Cell::new(None)),
+            wheel_grip: None,
             _subscriptions: subscriptions,
         }
     }
@@ -584,9 +661,19 @@ impl BoostEditor {
         .into_any_element()
     }
     fn draw_wheel(
-        tint: Option<u16>,
+        appearance: &browser_core::boosts::BoostAppearance,
         measured: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     ) -> AnyElement {
+        let tint = appearance.tint;
+        let inset = (148. - browser_core::boosts::PAD_EXTENT) / 2.;
+        // Untinted Boosts show the neutral dots in Arc's resting spots.
+        let dots = match (appearance.main_point(), appearance.accent_point()) {
+            (Some(main), Some(accent)) => [
+                (inset + main.0 * browser_core::boosts::PAD_EXTENT, inset + main.1 * browser_core::boosts::PAD_EXTENT, browser_core::boosts::MAIN_DOT_RADIUS, dot_color(main)),
+                (inset + accent.0 * browser_core::boosts::PAD_EXTENT, inset + accent.1 * browser_core::boosts::PAD_EXTENT, browser_core::boosts::ACCENT_DOT_RADIUS, dot_color(accent)),
+            ],
+            _ => [(113., 73., 17., rgb(0x6f6f6f).into()), (101., 102., 11., rgb(0x343434).into())],
+        };
         gpui::canvas(
             move |bounds, _, _| {
                 measured.set(Some(bounds));
@@ -678,7 +765,8 @@ impl BoostEditor {
                         ));
                     }
                 }
-                for (x, y, r, color) in [(113., 73., 17., 0x6f6f6f), (101., 102., 11., 0x343434)] {
+                // The accent dot is drawn last, above the main dot it orbits.
+                for (x, y, r, color) in dots {
                     let at = bounds.origin + point(px(x - r), px(y - r));
                     let circle = Bounds::new(at, size(px(r * 2.), px(r * 2.)));
                     window.paint_shadows(
@@ -699,8 +787,7 @@ impl BoostEditor {
                             at + point(px(2.), px(2.)),
                             size(px(r * 2. - 4.), px(r * 2. - 4.)),
                         ),
-                        tint.map(|hue| gpui::hsla(hue as f32 / 360., 0.5, 0.5, 1.))
-                            .unwrap_or_else(|| rgb(color).into()),
+                        color,
                     );
                     dot.corner_radii = px(r - 2.).into();
                     window.paint_quad(dot);
@@ -945,27 +1032,11 @@ impl Render for BoostEditor {
                                 .debug_selector(|| "boost-color".into())
                                 .size(px(148.))
                                 .cursor_pointer()
-                                .child(Self::draw_wheel(appearance.tint, self.color_bounds.clone()))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(
-                                        |this, event: &gpui::MouseDownEvent, window, cx| {
-                                            let _ = window;
-                                            let Some(bounds) = this.color_bounds.get() else {
-                                                return;
-                                            };
-                                            let hue =
-                                                ((f32::from(event.position.x - bounds.left())
-                                                    / 148.)
-                                                    .clamp(0., 1.)
-                                                    * 359.)
-                                                    as u16;
-                                            this.edit(cx, |boost| {
-                                                boost.appearance.tint = Some(hue)
-                                            });
-                                        },
-                                    ),
-                                ),
+                                .child(Self::draw_wheel(&appearance, self.color_bounds.clone()))
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| this.grab_wheel(event.position, cx)))
+                                .on_drag(WheelDrag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                                .on_drag_move::<WheelDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<WheelDrag>, _, cx| this.steer_wheel(event.event.position, cx)))
+                                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.wheel_grip = None)),
                         )
                         .child(
                             div().mt(px(14.)).flex().gap(px(8.)).children(
@@ -1013,7 +1084,7 @@ impl Render for BoostEditor {
                                                     boost.appearance.inverted =
                                                         !boost.appearance.inverted;
                                                 } else if index == 2 {
-                                                    boost.appearance.tint = None;
+                                                    boost.appearance.clear_color();
                                                 }
                                             })
                                         },

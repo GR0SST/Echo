@@ -1277,6 +1277,13 @@ impl Engine {
         self.script_evaluations.request(id,&page.browser,&self.message_ids,expected_url,source)
     }
 
+    /// Sets the page zoom for the view's host, as Arc's Boost text zoom does.
+    pub fn set_zoom_percent(&mut self, id: ViewId, percent: u16) {
+        if let Some(host) = self.views.get(&id).filter(|view| view.role == ViewRole::Page).and_then(|view| view.browser.host()) {
+            host.set_zoom_level((f64::from(percent.clamp(25, 500)) / 100.).ln() / 1.2_f64.ln());
+        }
+    }
+
     /// Steps through Chromium's standard zoom factors. Zero resets to 100%.
     pub fn zoom(&mut self, id: ViewId, direction: i32) {
         if let Some(host) = self.views.get(&id).and_then(|view| view.browser.host()) {

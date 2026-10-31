@@ -54,6 +54,10 @@ const FAVORITE_COLUMNS: usize = 4;
 const TODAY_ACTIONS_WIDTH: f32 = 96.0;
 const SPACE_BAR_HEIGHT: f32 = 50.0;
 const COMMAND_BAR_WIDTH: f32 = 764.0;
+/// Arc's address drop-down from the sidebar field (measured from the reference).
+const ADDRESS_DROPDOWN_WIDTH: f32 = 420.0;
+/// The drop-down's input row sits over the field, slightly proud of it.
+const ADDRESS_DROPDOWN_INSET: f32 = 6.0;
 /// The search field's band, separator included.
 const COMMAND_BAR_HEADER: f32 = 64.0;
 const COMMAND_BAR_RADIUS: f32 = 12.0;
@@ -588,6 +592,9 @@ pub struct CommandBar {
     pub(crate) rows_scroll: gpui::ScrollHandle,
     pub(crate) icon_picker: crate::icon_catalog::Picker,
     pub(crate) icon_anchor: Option<Bounds<gpui::Pixels>>,
+    /// Opened from the sidebar address: drops down over the field instead
+    /// of centering in the window.
+    pub(crate) address_anchor: Option<Bounds<gpui::Pixels>>,
     /// The bar is drawn in its own transparent window above the browser
     /// window, since pages are native views that cover anything drawn below.
     pub overlay: Option<WindowHandle<Overlay>>,
@@ -802,6 +809,8 @@ pub struct BrowserWindow {
     pub(crate) tear_off: Option<crate::tab_tear_off::TearOff>,
     /// The held row painted above pages, the floating sidebar and window edges.
     pub(crate) drag_ghost: Option<crate::drag_ghost::DragGhost>,
+    /// The docked sidebar address field, for the address drop-down.
+    pub(crate) address_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// Screen bounds of this window as of its last frame or drag move.
     pub(crate) window_bounds: gpui::Bounds<gpui::Pixels>,
     /// A standalone window torn from a Space shows that Space as its title.
@@ -873,6 +882,9 @@ pub struct BrowserWindow {
     /// Last pointer position GPUI saw over this window's own surfaces.
     pub(crate) last_pointer: Option<gpui::Point<gpui::Pixels>>,
     pub(crate) boost_editor: Option<WindowHandle<crate::boosts::BoostEditor>>,
+    /// Native parent and editor views, and whether the editor is shown.
+    pub(crate) boost_editor_native: Option<(usize, usize, bool)>,
+    pub(crate) boost_editor_shown: bool,
     pub(crate) boost_creation_pending: bool,
     pub(crate) new_menu_anchor: crate::site_controls::Anchor,
     /// Times the New menu opened or closed, keying the plus rotation.
@@ -1185,6 +1197,7 @@ impl BrowserWindow {
             split_drop_generation: 0,
             tear_off: None,
             drag_ghost: None,
+            address_bounds: Rc::new(Cell::new(None)),
             window_bounds: window.bounds(),
             torn_space: false,
             split_draft: None,
@@ -1250,6 +1263,8 @@ impl BrowserWindow {
             folder_preview: None,
             last_pointer: None,
             boost_editor: None,
+            boost_editor_native: None,
+            boost_editor_shown: true,
             boost_creation_pending: false,
             new_menu_anchor: Default::default(),
             new_menu_toggles: 0,
@@ -1857,6 +1872,7 @@ impl BrowserWindow {
             rows_scroll: gpui::ScrollHandle::new(),
             icon_picker: crate::icon_catalog::Picker { catalog: if matches!(target, Target::Icon(crate::icons::IconTarget::Folder(_))) { crate::icon_catalog::Catalog::Symbols } else { self.last_icon_catalog }, folder: matches!(target, Target::Icon(crate::icons::IconTarget::Folder(_))), ..Default::default() },
             icon_anchor: if let Target::Icon(target) = target { self.icon_anchors.borrow().get(&target).copied() } else { None },
+            address_anchor: None,
             overlay: None,
             _changed: changed,
             _empty_backspace: empty_backspace,
@@ -2855,6 +2871,13 @@ impl BrowserWindow {
             .unwrap_or((Target::NewTab, String::new()));
         if !self.toggle_command_target(target, &text, cx) {
             self.open_command_bar(target, &text, window, cx);
+        }
+        // Arc drops the address editor down from the docked sidebar field;
+        // a top toolbar or hidden sidebar keeps the centered bar.
+        let anchor = self.address_bounds.get().filter(|_| self.sidebar_visible && !self.page_toolbar_shown());
+        if let Some(bar) = self.command_bar.as_mut().filter(|bar| matches!(bar.target, Target::Tab(_) | Target::NewTab)) {
+            bar.address_anchor = anchor;
+            cx.notify();
         }
     }
 
@@ -3876,7 +3899,9 @@ impl BrowserWindow {
         let address_action = |id: &'static str, active: bool| div().id(id).debug_selector(|| self.sidebar_debug_name((move || id.into())()))
             .group(id).relative().flex_none().size(px(26.)).flex().items_center().justify_center()
             .child(self.render_press_highlight(id, hsla(0., 0., 0., 0.08), active));
-        let address_actions_shown = controls_open || self.sidebar_hovered;
+        // An active Boost marks the site controls with a white tile, always shown.
+        let boosted = self.browser.active_tab().is_some_and(|tab| self.site_boosts().iter().any(|boost| boost.matches(&tab.url)));
+        let address_actions_shown = controls_open || self.sidebar_hovered || boosted;
         let favorites: Vec<_> = self.browser.active_user_profile().favorites.iter().filter(|tab| !self.browser.is_split_secondary(tab.id)).collect();
         let mini_player = self.render_mini_player(cx);
         let has_mini_player = mini_player.is_some();
@@ -3935,6 +3960,7 @@ impl BrowserWindow {
                         .when(dark, |this| this.bg(hsla(0., 0., 1., 0.14)).text_color(hsla(0., 0., 1., 0.65)))
                         .when_some(self.theme_address_fill(), |this, fill| this.bg(fill))
                         .whitespace_nowrap()
+                        .child({ let measured = self.address_bounds.clone(); canvas(|_, _, _| (), move |bounds, _, _, _| measured.set(Some(bounds))).absolute().inset_0() })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.on_edit_current_url(&EditCurrentUrl, window, cx)
                         }))
@@ -3967,7 +3993,8 @@ impl BrowserWindow {
                                     this.press_control("address-site-controls");
                                     this.toggle_site_controls(window, cx);
                                 }))
-                                .child(self.render_pressed_icon("address-site-controls", crate::icons::Icon::SiteControls))
+                                .when(boosted, |this| this.child(div().debug_selector(|| "address-boost-active".into()).absolute().size(px(22.)).rounded(px(6.)).bg(gpui::white())))
+                                .child(div().relative().when(boosted, |icon| icon.text_color(hsla(0., 0., 0.1, 1.))).child(self.render_pressed_icon("address-site-controls", crate::icons::Icon::SiteControls)))
                                 .child(canvas(|_, _, _| (), move |bounds, _, _, _| anchor.set(Some(bounds))).absolute().inset_0()))),
                             "address-actions", address_actions_shown))),
                 ),
@@ -4555,7 +4582,12 @@ impl BrowserWindow {
                 .child(div().id("toolbar-copy-url").text_color(hsla(0.,0.,ink,0.675)).debug_selector(||"toolbar-copy-url".into()).size(px(26.)).flex_none().flex().items_center().justify_center().on_click(cx.listener(|this,_,_,cx|{cx.stop_propagation();this.copy_url(false,cx);})).child(crate::icons::control(crate::icons::Icon::Link)))
                 .child(div().min_w_0().truncate().child(text))))
             .child(self.render_pinned_extensions(cx))
-            .child(button("toolbar-site-controls",crate::icons::Icon::SiteControls).on_click(cx.listener(|this,_,window,cx|this.toggle_site_controls(window,cx))).child(canvas(|_,_,_|(),move |bounds,_,_,_|anchor.set(Some(bounds))).absolute().inset_0()))
+            // An active Boost marks the site controls with a white tile, as in the sidebar.
+            .child(button("toolbar-site-controls",crate::icons::Icon::SiteControls).relative()
+                .when(self.browser.active_tab().is_some_and(|tab| self.site_boosts().iter().any(|boost| boost.matches(&tab.url))), |this| this.text_color(hsla(0.,0.,0.1,1.))
+                    .child(div().debug_selector(|| "toolbar-boost-active".into()).absolute().size(px(22.)).rounded(px(6.)).bg(gpui::white())
+                        .flex().items_center().justify_center().child(crate::icons::control_sized(crate::icons::Icon::SiteControls, 18.))))
+                .on_click(cx.listener(|this,_,window,cx|this.toggle_site_controls(window,cx))).child(canvas(|_,_,_|(),move |bounds,_,_,_|anchor.set(Some(bounds))).absolute().inset_0()))
             .child(button("toolbar-split",crate::icons::Icon::Split).on_click(cx.listener(|this,_,window,cx|this.open_command_action(Command::AddSplit(None),window,cx))))
             .into_any_element()
     }
@@ -4803,11 +4835,16 @@ impl BrowserWindow {
         let accent = self.accent();
         // Arc's split draft uses the ordinary window-wide Command Bar, even
         // when its empty pane is only 220 px wide.
-        let panel_width = COMMAND_BAR_WIDTH.min((width - 32.).max(0.));
+        let anchor = bar.address_anchor;
+        let panel_width = match anchor {
+            // Wider than the sidebar, over its address field.
+            Some(anchor) => ADDRESS_DROPDOWN_WIDTH.min((width - f32::from(anchor.left()) - 8.).max(0.)),
+            None => COMMAND_BAR_WIDTH.min((width - 32.).max(0.)),
+        };
         let archive = matches!(bar.target, Target::Archive(_));
         // Arc anchors the top to the center of a nominal 338px panel. Result
         // changes grow down from that point instead of moving the input.
-        let default_top = ((height - 338.) * 0.5).max(16.);
+        let default_top = anchor.map_or(((height - 338.) * 0.5).max(16.), |anchor| f32::from(anchor.top()) - ADDRESS_DROPDOWN_INSET);
         let rows_height = (height - default_top - if archive { 150. } else { 90. } - 16.).max(40.);
         let top = default_top;
         let mut previous_date = None;
@@ -5024,7 +5061,8 @@ impl BrowserWindow {
             .rounded(px(WINDOW_CORNER_RADIUS))
             .flex()
             .flex_col()
-            .items_center()
+            .when(anchor.is_none(), |this| this.items_center())
+            .when_some(anchor, |this, anchor| this.items_start().pl(anchor.left()))
             .pt(px(top))
             .bg(gpui::transparent_black())
             .on_click(cx.listener(|this, _, _, cx| {this.boost_creation_pending=false;this.close_command_bar(cx);}))
@@ -5189,6 +5227,7 @@ impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = crate::native::view_of(window);
         self.window_bounds = window.bounds();
+        self.sync_boost_editor_visibility(cx);
         self.sync_devtools_windows(cx);
         if let Some(pages)=&self.pages { pages.borrow_mut().sync_shortcuts(crate::shortcuts::page(cx)); }
         if window.is_window_active() {
