@@ -423,7 +423,6 @@ impl BrowserWindow {
                     let browser = cx.entity().downgrade();
                     let key = id.get() as usize;
                     let focus = self.browser.spaces.iter().find(|entry| entry.id == space).and_then(|space| space.active_tab).filter(|tab| self.browser.folder_ancestors(*tab).contains(&id));
-                    let active = focus.is_some();
                     let dark = self.theme_is_dark_for(space);
                     let folder_pigment = self.theme_primary_for(space);
                     Some(div().pl(px(indent)).flex_none().min_w_0().flex().flex_col().gap(px(crate::window::SIDEBAR_ROW_GAP)).child(div().id(("folder", key)).debug_selector(|| self.sidebar_debug_name((move || format!("folder-{key}"))()))
@@ -432,7 +431,8 @@ impl BrowserWindow {
                         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| { if *hovered && this.sidebar_page_interactive { this.hover_folder(id, cx); } }))
                         .flex().items_center().h(px(crate::window::SIDEBAR_ROW_HEIGHT)).pl(px(9.)).pr(px(6.)).gap(px(9.)).rounded(px(crate::window::SIDEBAR_ROW_RADIUS))
                         .text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD)
-                        .when(active || self.sidebar_folder_selected(id), |this| this.bg(hsla(0., 0., 1., 0.25))).hover(move |this| this.bg(hsla(0., 0., 1., if dark { 0.1 } else { 0.3 })))
+                        // The page itself is highlighted, not the folder holding it.
+                        .when(self.sidebar_folder_selected(id), |this| this.bg(hsla(0., 0., 1., 0.25))).hover(move |this| this.bg(hsla(0., 0., 1., if dark { 0.1 } else { 0.3 })))
                         .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| { if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } if this.select_sidebar_folder(id,event.modifiers(),cx) {return;} if this.browser.folder(id).and_then(|f|f.live.as_ref()).is_some_and(|l|l.credential_id.is_empty()) { this.open_live_connection(id,cx); } else { this.toggle_folder(id, cx); } cx.notify(); }))
                         .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| { cx.stop_propagation(); if !painted_profile.is_some_and(|profile| this.prepare_sidebar_target(space, profile)) { return; } this.open_folder_menu(id, event.position, window, cx); }))
                         .on_drag(crate::folder_drag::FolderDrag::new(folder, focus, self.profile.handle.clone(), self.browser.spaces.iter().find(|entry| entry.id == space).expect("folder Space").user_profile_id), { let owner = cx.entity().downgrade(); move |drag, _, _, cx| drag.start(owner.clone(), cx) })
