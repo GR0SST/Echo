@@ -809,6 +809,8 @@ pub struct BrowserWindow {
     pub(crate) tear_off: Option<crate::tab_tear_off::TearOff>,
     /// The held row painted above pages, the floating sidebar and window edges.
     pub(crate) drag_ghost: Option<crate::drag_ghost::DragGhost>,
+    /// The top toolbar color shown and the one it eases from.
+    toolbar_tint: Cell<(gpui::Hsla, gpui::Hsla)>,
     /// The docked sidebar address field, for the address drop-down.
     pub(crate) address_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// Screen bounds of this window as of its last frame or drag move.
@@ -1197,6 +1199,7 @@ impl BrowserWindow {
             split_drop_generation: 0,
             tear_off: None,
             drag_ghost: None,
+            toolbar_tint: Cell::new((gpui::white(), gpui::white())),
             address_bounds: Rc::new(Cell::new(None)),
             window_bounds: window.bounds(),
             torn_space: false,
@@ -4567,10 +4570,18 @@ impl BrowserWindow {
         if self.developer_mode_enabled() { return self.render_developer_toolbar(cx); }
         let state = self.browser.active_tab().and_then(|tab| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(tab.id))).unwrap_or_default();
         let text = self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default();
-        let (background, ink) = toolbar_colors(state.document_color, self.theme_is_dark());
+        // The bar takes the page's top color, starting white and easing into it.
+        let (background, ink) = toolbar_tint(state.top_color);
+        let (shown, previous) = self.toolbar_tint.get();
+        let previous = if shown == background { previous } else { self.toolbar_tint.set((background, shown)); shown };
+        let tint_key = SharedString::from(format!("toolbar-tint-{:?}-{:?}", background, previous));
         let anchor = self.site_controls_anchor.clone();
         let button = |id: &'static str, icon| div().id(id).debug_selector(move || id.into()).flex_none().w(px(38.)).h(px(TOP_TOOLBAR_HEIGHT)).flex().items_center().justify_center().rounded(px(5.)).hover(move |s|s.bg(hsla(0.,0.,ink,0.08))).child(crate::icons::control_sized(icon, if matches!(icon, crate::icons::Icon::Reload) { 16. } else { 18. }));
-        div().debug_selector(|| "top-toolbar".into()).absolute().top_0().left_0().right_0().h(px(TOP_TOOLBAR_HEIGHT)).rounded_t(px(CONTENT_CORNER_RADIUS)).px(px(2.)).flex().items_center().bg(background).border_b_1().border_color(hsla(0.,0.,ink,0.08)).text_color(hsla(0.,0.,ink,0.675))
+        div().debug_selector(|| "top-toolbar".into()).absolute().top_0().left_0().right_0().h(px(TOP_TOOLBAR_HEIGHT)).rounded_t(px(CONTENT_CORNER_RADIUS)).px(px(2.)).flex().items_center()
+            .child(div().debug_selector(|| "top-toolbar-fill".into()).absolute().inset_0().rounded_t(px(CONTENT_CORNER_RADIUS)).bg(background)
+                .with_animation(tint_key, Animation::new(if crate::native::prefers_reduced_motion() { Duration::ZERO } else { Duration::from_millis(250) }).with_easing(ease_out_quint()),
+                    move |fill, delta| fill.bg(mix_colors(previous, background, delta))))
+            .border_b_1().border_color(hsla(0.,0.,ink,0.08)).text_color(hsla(0.,0.,ink,0.675))
             .child(self.navigation_history_button(button("toolbar-back",crate::icons::Icon::Back),false,cx).opacity(if state.can_go_back {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_back(tab)))))
             .child(self.navigation_history_button(button("toolbar-forward",crate::icons::Icon::Forward),true,cx).opacity(if state.can_go_forward {1.} else {0.37}).on_click(cx.listener(|this,_,_,_|this.with_active_page(|pages,tab|pages.go_forward(tab)))))
             .child(button("toolbar-reload",if state.loading {crate::icons::Icon::Close} else {crate::icons::Icon::Reload}).on_click(cx.listener(move |this,_,_,_|this.with_active_page(|pages,tab|if state.loading {pages.stop_loading(tab)} else {pages.reload(tab)}))))
@@ -5693,6 +5704,19 @@ mod page_share;
 mod save_page;
 
 /// Arc's toolbar follows the document canvas, independently of chrome mode.
+/// The top toolbar wears the page's top color itself (white until known),
+/// with ink chosen for contrast.
+pub(crate) fn toolbar_tint(color: Option<[u8; 3]>) -> (gpui::Hsla, f32) {
+    let color = color.unwrap_or([255; 3]);
+    let light = (color[0] as f32 * 0.2126 + color[1] as f32 * 0.7152 + color[2] as f32 * 0.0722) > 127.5;
+    (gpui::rgb((color[0] as u32) << 16 | (color[1] as u32) << 8 | color[2] as u32).into(), if light { 0. } else { 1. })
+}
+
+fn mix_colors(from: gpui::Hsla, to: gpui::Hsla, t: f32) -> gpui::Hsla {
+    let (a, b): (gpui::Rgba, gpui::Rgba) = (from.into(), to.into());
+    gpui::Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }.into()
+}
+
 pub(crate) fn toolbar_colors(color: Option<[u8; 3]>, dark_fallback: bool) -> (gpui::Hsla, f32) {
     let color = color.unwrap_or(if dark_fallback { [34; 3] } else { [255; 3] });
     let light = (color[0] as f32 * 0.2126 + color[1] as f32 * 0.7152 + color[2] as f32 * 0.0722) > 127.5;

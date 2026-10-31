@@ -157,7 +157,9 @@ pub(crate) fn receive(
         return true;
     }
     let boosts = decode(&CefString::from(&arguments.string(0)).to_string());
-    let script = sources(&boosts, &CefString::from(&frame.url()).to_string(), false).remove(0);
+    // Edited Boosts recolor the page; chrome takes its colors again right away.
+    let script = sources(&boosts, &CefString::from(&frame.url()).to_string(), false).remove(0)
+        + "\n;document[Symbol.for('echo.document.color.refresh')]?.();";
     CONFIG.with_borrow_mut(|config| {
         config.insert(browser.identifier(), boosts);
     });

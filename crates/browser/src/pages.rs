@@ -514,6 +514,8 @@ pub struct PageState {
     pub crashed: Option<i32>,
     pub loading_progress: u16,
     pub document_color: Option<[u8; 3]>,
+    /// The color at the page's top edge, under the top toolbar.
+    pub top_color: Option<[u8; 3]>,
     pub loading: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
@@ -2298,8 +2300,8 @@ impl Pages {
                     }
                 }
             }
-            Event::DocumentColor { view, url, color } => {
-                if let Some(page) = pages.values_mut().find(|page| page.view == *view && page.url == *url) { page.state.document_color = Some(*color); }
+            Event::DocumentColor { view, url, color, top } => {
+                if let Some(page) = pages.values_mut().find(|page| page.view == *view && page.url == *url) { page.state.document_color = Some(*color); page.state.top_color = Some(*top); }
             }
             Event::PageSwipe { .. } => {}
             Event::LoadingProgress { view, progress } => {
@@ -2322,7 +2324,7 @@ impl Pages {
             }
             Event::UrlChanged { view, url } => {
                 if let Some(page) = pages.values_mut().find(|page| page.view == *view) {
-                    if page.url != *url { page.state.document_color = None; }
+                    if page.url != *url { page.state.document_color = None; page.state.top_color = None; }
                     page.url = url.clone();
                     page.state.status.clear();
                 }

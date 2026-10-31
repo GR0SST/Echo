@@ -12082,21 +12082,41 @@ fn toolbar_canvas_color_tracks_its_document_and_rejects_stale_navigation_reports
     let color = |view: &Entity<BrowserWindow>, cx: &VisualTestContext| view.read_with(cx, |view, _| {
         view.pages.as_ref().unwrap().borrow().state(view.browser.active_tab().unwrap().id).document_color
     });
-    fake.send(cx, Event::DocumentColor { view: page(1), url: "https://stale.example/".into(), color: [10; 3] });
+    fake.send(cx, Event::DocumentColor { view: page(1), url: "https://stale.example/".into(), color: [10; 3], top: [10; 3] });
     assert_eq!(color(&view, cx), None);
-    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [245; 3] });
+    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [245; 3], top: [245; 3] });
     assert_eq!(color(&view, cx), Some([245; 3]));
     assert_eq!(crate::window::toolbar_colors(color(&view, cx), true), (gpui::white(), 0.));
     cx.simulate_keystrokes("cmd-shift-d");
     cx.run_until_parked();
     assert_eq!(cx.debug_bounds("top-toolbar").unwrap().size.height, gpui::px(33.));
-    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [18; 3] });
+    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [18; 3], top: [18; 3] });
     assert_eq!(crate::window::toolbar_colors(color(&view, cx), true).1, 1.);
     fake.send(cx, Event::UrlChanged { view: page(1), url: "https://next.example/".into() });
     assert_eq!(color(&view, cx), None);
-    fake.send(cx, Event::DocumentColor { view: page(1), url, color: [18; 3] });
+    fake.send(cx, Event::DocumentColor { view: page(1), url, color: [18; 3], top: [18; 3] });
     assert_eq!(color(&view, cx), None);
     assert_eq!(crate::window::toolbar_colors(color(&view, cx), true), (gpui::rgb(0x222222).into(), 1.));
+}
+
+#[gpui::test]
+fn the_top_toolbar_wears_the_pages_header_color_not_its_canvas(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let url = active_url(&view, cx).unwrap();
+    cx.simulate_keystrokes("cmd-shift-d");
+    cx.run_until_parked();
+    let top = |view: &Entity<BrowserWindow>, cx: &VisualTestContext| view.read_with(cx, |view, _| {
+        view.pages.as_ref().unwrap().borrow().state(view.browser.active_tab().unwrap().id).top_color
+    });
+    // Unknown: white with dark ink.
+    assert_eq!(crate::window::toolbar_tint(top(&view, cx)), (gpui::white(), 0.));
+    // A light lavender header over a white canvas keeps its own color.
+    fake.send(cx, Event::DocumentColor { view: page(1), url: url.clone(), color: [255; 3], top: [243, 243, 251] });
+    cx.run_until_parked();
+    assert_eq!(crate::window::toolbar_tint(top(&view, cx)), (gpui::rgb(0xf3f3fb).into(), 0.));
+    assert!(cx.debug_bounds("top-toolbar-fill").is_some());
+    fake.send(cx, Event::DocumentColor { view: page(1), url, color: [255; 3], top: [20, 20, 40] });
+    assert_eq!(crate::window::toolbar_tint(top(&view, cx)).1, 1., "a dark header gets light ink");
 }
 
 #[path = "mini_player_audit_tests.rs"]

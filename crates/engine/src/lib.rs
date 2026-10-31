@@ -156,7 +156,8 @@ pub enum Event {
     BoostZap { view: ViewId, selector: String },
     TitleChanged { view: ViewId, title: String },
     AudioStateChanged { view: ViewId, audible: bool },
-    DocumentColor { view: ViewId, url: String, color: [u8; 3] },
+    /// `color` is the canvas behind the page; `top` is what shows at its top edge.
+    DocumentColor { view: ViewId, url: String, color: [u8; 3], top: [u8; 3] },
     PageSwipe { view: ViewId, state: Option<PageSwipe> },
     MediaCaptureChanged { view: ViewId, state: MediaCaptureState },
     MediaStateChanged { view: ViewId, state: MediaState },
@@ -202,7 +203,7 @@ enum RawEvent {
     Progress(u16),
     BoostZap(String),
     Audio(bool),
-    DocumentColor(String, [u8; 3]),
+    DocumentColor(String, [u8; 3], [u8; 3]),
     PageSwipe(Option<PageSwipe>),
     Capture(MediaCaptureState),
     Media(MediaState),
@@ -1657,7 +1658,7 @@ fn page_event(view: ViewId, role: ViewRole, event: RawEvent) -> Option<Event> {
         RawEvent::PermissionRequested(request) => Event::PermissionRequested { view, request },
         RawEvent::PermissionDismissed(request) => Event::PermissionDismissed { view, request },
         RawEvent::LoadError(_, _, _) => return None,
-        RawEvent::DocumentColor(url, color) => Event::DocumentColor { view, url, color },
+        RawEvent::DocumentColor(url, color, top) => Event::DocumentColor { view, url, color, top },
         RawEvent::Media(state) => Event::MediaStateChanged { view, state },
         RawEvent::Audio(audible) => Event::AudioStateChanged { view, audible },
         RawEvent::PageSwipe(state) => Event::PageSwipe { view, state },
@@ -1744,11 +1745,12 @@ wrap_client! {
                 }
 
                 if let Some(message) = message.as_ref().filter(|message| CefString::from(&message.name()).to_string() == document_color::MESSAGE) {
-                    if let (Some(frame), Some(args)) = (frame.as_ref().filter(|frame| frame.is_main() != 0), message.argument_list().filter(|args| args.size() == 4 && args.get_type(0) == ValueType::STRING && (1..4).all(|index| args.get_type(index) == ValueType::INT))) {
+                    if let (Some(frame), Some(args)) = (frame.as_ref().filter(|frame| frame.is_main() != 0), message.argument_list().filter(|args| args.size() == 7 && args.get_type(0) == ValueType::STRING && (1..7).all(|index| args.get_type(index) == ValueType::INT))) {
                         let url = CefString::from(&args.string(0)).to_string();
-                        let values = [args.int(1), args.int(2), args.int(3)];
+                        let values = [args.int(1), args.int(2), args.int(3), args.int(4), args.int(5), args.int(6)];
                         if url == CefString::from(&frame.url()).to_string() && values.iter().all(|value| (0..=255).contains(value)) {
-                            push(&self.events, browser, RawEvent::DocumentColor(url, values.map(|value| value as u8)));
+                            let values = values.map(|value| value as u8);
+                            push(&self.events, browser, RawEvent::DocumentColor(url, [values[0], values[1], values[2]], [values[3], values[4], values[5]]));
                         }
                     }
                     return 1;
