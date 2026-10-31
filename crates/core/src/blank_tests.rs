@@ -166,3 +166,17 @@ fn normal_and_private_persistent_sidebar_mutations_remain_available() {
         assert!(browser.favorite_tab(b));
     }
 }
+
+#[test]
+fn detaching_a_today_tab_removes_it_without_archiving() {
+    let now = std::time::SystemTime::now();
+    let mut browser = Browser::new();
+    let first = browser.new_tab("https://a.example", now);
+    let second = browser.new_tab("https://b.example", now);
+    let archived = browser.archive.len();
+    assert_eq!(browser.detach_today_tab(second).map(|tab| tab.url), Some("https://b.example".to_string()));
+    assert_eq!(browser.archive.len(), archived);
+    assert!(browser.all_tabs().all(|tab| tab.id != second));
+    assert_eq!(browser.space().active_tab, Some(first));
+    assert!(browser.detach_today_tab(second).is_none());
+}

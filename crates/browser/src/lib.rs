@@ -80,6 +80,7 @@ mod space_theme;
 mod theme_editor;
 mod space_drag;
 mod tab_drag;
+mod tab_tear_off;
 mod folder_drag;
 mod inline_rename;
 mod inline_folder_rename;

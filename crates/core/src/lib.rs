@@ -477,6 +477,18 @@ impl Browser {
         Some(tab)
     }
 
+    /// Takes a standalone Today page out of its Space without archiving it,
+    /// e.g. when it is dragged out into a window of its own.
+    pub fn detach_today_tab(&mut self, id: TabId) -> Option<Tab> {
+        if self.split_for(id).is_some() { return None; }
+        let index = self.spaces.iter().position(|space| space.today.iter().any(|tab| tab.id == id))?;
+        let previous = self.active_space;
+        self.active_space = index;
+        let tab = self.remove_tab(id);
+        self.active_space = previous;
+        tab
+    }
+
     /// Closes a tab like Arc's ⌘W: Today tabs go to the archive, pinned
     /// tabs stay pinned and return to their pinned page.
     pub fn close_tab(&mut self, id: TabId, now: SystemTime) -> Option<Closed> {

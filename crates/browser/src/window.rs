@@ -616,6 +616,8 @@ pub enum OverlayKind {
     PageZoom,
     PageSwipe,
     SplitDrop,
+    /// A tab dragged out of the window, drawn over the whole display.
+    TearOff,
     /// The hidden sidebar, shown floating over the page.
     Sidebar,
     TabMenu,
@@ -654,7 +656,7 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn draws_split_drag_card(&self)->bool {matches!(self.kind,OverlayKind::SplitDrop)}
+    pub(crate) fn draws_split_drag_card(&self)->bool {matches!(self.kind,OverlayKind::SplitDrop|OverlayKind::TearOff)}
 
     pub(crate) fn belongs_to(&self,owner:gpui::EntityId)->bool {self.browser.entity_id()==owner}
 
@@ -704,6 +706,7 @@ impl Render for Overlay {
                     OverlayKind::PageSwipe => browser.render_page_swipe(cx),
                     OverlayKind::PageZoom => browser.render_page_zoom(),
                     OverlayKind::SplitDrop => browser.render_split_drop(window),
+                    OverlayKind::TearOff => browser.render_tear_off(window),
                     OverlayKind::Sidebar => browser.render_floating_sidebar(cx),
                     OverlayKind::TabMenu => browser.render_tab_menu(window, cx),
                     OverlayKind::NavigationHistory => browser.render_navigation_history(cx),
@@ -790,6 +793,9 @@ pub struct BrowserWindow {
     sidebar_press_task: Option<Task<()>>,
     space_drag_hover: Option<(SpaceId, Task<()>)>,
     pub(crate) split_drop: Option<crate::split_drop::SplitDropPreview>,
+    pub(crate) tear_off: Option<crate::tab_tear_off::TearOff>,
+    /// A standalone window torn from a Space shows that Space as its title.
+    pub(crate) torn_space: bool,
     pub(crate) split_drop_generation: u64,
     pub(crate) split_draft: Option<crate::split::SplitDraft>,
     pub(crate) hovered_row: Option<TabId>,
@@ -1167,6 +1173,8 @@ impl BrowserWindow {
             space_drag_hover: None,
             split_drop: None,
             split_drop_generation: 0,
+            tear_off: None,
+            torn_space: false,
             split_draft: None,
             hovered_row: None,
             pin_cross: None,
@@ -2699,7 +2707,7 @@ impl BrowserWindow {
     pub(crate) fn render_overlay_shell(&self, content: AnyElement, focus:Option<&FocusHandle>, cx: &mut Context<Self>) -> AnyElement {
         div().size_full().when_some(focus,|root,focus|root.track_focus(focus)).key_context(if self.sidebar_resize.is_some() { "BrowserWindow SidebarResizing" } else { WINDOW_CONTEXT })
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && cx.stop_active_drag(window) {
+                if event.keystroke.key == "escape" && { this.close_tear_off(cx); cx.stop_active_drag(window) } {
                     this.sidebar_drag_scroll = None;
                     this.cancel_space_drag_hover();
                     this.close_split_drop(cx);
@@ -3843,7 +3851,8 @@ impl BrowserWindow {
         let private = self.browser.is_private();
         let dark = self.theme_uses_light_ink_for(self.browser.space().id);
         let blank = self.browser.is_blank();
-        let (pages, offset) = pager_pages.unwrap_or_else(|| (vec![if blank { self.render_blank_tabs(cx).into_any_element() } else if private { self.render_private_tabs(cx).into_any_element() } else { self.render_space_page(self.browser.active_space, cx).into_any_element() }], 0.));
+        // A single page fills the sidebar width like a pager page; the track is content-sized.
+        let (pages, offset) = pager_pages.unwrap_or_else(|| (vec![div().flex_none().w(px(self.sidebar_width())).h_full().child(if blank { self.render_blank_tabs(cx).into_any_element() } else if private { self.render_private_tabs(cx).into_any_element() } else { self.render_space_page(self.browser.active_space, cx).into_any_element() }).into_any_element()], 0.));
         let browser = cx.entity().downgrade();
         let state = self.browser.space().active_tab.and_then(|id| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(id))).unwrap_or_default();
 
@@ -5301,9 +5310,10 @@ impl Render for BrowserWindow {
             .on_drag_move::<crate::tab_drag::TabDrag>(cx.listener(|this, event: &gpui::DragMoveEvent<crate::tab_drag::TabDrag>, window, cx| {
                 let drag = event.drag(cx).clone();
                 this.update_split_drop(&drag, event.event.position, window, cx);
+                this.update_tear_off(&drag, event.event.position, window, cx);
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && cx.stop_active_drag(window) {
+                if event.keystroke.key == "escape" && { this.close_tear_off(cx); cx.stop_active_drag(window) } {
                     this.sidebar_drag_scroll = None;
                     this.cancel_space_drag_hover();
                     this.close_split_drop(cx);

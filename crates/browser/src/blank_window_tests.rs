@@ -216,3 +216,47 @@ fn named_blank_uses_captured_source_storage_even_after_the_normal_window_switche
         assert_eq!(view.browser.user_profile(named).unwrap().history[0].url, "https://named.example/blank");
     });
 }
+
+#[gpui::test]
+fn dragging_a_tab_out_of_the_window_tears_it_into_a_space_window(cx: &mut TestAppContext) {
+    let (normal, visual, _fake) = open_pages(cx);
+    let (kept, torn) = normal.update(visual, |view, cx| {
+        let kept = view.edit_browser(|b| b.new_tab("https://kept.example", std::time::SystemTime::now()));
+        let torn = view.edit_browser(|b| b.new_tab("https://torn.example", std::time::SystemTime::now()));
+        view.edit_browser(|b| b.activate_tab(kept, std::time::SystemTime::now()));
+        cx.notify();
+        (kept, torn)
+    });
+    visual.run_until_parked();
+    let space = normal.read_with(visual, |view, _| view.browser.space().name.clone());
+    let viewport = visual.update(|window, _| window.viewport_size());
+    let outside = gpui::point(viewport.width + gpui::px(80.), gpui::px(200.));
+    // Escape while outside cancels: nothing leaves.
+    begin_sidebar_drag(visual, test_selector(format!("tab-{}", torn.get())));
+    visual.simulate_mouse_move(outside, gpui::MouseButton::Left, Modifiers::none());
+    visual.run_until_parked();
+    assert!(normal.read_with(visual, |view, _| view.tear_off.is_some()), "outside the window arms the tear-off");
+    let overlay = normal.read_with(visual, |view, _| view.tear_off.as_ref().unwrap().overlay_handle()).expect("a passive tear-off overlay");
+    let mut popup = VisualTestContext::from_window(overlay.into(), &visual.cx);
+    popup.run_until_parked();
+    assert!(popup.debug_bounds("tear-off-card").is_some(), "the page follows the pointer outside the window");
+    assert!(popup.debug_bounds("tab-drag-row").is_none());
+    visual.simulate_keystrokes("escape");
+    visual.simulate_mouse_up(outside, gpui::MouseButton::Left, Modifiers::none());
+    visual.run_until_parked();
+    assert_eq!(roots(visual).len(), 1);
+    // Releasing outside opens a standalone window titled by the Space.
+    begin_sidebar_drag(visual, test_selector(format!("tab-{}", torn.get())));
+    finish_sidebar_drag(visual, outside);
+    let other = roots(visual).into_iter().find(|view| view != &normal).expect("a torn window");
+    other.read_with(visual, |view, _| {
+        assert!(view.browser.is_blank() && view.torn_space);
+        assert_eq!(view.browser.space().name, space);
+        assert_eq!(view.browser.all_tabs().map(|tab| tab.url.as_str()).collect::<Vec<_>>(), vec!["https://torn.example"]);
+    });
+    normal.read_with(visual, |view, _| {
+        assert!(view.browser.all_tabs().all(|tab| tab.id != torn), "the page left its Space");
+        assert_eq!(view.browser.space().active_tab, Some(kept));
+        assert!(view.tear_off.is_none());
+    });
+}

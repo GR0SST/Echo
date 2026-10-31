@@ -26,6 +26,9 @@ pub(crate) struct TabDrag {
 }
 
 impl TabDrag {
+    pub(crate) fn is_split(&self) -> bool { self.split }
+    /// The page shown for this item: the focused pane of a Split View.
+    pub(crate) fn focus_page(&self) -> TabId { self.focus }
 
     pub(crate) fn start_at(&self, owner: gpui::WeakEntity<BrowserWindow>, offset: gpui::Point<gpui::Pixels>, width: f32, height: f32, cx: &mut gpui::App) -> gpui::Entity<Self> {
         self.row.set(gpui::size(px(width), px(height)));
@@ -44,9 +47,10 @@ impl TabDrag {
         cx.new(|cx| {
             // Tie restoration of a dismissed card to this typed drag's lifetime, including
             // cancellations and drops outside the sidebar.
-            cx.on_release(move |_, cx| {
+            cx.on_release(move |drag: &mut TabDrag, cx| {
                 let _ = owner.update(cx, |this, cx| {
                     this.tab_drag_active = false;
+                    this.finish_tear_off(drag, cx);
                     this.close_split_drop(cx);
                     cx.notify();
                 });
