@@ -31,7 +31,16 @@ impl Element for CodeElement {
     ) -> (LayoutId, ()) {
         let input = self.input.read(cx);
         let mut style = Style::default();
-        style.size.width = relative(1.).into();
+        // As wide as the longest line, so a long line scrolls sideways
+        // instead of running past the edge.
+        let text_style = window.text_style();
+        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        let longest = input.content.split('\n').map(|text| {
+            let run = TextRun { len: text.len(), font: text_style.font(), color: text_style.color, background_color: None, underline: None, strikethrough: None };
+            window.text_system().shape_line(text.to_string().into(), font_size, &[run], None).width
+        }).fold(px(0.), |widest, width| widest.max(width));
+        style.size.width = (longest + px(8.)).into();
+        style.min_size.width = relative(1.).into();
         style.size.height =
             (window.line_height() * input.content.split('\n').count().max(25) as f32).into();
         (window.request_layout(style, [], cx), ())

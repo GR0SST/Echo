@@ -76,6 +76,8 @@ pub(crate) struct BoostEditor {
     advanced_closed_at: Option<std::time::Instant>,
     /// When a click outside closed the name menu.
     menu_closed_at: Option<std::time::Instant>,
+    /// The code editor's sideways scroll.
+    pub(crate) code_scroll: gpui::ScrollHandle,
     /// The panel width it animates from and since when, after Code or Back.
     resize: Option<(f32, std::time::Instant)>,
     /// Which color dot the current press moves.
@@ -436,6 +438,7 @@ impl BoostEditor {
             advanced_closed_at: None,
             menu_closed_at: None,
             resize: None,
+            code_scroll: gpui::ScrollHandle::new(),
             wheel_grip: None,
             _subscriptions: subscriptions,
         }
@@ -965,7 +968,7 @@ impl Render for BoostEditor {
         // The content is laid out once at its mode's width; only the panel's
         // clip widens or narrows around it, from the right edge.
         let mut root = div()
-            .w(px(target - 2.))
+            .w(px(target))
             .h_full()
             .flex_none()
             .relative()
@@ -981,6 +984,7 @@ impl Render for BoostEditor {
             }))
             .on_action(cx.listener(|this, _: &UndoZap, _, cx| this.undo_zap(cx)));
         if self.code {
+            let code_lines = if self.javascript { &self.js } else { &self.css }.read(cx).text().split('\n').count();
             let tabs = div()
                 .flex()
                 .w(px(100.))
@@ -1051,15 +1055,43 @@ impl Render for BoostEditor {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
-                        .p(px(12.))
+                        .py(px(12.))
                         .font_family("Menlo")
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .child(if self.javascript {
-                            self.js.clone()
-                        } else {
-                            self.css.clone()
-                        }),
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                // Line numbers stay put while the code scrolls sideways.
+                                .child(
+                                    div()
+                                        .debug_selector(|| "boost-code-lines".into())
+                                        .flex_none()
+                                        .w(px(34.))
+                                        .pr(px(8.))
+                                        .flex()
+                                        .flex_col()
+                                        .items_end()
+                                        .text_color(rgb(0xb0b0b6))
+                                        .children((1..=code_lines).map(|line| div().h(px(18.)).child(line.to_string()))),
+                                )
+                                .child(
+                                    div()
+                                        .id("boost-code-horizontal")
+                                        .debug_selector(|| "boost-code-horizontal".into())
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_x_scroll()
+                                        .track_scroll(&self.code_scroll)
+                                        .pr(px(12.))
+                                        .child(if self.javascript {
+                                            self.js.clone()
+                                        } else {
+                                            self.css.clone()
+                                        }),
+                                ),
+                        ),
                 )
                 .child(
                     div()
@@ -1533,12 +1565,14 @@ impl Render for BoostEditor {
                 .flex_none()
                 .flex()
                 .justify_end()
+                .relative()
                 .rounded(px(12.))
-                .border_1()
-                .border_color(rgb(0xa7a7a7))
                 .overflow_hidden()
                 .bg(rgb(0xfdfdff))
-                .child(root),
+                .child(root)
+                // The outline is drawn over the content: backgrounds such as the
+                // header would otherwise cover it along the rounded corners.
+                .child(div().absolute().inset_0().rounded(px(12.)).border_1().border_color(rgb(0xa7a7a7))),
         )
     }
 }

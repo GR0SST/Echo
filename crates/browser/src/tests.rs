@@ -10422,6 +10422,17 @@ fn boost_zap_bar_lists_zaps_to_restore_and_the_code_eyedropper_writes_selectors(
     assert_eq!(boost(&view,cx).javascript,"document.querySelector(\"#nav\")");
 }
 #[gpui::test]
+fn boost_code_numbers_its_lines_and_scrolls_long_lines_sideways(cx:&mut TestAppContext){
+    let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
+    let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
+    panel.simulate_input("body {");panel.simulate_keystrokes("enter");panel.simulate_input(&format!("  background: {};","x".repeat(160)));panel.simulate_keystrokes("enter");panel.simulate_input("}");panel.run_until_parked();
+    assert_eq!(panel.debug_bounds("boost-code-lines").unwrap().size.height,gpui::px(54.),"one number per line");
+    let code=panel.debug_bounds("boost-code-horizontal").unwrap();
+    panel.simulate_event(gpui::ScrollWheelEvent{position:code.center(),delta:gpui::ScrollDelta::Pixels(gpui::point(gpui::px(-200.),gpui::px(0.))),..Default::default()});panel.run_until_parked();
+    let offset=view.read_with(&panel,|view,cx|view.boost_editor.and_then(|editor|editor.read(cx).ok().map(|editor|editor.code_scroll.offset().x)));
+    assert!(offset.is_some_and(|x|x<gpui::px(0.)),"the long line scrolls sideways: {offset:?}");
+}
+#[gpui::test]
 fn boost_code_mode_widens_and_narrows_the_panel_from_its_right_edge(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
     crate::boosts::ANIMATE_BOOST_RESIZE.with(|animate|animate.set(true));
