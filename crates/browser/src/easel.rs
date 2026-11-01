@@ -107,8 +107,9 @@ pub(crate) struct State {
     gesture: Option<Gesture>,
     editing: Option<Editing>,
     text: Entity<TextInput>,
+    /// Always editable, like plain text; every change renames the Easel.
     title: Entity<TextInput>,
-    title_editing: Option<EaselId>,
+    _title_changed: gpui::Subscription,
     pub(crate) focus: FocusHandle,
     /// The document layer as last laid out, scrolled with it.
     document: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -119,14 +120,23 @@ pub(crate) struct State {
 }
 impl State {
     pub(crate) fn new(cx: &mut Context<BrowserWindow>) -> Self {
+        let title = cx.new(|cx| TextInput::new(browser_core::easels::DEFAULT_TITLE, cx));
+        let _title_changed = cx.subscribe(&title, |this, input, _: &crate::text_input::Changed, cx| {
+            let Some(id) = this.open_easel_id() else { return; };
+            let text = input.read(cx).text().trim().to_owned();
+            let current = this.browser.active_user_profile().easels.get(id).map(|easel| easel.title.clone());
+            if current.as_deref() == Some(if text.is_empty() { browser_core::easels::DEFAULT_TITLE } else { &text }) { return; }
+            this.rename_easel(id, &text);
+            cx.notify();
+        });
         Self {
             tool: Tool::Select,
             selected: None,
             gesture: None,
             editing: None,
             text: cx.new(TextInput::code),
-            title: cx.new(|cx| TextInput::new(browser_core::easels::DEFAULT_TITLE, cx)),
-            title_editing: None,
+            title,
+            _title_changed,
             focus: cx.focus_handle(),
             document: Rc::new(Cell::new(None)),
             scroll: gpui::ScrollHandle::new(),
@@ -300,6 +310,11 @@ fn tool_icon(tool: Tool) -> AnyElement {
     }).size(px(18.)).flex_none().into_any_element()
 }
 
+/// The translucent wash over the Space theme; the page and its top bar share it.
+pub(crate) fn veil(dark: bool) -> Hsla {
+    hsla(0., 0., if dark { 0.05 } else { 1. }, 0.35)
+}
+
 /// Easel's own mark: a page with a loose stroke across it.
 pub(crate) fn favicon(size: f32) -> AnyElement {
     canvas(|_, _, _| (), move |bounds, _, window, _| {
@@ -441,7 +456,6 @@ impl BrowserWindow {
 
     fn set_easel_tool(&mut self, tool: Tool, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_easel_text(cx);
-        self.commit_easel_title(cx);
         if tool == Tool::Image {
             self.easel.tool = Tool::Select;
             self.pick_easel_images(cx);
@@ -503,7 +517,6 @@ impl BrowserWindow {
     fn easel_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.open_easel_id() else { return; };
         let Some(at) = self.easel_point(event.position) else { return; };
-        self.commit_easel_title(cx);
         let editing_here = self.easel.editing.as_ref().is_some_and(|editing| editing.frame.contains(at, 0.));
         if editing_here { return; }
         self.commit_easel_text(cx);
@@ -686,27 +699,15 @@ impl BrowserWindow {
         cx.notify();
     }
 
-    fn begin_easel_title(&mut self, id: EaselId, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_easel_text(cx);
-        let title = self.browser.active_user_profile().easels.get(id).map(|easel| easel.title.clone()).unwrap_or_default();
-        self.easel.title_editing = Some(id);
-        self.easel.title.update(cx, |input, cx| { input.set_text(title, cx); input.select_all_text(cx); });
-        self.easel.title.read(cx).focus_handle(cx).focus(window);
-        cx.notify();
-    }
-
-    fn commit_easel_title(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.easel.title_editing.take() else { return; };
-        let title = self.easel.title.read(cx).text().to_owned();
-        self.rename_easel(id, &title);
-        cx.notify();
-    }
-
     fn easel_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.easel.title_editing.is_some() { self.commit_easel_title(cx); self.focus_easel(window, cx); return; }
+        if self.easel_title_focused(window, cx) { self.focus_easel(window, cx); return; }
         if self.easel.editing.is_some() { self.commit_easel_text(cx); self.focus_easel(window, cx); return; }
         if self.easel.selected.take().is_none() { self.easel.tool = Tool::Select; }
         cx.notify();
+    }
+
+    fn easel_title_focused(&self, window: &Window, cx: &App) -> bool {
+        self.easel.title.read(cx).focus_handle(cx).is_focused(window)
     }
 
     fn delete_easel_selection(&mut self, cx: &mut Context<Self>) {
@@ -717,7 +718,12 @@ impl BrowserWindow {
 
     fn easel_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let modifiers = event.keystroke.modifiers;
-        if self.easel.editing.is_some() || self.easel.title_editing.is_some() || modifiers.platform || modifiers.control || modifiers.alt || modifiers.function { return; }
+        if self.easel_title_focused(window, cx) {
+            // Return leaves the title as Escape does; the text is already saved.
+            if event.keystroke.key == "enter" { self.focus_easel(window, cx); cx.stop_propagation(); }
+            return;
+        }
+        if self.easel.editing.is_some() || modifiers.platform || modifiers.control || modifiers.alt || modifiers.function { return; }
         if let Some(tool) = Tool::ALL.into_iter().find(|tool| tool.key() == event.keystroke.key) {
             self.set_easel_tool(tool, window, cx);
             cx.stop_propagation();
@@ -729,8 +735,10 @@ impl BrowserWindow {
         let open = self.open_easel_id();
         if self.easel.shown == open { return; }
         self.commit_easel_text(cx);
-        self.commit_easel_title(cx);
         self.easel.shown = open;
+        if let Some(title) = open.and_then(|id| self.browser.active_user_profile().easels.get(id)).map(|easel| easel.title.clone()) {
+            self.easel.title.update(cx, |input, cx| input.set_text_at_end(title, cx));
+        }
         self.easel.selected = None;
         self.easel.gesture = None;
         self.easel.tool = Tool::Select;
@@ -829,15 +837,14 @@ impl BrowserWindow {
         let content_height = LAYER_TOP + easel.bottom() * scale + TRAILING_SPACE;
         let document = state.document.clone();
         let owner = cx.entity().downgrade();
-        let title = if state.title_editing == Some(id) {
-            div().id("easel-title-editor").debug_selector(|| "easel-title-editor".into()).w(px(420.)).flex().justify_center()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(state.title.clone()).into_any_element()
-        } else {
-            div().id("easel-title").debug_selector(|| "easel-title".into()).max_w(px(600.)).truncate().cursor_text()
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.begin_easel_title(id, window, cx); }))
-                .child(easel.title.clone()).into_any_element()
-        };
+        // Invisible text sizes the field so the title stays centered, and a
+        // click places the caret, as in any text.
+        let typed = state.title.read(cx).text().to_owned();
+        let sizing = if typed.is_empty() { browser_core::easels::DEFAULT_TITLE.to_owned() } else { typed };
+        let title = div().id("easel-title").debug_selector(|| "easel-title".into()).relative().max_w(px(600.)).overflow_hidden().cursor_text()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().whitespace_nowrap().pr(px(2.)).text_color(gpui::transparent_black()).child(sizing))
+            .child(div().absolute().inset_0().child(state.title.clone()));
         let mut scroll = div().id("easel-scroll").debug_selector(|| "easel-scroll".into()).absolute().inset_0().overflow_y_scroll().track_scroll(&state.scroll);
         // A horizontal swipe belongs to the sidebar and Library.
         scroll.style().restrict_scroll_to_axis = Some(true);
@@ -851,7 +858,7 @@ impl BrowserWindow {
             .inset_0()
             .overflow_hidden()
             .font_family(".SystemUIFont")
-            .bg(hsla(0., 0., if dark { 0.05 } else { 1. }, 0.35))
+            .bg(veil(dark))
             .text_color(hsla(0., 0., ink, 1.))
             .on_action(cx.listener(|this, _: &DeleteSelection, _, cx| this.delete_easel_selection(cx)))
             .on_action(cx.listener(|this, _: &Escape, window, cx| this.easel_escape(window, cx)))

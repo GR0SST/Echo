@@ -4620,7 +4620,8 @@ impl BrowserWindow {
         let state = self.browser.active_tab().and_then(|tab| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(tab.id))).unwrap_or_default();
         let text = self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default();
         // The bar takes the page's top color, starting white and easing into it.
-        let (background, ink) = toolbar_tint(state.top_color);
+        // An Easel's bar shows the Space theme through it, as its page does.
+        let (background, ink) = if self.easel_is_open() { let dark = self.theme_is_dark(); (crate::easel::veil(dark), if dark { 1. } else { 0. }) } else { toolbar_tint(state.top_color) };
         let (shown, previous) = self.toolbar_tint.get();
         let previous = if shown == background { previous } else { self.toolbar_tint.set((background, shown)); shown };
         let tint_key = SharedString::from(format!("toolbar-tint-{:?}-{:?}", background, previous));

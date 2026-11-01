@@ -13565,10 +13565,17 @@ fn easels_rename_from_their_title_and_open_from_library(cx: &mut TestAppContext)
     cx.run_until_parked();
     click(cx, "easel-title");
     cx.simulate_keystrokes("cmd-a");
-    cx.simulate_input("Plans");
-    cx.simulate_keystrokes("escape");
+    cx.simulate_input("Plan");
+    cx.run_until_parked();
+    // Each keystroke renames the Easel and its tab at once.
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Plan");
+    cx.simulate_input("s");
+    cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Plans");
+    // Return leaves the title: tool keys reach the canvas again.
+    cx.simulate_keystrokes("o");
+    assert_eq!(view.read_with(cx, |w, _| w.easel.tool()), crate::easel::Tool::Circle);
     let first = view.read_with(cx, |w, _| w.open_easel_id().unwrap());
     cx.simulate_keystrokes("ctrl-shift-e");
     cx.run_until_parked();
