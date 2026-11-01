@@ -10448,7 +10448,11 @@ fn boost_code_numbers_its_lines_and_scrolls_long_lines_sideways(cx:&mut TestAppC
     panel.simulate_mouse_move(code.center(),None,Modifiers::none());panel.run_until_parked();
     panel.simulate_event(gpui::ScrollWheelEvent{position:code.center(),delta:gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.),gpui::px(-40.))),..Default::default()});panel.run_until_parked();
     assert_eq!(offset(&view,&mut panel),gpui::px(0.),"a vertical swipe never scrolls sideways");
-    panel.simulate_event(gpui::ScrollWheelEvent{position:code.center(),delta:gpui::ScrollDelta::Pixels(gpui::point(gpui::px(-200.),gpui::px(0.))),..Default::default()});panel.run_until_parked();
+    // Over the empty space below the code, not only over its lines.
+    let below=gpui::point(code.center().x,code.bottom()-gpui::px(20.));
+    assert!(below.y>code.top()+gpui::px(54.),"the scroll area spans the editor below the lines: {code:?}");
+    panel.simulate_mouse_move(below,None,Modifiers::none());panel.run_until_parked();
+    panel.simulate_event(gpui::ScrollWheelEvent{position:below,delta:gpui::ScrollDelta::Pixels(gpui::point(gpui::px(-200.),gpui::px(0.))),..Default::default()});panel.run_until_parked();
     let offset=view.read_with(&panel,|view,cx|view.boost_editor.and_then(|editor|editor.read(cx).ok().map(|editor|editor.code_scroll.offset().x)));
     assert!(offset.is_some_and(|x|x<gpui::px(0.)),"the long line scrolls sideways: {offset:?}");
 }

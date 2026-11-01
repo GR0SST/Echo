@@ -743,6 +743,51 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 "quit" => {
                     let _ = cx.update(|cx| crate::quit::request(cx));
                 }
+                // The Boost editor is its own window, out of reach of native
+                // input aimed at the browser window; these drive it directly.
+                "boost-code" | "boost-type" | "boost-scroll" | "boost-press" | "boost-state" => {
+                    let arg = arg.to_string();
+                    let name = name.to_string();
+                    // Native input is sent after this update returns: GPUI drops
+                    // events that arrive while the app is already being updated.
+                    let native_input = cx.update(|cx| -> Option<(usize, f64, f64)> {
+                        let Some(editor) = view.upgrade().and_then(|view| view.read(cx).boost_editor) else {
+                            eprintln!("[automation] no Boost editor");
+                            return None;
+                        };
+                        match name.as_str() {
+                            "boost-code" => { let _ = editor.update(cx, |editor, window, cx| editor.automation_code(window, cx)); None }
+                            "boost-type" => { let _ = editor.update(cx, |editor, window, cx| editor.automation_type(&arg, window, cx)); None }
+                            "boost-scroll" => editor.update(cx, |editor, window, _| {
+                                let center = editor.code_scroll.bounds().center();
+                                crate::native::view_of(window).map(|native| (native as usize, f64::from(f32::from(center.x)), f64::from(f32::from(center.y))))
+                            }).ok().flatten(),
+                            "boost-press" => editor.update(cx, |editor, window, _| {
+                                let track = editor.automation_track()?;
+                                let at: f32 = arg.parse().unwrap_or(0.);
+                                crate::native::view_of(window).map(|native| (native as usize, f64::from(f32::from(track.left() + track.size.width * at)), f64::from(f32::from(track.center().y))))
+                            }).ok().flatten(),
+                            _ => { let _ = editor.update(cx, |editor, _, _| eprintln!("[boost-state] offset={:?} max={:?} view={:?}", editor.code_scroll.offset(), editor.code_scroll.max_offset(), editor.code_scroll.bounds())); None }
+                        }
+                    }).ok().flatten();
+                    if let Some((native, x, y)) = native_input {
+                        let native = native as *mut AnyObject;
+                        unsafe {
+                            make_key(native);
+                            post_mouse(native, MOUSE_MOVED, x, y);
+                            if name == "boost-press" {
+                                send_mouse_direct(native, 1, x, y);
+                                send_mouse_direct(native, 2, x, y);
+                            } else {
+                                let dx: f64 = arg.parse().unwrap_or(-100.);
+                                send_scroll_bound(native, x, y, 0., 1, true);
+                                send_scroll_bound(native, x, y, dx, 2, true);
+                                send_scroll_bound(native, x, y, 0., 4, true);
+                            }
+                        }
+                    }
+                    cx.background_executor().timer(Duration::from_millis(400)).await;
+                }
                 _ => eprintln!("[automation] unknown command"),
             }
         }
@@ -1285,6 +1330,34 @@ unsafe fn toolkit_view(view: *mut AnyObject) -> Option<*mut AnyObject> {
             if let Some(view) = toolkit_view(child) { return Some(view); }
         }
         None
+    }
+}
+
+/// A left press (1) or release (2) at window point (x, y), sent to the view
+/// itself rather than posted through the screen.
+unsafe fn send_mouse_direct(view: *mut AnyObject, kind: usize, x: f64, y: f64) {
+    unsafe {
+        let window = window_of(view);
+        if window.is_null() { return; }
+        let content: *mut AnyObject = msg_send![window, contentView];
+        let bounds: NSRect = msg_send![content, bounds];
+        let location = NSPoint::new(x, bounds.size.height - y);
+        let number: isize = msg_send![window, windowNumber];
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        let event: *mut AnyObject = msg_send![
+            AnyClass::get(c"NSEvent").unwrap(),
+            mouseEventWithType: kind,
+            location: location,
+            modifierFlags: 0usize,
+            timestamp: 0.0f64,
+            windowNumber: number,
+            context: nil,
+            eventNumber: 0isize,
+            clickCount: 1isize,
+            pressure: 1.0f32
+        ];
+        if event.is_null() { return; }
+        if kind == 1 { let _: () = msg_send![view, mouseDown: event]; } else { let _: () = msg_send![view, mouseUp: event]; }
     }
 }
 

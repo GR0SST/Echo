@@ -682,6 +682,16 @@ impl BoostEditor {
             });
         }
     }
+    pub(crate) fn automation_track(&self) -> Option<Bounds<gpui::Pixels>> { self.code_track.get() }
+    pub(crate) fn automation_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.code_mode(true, window, cx);
+    }
+    /// Types `text` into the open code input at its caret, as keystrokes would.
+    pub(crate) fn automation_type(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let input = if self.javascript { self.js.clone() } else { self.css.clone() };
+        input.read(cx).focus_handle(cx).focus(window);
+        input.update(cx, |input, cx| input.insert_at_caret(text, 0, cx));
+    }
     pub(crate) fn boost_id(&self) -> BoostId { self.id }
     fn has_edits(boost: &Boost) -> bool {
         boost.appearance != Default::default()
@@ -1132,6 +1142,7 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .h(px(40.))
+                        .rounded_t(px(12.))
                         .bg(rgb(0xf7f7f8))
                         .flex_none()
                         .relative()
@@ -1164,6 +1175,8 @@ impl Render for BoostEditor {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
                         .font_family("Menlo")
                         .text_size(px(12.))
                         .line_height(px(18.))
@@ -1171,8 +1184,11 @@ impl Render for BoostEditor {
                             div()
                                 .id("boost-code-lines-row")
                                 .flex()
-                                .items_start()
-                                .min_h_full()
+                                .flex_grow()
+                                .flex_shrink_0()
+                                // The sideways scroll area spans the whole editor, so a
+                                // swipe over the empty space below the code scrolls it too
+                                // (flex rows stretch their children by default).
                                 .py(px(12.))
                                 // A press below the last line still puts the caret in the code.
                                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -1181,16 +1197,15 @@ impl Render for BoostEditor {
                                 }))
                                 // Line numbers stay put while the code scrolls sideways.
                                 .child(
-                                    div()
-                                        .debug_selector(|| "boost-code-lines".into())
-                                        .flex_none()
-                                        .w(px(34.))
-                                        .pr(px(8.))
-                                        .flex()
-                                        .flex_col()
-                                        .items_end()
-                                        .text_color(rgb(0xb0b0b6))
-                                        .children((1..=code_lines).map(|line| div().h(px(18.)).child(line.to_string()))),
+                                    div().flex_none().w(px(34.)).pr(px(8.)).child(
+                                        div()
+                                            .debug_selector(|| "boost-code-lines".into())
+                                            .flex()
+                                            .flex_col()
+                                            .items_end()
+                                            .text_color(rgb(0xb0b0b6))
+                                            .children((1..=code_lines).map(|line| div().h(px(18.)).child(line.to_string()))),
+                                    ),
                                 )
                                 .child(
                                     div()
@@ -1229,6 +1244,7 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .h(px(68.))
+                        .rounded_b(px(12.))
                         .bg(rgb(0xffffff))
                         .flex_none()
                         .px(px(14.))
@@ -1286,6 +1302,7 @@ impl Render for BoostEditor {
                 .child(
                     div()
                         .h(px(40.))
+                        .rounded_t(px(12.))
                         .bg(rgb(0xf6f6f8))
                         .flex_none()
                         .px(px(10.))
@@ -1702,8 +1719,8 @@ impl Render for BoostEditor {
                         .bg(rgb(0xfdfdff))
                         .child(root),
                 )
-                // The outline sits beside the clipped panel, not inside it: the
-                // rounded clip would shave it away along the corners.
+                // The outline sits beside the clipped panel, not inside it. The
+                // clip is square, so edge bars round their own corners.
                 .child(div().absolute().inset_0().rounded(px(12.)).border_1().border_color(rgb(0xa7a7a7))),
         )
     }
