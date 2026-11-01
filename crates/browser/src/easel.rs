@@ -87,8 +87,9 @@ impl Tool {
 enum Gesture {
     Draw { kind: ShapeKind, start: Point, current: Point, points: Vec<Point> },
     Move { id: u64, grab: Point, origin: Frame, frame: Frame },
-    /// `anchor` is the corner opposite the one being dragged.
-    Resize { id: u64, anchor: Point, frame: Frame },
+    /// `handle` names the sides that follow the pointer: -1 the left or
+    /// top, 1 the right or bottom, 0 neither. Images keep their `aspect`.
+    Resize { id: u64, handle: (i8, i8), origin: Frame, aspect: Option<f32>, frame: Frame },
 }
 
 /// A text box being typed into; `id` is `None` until it has text.
@@ -308,6 +309,56 @@ fn tool_icon(tool: Tool) -> AnyElement {
             }
         }
     }).size(px(18.)).flex_none().into_any_element()
+}
+
+/// Which sides of `frame` a press at `at` grabs: a corner, else an edge.
+fn resize_handle(frame: Frame, at: Point, slop: f32) -> Option<(i8, i8)> {
+    let side = |at: f32, low: f32, high: f32| if (at - low).abs() <= slop { Some(-1) } else if (at - high).abs() <= slop { Some(1) } else { None };
+    let within = |at: f32, low: f32, high: f32| at > low - slop && at < high + slop;
+    match (side(at.x, frame.x, frame.x + frame.width), side(at.y, frame.y, frame.bottom())) {
+        (Some(x), Some(y)) => Some((x, y)),
+        (Some(x), None) if within(at.y, frame.y, frame.bottom()) => Some((x, 0)),
+        (None, Some(y)) if within(at.x, frame.x, frame.x + frame.width) => Some((0, y)),
+        _ => None,
+    }
+}
+
+/// `origin` with the grabbed sides moved to `at`. With an `aspect` the
+/// frame scales as a whole from its fixed sides.
+fn resized(origin: Frame, (hx, hy): (i8, i8), at: Point, aspect: Option<f32>) -> Frame {
+    const MIN: f32 = 4.;
+    let (mut left, mut top, mut right, mut bottom) = (origin.x, origin.y, origin.x + origin.width, origin.bottom());
+    if hx < 0 { left = at.x } else if hx > 0 { right = at.x }
+    if hy < 0 { top = at.y } else if hy > 0 { bottom = at.y }
+    if let Some(ratio) = aspect {
+        let (width, height) = ((right - left).abs().max(MIN), (bottom - top).abs().max(MIN));
+        let (width, height) = if hy == 0 || (hx != 0 && width / ratio >= height) { (width, width / ratio) } else { (height * ratio, height) };
+        let (sx, sy) = ((right - left).signum(), (bottom - top).signum());
+        if hx < 0 { left = right - sx * width } else { right = left + sx * width }
+        if hy < 0 { top = bottom - sy * height } else { bottom = top + sy * height }
+    }
+    let frame = Frame::spanning(Point { x: left, y: top }, Point { x: right, y: bottom });
+    Frame { width: frame.width.max(MIN), height: frame.height.max(MIN), ..frame }
+}
+
+/// Invisible strips over the selection's edges and corners that show the
+/// resize cursor; the document still receives the press.
+fn resize_zones(x: f32, y: f32, w: f32, h: f32) -> Vec<gpui::Stateful<gpui::Div>> {
+    use gpui::CursorStyle::*;
+    const SLOP: f32 = 6.;
+    let zone = |name: &'static str, left: f32, top: f32, width: f32, height: f32, cursor| div().id(name).debug_selector(move || format!("easel-resize-{name}"))
+        .absolute().left(px(left)).top(px(top)).w(px(width.max(0.))).h(px(height.max(0.))).cursor(cursor);
+    let (right, bottom, inner_w, inner_h) = (x + w, y + h, w - 2. * SLOP, h - 2. * SLOP);
+    vec![
+        zone("top", x + SLOP, y - SLOP, inner_w, 2. * SLOP, ResizeUpDown),
+        zone("bottom", x + SLOP, bottom - SLOP, inner_w, 2. * SLOP, ResizeUpDown),
+        zone("left", x - SLOP, y + SLOP, 2. * SLOP, inner_h, ResizeLeftRight),
+        zone("right", right - SLOP, y + SLOP, 2. * SLOP, inner_h, ResizeLeftRight),
+        zone("top-left", x - SLOP, y - SLOP, 2. * SLOP, 2. * SLOP, ResizeUpLeftDownRight),
+        zone("bottom-right", right - SLOP, bottom - SLOP, 2. * SLOP, 2. * SLOP, ResizeUpLeftDownRight),
+        zone("top-right", right - SLOP, y - SLOP, 2. * SLOP, 2. * SLOP, ResizeUpRightDownLeft),
+        zone("bottom-left", x - SLOP, bottom - SLOP, 2. * SLOP, 2. * SLOP, ResizeUpRightDownLeft),
+    ]
 }
 
 /// The translucent wash over the Space theme; the page and its top bar share it.
@@ -534,13 +585,11 @@ impl BrowserWindow {
         }
         let scale = self.easel_scale();
         let slop = 6. / scale;
-        // A handle of the selection resizes it from the opposite corner.
+        // A corner or edge of the selection resizes it.
         if let Some(object) = self.easel.selected.and_then(|selected| easel.object(selected)) {
-            let f = object.frame;
-            let corners = [(f.x, f.y), (f.x + f.width, f.y), (f.x + f.width, f.bottom()), (f.x, f.bottom())];
-            if let Some(index) = corners.iter().position(|(x, y)| (x - at.x).abs() <= slop && (y - at.y).abs() <= slop) {
-                let (ax, ay) = corners[(index + 2) % 4];
-                self.easel.gesture = Some(Gesture::Resize { id: object.id, anchor: Point { x: ax, y: ay }, frame: f });
+            if let Some(handle) = resize_handle(object.frame, at, slop) {
+                let aspect = matches!(object.content, Content::Image { .. }).then(|| object.frame.width / object.frame.height.max(1.));
+                self.easel.gesture = Some(Gesture::Resize { id: object.id, handle, origin: object.frame, aspect, frame: object.frame });
                 return;
             }
         }
@@ -574,11 +623,7 @@ impl BrowserWindow {
             Some(Gesture::Move { grab, origin, frame, .. }) => {
                 *frame = Frame { x: origin.x + at.x - grab.x, y: (origin.y + at.y - grab.y).max(0.), ..*origin };
             }
-            Some(Gesture::Resize { anchor, frame, .. }) => {
-                *frame = Frame::spanning(*anchor, at);
-                frame.width = frame.width.max(4.);
-                frame.height = frame.height.max(4.);
-            }
+            Some(Gesture::Resize { handle, origin, aspect, frame, .. }) => *frame = resized(*origin, *handle, at, *aspect),
             None => {}
         }
         cx.notify();
@@ -781,7 +826,9 @@ impl BrowserWindow {
                         .px(px(4. * scale))
                         .children(string.split('\n').map(|line| div().child(line.to_owned())))
                 }
-                Content::Image { file } => place(div()).child(gpui::img(images.join(file)).size_full().object_fit(gpui::ObjectFit::Fill)),
+                // Both sides are explicit: an image's own aspect ratio would
+                // otherwise size it past its frame.
+                Content::Image { file } => place(div()).child(gpui::img(images.join(file)).w(px(frame.width * scale)).h(px(frame.height * scale)).object_fit(gpui::ObjectFit::Fill)),
             };
             layer = layer.child(element.debug_selector({ let id = object.id; move || format!("easel-object-{id}") }));
         }
@@ -813,7 +860,8 @@ impl BrowserWindow {
             let handle = |hx: f32, hy: f32| div().absolute().left(px(hx - 4.)).top(px(hy - 4.)).size(px(8.)).rounded_full().border(px(1.5)).border_color(blue).bg(hsla(0., 0., 1. - ink, 1.));
             layer = layer.child(div().debug_selector(|| "easel-selection".into()).absolute().left(px(x - 2.)).top(px(y - 2.)).w(px(w + 4.)).h(px(h + 4.))
                     .border(px(1.5)).border_color(blue).when(matches!(object.content, Content::Text { .. }), |outline| outline.rounded(px(6.))))
-                .children([handle(x - 2., y - 2.), handle(x + w + 2., y - 2.), handle(x + w + 2., y + h + 2.), handle(x - 2., y + h + 2.)]);
+                .children([handle(x - 2., y - 2.), handle(x + w + 2., y - 2.), handle(x + w + 2., y + h + 2.), handle(x - 2., y + h + 2.)])
+                .children(if state.tool == Tool::Select { resize_zones(x, y, w, h) } else { Vec::new() });
             match &object.content {
                 Content::Shape { color, .. } if live.is_none() => layer = layer.child(self.render_easel_palette(*color, x + w / 2., y, dark, cx)),
                 Content::Text { .. } if live.is_none() => layer = layer.child(self.render_easel_text_controls(x, y, h, cx)),
@@ -948,5 +996,30 @@ impl BrowserWindow {
             .child(button("easel-text-smaller").child(crate::icons::control_sized(crate::icons::Icon::Minus, 12.))
                 .on_click(cx.listener(|this, _, _, cx| this.step_easel_text(false, cx))))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    const FRAME: Frame = Frame { x: 100., y: 100., width: 200., height: 100. };
+
+    #[test]
+    fn corners_and_edges_grab_their_sides() {
+        assert_eq!(resize_handle(FRAME, Point { x: 101., y: 99. }, 6.), Some((-1, -1)));
+        assert_eq!(resize_handle(FRAME, Point { x: 300., y: 150. }, 6.), Some((1, 0)));
+        assert_eq!(resize_handle(FRAME, Point { x: 200., y: 203. }, 6.), Some((0, 1)));
+        assert_eq!(resize_handle(FRAME, Point { x: 200., y: 150. }, 6.), None);
+    }
+
+    #[test]
+    fn edges_move_one_side_and_images_keep_their_aspect() {
+        assert_eq!(resized(FRAME, (1, 0), Point { x: 400., y: 0. }, None), Frame { width: 300., ..FRAME });
+        // A corner follows the dominant axis; the opposite corner stays put.
+        assert_eq!(resized(FRAME, (1, 1), Point { x: 500., y: 150. }, Some(2.)), Frame { x: 100., y: 100., width: 400., height: 200. });
+        assert_eq!(resized(FRAME, (-1, -1), Point { x: 200., y: 0. }, Some(2.)), Frame { x: -100., y: 0., width: 400., height: 200. });
+        // An edge scales the other side with it.
+        assert_eq!(resized(FRAME, (0, 1), Point { x: 0., y: 150. }, Some(2.)), Frame { x: 100., y: 100., width: 100., height: 50. });
     }
 }

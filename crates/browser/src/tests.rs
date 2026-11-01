@@ -13533,6 +13533,12 @@ fn easels_draw_shapes_text_and_ink(cx: &mut TestAppContext) {
     drag(cx, &[(260., 340.), (300., 360.), (360., 400.)]);
     let after = objects(&view, cx)[0].frame;
     assert!(after.x > before.x && after.y > before.y && after.width == before.width);
+    // The right edge widens it alone.
+    let edge = cx.debug_bounds("easel-resize-right").unwrap().center();
+    let (x, y) = (f32::from(edge.x - document.origin.x), f32::from(edge.y - document.origin.y));
+    drag(cx, &[(x, y), (x + 20., y + 30.), (x + 40., y + 30.)]);
+    let widened = objects(&view, cx)[0].frame;
+    assert!(widened.width > after.width && (widened.x - after.x).abs() < 0.01 && (widened.height - after.height).abs() < 0.01, "{widened:?}");
     cx.simulate_keystrokes("backspace");
     cx.run_until_parked();
     assert!(objects(&view, cx).is_empty());
