@@ -850,7 +850,7 @@ impl BrowserWindow {
         let add_scope = scope.clone();
         let clear_scope = scope.clone();
         let help_scope = scope.clone();
-        let mut page=div().id("password-manager-page").debug_selector(||"password-manager-page".into()).absolute().inset_0().bg(rgb(0x202124)).text_color(rgb(0xe8eaed)).font_family(".SystemUIFont").text_size(px(13.)).line_height(px(20.)).flex().flex_col().track_focus(&self.password_manager.focus)
+        let mut page=self.echo_page_corners(div()).id("password-manager-page").debug_selector(||"password-manager-page".into()).absolute().inset_0().bg(rgb(0x202124)).text_color(rgb(0xe8eaed)).font_family(".SystemUIFont").text_size(px(13.)).line_height(px(20.)).flex().flex_col().track_focus(&self.password_manager.focus)
    .child(div().h(px(56.)).flex_none().pl(px(22.)).pr(px(4.)).flex().items_center().gap(px(8.)).text_color(rgb(0xbdc1c6))
     .child(icons::control_sized(Icon::Search,16.))
     .child(div().flex_1().min_w_0().text_color(rgb(0xe8eaed)).child(self.password_manager.filter.clone()))

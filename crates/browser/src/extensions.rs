@@ -1643,7 +1643,7 @@ impl BrowserWindow {
                     .child("This extension is no longer installed."),
             );
         }
-        div()
+        self.echo_page_corners(div())
             .id("extensions-page")
             .debug_selector(|| "extensions-page".into())
             .key_context("ExtensionManager")
@@ -1653,7 +1653,6 @@ impl BrowserWindow {
             }))
             .absolute()
             .inset_0()
-            .rounded(px(8.))
             .overflow_hidden()
             .bg(gpui::rgb(0x202124))
             .text_color(gpui::rgb(0xe8eaed))
@@ -1697,7 +1696,7 @@ impl BrowserWindow {
             .filter(|entry| query.is_empty() || entry.name.to_lowercase().contains(&query))
             .cloned()
             .collect::<Vec<_>>();
-        div()
+        self.echo_page_corners(div())
             .id("extensions-page")
             .debug_selector(|| "extensions-page".into())
             .key_context("ExtensionManager")
@@ -1707,7 +1706,6 @@ impl BrowserWindow {
             }))
             .absolute()
             .inset_0()
-            .rounded(px(8.))
             .overflow_hidden()
             .bg(gpui::rgb(0x202124))
             .text_color(gpui::rgb(0xe8eaed))

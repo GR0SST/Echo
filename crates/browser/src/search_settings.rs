@@ -598,7 +598,7 @@ impl BrowserWindow {
             .filter(|p| !p.active)
             .filter(matches)
             .collect::<Vec<_>>();
-        div().id("search-settings-page").debug_selector(||"search-settings-page".into()).on_click(cx.listener(|this,_,_,cx|{this.search_settings.menu=None;cx.notify();})).absolute().inset_0().rounded(px(crate::pages::CONTENT_CORNER_RADIUS)).overflow_hidden().min_w_0().whitespace_normal().flex().flex_col().bg(rgb(0x202124)).text_color(rgb(0xe3e3e3)).font_family(".SystemUIFont").text_size(px(13.)).line_height(px(20.))
+        self.echo_page_corners(div()).id("search-settings-page").debug_selector(||"search-settings-page".into()).on_click(cx.listener(|this,_,_,cx|{this.search_settings.menu=None;cx.notify();})).absolute().inset_0().overflow_hidden().min_w_0().whitespace_normal().flex().flex_col().bg(rgb(0x202124)).text_color(rgb(0xe3e3e3)).font_family(".SystemUIFont").text_size(px(13.)).line_height(px(20.))
             .track_focus(&self.search_settings.focus)
             .key_context("ManagedSearchPage")
             .when(self.search_settings.editor.is_some(),|page|page.key_context("ManagedSearchEditor"))

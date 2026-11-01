@@ -252,7 +252,7 @@ impl BrowserWindow {
                         }),
                 )
         }).collect::<Vec<_>>();
-        div()
+        self.echo_page_corners(div())
             .id("flags-page")
             .debug_selector(|| "flags-page".into())
             .absolute()
@@ -342,6 +342,7 @@ impl BrowserWindow {
                 page.child(
                     div()
                         .debug_selector(|| "flags-relaunch-banner".into())
+                        .rounded_b(px(crate::pages::CONTENT_CORNER_RADIUS))
                         .flex_none()
                         .h(px(64.))
                         .px(px(24.))

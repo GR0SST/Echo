@@ -1971,6 +1971,18 @@ fn library_spaces_scroll_until_the_last_space_and_only_then_close(cx: &mut TestA
 }
 
 #[gpui::test]
+fn echo_pages_round_like_the_page_card_and_defer_to_the_toolbar(cx: &mut TestAppContext) {
+    use crate::pages::CONTENT_CORNER_RADIUS as RADIUS;
+    let (view, cx) = open(cx);
+    let shown = view.read_with(cx, |w, _| w.page_toolbar_shown());
+    assert_eq!(view.read_with(cx, |w, _| w.echo_page_radii()), (if shown { 0. } else { RADIUS }, RADIUS));
+    cx.simulate_keystrokes("cmd-shift-l");
+    cx.run_until_parked();
+    // Library's preview has no toolbar above the page.
+    assert_eq!(view.read_with(cx, |w, _| w.echo_page_radii()), (RADIUS, RADIUS));
+}
+
+#[gpui::test]
 fn long_input_scrolls_inside_the_command_bar(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-t");

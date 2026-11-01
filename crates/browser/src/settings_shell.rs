@@ -246,7 +246,7 @@ impl BrowserWindow {
         } else {
             self.settings_search_results(&query, cx)
         };
-        div()
+        self.echo_page_corners(div())
             .id("settings-shell")
             .debug_selector(|| "settings-shell".into())
             .absolute()

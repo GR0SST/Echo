@@ -475,7 +475,7 @@ impl BrowserWindow {
                 "Controls what information sites can use and show",
             ),
         ];
-        let page = div()
+        let page = self.echo_page_corners(div())
             .id("browsing-data-page")
             .debug_selector(|| "browsing-data-page".into())
             .absolute()

@@ -4524,6 +4524,18 @@ impl BrowserWindow {
 
     /// Both normal content and Library mount this canvas inside their actual
     /// GPUI surface. Generation guards also cover deferred tracking updates.
+    /// Top and bottom corner radii of an opaque `echo://` page, matching the
+    /// native page card. The toolbar owns the top corners when it is above it.
+    pub(crate) fn echo_page_radii(&self) -> (f32, f32) {
+        let toolbar = self.page_content_visible() && self.page_toolbar_shown();
+        (if toolbar { 0. } else { CONTENT_CORNER_RADIUS }, CONTENT_CORNER_RADIUS)
+    }
+    /// GPUI clips children to rectangles, so a page rounds its own fill.
+    pub(crate) fn echo_page_corners<E: Styled>(&self, page: E) -> E {
+        let (top, bottom) = self.echo_page_radii();
+        page.rounded_t(px(top)).rounded_b(px(bottom))
+    }
+
     /// The browser-owned page at the active tab's `echo://` address, for the
     /// normal content and Library's retained preview alike.
     pub(crate) fn render_echo_page(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {

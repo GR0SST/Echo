@@ -674,7 +674,7 @@ impl BrowserWindow {
             .px(px(16.))
             .child(body);
         let painted_bounds = state.bounds.clone();
-        let mut root = div()
+        let mut root = self.echo_page_corners(div())
             .debug_selector(|| "site-settings-page".into())
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .key_context(CONTEXT)
