@@ -13338,3 +13338,30 @@ fn toolbar_split_opens_a_focused_command_bar_ready_for_typing(cx: &mut TestAppCo
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(..) | Call::Navigate(..))));
     bar(&view, cx).simulate_keystrokes("escape");
 }
+#[gpui::test]
+fn settings_pages_share_arcs_frame_with_sections_and_search(cx:&mut TestAppContext){
+    let (view,cx)=open(cx);
+    view.update(cx,|view,cx|{let tab=view.browser.active_tab().unwrap().id;view.edit_browser(|b|b.set_url(tab,"browser://settings/"));cx.notify();});cx.run_until_parked();
+    assert!(cx.debug_bounds("settings-shell").is_some());
+    assert!(cx.debug_bounds("settings-profile").is_some(),"the root shows the local profile");
+    for selector in ["settings-nav-You","settings-nav-Privacy","settings-nav-SearchEngine","settings-nav-Downloads","settings-nav-About"] {assert!(cx.debug_bounds(selector).is_some(),"{selector}");}
+    // Sections open in place and keep the frame.
+    click(cx,"settings-nav-Downloads");
+    assert_eq!(active_url(&view,cx).as_deref(),Some("browser://settings/downloads"));
+    click(cx,"settings-ask-download");
+    assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().settings.ask_for_download_location));
+    click(cx,"settings-nav-Privacy");
+    assert_eq!(active_url(&view,cx).as_deref(),Some(crate::browsing_data::PRIVACY));
+    assert!(cx.debug_bounds("settings-shell").is_some() && cx.debug_bounds("browsing-data-page").is_some());
+    click(cx,"settings-nav-SearchEngine");
+    click(cx,"settings-manage-search");
+    assert_eq!(active_url(&view,cx).as_deref(),Some(crate::search_settings::URL));
+    assert!(cx.debug_bounds("settings-shell").is_some() && cx.debug_bounds("search-settings-page").is_some());
+    // The search lists matching rows; one opens its section.
+    let search=view.read_with(cx,|view,_|view.settings_shell.search.clone());
+    view.update_in(cx,|_,window,cx|search.read(cx).focus_handle(cx).focus(window));
+    cx.simulate_input("password");cx.run_until_parked();
+    click(cx,"settings-result-0");
+    assert_eq!(active_url(&view,cx).as_deref(),Some("browser://settings/autofill"));
+    assert!(cx.debug_bounds("settings-password-manager").is_some());
+}

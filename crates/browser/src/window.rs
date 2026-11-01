@@ -873,6 +873,7 @@ pub struct BrowserWindow {
     pub(crate) extensions: crate::extensions::State,
     pub(crate) history_page: crate::history::HistoryPage,
     pub(crate) search_settings: crate::search_settings::State,
+    pub(crate) settings_shell: crate::settings_shell::State,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) navigation_history: crate::navigation_history::NavigationHistory,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
@@ -1252,6 +1253,7 @@ impl BrowserWindow {
             extensions: crate::extensions::State::new(cx),
             history_page: crate::history::HistoryPage::new(cx),
             search_settings: crate::search_settings::State::new(cx),
+            settings_shell: crate::settings_shell::State::new(cx),
             pages,
             pending_engine_events: Default::default(),
             engine_shortcut_pending: false,
@@ -4619,11 +4621,11 @@ impl BrowserWindow {
         let search_settings_open = !virtual_page && self.search_settings_owner().is_some();
         let password_manager_open = !virtual_page && self.password_manager_is_open();
         let browsing_data_open = !virtual_page && self.browsing_data_is_open();
-        let more_settings_open = !virtual_page && self.more_settings_is_open();
-        let site_settings_open = !virtual_page && (self.site_settings_is_open() || more_settings_open);
+        let simple_settings = (!virtual_page).then(|| self.simple_settings_section()).flatten();
+        let site_settings_open = !virtual_page && self.site_settings_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if virtual_page || split_open || extensions_open || history_open || search_settings_open || password_manager_open || browsing_data_open || site_settings_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if virtual_page || split_open || extensions_open || history_open || search_settings_open || password_manager_open || browsing_data_open || site_settings_open || simple_settings.is_some() || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -4682,7 +4684,8 @@ impl BrowserWindow {
                     .when(search_settings_open, |this| this.child(self.render_search_settings(window,cx)))
                     .when(password_manager_open, |this| this.child(self.render_password_manager(window,cx)))
                     .when(browsing_data_open,|this|this.child(self.render_browsing_data(cx)))
-                    .when(site_settings_open, |this| this.child(if more_settings_open { self.render_more_settings_root() } else { self.render_site_settings_page(cx) }))
+                    .when(site_settings_open, |this| this.child(self.render_site_settings_page(cx)))
+                    .children(simple_settings.map(|section| self.render_simple_settings(section, cx)))
                     .children(placeholder.map(|(title, url)| {
                         div().debug_selector(|| "page-placeholder".into())
                             .flex()

@@ -1471,23 +1471,4 @@ pub(crate) fn open_section(section:Tab,cx: &mut App) {
     }
 }
 
-impl BrowserWindow {
-    pub(crate) fn more_settings_is_open(&self) -> bool {
-        self.browser.active_tab().is_some_and(|tab|url::Url::parse(&tab.url).is_ok_and(|url|
-            url.scheme()=="browser" && url.host_str()==Some("settings") && matches!(url.path(),""|"/") && url.query().is_none()))
-    }
-    pub(crate) fn render_more_settings_root(&self) -> AnyElement {
-        div().debug_selector(||"more-settings-page".into()).size_full().bg(rgb(0x202124)).text_color(rgb(0xe8eaed))
-            .font_family(".SystemUIFont").flex().flex_col()
-            .child(div().h(px(56.)).flex_none().px(px(26.)).flex().items_center().gap(px(14.))
-                .child(icons::ionicon("menu-outline",18.,1.)).child(div().text_size(px(22.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Settings"))
-                .child(div().flex_1()).child(icons::ionicon("search-outline",20.,1.)))
-            // Arc's account/synchronization section is intentionally outside Echo's local profile surface.
-            .child(div().mx_auto().mt(px(75.)).w_full().max_w(px(720.)).px(px(20.))
-                .child(div().h(px(64.)).px(px(20.)).rounded(px(8.)).bg(rgb(0x292a2d)).flex().items_center().gap(px(16.))
-                    .child(icons::ionicon("person-circle-outline",32.,1.))
-                    .child(div().text_size(px(14.)).child(self.browser.active_user_profile().name().to_owned()))
-                    .child(div().flex_1())))
-            .into_any_element()
-    }
-}
+

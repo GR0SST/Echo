@@ -34,6 +34,7 @@ mod feedback;
 mod page_swipe;
 mod site_controls;
 mod site_settings_page;
+mod settings_shell;
 mod boosts;
 mod boost_library;
 mod library_archive;

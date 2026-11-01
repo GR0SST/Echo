@@ -29,6 +29,6 @@ fn advanced_footer_resets_only_the_selected_live_profile_and_more_settings_opens
     assert!(fake.take_calls().contains(&Call::ResetTranslation(crate::pages::StorageSelection::for_profile(other))));
     click(&mut panel,"settings-more");visual.run_until_parked();
     assert_eq!(active_url(&view,visual).as_deref(),Some("browser://settings/"));
-    assert!(visual.debug_bounds("more-settings-page").is_some());
+    assert!(visual.debug_bounds("settings-shell").is_some());
     assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(_,url) if url=="browser://settings/")));
 }

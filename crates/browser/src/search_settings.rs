@@ -555,6 +555,14 @@ impl BrowserWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let page = self.render_search_settings_page(window, cx);
+        self.settings_shell(crate::settings_shell::Section::SearchEngine, page, cx)
+    }
+    fn render_search_settings_page(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(preferences) = self.managed_search() else {
             return div().into_any_element();
         };
@@ -600,9 +608,6 @@ impl BrowserWindow {
             .on_action(cx.listener(|this,_:&Previous,window,cx|this.move_search_editor_focus(true,window,cx)))
             .on_action(cx.listener(|this,_:&PageDown,window,cx|this.scroll_search_settings(true,window,cx)))
             .on_action(cx.listener(|this,_:&PageUp,window,cx|this.scroll_search_settings(false,window,cx)))
-            .child(div().h(px(56.)).flex_none().flex().items_center().px(px(24.)).gap(px(16.)).shadow_sm()
-                .child(hamburger()).child(div().flex_1().text_size(px(22.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Settings"))
-                .child(icons::control(Icon::Search)))
             .child(div().id("search-settings-scroll").w_full().min_w_0().flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.search_settings.scroll)
                 .child(div().w_full().min_w_0().max_w(px(680.)).mx_auto().min_h_full().bg(rgb(0x292a2d)).px(px(20.)).pb(px(24.))
                     .child(div().h(px(56.)).flex().items_center().gap(px(16.)).font_weight(gpui::FontWeight::SEMIBOLD)
@@ -709,23 +714,6 @@ fn radio(selected: bool) -> gpui::Div {
         .when(selected, |r| {
             r.child(div().size(px(6.)).rounded_full().bg(rgb(0xa8c7fa)))
         })
-}
-fn hamburger() -> impl IntoElement {
-    gpui::canvas(
-        |_, _, _| (),
-        |bounds, _, window, _| {
-            for y in [4., 9., 14.] {
-                window.paint_quad(gpui::fill(
-                    gpui::Bounds::new(
-                        bounds.origin + gpui::point(px(1.), px(y)),
-                        gpui::size(px(16.), px(1.)),
-                    ),
-                    rgb(0x9aa0a6),
-                ));
-            }
-        },
-    )
-    .size(px(18.))
 }
 fn pencil() -> impl IntoElement {
     gpui::canvas(

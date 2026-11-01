@@ -437,6 +437,10 @@ impl BrowserWindow {
         cx.notify();
     }
     pub(crate) fn render_site_settings_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        let page = self.render_site_details(cx);
+        self.settings_shell(crate::settings_shell::Section::Privacy, page, cx)
+    }
+    fn render_site_details(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(scope) = self.settings_scope() else {
             return div().into_any_element();
         };
@@ -728,25 +732,6 @@ impl BrowserWindow {
                 )
                 .absolute()
                 .inset_0(),
-            )
-            .child(
-                div()
-                    .h(px(56.))
-                    .flex_none()
-                    .px(px(24.))
-                    .flex()
-                    .items_center()
-                    .gap(px(16.))
-                    .bg(rgb(0x202124))
-                    .child(icons::ionicon("menu", 20., 1.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(22.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Settings"),
-                    )
-                    .child(icons::control_sized(icons::Icon::Search, 18.)),
             )
             .child(body);
         if let Some((kind, setting, anchor, bounds)) = state.popup.and_then(|kind| {

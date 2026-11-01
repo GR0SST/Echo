@@ -462,19 +462,6 @@ impl BrowserWindow {
         let dark = self.theme_is_dark();
         let c = move |v| color(dark, v);
         let state = &self.browsing_data;
-        let title = div()
-            .h(px(56.))
-            .px(px(24.))
-            .flex()
-            .items_center()
-            .gap(px(16.))
-            .child(icons::ionicon("menu-outline", 18., 1.))
-            .child(
-                div()
-                    .text_size(px(20.))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Settings"),
-            );
         let rows = [
             (
                 "Delete browsing data",
@@ -505,7 +492,6 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &Next, w, _| this.data_focus(false, w)))
             .on_action(cx.listener(|this, _: &Previous, w, _| this.data_focus(true, w)))
             .on_action(cx.listener(|this, _: &Activate, w, cx| this.data_activate(w, cx)))
-            .child(title)
             .child(
                 div()
                     .mx_auto()
@@ -557,7 +543,7 @@ impl BrowserWindow {
                     ),
             );
         if !self.data_dialog() {
-            return page.into_any_element();
+            return self.settings_shell(crate::settings_shell::Section::Privacy, page, cx);
         }
         let controls = &state.controls;
         let busy = state.busy;
@@ -944,7 +930,7 @@ impl BrowserWindow {
                     ),
             );
         }
-        page.child(overlay).into_any_element()
+        self.settings_shell(crate::settings_shell::Section::Privacy, page.child(overlay), cx)
     }
     fn browsing_data_counter(&self, profile: UserProfileId, category: usize) -> String {
         // Chromium owns site/cache/form/settings/app counts; Echo owns its history and download metadata.
