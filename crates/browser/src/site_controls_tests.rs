@@ -112,7 +112,7 @@ fn site_permission_toggle_uses_the_profile_origin_and_updates_the_live_engine(
     assert!(controls.debug_bounds("site-permission-Camera").is_some());
     assert!(controls.debug_bounds("site-permission-Microphone").is_none());
     assert!(controls.debug_bounds("site-settings-more").is_some());
-    assert!(controls.debug_bounds("site-automatic-pip").is_none(), "no video, no Picture-in-Picture row");
+    assert!(controls.debug_bounds("site-automatic-pip").is_some(), "Picture-in-Picture is always offered");
     fake.take_calls();
     click(&mut controls, "site-permission-Camera");
     assert!(fake.take_calls().contains(&Call::SitePermission(
@@ -618,7 +618,7 @@ fn full_page_capture_rejects_a_same_url_document_replacement_before_completion(c
 }
 
 #[gpui::test]
-fn site_controls_offer_automatic_picture_in_picture_once_the_site_plays_video(cx: &mut TestAppContext) {
+fn site_controls_toggle_automatic_picture_in_picture_and_open_more(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     let origin = install_site_info(&view, cx, &fake, true);
     let mut media = playing_media();

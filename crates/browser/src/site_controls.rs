@@ -878,20 +878,20 @@ impl BrowserWindow {
         let arrow_at = point(arrow_x - px(9.), panel.position.y - px(8.));
         let scope = panel.scope.clone();
         // Arc lists what differs from the defaults for this site: each permission
-        // the site was explicitly allowed or blocked, then Developer Mode, then
-        // automatic Picture-in-Picture once the site plays video.
+        // the site was explicitly allowed or blocked, then Developer Mode and
+        // automatic Picture-in-Picture.
         let site_rows = scope.origin.as_deref().and_then(|origin| {
             self.pages.as_ref()?.try_borrow().ok()?.profile_site_settings(scope.profile, self.browser.is_private(), origin)
         }).unwrap_or_default();
         let permissions: Vec<_> = site_rows
             .iter()
-            .filter(|row| row.uses_default == Some(false) && row.kind != engine::PermissionKind::AutomaticPictureInPicture
+            .filter(|row| explicitly_set(row) && row.kind != engine::PermissionKind::AutomaticPictureInPicture
                 && matches!(row.value, engine::PermissionValue::Allow | engine::PermissionValue::Block))
             .map(|row| engine::SitePermission { kind: row.kind, value: row.value })
             .collect();
         let pip_row = site_rows.iter().find(|row| row.kind == engine::PermissionKind::AutomaticPictureInPicture);
-        let plays_video = self.pages.as_ref().and_then(|pages| pages.try_borrow().ok()?.owned_media(scope.tab)).is_some_and(|media| media.video);
-        let show_pip = plays_video || pip_row.is_some_and(|row| row.uses_default == Some(false));
+        // Arc always offers this one.
+        let show_pip = true;
         let pip_allowed = !pip_row.is_some_and(|row| row.value == engine::PermissionValue::Block)
             && self.browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture);
         let tile = |id: &'static str| {
@@ -1431,6 +1431,15 @@ pub(crate) fn core_permission(
         engine::PermissionKind::LoopbackNetwork => C::LoopbackNetwork,
     }
 }
+/// A site's own choice rather than the browser default. When the engine
+/// cannot say where a value came from, a value unlike the default is one.
+fn explicitly_set(row: &engine::SiteSetting) -> bool {
+    match row.uses_default {
+        Some(uses_default) => !uses_default,
+        None => row.value != row.default_value,
+    }
+}
+
 /// Arc's setting tile: a white circle when on, a dim one when off.
 fn setting_tile(on: bool, icon: &'static str) -> gpui::Div {
     div()
