@@ -2279,6 +2279,36 @@ fn developer_id_signed() -> bool {
         .is_ok_and(|plist| plist.contains(&format!("<key>{DEVELOPER_ID_SIGNED_KEY}</key>")))
 }
 
+/// Experiments the user turned on or off on the flags page, applied once
+/// when the engine starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaunchSwitches {
+    pub enable_features: Vec<String>,
+    pub disable_features: Vec<String>,
+    /// Command-line switches, with an optional value.
+    pub switches: Vec<(String, Option<String>)>,
+}
+
+static LAUNCH_SWITCHES: std::sync::Mutex<Option<LaunchSwitches>> = std::sync::Mutex::new(None);
+
+/// Set before the engine first starts; later calls do not reach a running engine.
+pub fn set_launch_switches(switches: LaunchSwitches) {
+    *LAUNCH_SWITCHES.lock().unwrap() = Some(switches);
+}
+
+/// Adds `features` to a comma-separated feature switch, keeping any given on
+/// the command line already.
+fn merge_feature_switch(command_line: &mut CommandLine, name: &str, features: &[String]) {
+    if features.is_empty() {
+        return;
+    }
+    let key = CefString::from(name);
+    let existing = CefString::from(&command_line.switch_value(Some(&key))).to_string();
+    let merged = existing.split(',').filter(|feature| !feature.is_empty()).map(str::to_owned)
+        .chain(features.iter().cloned()).collect::<Vec<_>>().join(",");
+    command_line.append_switch_with_value(Some(&key), Some(&CefString::from(merged.as_str())));
+}
+
 wrap_app! {
     struct EngineApp { shutdown_marker: String }
 
@@ -2317,6 +2347,17 @@ wrap_app! {
                 // Stock CEF ignores this switch; the source bridge remains
                 // profile-scoped and performs its own operation checks.
                 command_line.append_switch(Some(&CefString::from("echo-enable-extensions-bridge")));
+                if let Some(launch) = LAUNCH_SWITCHES.lock().unwrap().clone() {
+                    merge_feature_switch(command_line, "enable-features", &launch.enable_features);
+                    merge_feature_switch(command_line, "disable-features", &launch.disable_features);
+                    for (name, value) in &launch.switches {
+                        let name = CefString::from(name.as_str());
+                        match value {
+                            Some(value) => command_line.append_switch_with_value(Some(&name), Some(&CefString::from(value.as_str()))),
+                            None => command_line.append_switch(Some(&name)),
+                        }
+                    }
+                }
             }
         }
     }

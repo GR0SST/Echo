@@ -35,6 +35,7 @@ mod page_swipe;
 mod site_controls;
 mod site_settings_page;
 mod settings_shell;
+mod flags;
 mod boosts;
 mod boost_library;
 mod library_archive;
@@ -298,6 +299,7 @@ fn show_session_error(error: std::io::Error, cx: &mut App) {
 fn start_engine(window: &gpui::Window, data_dir: &std::path::Path, private: bool) -> Option<Box<dyn WebEngine>> {
     if quit::is_quitting() { return None; }
     let parent = native::view_of(window)?;
+    flags::apply_at_launch();
     let engine = if private { engine::Engine::start_private(data_dir, window::page_shortcuts()) }
         else { engine::Engine::start(data_dir, window::page_shortcuts()) };
     match engine {

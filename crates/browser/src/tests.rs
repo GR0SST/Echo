@@ -1857,6 +1857,30 @@ fn library_swipe_never_leaves_an_empty_or_stuck_window(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn the_flags_page_changes_a_choice_and_asks_for_a_relaunch(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, cx| {
+        w.edit_browser(|browser| { let id = browser.space().active_tab.unwrap(); browser.set_url(id, crate::flags::URL); });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("flags-page").is_some());
+    assert!(!view.read_with(cx, |w, _| w.flags.relaunch_pending()));
+    click(cx, "flag-choice-0");
+    assert!(view.read_with(cx, |w, _| w.flags.menu_open()));
+    click(cx, "flag-option-Enabled");
+    cx.run_until_parked();
+    view.read_with(cx, |w, _| {
+        assert!(w.flags.relaunch_pending(), "a change applies on relaunch");
+        assert!(!w.flags.menu_open(), "choosing closes the menu");
+    });
+    assert!(cx.debug_bounds("flags-relaunch").is_some());
+    // Returning to what the engine started with needs no relaunch.
+    click(cx, "flags-reset-all");
+    assert!(!view.read_with(cx, |w, _| w.flags.relaunch_pending()));
+}
+
+#[gpui::test]
 fn long_input_scrolls_inside_the_command_bar(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-t");
