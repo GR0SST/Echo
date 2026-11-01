@@ -74,6 +74,10 @@ pub(crate) struct BoostEditor {
     /// When a click outside closed the Advanced popover, so the same click
     /// on its button does not open it again.
     advanced_closed_at: Option<std::time::Instant>,
+    /// When a click outside closed the name menu.
+    menu_closed_at: Option<std::time::Instant>,
+    /// The panel width it animates from and since when, after Code or Back.
+    resize: Option<(f32, std::time::Instant)>,
     /// Which color dot the current press moves.
     wheel_grip: Option<WheelGrip>,
     _subscriptions: Vec<Subscription>,
@@ -107,6 +111,18 @@ fn shuffle(appearance: &mut browser_core::boosts::BoostAppearance) {
     let font = next(FONTS.len() as u64) as usize;
     // The first specimen stands for the system font.
     appearance.font = Some(if font == 0 { "system-ui" } else { FONTS[font] }.into());
+}
+
+const RESIZE: std::time::Duration = std::time::Duration::from_millis(260);
+
+#[cfg(test)]
+thread_local! {
+    /// Tests switch modes at once; the resize test turns the animation on.
+    pub(crate) static ANIMATE_BOOST_RESIZE: Cell<bool> = const { Cell::new(false) };
+}
+fn resize_animates() -> bool {
+    #[cfg(test)] { ANIMATE_BOOST_RESIZE.with(|animate| animate.get()) }
+    #[cfg(not(test))] { true }
 }
 
 /// How long the accent dot takes to catch up with the main dot, in seconds.
@@ -418,6 +434,8 @@ impl BoostEditor {
             accent_shown: Rc::new(Cell::new(None)),
             renaming: None,
             advanced_closed_at: None,
+            menu_closed_at: None,
+            resize: None,
             wheel_grip: None,
             _subscriptions: subscriptions,
         }
@@ -604,7 +622,19 @@ impl BoostEditor {
     fn code_mode(&mut self, code: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_picker(cx);
         self.close_advanced(cx);
+        let from = if self.code { CODE_WIDTH } else { SIMPLE_WIDTH };
         self.code = code;
+        // The panel widens or narrows from its right edge. Widening needs the
+        // wide window first; narrowing keeps it until the panel has shrunk.
+        self.resize = (resize_animates() && !crate::native::prefers_reduced_motion()).then(|| (from, std::time::Instant::now()));
+        if code || self.resize.is_none() {
+            self.reopen_at_mode_width(window, cx);
+        }
+        cx.notify();
+    }
+    /// Opens this editor again in a window as wide as its mode, right edge kept.
+    fn reopen_at_mode_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let code = self.code;
         let bounds = window.bounds();
         let width = px(if code { CODE_WIDTH } else { SIMPLE_WIDTH });
         let options = WindowOptions {
@@ -908,25 +938,23 @@ impl BoostEditor {
     }
 }
 impl Render for BoostEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let boost = self.boost(cx);
         let appearance = boost
             .as_ref()
             .map(|boost| boost.appearance.clone())
             .unwrap_or_default();
         let changed = appearance != Default::default();
+        let target = if self.code { CODE_WIDTH } else { SIMPLE_WIDTH };
+        // The content is laid out once at its mode's width; only the panel's
+        // clip widens or narrows around it, from the right edge.
         let mut root = div()
-            .id("boost-editor")
-            .debug_selector(|| "boost-editor".into())
-            .size_full()
+            .w(px(target - 2.))
+            .h_full()
+            .flex_none()
             .relative()
             .flex()
             .flex_col()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(rgb(0xa7a7a7))
-            .overflow_hidden()
-            .bg(rgb(0xfdfdff))
             .text_color(rgb(0x333333))
             .text_size(px(12.))
             .font_family(".SystemUIFont")
@@ -1133,7 +1161,14 @@ impl Render for BoostEditor {
                                 .cursor_pointer()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_size(px(13.))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    if this.menu {
+                                        this.menu = false;
+                                        this.menu_closed_at = Some(std::time::Instant::now());
+                                        cx.notify();
+                                    }
+                                }))
                                 .child(
                                     boost
                                         .as_ref()
@@ -1142,7 +1177,10 @@ impl Render for BoostEditor {
                                 )
                                 .child(icons::chevron(false))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.menu = !this.menu;
+                                    // A press on the name while the menu is open already
+                                    // closed it as a click outside; it stays closed.
+                                    let just_closed = this.menu_closed_at.take().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(400));
+                                    this.menu = !this.menu && !just_closed;
                                     cx.notify();
                                 }))
                                 .into_any_element()
@@ -1426,7 +1464,11 @@ impl Render for BoostEditor {
                     .border_color(gpui::hsla(0., 0., 0., 0.12))
                     .shadow_lg()
                     .text_color(rgb(0x1d1d1f))
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| { this.menu = false; cx.notify(); }))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.menu = false;
+                        this.menu_closed_at = Some(std::time::Instant::now());
+                        cx.notify();
+                    }))
                     .child(item("boost-menu-rename", "Rename this Boost…", true)
                         .on_click(cx.listener(|this, _, window, cx| this.start_rename(window, cx))))
                     .child(item("boost-menu-shuffle", "Shuffle", true)
@@ -1443,6 +1485,38 @@ impl Render for BoostEditor {
                         }))),
             );
         }
-        root
+        let width = match self.resize {
+            Some((from, started)) => {
+                let t = (started.elapsed().as_secs_f32() / RESIZE.as_secs_f32()).min(1.);
+                if t < 1. {
+                    window.request_animation_frame();
+                    from + (target - from) * (1. - (1. - t).powi(3))
+                } else {
+                    self.resize = None;
+                    // Narrowed: the window follows now that the panel has shrunk.
+                    if f32::from(window.bounds().size.width) > target + 1. {
+                        cx.defer_in(window, |this, window, cx| this.reopen_at_mode_width(window, cx));
+                    }
+                    target
+                }
+            }
+            None => target,
+        };
+        div().size_full().flex().justify_end().child(
+            div()
+                .id("boost-editor")
+                .debug_selector(|| "boost-editor".into())
+                .w(px(width))
+                .h_full()
+                .flex_none()
+                .flex()
+                .justify_end()
+                .rounded(px(12.))
+                .border_1()
+                .border_color(rgb(0xa7a7a7))
+                .overflow_hidden()
+                .bg(rgb(0xfdfdff))
+                .child(root),
+        )
     }
 }

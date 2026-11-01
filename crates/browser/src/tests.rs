@@ -10280,6 +10280,10 @@ fn boost_menu_renames_shuffles_resets_and_deletes_like_arc(cx:&mut TestAppContex
     let mut panel=boost_panel(&view,cx);
     let boost=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().cloned());
     click(&mut panel,"boost-name");
+    // The name closes its own menu again.
+    click(&mut panel,"boost-name");panel.update(|window,_|window.refresh());panel.run_until_parked();
+    assert!(panel.debug_bounds("boost-menu").is_none(),"a second press on the name closes the menu");
+    click(&mut panel,"boost-name");
     for item in ["boost-menu-rename","boost-menu-shuffle","boost-menu-reset","boost-menu-delete","boost-menu-all"] {assert!(panel.debug_bounds(item).is_some(),"{item}");}
     // Nothing to reset yet.
     click(&mut panel,"boost-menu-reset");panel.run_until_parked();
@@ -10393,6 +10397,30 @@ fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut Test
     panel.simulate_keystrokes("escape");cx.run_until_parked();assert!(view.read_with(cx,|view,_|view.boost_editor.is_none()));
 }
 #[gpui::test]
+fn boost_code_mode_widens_and_narrows_the_panel_from_its_right_edge(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
+    crate::boosts::ANIMATE_BOOST_RESIZE.with(|animate|animate.set(true));
+    let mut panel=boost_panel(&view,cx);
+    let simple=panel.debug_bounds("boost-editor").unwrap();
+    click(&mut panel,"boost-code");
+    let mut panel=boost_panel(&view,cx);
+    let widening=panel.debug_bounds("boost-editor").unwrap();
+    std::thread::sleep(Duration::from_millis(300));panel.update(|window,_|window.refresh());panel.run_until_parked();
+    let wide=panel.debug_bounds("boost-editor").unwrap();
+    assert!(simple.size.width<widening.size.width && widening.size.width<wide.size.width,"{simple:?} {widening:?} {wide:?}");
+    assert_eq!(wide.size.width,gpui::px(480.));
+    assert_eq!(widening.right(),wide.right(),"it grows leftward from the right edge");
+    // Back narrows the panel first; the window follows once it has shrunk.
+    click(&mut panel,"boost-code-back");
+    let narrowing=panel.debug_bounds("boost-editor").unwrap();
+    assert!(narrowing.size.width<wide.size.width && narrowing.size.width>simple.size.width,"{narrowing:?}");
+    std::thread::sleep(Duration::from_millis(300));panel.update(|window,_|window.refresh());panel.run_until_parked();cx.run_until_parked();
+    crate::boosts::ANIMATE_BOOST_RESIZE.with(|animate|animate.set(false));
+    let mut panel=boost_panel(&view,cx);
+    assert_eq!(panel.debug_bounds("boost-editor").unwrap().size,simple.size);
+    assert_eq!(panel.update(|window,_|window.bounds().size.width),gpui::px(184.),"the window narrows after the panel");
+}
+#[gpui::test]
 fn boost_code_tabs_edit_multiline_css_and_javascript_with_local_undo(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
     let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
@@ -10438,20 +10466,17 @@ fn site_controls_run_one_boost_per_site_and_the_arrow_opens_it(cx:&mut TestAppCo
     assert_eq!(states(&view,cx).iter().map(|(_,on)|*on).collect::<Vec<_>>(),vec![false,true]);
 }
 #[gpui::test]
-fn site_controls_drop_out_of_their_button_and_open_to_full_height(cx:&mut TestAppContext) {
+fn site_controls_drop_out_of_their_button_without_relayout(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);
     crate::site_controls::ANIMATE_SITE_REVEAL.with(|animate|animate.set(true));
     click(cx,"address-site-controls");
     let overlay=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(overlay.into(),&cx.cx);controls.run_until_parked();
-    // The first frame measures the full height; the next ones grow into it.
-    controls.update(|window,_|window.refresh());controls.run_until_parked();
     let opening=controls.debug_bounds("site-controls").unwrap();
-    std::thread::sleep(Duration::from_millis(260));controls.update(|window,_|window.refresh());controls.run_until_parked();
+    std::thread::sleep(Duration::from_millis(280));controls.update(|window,_|window.refresh());controls.run_until_parked();
     let open=controls.debug_bounds("site-controls").unwrap();
     crate::site_controls::ANIMATE_SITE_REVEAL.with(|animate|animate.set(false));
-    assert!(opening.size.height<open.size.height,"it opens toward its full height: {opening:?} -> {open:?}");
-    assert!(opening.origin.y<open.origin.y,"it settles down out of the button");
-    assert_eq!(opening.size.width,open.size.width,"its rows keep their width while it opens");
+    assert!(opening.origin.y<open.origin.y,"it settles down out of the button: {opening:?} -> {open:?}");
+    assert_eq!(opening.size,open.size,"only paint-time properties move; its layout stays");
 }
 #[gpui::test]
 fn site_boost_toggle_updates_its_enabled_badge(cx:&mut TestAppContext) {

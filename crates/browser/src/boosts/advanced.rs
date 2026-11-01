@@ -205,7 +205,7 @@ impl Render for Advanced {
         root.relative()
             .with_animation(
                 "boost-advanced-in",
-                gpui::Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui::ease_out_quint()),
+                gpui::Animation::new(std::time::Duration::from_millis(200)).with_easing(|t: f32| 1. - (1. - t).powi(3)),
                 |root, delta| root.opacity(delta).top(px(-6. * (1. - delta))),
             )
             .into_any_element()

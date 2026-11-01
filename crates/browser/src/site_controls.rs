@@ -65,8 +65,6 @@ pub(crate) struct SiteControls {
     pub overlay: Option<WindowHandle<Overlay>>,
     /// When the panel opened, for its reveal.
     opened: std::time::Instant,
-    /// The panel's full height once laid out, which the reveal grows into.
-    height: Rc<Cell<f32>>,
 }
 
 #[cfg(test)]
@@ -79,14 +77,14 @@ fn reveal_animates() -> bool {
     #[cfg(not(test))] { true }
 }
 
-const REVEAL: std::time::Duration = std::time::Duration::from_millis(220);
+const REVEAL: std::time::Duration = std::time::Duration::from_millis(240);
 
 /// The reveal's eased progress; frames keep coming until it settles.
 fn reveal_progress(opened: std::time::Instant, window: &Window) -> f32 {
     if crate::native::prefers_reduced_motion() || !reveal_animates() { return 1.; }
     let t = (opened.elapsed().as_secs_f32() / REVEAL.as_secs_f32()).min(1.);
     if t < 1. { window.request_animation_frame(); }
-    1. - (1. - t).powi(5)
+    1. - (1. - t).powi(3)
 }
 
 /// Where the address field's site controls button was last painted, in
@@ -156,7 +154,6 @@ impl BrowserWindow {
             focus: focus.clone(),
             overlay: None,
             opened: std::time::Instant::now(),
-            height: Rc::new(Cell::new(0.)),
         });
         let main = self.main_window;
         let parent = self.native_view;
@@ -628,7 +625,7 @@ impl BrowserWindow {
                 cx.listener(|this, _, _, cx| this.close_site_controls(cx)),
             )
             .child(
-                self.site_panel_shell(panel, "site-permission-prompt")
+                self.site_panel_shell(panel, "site-permission-prompt", 1.)
                     .absolute()
                     .left(panel.position.x)
                     .top(panel.position.y)
@@ -716,6 +713,7 @@ impl BrowserWindow {
         &self,
         panel: &SiteControls,
         id: &'static str,
+        material_alpha: f32,
     ) -> gpui::Stateful<gpui::Div> {
         let material_alive = panel.material_alive.clone();
         let material_installed = panel.material_installed.clone();
@@ -754,7 +752,7 @@ impl BrowserWindow {
                                     f32::from(bounds.size.height) as f64,
                                 ]),
                                 SITE_RADIUS as f64,
-                                site_backdrop_config(),
+                                crate::material::BackdropConfig { effect_alpha: material_alpha as f64, ..site_backdrop_config() },
                             ) == crate::material::BackdropInstallation::Installed
                         });
                         if material_installed.replace(installed) != installed {
@@ -813,10 +811,10 @@ impl BrowserWindow {
         let secure = panel.info.as_ref().is_some_and(|info| info.secure);
         let more = panel.more;
         let more_anchor = panel.more_anchor.clone();
-        // The panel drops out of its button on a fast-out curve: it fades in,
-        // settles a few points down and opens to its full height.
+        // The panel drops out of its button on an ease-out curve: it and its
+        // material fade in together as it settles a few points down. Only
+        // paint-time properties change, so nothing is laid out again.
         let reveal = reveal_progress(panel.opened, window);
-        let full_height = panel.height.clone();
         let drop = px(-6. * (1. - reveal));
         let menu_position = more_anchor
             .get()
@@ -956,21 +954,11 @@ impl BrowserWindow {
             )
             .opacity(reveal)
             .child(
-                self.site_panel_shell(panel, "site-controls")
+                self.site_panel_shell(panel, "site-controls", reveal)
                     .absolute()
                     .left(panel.position.x)
                     .top(panel.position.y + drop)
                     .w(px(WIDTH))
-                    .when(reveal < 1. && full_height.get() > 0., |shell| {
-                        shell.max_h(px(full_height.get() * (0.9 + 0.1 * reveal))).overflow_hidden()
-                    })
-                    .child({
-                        let full_height = full_height.clone();
-                        gpui::canvas(move |bounds, _, _| {
-                            // Clipped frames are shorter; keep the tallest seen.
-                            full_height.set(full_height.get().max(f32::from(bounds.size.height)));
-                        }, |_, _, _, _| {}).absolute().inset_0()
-                    })
                     .p(px(PADDING))
                     .pt(px(9.))
                     .flex()
