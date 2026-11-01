@@ -1945,6 +1945,10 @@ fn library_spaces_scroll_until_the_last_space_and_only_then_close(cx: &mut TestA
     assert!(end < -200.);
     assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected()), SidebarPage::Library);
     assert_eq!(view.read_with(cx, |w, _| w.library_slide_amount()), 1.);
+    // The page's sliver leaves the creation button whole at the end.
+    let plus = cx.debug_bounds("library-new-space").unwrap();
+    let page = cx.debug_bounds("library-media-preview").unwrap();
+    assert!(plus.right() <= page.left(), "{plus:?} {page:?}");
     // Back toward the first Space only scrolls.
     swipe(cx, 50., true);
     assert_eq!(offset(&view, cx), end + 50.);
@@ -1954,6 +1958,10 @@ fn library_spaces_scroll_until_the_last_space_and_only_then_close(cx: &mut TestA
     // From the last Space a new swipe leaves Library with the fingers.
     swipe(cx, -200., false);
     view.read_with(cx, |w, _| assert!(w.library_slide_amount() < 1. && w.library_in_motion()));
+    // Sliding keeps the strip's scroll position, so a cancelled swipe returns to it.
+    assert_eq!(offset(&view, cx), end);
+    assert_eq!(crate::library::spaces_strip_opacity(0.05), 0.);
+    assert_eq!(crate::library::spaces_strip_opacity(1.), 1.);
     scroll(cx, "library-spaces-scroll", Moved, -400., 0.);
     cx.executor().advance_clock(Duration::from_millis(200));
     scroll(cx, "library-spaces-scroll", Ended, 0., 0.);

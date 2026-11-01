@@ -60,7 +60,7 @@ impl Render for Harness {
                     .into_any_element()
             },
             None,
-            &self.spaces_scroll,
+            SpacesStrip::at_rest(self.spaces_scroll.clone()),
         ))
     }
 }

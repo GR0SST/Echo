@@ -315,14 +315,16 @@ impl BrowserWindow {
                             })),
                     ),
             )
-            .child(
-                div()
+            .child({
+                let mut list = div()
                     .id("flags-scroll")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .track_scroll(&state.scroll)
-                    .child(
+                    .track_scroll(&state.scroll);
+                // A horizontal swipe belongs to the sidebar and Library.
+                list.style().restrict_scroll_to_axis = Some(true);
+                list.child(
                         div()
                             .w_full()
                             .max_w(px(820.))
@@ -334,8 +336,8 @@ impl BrowserWindow {
                                 "Warning: Experimental features ahead! By enabling these features, you could lose browser data or compromise your security or privacy. Enabled features apply to all users of this browser.",
                             ))
                             .child(div().mt(px(16.)).children(rows)),
-                    ),
-            )
+                    )
+            })
             .when(pending, |page| {
                 page.child(
                     div()

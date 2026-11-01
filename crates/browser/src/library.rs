@@ -186,6 +186,26 @@ fn action(
 /// the captured Space and Profile IDs, with all native tab/menu/drag hooks.
 /// The callback must return a shrinkable element (no fixed sidebar width).
 /// `other_section` is host-owned; Media's actual inventory is outside this slice.
+/// The live page stays visible this far at the window edge beside Spaces.
+pub(crate) const SPACES_PAGE_SLIVER: f32 = 46.;
+
+/// How the Spaces strip sits in the sliding Library layer.
+pub(crate) struct SpacesStrip {
+    pub(crate) scroll: gpui::ScrollHandle,
+    /// Cancels the layer's growth while it slides, so the strip keeps its width
+    /// and scroll range.
+    pub(crate) right: f32,
+    pub(crate) opacity: f32,
+}
+
+impl SpacesStrip {
+    #[cfg(test)]
+    pub(crate) fn at_rest(scroll: gpui::ScrollHandle) -> Self { Self { scroll, right: 0., opacity: 1. } }
+}
+
+/// Spaces are gone before the slide ends rather than vanishing on its last frame.
+pub(crate) fn spaces_strip_opacity(slide: f32) -> f32 { ((slide - 0.1) / 0.6).clamp(0., 1.) }
+
 pub(crate) fn render_library(
     projection: &LibraryProjection,
     section: LibrarySection,
@@ -194,7 +214,7 @@ pub(crate) fn render_library(
     events: LibraryEvents,
     mut render_sidebar: impl FnMut(&LibrarySpace, LibraryEvents) -> AnyElement,
     other_section: Option<AnyElement>,
-    spaces_scroll: &gpui::ScrollHandle,
+    spaces: SpacesStrip,
 ) -> AnyElement {
     // The captured rail has six 96 × 80 icon tiles at a 100 px pitch.
     // Its 580 px group is centered as a whole, not pinned below the titlebar.
@@ -327,12 +347,13 @@ pub(crate) fn render_library(
             .debug_selector(|| "library-spaces-scroll".into())
             .absolute()
             .left(px(112.))
-            .right_0()
+            .right(px(spaces.right))
             .top(px(48.))
             .bottom(px(48.))
+            .opacity(spaces.opacity)
             .overflow_x_scroll()
             .overflow_y_hidden()
-            .track_scroll(spaces_scroll);
+            .track_scroll(&spaces.scroll);
         // GPUI otherwise maps a vertical wheel delta onto this horizontal
         // strip as well as scrolling the nested sidebar body.
         scroll.style().restrict_scroll_to_axis = Some(true);
@@ -340,7 +361,8 @@ pub(crate) fn render_library(
             scroll.child(
                 div()
                     .flex()
-                    .w(px(104. + projection.spaces.len() as f32 * 264.))
+                    // The retained page's sliver must not cover the creation button.
+                    .w(px(104. + SPACES_PAGE_SLIVER + projection.spaces.len() as f32 * 264.))
                     .h_full()
                     .items_center()
                     .gap(px(24.))

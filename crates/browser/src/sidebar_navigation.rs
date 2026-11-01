@@ -144,7 +144,7 @@ impl BrowserWindow {
         if self.sidebar_navigation.library_section == LibrarySection::Spaces {
             // A 46 px sliver stays visible before the window edge.
             self.sidebar_navigation.normal_content_left + f32::from(self.sidebar_navigation.normal_content_size.width)
-                + crate::pages::CONTENT_INSET - 46.
+                + crate::pages::CONTENT_INSET - library::SPACES_PAGE_SLIVER
         } else { 112. + library::media::MEDIA_REFERENCE_COLUMN_WIDTH }
     }
     pub(crate) fn library_page_offset(&self) -> f32 {
@@ -908,7 +908,11 @@ impl BrowserWindow {
             selected: theme.selected,
         };
         let section = self.sidebar_navigation.library_section;
-        let spaces_scroll = self.sidebar_navigation.spaces_scroll.clone();
+        let spaces = library::SpacesStrip {
+            scroll: self.sidebar_navigation.spaces_scroll.clone(),
+            right: -self.library_layer_shift(),
+            opacity: library::spaces_strip_opacity(self.sidebar_navigation.library_slide_amount),
+        };
         let preview_left = self.library_preview_left();
         let page_width = f32::from(self.sidebar_navigation.normal_content_size.width);
         let preview = (open && section == LibrarySection::Media).then(|| self.render_library_page_preview(window, cx));
@@ -1012,7 +1016,7 @@ impl BrowserWindow {
             events,
             |card, _| self.render_library_sidebar(card, cx),
             empty,
-            &spaces_scroll,
+            spaces,
         )
     }
     /// Mount inside the presenter-owned preview rectangle (Media or Downloads).
