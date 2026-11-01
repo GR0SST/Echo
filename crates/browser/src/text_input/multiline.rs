@@ -62,6 +62,7 @@ impl Element for CodeElement {
             quads: Vec::new(),
         };
         let mut offset = 0;
+        input.caret.set(None);
         for (index, text) in input.content.split('\n').enumerate() {
             let run = TextRun {
                 len: text.len(),
@@ -98,13 +99,15 @@ impl Element for CodeElement {
                 && input.cursor_offset() >= offset
                 && input.cursor_offset() <= offset + text.len()
             {
-                window.request_autoscroll(Bounds::new(
+                let caret = Bounds::new(
                     point(
                         at.x + line.x_for_index(input.cursor_offset() - offset),
                         at.y,
                     ),
                     size(px(2.), height),
-                ));
+                );
+                window.request_autoscroll(caret);
+                input.caret.set(Some(caret));
                 result.quads.push(fill(
                     Bounds::new(
                         point(

@@ -23,7 +23,7 @@ impl BoostEditor {
         if self.advanced_closed_at.take().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(400)) {
             return;
         }
-        let at = window.bounds().origin + point(px(-20.), px(272.));
+        let at = window.bounds().origin + point(px(-20. + EDGE), px(272. + EDGE));
         let parent = crate::native::view_of(window);
         let owner = cx.entity().downgrade();
         let owner_handle = owner.clone();

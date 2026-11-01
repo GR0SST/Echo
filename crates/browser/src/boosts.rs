@@ -20,6 +20,9 @@ mod picker_bar;
 const HEIGHT: f32 = 590.;
 const SIMPLE_WIDTH: f32 = 184.;
 const CODE_WIDTH: f32 = 480.;
+/// Clear room around the panel inside its window: the system rounds window
+/// corners on its own and would otherwise cut the outline off there.
+pub(crate) const EDGE: f32 = 6.;
 const FONTS: [&str; 20] = [
     ".SystemUIFont",
     "Helvetica Neue",
@@ -78,6 +81,8 @@ pub(crate) struct BoostEditor {
     menu_closed_at: Option<std::time::Instant>,
     /// The code editor's sideways scroll.
     pub(crate) code_scroll: gpui::ScrollHandle,
+    /// The caret position the code view last scrolled for.
+    followed_caret: Option<(gpui::Pixels, gpui::Pixels)>,
     /// The panel width it animates from and since when, after Code or Back.
     resize: Option<(f32, std::time::Instant)>,
     /// Which color dot the current press moves.
@@ -283,10 +288,10 @@ impl BrowserWindow {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     bounds.origin
                         + point(
-                            (bounds.size.width - px(SIMPLE_WIDTH + 24.)).max(px(0.)),
-                            px(80.),
+                            (bounds.size.width - px(SIMPLE_WIDTH + 24. + EDGE)).max(px(0.)),
+                            px(80. - EDGE),
                         ),
-                    size(px(SIMPLE_WIDTH), px(HEIGHT)),
+                    size(px(SIMPLE_WIDTH + 2. * EDGE), px(HEIGHT + 2. * EDGE)),
                 ))),
                 titlebar: None,
                 kind: WindowKind::Normal,
@@ -439,6 +444,7 @@ impl BoostEditor {
             menu_closed_at: None,
             resize: None,
             code_scroll: gpui::ScrollHandle::new(),
+            followed_caret: None,
             wheel_grip: None,
             _subscriptions: subscriptions,
         }
@@ -575,6 +581,27 @@ impl BoostEditor {
             boost.zap_selectors.pop();
         });
     }
+    /// When the caret moves out of the code view's sides (typing at the end
+    /// of a long line), the view scrolls sideways after it. A caret that sits
+    /// still leaves the user's own scrolling alone.
+    fn follow_code_caret(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = if self.javascript { &self.js } else { &self.css };
+        let (Some(caret), view) = (input.read(cx).caret.get(), self.code_scroll.bounds()) else { return; };
+        let offset = self.code_scroll.offset();
+        let in_content = caret.origin.x - view.origin.x - offset.x;
+        if self.followed_caret == Some((in_content, caret.origin.y - offset.y)) { return; }
+        self.followed_caret = Some((in_content, caret.origin.y - offset.y));
+        let margin = px(16.);
+        let shift = if caret.right() > view.right() - margin {
+            view.right() - margin - caret.right()
+        } else if caret.left() < view.left() + margin {
+            (view.left() + margin - caret.left()).min(-offset.x)
+        } else {
+            return;
+        };
+        self.code_scroll.set_offset(point(offset.x + shift, offset.y));
+        window.request_animation_frame();
+    }
     pub(crate) fn boost_id(&self) -> BoostId { self.id }
     fn has_edits(boost: &Boost) -> bool {
         boost.appearance != Default::default()
@@ -655,11 +682,11 @@ impl BoostEditor {
     fn reopen_at_mode_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let code = self.code;
         let bounds = window.bounds();
-        let width = px(if code { CODE_WIDTH } else { SIMPLE_WIDTH });
+        let width = px(if code { CODE_WIDTH } else { SIMPLE_WIDTH } + 2. * EDGE);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(bounds.right() - width, bounds.top()),
-                size(width, px(HEIGHT)),
+                size(width, px(HEIGHT + 2. * EDGE)),
             ))),
             titlebar: None,
             kind: WindowKind::Normal,
@@ -984,6 +1011,7 @@ impl Render for BoostEditor {
             }))
             .on_action(cx.listener(|this, _: &UndoZap, _, cx| this.undo_zap(cx)));
         if self.code {
+            self.follow_code_caret(window, cx);
             let code_lines = if self.javascript { &self.js } else { &self.css }.read(cx).text().split('\n').count();
             let tabs = div()
                 .flex()
@@ -1084,6 +1112,11 @@ impl Render for BoostEditor {
                                         .min_w_0()
                                         .overflow_x_scroll()
                                         .track_scroll(&self.code_scroll)
+                                        .map(|mut el| {
+                                            // Vertical swipes scroll the code down, never sideways.
+                                            el.style().restrict_scroll_to_axis = Some(true);
+                                            el
+                                        })
                                         .pr(px(12.))
                                         .child(if self.javascript {
                                             self.js.clone()
@@ -1548,7 +1581,7 @@ impl Render for BoostEditor {
                 } else {
                     self.resize = None;
                     // Narrowed: the window follows now that the panel has shrunk.
-                    if f32::from(window.bounds().size.width) > target + 1. {
+                    if f32::from(window.bounds().size.width) > target + 2. * EDGE + 1. {
                         cx.defer_in(window, |this, window, cx| this.reopen_at_mode_width(window, cx));
                     }
                     target
@@ -1556,22 +1589,26 @@ impl Render for BoostEditor {
             }
             None => target,
         };
-        div().size_full().flex().justify_end().child(
+        div().size_full().p(px(EDGE)).flex().justify_end().child(
             div()
                 .id("boost-editor")
                 .debug_selector(|| "boost-editor".into())
                 .w(px(width))
                 .h_full()
                 .flex_none()
-                .flex()
-                .justify_end()
                 .relative()
-                .rounded(px(12.))
-                .overflow_hidden()
-                .bg(rgb(0xfdfdff))
-                .child(root)
-                // The outline is drawn over the content: backgrounds such as the
-                // header would otherwise cover it along the rounded corners.
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .justify_end()
+                        .rounded(px(12.))
+                        .overflow_hidden()
+                        .bg(rgb(0xfdfdff))
+                        .child(root),
+                )
+                // The outline sits beside the clipped panel, not inside it: the
+                // rounded clip would shave it away along the corners.
                 .child(div().absolute().inset_0().rounded(px(12.)).border_1().border_color(rgb(0xa7a7a7))),
         )
     }

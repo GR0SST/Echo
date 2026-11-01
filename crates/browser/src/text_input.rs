@@ -98,6 +98,8 @@ pub struct TextInput {
     multiline: bool,
     form_multiline: bool,
     lines: Vec<(usize, ShapedLine, Bounds<Pixels>)>,
+    /// Where a code input last painted its caret, for a scrolling host.
+    pub(crate) caret: std::cell::Cell<Option<Bounds<Pixels>>>,
     focus_handle: FocusHandle,
     content: SharedString,
     placeholder: SharedString,
@@ -133,7 +135,7 @@ impl TextInput {
         let placeholder = placeholder.into();
         Self {
             secure: false,
-            multiline: false, form_multiline: false, lines: Vec::new(),
+            multiline: false, form_multiline: false, lines: Vec::new(), caret: std::cell::Cell::new(None),
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
             placeholder: single_line_text(&placeholder).into_owned().into(),
