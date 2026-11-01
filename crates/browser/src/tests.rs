@@ -10394,6 +10394,9 @@ fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut Test
     for selector in ["boost-color","boost-font-0","boost-size","boost-case","boost-zap","boost-code"] {assert!(panel.debug_bounds(selector).is_some(),"{selector}");}
     click(&mut panel,"boost-size");click(&mut panel,"boost-case");click(&mut panel,"boost-font-0");
     view.read_with(cx,|view,_|{let boost=view.browser.active_user_profile().boosts.iter().next().unwrap();assert_eq!(boost.appearance.size,1);assert_eq!(boost.appearance.case,1);assert_eq!(boost.appearance.font.as_deref(),Some("system-ui"));});
+    // A second press on the chosen font clears it.
+    click(&mut panel,"boost-font-0");
+    assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().appearance.font.is_none()));
     panel.simulate_keystrokes("escape");cx.run_until_parked();assert!(view.read_with(cx,|view,_|view.boost_editor.is_none()));
 }
 #[gpui::test]
@@ -10415,10 +10418,12 @@ fn boost_zap_bar_lists_zaps_to_restore_and_the_code_eyedropper_writes_selectors(
     // The eyedropper in code writes the element's selector into the open editor.
     click(&mut panel,"boost-code-picker");
     fake.send(cx,Event::BoostZap{view:page(1),selector:"main > h1".into()});cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(200));cx.run_until_parked();
     assert_eq!(boost(&view,cx).css,"main > h1 {\n  \n}\n");
     assert_eq!(boost(&view,cx).zap_selectors,vec![".banner"],"nothing new is zapped");
     let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-tab-js");click(&mut panel,"boost-code-picker");
     fake.send(cx,Event::BoostZap{view:page(1),selector:"#nav".into()});cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(200));cx.run_until_parked();
     assert_eq!(boost(&view,cx).javascript,"document.querySelector(\"#nav\")");
 }
 #[gpui::test]
@@ -10427,10 +10432,14 @@ fn boost_code_numbers_its_lines_and_scrolls_long_lines_sideways(cx:&mut TestAppC
     let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
     let offset=|view:&Entity<BrowserWindow>,panel:&mut VisualTestContext|view.read_with(panel,|view,cx|view.boost_editor.and_then(|editor|editor.read(cx).ok().map(|editor|editor.code_scroll.offset().x))).unwrap();
     panel.simulate_input("body {");panel.simulate_keystrokes("enter");panel.simulate_input(&format!("  background: {};","x".repeat(160)));panel.run_until_parked();
-    for _ in 0..3 {panel.update(|window,_|window.refresh());panel.run_until_parked();}
     assert!(offset(&view,&mut panel)<gpui::px(0.),"typing at the end of a long line scrolls after the caret");
-    panel.simulate_keystrokes("enter");panel.simulate_input("}");panel.run_until_parked();
-    for _ in 0..3 {panel.update(|window,_|window.refresh());panel.run_until_parked();}
+    assert!(panel.debug_bounds("boost-code-scrollbar").is_some());
+    // Dragging the scrollbar to its start shows the line's start again.
+    let track=panel.debug_bounds("boost-code-scrollbar").unwrap();
+    panel.simulate_mouse_down(gpui::point(track.left()+gpui::px(2.),track.center().y),gpui::MouseButton::Left,Modifiers::none());
+    panel.simulate_mouse_up(gpui::point(track.left()+gpui::px(2.),track.center().y),gpui::MouseButton::Left,Modifiers::none());panel.run_until_parked();
+    assert_eq!(offset(&view,&mut panel),gpui::px(0.),"a press at the track's start scrolls to the start");
+    panel.simulate_keystrokes("end");panel.simulate_keystrokes("enter");panel.simulate_input("}");panel.run_until_parked();
     assert_eq!(offset(&view,&mut panel),gpui::px(0.),"a caret back at the start brings the view back");
     assert_eq!(panel.debug_bounds("boost-code-lines").unwrap().size.height,gpui::px(54.),"one number per line");
     let code=panel.debug_bounds("boost-code-horizontal").unwrap();
@@ -10469,8 +10478,12 @@ fn boost_code_tabs_edit_multiline_css_and_javascript_with_local_undo(cx:&mut Tes
     let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
     let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
     panel.simulate_input("body {");panel.simulate_keystrokes("enter");panel.simulate_input("color: red;");panel.simulate_keystrokes("enter");panel.simulate_input("}");panel.run_until_parked();
+    // Typing does not rewrite the Boost (and its page) on every keystroke.
+    assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().css.clone()),"");
+    cx.executor().advance_clock(Duration::from_millis(200));cx.run_until_parked();
     assert_eq!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().css.clone()),"body {\ncolor: red;\n}");
     click(&mut panel,"boost-tab-js");panel.simulate_input("window.boost = 1;");panel.simulate_keystrokes("enter");panel.simulate_input("window.second = 2;");panel.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(200));cx.run_until_parked();
     let javascript=view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().javascript.clone());
     assert!(javascript.contains("\nwindow.second"),"actual JS: {javascript:?}");
     panel.simulate_keystrokes("cmd-z");panel.run_until_parked();

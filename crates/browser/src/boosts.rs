@@ -79,10 +79,14 @@ pub(crate) struct BoostEditor {
     advanced_closed_at: Option<std::time::Instant>,
     /// When a click outside closed the name menu.
     menu_closed_at: Option<std::time::Instant>,
+    /// The pending write of typed code into the Boost.
+    code_commit: Option<gpui::Task<()>>,
     /// The code editor's sideways scroll.
     pub(crate) code_scroll: gpui::ScrollHandle,
     /// The caret position the code view last scrolled for.
-    followed_caret: Option<(gpui::Pixels, gpui::Pixels)>,
+    followed_caret: Rc<Cell<Option<(gpui::Pixels, gpui::Pixels)>>>,
+    /// The code view's sideways scrollbar track, as last painted.
+    code_track: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     /// The panel width it animates from and since when, after Code or Back.
     resize: Option<(f32, std::time::Instant)>,
     /// Which color dot the current press moves.
@@ -99,6 +103,35 @@ enum WheelGrip { Main, Accent }
 #[derive(Clone)]
 struct WheelDrag;
 impl Render for WheelDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+}
+
+const CODE_COMMIT_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// When the caret moves past the code view's sides (typing at the end of a
+/// long line), the view scrolls sideways after it. A caret that sits still
+/// leaves the user's own scrolling alone.
+fn follow_caret(input: &Entity<TextInput>, handle: &gpui::ScrollHandle, followed: &Cell<Option<(gpui::Pixels, gpui::Pixels)>>, window: &mut Window, cx: &mut App) {
+    let (Some(caret), view) = (input.read(cx).caret.get(), handle.bounds()) else { return; };
+    let offset = handle.offset();
+    let at = (caret.origin.x - view.origin.x - offset.x, caret.origin.y - offset.y);
+    if followed.replace(Some(at)) == Some(at) { return; }
+    let margin = px(16.);
+    let shift = if caret.right() > view.right() - margin {
+        view.right() - margin - caret.right()
+    } else if caret.left() < view.left() + margin {
+        (view.left() + margin - caret.left()).min(-offset.x)
+    } else {
+        return;
+    };
+    handle.set_offset(point(offset.x + shift, offset.y));
+    window.refresh();
+}
+
+/// Marker for dragging the code view's scrollbar thumb.
+#[derive(Clone)]
+struct CodeScrollDrag;
+impl Render for CodeScrollDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
 }
 
@@ -397,14 +430,10 @@ impl BoostEditor {
         let focus = cx.focus_handle();
         focus.focus(window);
         let mut subscriptions = vec![
-            cx.subscribe(&css, |this, input, _: &text_input::Changed, cx| {
-                let value = input.read(cx).text().to_string();
-                this.edit(cx, |boost| boost.css = value);
-            }),
-            cx.subscribe(&js, |this, input, _: &text_input::Changed, cx| {
-                let value = input.read(cx).text().to_string();
-                this.edit(cx, |boost| boost.javascript = value);
-            }),
+            // Typing shows at once; the Boost (and its page) takes the code
+            // after a short pause instead of on every keystroke.
+            cx.subscribe(&css, |this, _, _: &text_input::Changed, cx| this.schedule_code_commit(cx)),
+            cx.subscribe(&js, |this, _, _: &text_input::Changed, cx| this.schedule_code_commit(cx)),
         ];
         if let Some(owner) = browser.upgrade() {
             subscriptions.push(cx.observe(&owner, |_, _, cx| cx.notify()));
@@ -443,8 +472,10 @@ impl BoostEditor {
             advanced_closed_at: None,
             menu_closed_at: None,
             resize: None,
+            code_commit: None,
             code_scroll: gpui::ScrollHandle::new(),
-            followed_caret: None,
+            followed_caret: Rc::new(Cell::new(None)),
+            code_track: Rc::new(Cell::new(None)),
             wheel_grip: None,
             _subscriptions: subscriptions,
         }
@@ -581,26 +612,72 @@ impl BoostEditor {
             boost.zap_selectors.pop();
         });
     }
-    /// When the caret moves out of the code view's sides (typing at the end
-    /// of a long line), the view scrolls sideways after it. A caret that sits
-    /// still leaves the user's own scrolling alone.
-    fn follow_code_caret(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = if self.javascript { &self.js } else { &self.css };
-        let (Some(caret), view) = (input.read(cx).caret.get(), self.code_scroll.bounds()) else { return; };
-        let offset = self.code_scroll.offset();
-        let in_content = caret.origin.x - view.origin.x - offset.x;
-        if self.followed_caret == Some((in_content, caret.origin.y - offset.y)) { return; }
-        self.followed_caret = Some((in_content, caret.origin.y - offset.y));
-        let margin = px(16.);
-        let shift = if caret.right() > view.right() - margin {
-            view.right() - margin - caret.right()
-        } else if caret.left() < view.left() + margin {
-            (view.left() + margin - caret.left()).min(-offset.x)
-        } else {
-            return;
+    /// A thin sideways scrollbar under the code once a line is wider than
+    /// the view; its thumb drags, and a press on the track jumps there.
+    fn code_scrollbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (handle, track) = (self.code_scroll.clone(), self.code_track.clone());
+        let scroll_to = |handle: &gpui::ScrollHandle, track: &Cell<Option<Bounds<gpui::Pixels>>>, x: gpui::Pixels| {
+            let (Some(track), view, max) = (track.get(), handle.bounds(), handle.max_offset().width) else { return; };
+            if max <= px(0.) { return; }
+            let thumb = track.size.width * (view.size.width / (view.size.width + max));
+            let ratio = ((x - track.left() - thumb / 2.) / (track.size.width - thumb)).clamp(0., 1.);
+            handle.set_offset(point(-max * ratio, handle.offset().y));
         };
-        self.code_scroll.set_offset(point(offset.x + shift, offset.y));
-        window.request_animation_frame();
+        let (press_handle, press_track, move_handle, move_track) = (handle.clone(), track.clone(), handle.clone(), track.clone());
+        div()
+            .id("boost-code-scrollbar")
+            .debug_selector(|| "boost-code-scrollbar".into())
+            .flex_none()
+            .h(px(12.))
+            .px(px(6.))
+            .bg(rgb(0xf8f9fa))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |_, event: &gpui::MouseDownEvent, window, cx| {
+                // Scrolling keeps the caret in the code.
+                window.prevent_default();
+                scroll_to(&press_handle, &press_track, event.position.x);
+                cx.notify();
+            }))
+            .on_drag(CodeScrollDrag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .on_drag_move::<CodeScrollDrag>(cx.listener(move |_, event: &gpui::DragMoveEvent<CodeScrollDrag>, _, cx| {
+                scroll_to(&move_handle, &move_track, event.event.position.x);
+                cx.notify();
+            }))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| track.set(Some(bounds)),
+                    move |bounds, _, window, _| {
+                        let (view, max) = (handle.bounds(), handle.max_offset().width);
+                        if max <= px(0.) || view.size.width <= px(0.) { return; }
+                        let thumb = (bounds.size.width * (view.size.width / (view.size.width + max))).max(px(24.));
+                        let at = (bounds.size.width - thumb) * (-handle.offset().x / max).clamp(0., 1.);
+                        let mut quad = gpui::fill(
+                            Bounds::new(point(bounds.left() + at, bounds.top() + px(3.)), size(thumb, px(6.))),
+                            gpui::hsla(0., 0., 0., 0.28),
+                        );
+                        quad.corner_radii = px(3.).into();
+                        window.paint_quad(quad);
+                    },
+                )
+                .size_full(),
+            )
+            .into_any_element()
+    }
+    fn schedule_code_commit(&mut self, cx: &mut Context<Self>) {
+        self.code_commit = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(CODE_COMMIT_DELAY).await;
+            let _ = this.update(cx, |this, cx| this.commit_code(cx));
+        }));
+    }
+    /// Writes the typed code into the Boost now, if it changed.
+    pub(crate) fn commit_code(&mut self, cx: &mut Context<Self>) {
+        self.code_commit = None;
+        let (css, javascript) = (self.css.read(cx).text().to_string(), self.js.read(cx).text().to_string());
+        if self.boost(cx).is_some_and(|boost| boost.css != css || boost.javascript != javascript) {
+            self.edit(cx, |boost| {
+                boost.css = css;
+                boost.javascript = javascript;
+            });
+        }
     }
     pub(crate) fn boost_id(&self) -> BoostId { self.id }
     fn has_edits(boost: &Boost) -> bool {
@@ -652,6 +729,7 @@ impl BoostEditor {
         });
     }
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_commit.is_some() { self.commit_code(cx); }
         self.stop_picker(cx);
         self.close_advanced(cx);
         let _ = self.browser.update(cx, |browser, cx| {
@@ -666,6 +744,7 @@ impl BoostEditor {
         window.remove_window();
     }
     fn code_mode(&mut self, code: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_commit.is_some() { self.commit_code(cx); }
         self.stop_picker(cx);
         self.close_advanced(cx);
         let from = if self.code { CODE_WIDTH } else { SIMPLE_WIDTH };
@@ -1011,7 +1090,6 @@ impl Render for BoostEditor {
             }))
             .on_action(cx.listener(|this, _: &UndoZap, _, cx| this.undo_zap(cx)));
         if self.code {
-            self.follow_code_caret(window, cx);
             let code_lines = if self.javascript { &self.js } else { &self.css }.read(cx).text().split('\n').count();
             let tabs = div()
                 .flex()
@@ -1122,10 +1200,21 @@ impl Render for BoostEditor {
                                             self.js.clone()
                                         } else {
                                             self.css.clone()
+                                        })
+                                        .child({
+                                            // Runs right after the input lays out its caret, in the
+                                            // same frame, so typing scrolls without waiting for the
+                                            // editor itself to render again.
+                                            let input = if self.javascript { self.js.clone() } else { self.css.clone() };
+                                            let (handle, followed) = (self.code_scroll.clone(), self.followed_caret.clone());
+                                            gpui::canvas(move |_, window, cx| follow_caret(&input, &handle, &followed, window, cx), |_, _, _, _| {})
+                                                .absolute()
+                                                .size_0()
                                         }),
                                 ),
                         ),
                 )
+                .child(self.code_scrollbar(cx))
                 .child(
                     div()
                         .h(px(68.))
@@ -1400,14 +1489,9 @@ impl Render for BoostEditor {
                             .child("Aa")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.edit(cx, |boost| {
-                                    boost.appearance.font = Some(
-                                        if index == 0 {
-                                            "system-ui"
-                                        } else {
-                                            FONTS[index]
-                                        }
-                                        .into(),
-                                    )
+                                    let font = if index == 0 { "system-ui" } else { FONTS[index] };
+                                    // A second press on the chosen font clears it.
+                                    boost.appearance.font = if boost.appearance.font.as_deref() == Some(font) { None } else { Some(font.into()) };
                                 })
                             })),
                     );
