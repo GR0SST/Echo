@@ -1,10 +1,12 @@
 //! The reference's Contrast / Brightness / Original Saturation popover.
 use super::*;
+use gpui::AnimationExt;
 pub(super) struct Advanced {
     owner: WeakEntity<BoostEditor>,
     focus: gpui::FocusHandle,
     drag: Option<usize>,
     bounds: [Rc<Cell<Option<Bounds<gpui::Pixels>>>>; 3],
+    _outside: gpui::Subscription,
 }
 impl BoostEditor {
     pub(super) fn close_advanced(&mut self, cx: &mut Context<Self>) {
@@ -15,6 +17,10 @@ impl BoostEditor {
     pub(super) fn toggle_advanced(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.advanced.is_some() {
             self.close_advanced(cx);
+            return;
+        }
+        // The press on this button already closed it as a click outside.
+        if self.advanced_closed_at.take().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(400)) {
             return;
         }
         let at = window.bounds().origin + point(px(-20.), px(272.));
@@ -44,11 +50,20 @@ impl BoostEditor {
                 cx.new(|cx| {
                     let focus = cx.focus_handle();
                     focus.focus(window);
+                    // A click anywhere else (the editor, the page, another app)
+                    // takes the key window away and closes the popover.
+                    let outside = cx.observe_window_activation(window, |this: &mut Advanced, window, cx| {
+                        if !window.is_window_active() {
+                            let _ = this.owner.update(cx, |editor, _| editor.advanced_closed_at = Some(std::time::Instant::now()));
+                            this.close(window, cx);
+                        }
+                    });
                     Advanced {
                         owner,
                         focus,
                         drag: None,
                         bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
+                        _outside: outside,
                     }
                 })
             }) else {
@@ -183,6 +198,16 @@ impl Render for Advanced {
                 ),
             );
         }
-        root
+        // Arc fades the popover in as it drops a few points into place.
+        if crate::native::prefers_reduced_motion() {
+            return root.into_any_element();
+        }
+        root.relative()
+            .with_animation(
+                "boost-advanced-in",
+                gpui::Animation::new(std::time::Duration::from_millis(160)).with_easing(gpui::ease_out_quint()),
+                |root, delta| root.opacity(delta).top(px(-6. * (1. - delta))),
+            )
+            .into_any_element()
     }
 }

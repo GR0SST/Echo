@@ -674,6 +674,13 @@ mod mac {
             unsafe { let _: () = msg_send![overlay, setIgnoresMouseEvents: Bool::YES]; }
         }
     }
+
+    pub fn set_overlay_movable(view: *mut c_void) {
+        let overlay = window(view);
+        if !overlay.is_null() {
+            unsafe { let _: () = msg_send![overlay, setMovable: Bool::YES]; }
+        }
+    }
 }
 
 /// Park a live lookup without closing its GPUI/CEF host. Ownership is checked
@@ -701,6 +708,15 @@ pub fn set_overlay_passthrough(view: *mut c_void) {
     mac::set_overlay_passthrough(view);
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     desktop::passthrough(view);
+}
+
+/// A floating panel among the overlays (the Boost editor) may be dragged by
+/// its header, also out past the browser window's edge.
+pub fn set_overlay_movable(view: *mut c_void) {
+    #[cfg(target_os = "macos")]
+    mac::set_overlay_movable(view);
+    #[cfg(not(target_os = "macos"))]
+    let _ = view;
 }
 
 /// Makes `overlay_view`'s window a borderless child of `parent_view`'s

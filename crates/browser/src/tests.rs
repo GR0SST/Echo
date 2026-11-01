@@ -10266,6 +10266,41 @@ fn boost_advanced_controls_open_without_crashing_and_change_the_boost(cx:&mut Te
     // The same button closes it again.
     click(&mut panel,"boost-advanced");panel.run_until_parked();
     assert_eq!(panel.windows().len(),before);
+    // A click outside takes its key window away and closes it.
+    click(&mut panel,"boost-advanced");panel.run_until_parked();
+    let mut advanced=VisualTestContext::from_window(*panel.windows().last().unwrap(),&panel.cx);
+    advanced.update(|window,_|window.activate_window());advanced.run_until_parked();
+    advanced.deactivate_window();advanced.run_until_parked();
+    assert_eq!(panel.windows().len(),before,"closed by the click outside");
+}
+#[gpui::test]
+fn boost_menu_renames_shuffles_resets_and_deletes_like_arc(cx:&mut TestAppContext){
+    let (view,cx,_fake)=open_pages(cx);
+    view.update(cx,|view,cx|view.new_boost(cx));
+    let mut panel=boost_panel(&view,cx);
+    let boost=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().cloned());
+    click(&mut panel,"boost-name");
+    for item in ["boost-menu-rename","boost-menu-shuffle","boost-menu-reset","boost-menu-delete","boost-menu-all"] {assert!(panel.debug_bounds(item).is_some(),"{item}");}
+    // Nothing to reset yet.
+    click(&mut panel,"boost-menu-reset");panel.run_until_parked();
+    assert!(panel.debug_bounds("boost-menu").is_some(),"a disabled item keeps the menu open");
+    click(&mut panel,"boost-menu-rename");panel.run_until_parked();
+    assert!(panel.debug_bounds("boost-rename").is_some());
+    panel.simulate_input("Calm Reading");panel.simulate_keystrokes("enter");panel.run_until_parked();
+    assert_eq!(boost(&view,&mut panel).unwrap().name,"Calm Reading");
+    // Escape abandons a rename without closing the editor.
+    click(&mut panel,"boost-name");click(&mut panel,"boost-menu-rename");
+    panel.simulate_input("Other");panel.simulate_keystrokes("escape");panel.run_until_parked();
+    assert_eq!(boost(&view,&mut panel).unwrap().name,"Calm Reading");
+    assert!(view.read_with(&panel,|view,_|view.boost_editor.is_some()));
+    click(&mut panel,"boost-name");click(&mut panel,"boost-menu-shuffle");panel.run_until_parked();
+    let shuffled=boost(&view,&mut panel).unwrap().appearance;
+    assert!(shuffled.tint.is_some() && shuffled.font.is_some());
+    click(&mut panel,"boost-name");click(&mut panel,"boost-menu-reset");panel.run_until_parked();
+    assert_eq!(boost(&view,&mut panel).unwrap().appearance,Default::default());
+    click(&mut panel,"boost-name");click(&mut panel,"boost-menu-delete");cx.run_until_parked();
+    assert!(view.read_with(cx,|view,_|view.boost_editor.is_none()));
+    assert!(boost(&view,cx).is_none());
 }
 #[gpui::test]
 fn the_sidebar_address_drops_down_over_its_field(cx:&mut TestAppContext){
@@ -12005,6 +12040,11 @@ fn video_pip_follows_tab_switches_and_preserves_the_live_source(cx:&mut TestAppC
     let tab=view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id);
     let mut media=playing_media();media.video=true;
     fake.send(cx,Event::MediaStateChanged{view:page(1),state:media.clone()});
+    // A muted decorative loop stays in its tab.
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("https://muted.example");bar(&view,cx).simulate_keystrokes("enter");cx.run_until_parked();
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::PictureInPicture(..))),"a silent video does not leave for PiP");
+    view.update(cx,|w,cx|{w.edit_browser(|b|b.activate_tab(tab,std::time::SystemTime::now()));cx.notify();});cx.run_until_parked();
+    fake.send(cx,Event::AudioStateChanged{view:page(1),audible:true});
     fake.take_calls();
     // Command Bar overlays do not leave the selected tab.
     cx.simulate_keystrokes("cmd-t");cx.run_until_parked();

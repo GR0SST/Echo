@@ -23,6 +23,7 @@ fn focusing_another_visible_split_pane_does_not_open_or_close_video_pip(cx: &mut
             state: video(),
         },
     );
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: true });
     fake.take_calls();
     click(cx, "pane-header-2");
     click(cx, "pane-header-3");
@@ -70,6 +71,7 @@ fn leaving_and_returning_to_a_split_tracks_its_unique_nonfocused_playing_video(
             state: video(),
         },
     );
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: true });
     click(cx, "pane-header-3");
     let focused = view.read_with(cx, |view, _| view.browser.active_tab().unwrap().id);
     let panes = view.read_with(cx, |view, _| {
@@ -116,6 +118,7 @@ fn leaving_and_returning_to_a_split_tracks_its_unique_nonfocused_playing_video(
             state: video(),
         },
     );
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: true });
     view.update(cx, |view, _| {
         view.edit_browser(|browser| {
             browser.settings.set_enabled(
@@ -145,6 +148,7 @@ fn split_pip_does_not_choose_between_ambiguous_siblings_but_keeps_the_focused_so
                 state: video(),
             },
         );
+        fake.send(cx, Event::AudioStateChanged { view: page(id), audible: true });
     }
     let last = view.read_with(cx, |view, _| *view.browser.active_split().unwrap().panes.last().unwrap());
     click(cx, test_selector(format!("pane-header-{}", last.get())));

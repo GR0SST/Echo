@@ -69,6 +69,11 @@ pub(crate) struct BoostEditor {
     color_bounds: Rc<Cell<Option<Bounds<gpui::Pixels>>>>,
     /// Where the lagging accent dot was last painted, and when.
     accent_shown: Rc<Cell<Option<((f32, f32), std::time::Instant)>>>,
+    /// The name field while the Boost is being renamed.
+    renaming: Option<Entity<TextInput>>,
+    /// When a click outside closed the Advanced popover, so the same click
+    /// on its button does not open it again.
+    advanced_closed_at: Option<std::time::Instant>,
     /// Which color dot the current press moves.
     wheel_grip: Option<WheelGrip>,
     _subscriptions: Vec<Subscription>,
@@ -84,6 +89,24 @@ enum WheelGrip { Main, Accent }
 struct WheelDrag;
 impl Render for WheelDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { div() }
+}
+
+/// Arc's Shuffle: a random color pair and font.
+fn shuffle(appearance: &mut browser_core::boosts::BoostAppearance) {
+    let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |time| time.as_nanos() as u64) | 1;
+    let mut next = |range: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % range
+    };
+    appearance.tint = Some(next(360) as u16);
+    appearance.saturation_point = Some(40 + next(61) as u8);
+    appearance.accent_offset = Some(next(361) as i16 - 180);
+    appearance.accent_saturation = Some(30 + next(71) as u8);
+    let font = next(FONTS.len() as u64) as usize;
+    // The first specimen stands for the system font.
+    appearance.font = Some(if font == 0 { "system-ui" } else { FONTS[font] }.into());
 }
 
 /// How long the accent dot takes to catch up with the main dot, in seconds.
@@ -260,6 +283,7 @@ impl BrowserWindow {
             if let Ok(handle) = cx.open_window(options, |window, cx| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
+                    crate::native::set_overlay_movable(child);
                     opened_view.set(Some((parent, child)));
                 }
                 cx.new(|cx| {
@@ -392,6 +416,8 @@ impl BoostEditor {
             focus,
             color_bounds: Rc::new(Cell::new(None)),
             accent_shown: Rc::new(Cell::new(None)),
+            renaming: None,
+            advanced_closed_at: None,
             wheel_grip: None,
             _subscriptions: subscriptions,
         }
@@ -512,6 +538,54 @@ impl BoostEditor {
             boost.zap_selectors.pop();
         });
     }
+    fn has_edits(boost: &Boost) -> bool {
+        boost.appearance != Default::default()
+            || !boost.css.is_empty()
+            || !boost.javascript.is_empty()
+            || !boost.zap_selectors.is_empty()
+    }
+    fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = false;
+        let name = self.boost(cx).map(|boost| boost.name).unwrap_or_default();
+        let input = cx.new(|cx| TextInput::new("Boost name", cx));
+        input.update(cx, |input, cx| { input.set_text(name, cx); input.select_all_text(cx); });
+        input.read(cx).focus_handle(cx).focus(window);
+        self.renaming = Some(input);
+        cx.notify();
+    }
+    fn finish_rename(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.renaming.take() else { return; };
+        let name = input.read(cx).text().trim().to_string();
+        if commit && !name.is_empty() {
+            let (profile, id) = (self.profile, self.id);
+            let _ = self.browser.update(cx, |browser, cx| {
+                browser.edit_browser(|model| model.user_profile_mut(profile).map(|profile| profile.boosts.rename(id, name)));
+                cx.notify();
+            });
+        }
+        self.focus.focus(window);
+        cx.notify();
+    }
+    fn reset_all_edits(&mut self, cx: &mut Context<Self>) {
+        self.menu = false;
+        self.edit(cx, |boost| {
+            boost.appearance = Default::default();
+            boost.css.clear();
+            boost.javascript.clear();
+            boost.zap_selectors.clear();
+        });
+        self.css.update(cx, |input, cx| input.set_text("", cx));
+        self.js.update(cx, |input, cx| input.set_text("", cx));
+    }
+    fn delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = false;
+        let (profile, id) = (self.profile, self.id);
+        self.dismiss(window, cx);
+        let _ = self.browser.update(cx, |browser, cx| {
+            browser.edit_browser(|model| model.user_profile_mut(profile).map(|profile| profile.boosts.remove(id)));
+            browser.sync_boosts(cx);
+        });
+    }
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_picker(cx);
         self.close_advanced(cx);
@@ -576,9 +650,13 @@ impl BoostEditor {
             if !current {
                 return;
             }
+            let native = Rc::new(Cell::new(None));
+            let opened = native.clone();
             if let Ok(handle) = cx.open_window(options, move |window, _| {
                 if let (Some(parent), Some(child)) = (parent, crate::native::view_of(window)) {
                     crate::native::attach_overlay(parent, child, false);
+                    crate::native::set_overlay_movable(child);
+                    opened.set(Some((parent as usize, child as usize, true)));
                 }
                 focus.focus(window);
                 editor
@@ -586,6 +664,7 @@ impl BoostEditor {
                 let _ = page_browser.update(cx, |page, _| page.boost_editor = Some(handle));
                 let _ = owner.update(cx, |browser, cx| {
                     browser.boost_editor = Some(handle);
+                    browser.boost_editor_native = native.get();
                     cx.notify();
                 });
                 let _ = old.update(cx, |_, window, _| window.remove_window());
@@ -852,7 +931,9 @@ impl Render for BoostEditor {
             .font_family(".SystemUIFont")
             .key_context("BoostEditor")
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                if this.renaming.is_some() { this.finish_rename(false, window, cx) } else { this.dismiss(window, cx) }
+            }))
             .on_action(cx.listener(|this, _: &UndoZap, _, cx| this.undo_zap(cx)));
         if self.code {
             let tabs = div()
@@ -1004,9 +1085,13 @@ impl Render for BoostEditor {
                         .border_b_1()
                         .border_color(rgb(0xe9e9e9))
                         .window_control_area(gpui::WindowControlArea::Drag)
+                        // The editor is a window of its own: its header carries it
+                        // anywhere, past the browser window's edge too.
+                        .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
                         .child(
                             div()
                                 .id("boost-close")
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .debug_selector(|| "boost-close".into())
                                 .cursor_pointer()
                                 .text_color(rgb(0xaaaaaa))
@@ -1015,7 +1100,29 @@ impl Render for BoostEditor {
                                     cx.listener(|this, _, window, cx| this.dismiss(window, cx)),
                                 ),
                         )
-                        .child(
+                        .child(if let Some(input) = &self.renaming {
+                            div()
+                                .debug_selector(|| "boost-rename".into())
+                                .w(px(110.))
+                                .h(px(22.))
+                                .px(px(6.))
+                                .rounded(px(5.))
+                                .bg(rgb(0xffffff))
+                                .border_1()
+                                .border_color(rgb(0x7aa7f7))
+                                .flex()
+                                .items_center()
+                                .text_size(px(13.))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                                    if event.keystroke.key == "enter" {
+                                        this.finish_rename(true, window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                }))
+                                .child(input.clone())
+                                .into_any_element()
+                        } else {
                             div()
                                 .id("boost-name")
                                 .debug_selector(|| "boost-name".into())
@@ -1025,6 +1132,7 @@ impl Render for BoostEditor {
                                 .cursor_pointer()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_size(px(13.))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .child(
                                     boost
                                         .as_ref()
@@ -1035,11 +1143,13 @@ impl Render for BoostEditor {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.menu = !this.menu;
                                     cx.notify();
-                                })),
-                        )
+                                }))
+                                .into_any_element()
+                        })
                         .child(
                             div()
                                 .id("boost-reset")
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .cursor_pointer()
                                 .text_color(rgb(0xaaaaaa))
                                 .child(icons::ionicon("reload-outline", 16., 1.))
@@ -1284,30 +1394,52 @@ impl Render for BoostEditor {
                 );
         }
         if self.menu {
+            let edited = boost.as_ref().is_some_and(Self::has_edits);
+            let item = |id: &'static str, label: &'static str, enabled: bool| {
+                div()
+                    .id(id)
+                    .debug_selector(move || id.into())
+                    .h(px(22.))
+                    .px(px(10.))
+                    .mx(px(5.))
+                    .rounded(px(4.))
+                    .flex()
+                    .items_center()
+                    .text_size(px(13.))
+                    .when(enabled, |el| el.cursor_pointer().hover(|style| style.bg(rgb(0x3478f6)).text_color(rgb(0xffffff))))
+                    .when(!enabled, |el| el.text_color(rgb(0xb0b0b0)))
+                    .child(label)
+            };
             root = root.child(
                 div()
+                    .id("boost-menu")
+                    .debug_selector(|| "boost-menu".into())
                     .absolute()
-                    .top(px(38.))
-                    .left(px(25.))
-                    .w(px(140.))
-                    .p(px(5.))
+                    .top(px(34.))
+                    .left(px(24.))
+                    .w(px(168.))
+                    .py(px(5.))
                     .rounded(px(8.))
-                    .bg(rgb(0xffffff))
-                    .shadow_md()
-                    .child(
-                        Self::control("boost-enabled")
-                            .w_full()
-                            .h(px(30.))
-                            .child(if boost.as_ref().is_some_and(|boost| boost.enabled) {
-                                "Turn Off"
-                            } else {
-                                "Turn On"
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.edit(cx, |boost| boost.enabled = !boost.enabled);
-                                this.menu = false;
-                            })),
-                    ),
+                    .bg(gpui::hsla(0., 0., 0.98, 0.98))
+                    .border_1()
+                    .border_color(gpui::hsla(0., 0., 0., 0.12))
+                    .shadow_lg()
+                    .text_color(rgb(0x1d1d1f))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| { this.menu = false; cx.notify(); }))
+                    .child(item("boost-menu-rename", "Rename this Boost…", true)
+                        .on_click(cx.listener(|this, _, window, cx| this.start_rename(window, cx))))
+                    .child(item("boost-menu-shuffle", "Shuffle", true)
+                        .on_click(cx.listener(|this, _, _, cx| { this.menu = false; this.edit(cx, |boost| shuffle(&mut boost.appearance)); })))
+                    .child(item("boost-menu-reset", "Reset all Edits", edited)
+                        .when(edited, |el| el.on_click(cx.listener(|this, _, _, cx| this.reset_all_edits(cx)))))
+                    .child(item("boost-menu-delete", "Delete this Boost", true)
+                        .on_click(cx.listener(|this, _, window, cx| this.delete(window, cx))))
+                    .child(div().h(px(1.)).mx(px(10.)).my(px(5.)).bg(gpui::hsla(0., 0., 0., 0.1)))
+                    .child(item("boost-menu-all", "All Boosts…", true)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.menu = false;
+                            let _ = this.browser.update(cx, |browser, cx| browser.open_library_boosts(cx));
+                        }))),
             );
         }
         root

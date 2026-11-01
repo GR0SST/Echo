@@ -1378,9 +1378,11 @@ impl Pages {
             let PageStore { engine, pages, .. } = &mut *store;
             let remains_visible = |id: TabId| self.wanted.iter().any(|intent| intent.tab == id);
             if !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture) {
+                // Only a video with sound follows the user out: muted
+                // decorative loops (GitHub's hero, for one) stay in their tab.
                 let eligible = |id: TabId, page: &Page| page.owner == self.host && page.visible
                     && !remains_visible(id) && page.state.media.playing && page.state.media.video
-                    && !page.state.media.picture_in_picture;
+                    && page.state.audible && !page.state.media.picture_in_picture;
                 // Prefer the previous focused source. When a non-video Split
                 // pane was focused, its unique visible playing sibling is the
                 // source being left. Multiple unselected videos are ambiguous.
