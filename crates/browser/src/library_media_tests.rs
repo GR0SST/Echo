@@ -66,6 +66,7 @@ impl Render for Host {
             Rc::new(|_, _, _| {}),
             |_, _| div().into_any_element(),
             media,
+            &gpui::ScrollHandle::new(),
         );
         div().size_full().track_focus(&self.focus).child(content)
     }

@@ -3278,6 +3278,7 @@ impl BrowserWindow {
         // Include movement in both the initial and release events. Ignore
         // inertial events after release, which no longer have a finger drag.
         let Some(drag) = &mut self.pager.drag else { return; };
+        let decided = drag.horizontal.is_none() && dx.abs() > dy.abs();
         if drag.horizontal.is_none() && (dx != 0. || dy != 0.) {
             drag.horizontal = Some(dx.abs() > dy.abs());
             if drag.horizontal == Some(true) {
@@ -3285,6 +3286,13 @@ impl BrowserWindow {
                 for (list, offset) in &self.pager.list_offsets { list.set_offset(*offset); }
             }
         }
+        // Library's Spaces strip keeps a swipe that can still scroll it; only a
+        // new swipe from its far end leaves Library.
+        if decided && self.library_spaces_keep_gesture(f32::from(delta.x)) {
+            self.pager.drag = None;
+            return;
+        }
+        let Some(drag) = &mut self.pager.drag else { return; };
         if drag.horizontal == Some(true) && dx != 0. {
             drag.travel += dx;
             drag.samples.push((now, dx));
@@ -4516,6 +4524,20 @@ impl BrowserWindow {
 
     /// Both normal content and Library mount this canvas inside their actual
     /// GPUI surface. Generation guards also cover deferred tracking updates.
+    /// The browser-owned page at the active tab's `echo://` address, for the
+    /// normal content and Library's retained preview alike.
+    pub(crate) fn render_echo_page(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.extensions_is_open() { return Some(self.render_extensions(cx).into_any_element()); }
+        if self.history_is_open() { return Some(self.render_history(cx).into_any_element()); }
+        if self.search_settings_owner().is_some() { return Some(self.render_search_settings(window, cx).into_any_element()); }
+        if self.password_manager_is_open() { return Some(self.render_password_manager(window, cx).into_any_element()); }
+        if self.browsing_data_is_open() { return Some(self.render_browsing_data(cx).into_any_element()); }
+        if self.site_settings_is_open() { return Some(self.render_site_settings_page(cx).into_any_element()); }
+        if let Some(section) = self.simple_settings_section() { return Some(self.render_simple_settings(section, cx).into_any_element()); }
+        if self.flags_is_open() { return Some(self.render_flags(cx)); }
+        None
+    }
+
     pub(crate) fn render_page_viewport_canvas(&self) -> Option<AnyElement> {
         if self.page_fullscreen.is_some() { return None; }
         self.render_document_viewport_canvas()
@@ -4618,17 +4640,10 @@ impl BrowserWindow {
         let panel_bounds = Bounds::new(point(px(left), px(CONTENT_INSET)),
             size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
-        let extensions_open = !virtual_page && self.extensions_is_open();
-        let history_open = !virtual_page && self.history_is_open();
-        let search_settings_open = !virtual_page && self.search_settings_owner().is_some();
-        let password_manager_open = !virtual_page && self.password_manager_is_open();
-        let browsing_data_open = !virtual_page && self.browsing_data_is_open();
-        let simple_settings = (!virtual_page).then(|| self.simple_settings_section()).flatten();
-        let flags_open = !virtual_page && self.flags_is_open();
-        let site_settings_open = !virtual_page && self.site_settings_is_open();
+        let echo_page = if virtual_page { None } else { self.render_echo_page(window, cx) };
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
-        let placeholder = if virtual_page || split_open || extensions_open || history_open || search_settings_open || password_manager_open || browsing_data_open || site_settings_open || simple_settings.is_some() || flags_open || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
+        let placeholder = if virtual_page || split_open || echo_page.is_some() || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
             (None, _) => None,
             (Some(tab), None) => Some((tab.title.clone(), tab.url.clone())),
             (Some(_), Some(_)) => None,
@@ -4682,14 +4697,7 @@ impl BrowserWindow {
                         .when(!split_open, |this| this.px_8())
                     .children((!virtual_page && !split_open).then(||self.browser.active_tab()).flatten().and_then(|tab|self.render_crashed_tab(tab.id,cx)))
                     .when(split_open, |this| this.child(self.render_split(cx)))
-                    .when(extensions_open, |this| this.child(self.render_extensions(cx)))
-                    .when(history_open, |this| this.child(self.render_history(cx)))
-                    .when(search_settings_open, |this| this.child(self.render_search_settings(window,cx)))
-                    .when(password_manager_open, |this| this.child(self.render_password_manager(window,cx)))
-                    .when(browsing_data_open,|this|this.child(self.render_browsing_data(cx)))
-                    .when(site_settings_open, |this| this.child(self.render_site_settings_page(cx)))
-                    .children(simple_settings.map(|section| self.render_simple_settings(section, cx)))
-                    .when(flags_open, |this| this.child(self.render_flags(cx)))
+                    .children(echo_page)
                     .children(placeholder.map(|(title, url)| {
                         div().debug_selector(|| "page-placeholder".into())
                             .flex()
@@ -5377,7 +5385,7 @@ impl Render for BrowserWindow {
         let library = (library_open || library_motion).then(|| {
             let shift = self.library_layer_shift();
             div().debug_selector(|| "library-layer".into()).absolute().top_0().bottom_0().left(px(shift)).right_0()
-                .child(self.render_library_host(library_open, cx))
+                .child(self.render_library_host(library_open, window, cx))
         });
         let compact = self.transient.is_some();
         let content = if compact { self.render_transient_content(cx) } else if library_open { div().into_any_element() } else { self.render_content(window, cx).into_any_element() };

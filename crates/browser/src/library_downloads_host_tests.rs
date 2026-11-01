@@ -541,7 +541,7 @@ fn actual_weak_owner_retained_preview_callback_preserves_empty_page_and_spaces_g
     let called = Rc::new(Cell::new(0));
     let count = called.clone();
     // Exact r5 callback body, with only a test counter at accepted invocation.
-    let callback: DownloadsPreview = Rc::new(move |_, cx| {
+    let callback: DownloadsPreview = Rc::new(move |window, cx| {
         owner
             .update(cx, |this, cx| {
                 if this.sidebar_navigation.controller.selected() != SidebarPage::Library
@@ -550,7 +550,7 @@ fn actual_weak_owner_retained_preview_callback_preserves_empty_page_and_spaces_g
                     return div().into_any_element();
                 }
                 count.set(count.get() + 1);
-                this.render_library_page_preview(cx)
+                this.render_library_page_preview(window, cx)
             })
             .unwrap_or_else(|_| div().into_any_element())
     });

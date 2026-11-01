@@ -86,11 +86,11 @@ impl BrowserWindow {
         let colors = self.downloads_colors();
         if active && self.sidebar_navigation.downloads.host.is_none() {
             let owner = cx.entity().downgrade();
-            let preview = Rc::new(move |_: &mut Window, cx: &mut gpui::App| {
+            let preview = Rc::new(move |window: &mut Window, cx: &mut gpui::App| {
                 owner
                     .update(cx, |this, cx| {
                         if this.downloads_route_active() {
-                            this.render_library_page_preview(cx)
+                            this.render_library_page_preview(window, cx)
                         } else {
                             div().into_any_element()
                         }

@@ -1875,9 +1875,91 @@ fn the_flags_page_changes_a_choice_and_asks_for_a_relaunch(cx: &mut TestAppConte
         assert!(!w.flags.menu_open(), "choosing closes the menu");
     });
     assert!(cx.debug_bounds("flags-relaunch").is_some());
+    // The lowest option lies over the next row and still takes the click.
+    click(cx, "flag-choice-0");
+    let option = cx.debug_bounds("flag-option-Disabled").unwrap();
+    let next = cx.debug_bounds("flag-1").unwrap();
+    assert!(option.bottom() > next.top(), "{option:?} {next:?}");
+    click(cx, "flag-option-Disabled");
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |w, _| w.flags.menu_open()), "the next row's control must not open its menu");
     // Returning to what the engine started with needs no relaunch.
     click(cx, "flags-reset-all");
     assert!(!view.read_with(cx, |w, _| w.flags.relaunch_pending()));
+}
+
+#[gpui::test]
+fn library_previews_echo_pages_instead_of_page_not_found(cx: &mut TestAppContext) {
+    for (url, selector) in [
+        (crate::flags::URL, "flags-page"),
+        ("echo://settings/content/siteDetails?site=https%3A%2F%2Fexample.com", "site-settings-page"),
+        ("echo://settings", "settings-shell"),
+        ("echo://extensions", "extensions-page"),
+    ] {
+        let (view, visual) = open(cx);
+        // Both happen before any frame, so the page's bounds can only come
+        // from Library's preview.
+        view.update(visual, |w, cx| {
+            w.edit_browser(|browser| { let id = browser.space().active_tab.unwrap(); browser.set_url(id, url); });
+            w.select_sidebar_page(crate::sidebar_pages::SidebarPage::Library, cx);
+        });
+        visual.run_until_parked();
+        let preview = visual.debug_bounds("library-media-preview").unwrap();
+        let page = visual.debug_bounds(selector).unwrap_or_else(|| panic!("{url} is not in the preview"));
+        assert!(page.origin.x >= preview.origin.x, "{url}: {page:?} {preview:?}");
+    }
+}
+
+#[gpui::test]
+fn library_spaces_scroll_until_the_last_space_and_only_then_close(cx: &mut TestAppContext) {
+    use crate::sidebar_pages::SidebarPage;
+    use gpui::TouchPhase::*;
+    let (view, cx) = open(cx);
+    view.update(cx, |w, cx| {
+        w.edit_browser(|browser| { for index in 0..8 { browser.add_space(format!("Extra {index}"), 200.); } });
+        w.open_library_spaces(cx);
+    });
+    cx.run_until_parked();
+    let offset = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |w, _| f32::from(w.sidebar_navigation.spaces_scroll.offset().x))
+    };
+    let swipe = |cx: &mut VisualTestContext, dx: f32, end: bool| {
+        scroll(cx, "library-spaces-scroll", Started, 0., 0.);
+        scroll(cx, "library-spaces-scroll", Moved, dx, 0.);
+        if end { cx.executor().advance_clock(Duration::from_millis(200)); scroll(cx, "library-spaces-scroll", Ended, 0., 0.); }
+    };
+    // Before the end a swipe scrolls and stays where it was left.
+    swipe(cx, -200., true);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    assert_eq!(offset(&view, cx), -200.);
+    view.read_with(cx, |w, _| {
+        assert_eq!(w.sidebar_navigation.controller.selected(), SidebarPage::Library);
+        assert_eq!(w.library_slide_amount(), 1.);
+        assert!(!w.library_in_motion());
+    });
+    // A swipe that reaches the end stops there without closing.
+    swipe(cx, -100_000., true);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    let end = offset(&view, cx);
+    assert!(end < -200.);
+    assert_eq!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected()), SidebarPage::Library);
+    assert_eq!(view.read_with(cx, |w, _| w.library_slide_amount()), 1.);
+    // Back toward the first Space only scrolls.
+    swipe(cx, 50., true);
+    assert_eq!(offset(&view, cx), end + 50.);
+    assert_eq!(view.read_with(cx, |w, _| w.library_slide_amount()), 1.);
+    swipe(cx, -50., true);
+    assert_eq!(offset(&view, cx), end);
+    // From the last Space a new swipe leaves Library with the fingers.
+    swipe(cx, -200., false);
+    view.read_with(cx, |w, _| assert!(w.library_slide_amount() < 1. && w.library_in_motion()));
+    scroll(cx, "library-spaces-scroll", Moved, -400., 0.);
+    cx.executor().advance_clock(Duration::from_millis(200));
+    scroll(cx, "library-spaces-scroll", Ended, 0., 0.);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(matches!(view.read_with(cx, |w, _| w.sidebar_navigation.controller.selected()), SidebarPage::Space(_)));
 }
 
 #[gpui::test]

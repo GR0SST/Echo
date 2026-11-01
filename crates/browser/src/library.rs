@@ -194,6 +194,7 @@ pub(crate) fn render_library(
     events: LibraryEvents,
     mut render_sidebar: impl FnMut(&LibrarySpace, LibraryEvents) -> AnyElement,
     other_section: Option<AnyElement>,
+    spaces_scroll: &gpui::ScrollHandle,
 ) -> AnyElement {
     // The captured rail has six 96 × 80 icon tiles at a 100 px pitch.
     // Its 580 px group is centered as a whole, not pinned below the titlebar.
@@ -330,7 +331,8 @@ pub(crate) fn render_library(
             .top(px(48.))
             .bottom(px(48.))
             .overflow_x_scroll()
-            .overflow_y_hidden();
+            .overflow_y_hidden()
+            .track_scroll(spaces_scroll);
         // GPUI otherwise maps a vertical wheel delta onto this horizontal
         // strip as well as scrolling the nested sidebar body.
         scroll.style().restrict_scroll_to_axis = Some(true);

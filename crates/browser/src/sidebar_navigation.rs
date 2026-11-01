@@ -69,6 +69,7 @@ pub(crate) struct SidebarNavigation {
     library_drag: Option<bool>,
     library_drag_start: usize,
     library_drag_watchdog: Option<gpui::Task<()>>,
+    pub(crate) spaces_scroll: gpui::ScrollHandle,
 }
 impl SidebarNavigation {
     pub(crate) fn new(browser: &Browser) -> Self {
@@ -104,6 +105,7 @@ impl SidebarNavigation {
             library_drag: None,
             library_drag_start: 0,
             library_drag_watchdog: None,
+            spaces_scroll: gpui::ScrollHandle::new(),
         }
     }
 }
@@ -169,6 +171,16 @@ impl BrowserWindow {
         self.sidebar_navigation.library_drag.is_some() || (amount > 0. && amount < 1.)
     }
     /// Sidebar swipe across the Library edge: the slide follows the fingers.
+    /// `delta` was already applied to the strip, whose listener runs first.
+    /// Fingers moving right only scroll back; moving left they leave Library
+    /// once the last Space had already been reached.
+    pub(crate) fn library_spaces_keep_gesture(&self, delta: f32) -> bool {
+        if self.sidebar_navigation.controller.selected() != SidebarPage::Library
+            || self.sidebar_navigation.library_section != LibrarySection::Spaces { return false; }
+        let scroll = &self.sidebar_navigation.spaces_scroll;
+        let before = f32::from(scroll.offset().x) - delta;
+        delta > 0. || before > -f32::from(scroll.max_offset().width) + 1.
+    }
     pub(crate) fn library_dragging(&self) -> bool { self.sidebar_navigation.library_drag.is_some() }
     pub(crate) fn drag_library(&mut self, entering: bool, amount: f32, start: usize, cx: &mut Context<Self>) {
         if self.sidebar_navigation.library_drag.is_none() && entering {
@@ -861,7 +873,7 @@ impl BrowserWindow {
     }
     /// `open`: Library owns the page preview. Otherwise the page stays in
     /// the normal content while this layer only slides alongside it.
-    pub(crate) fn render_library_host(&mut self, open: bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_library_host(&mut self, open: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(mut projection) =
             LibraryProjection::from_browser(&self.browser, self.sidebar_navigation.library_origin)
         else {
@@ -896,9 +908,10 @@ impl BrowserWindow {
             selected: theme.selected,
         };
         let section = self.sidebar_navigation.library_section;
+        let spaces_scroll = self.sidebar_navigation.spaces_scroll.clone();
         let preview_left = self.library_preview_left();
         let page_width = f32::from(self.sidebar_navigation.normal_content_size.width);
-        let preview = (open && section == LibrarySection::Media).then(|| self.render_library_page_preview(cx));
+        let preview = (open && section == LibrarySection::Media).then(|| self.render_library_page_preview(window, cx));
         let mut empty = (section == LibrarySection::Media).then(|| {
             // Reuse existing host semantic surfaces; never change App appearance.
             let media_colors = library::media::MediaColors {
@@ -963,7 +976,7 @@ impl BrowserWindow {
             // The live page moves into the translated preview beside the list;
             // unmounted, it keeps its content frame and covers the list.
             let fill = self.theme_empty_panel_fill();
-            let preview = open.then(|| self.render_library_page_preview(cx));
+            let preview = open.then(|| self.render_library_page_preview(window, cx));
             empty=Some(div().relative().size_full().child(view)
                 .when_some(preview, |this, preview| this.child(library::media::render_page_preview_at(fill, Some(preview), preview_left, page_width)))
                 .into_any_element());
@@ -973,13 +986,13 @@ impl BrowserWindow {
             let fill = self.theme_empty_panel_fill();
             let view = self.sidebar_navigation.archive.get_or_insert_with(|| cx.new(|cx| crate::library_archive::ArchiveLibrary::new(owner, colors, cx))).clone();
             view.update(cx, |view, _| view.set_colors(colors));
-            let preview = open.then(|| self.render_library_page_preview(cx));
+            let preview = open.then(|| self.render_library_page_preview(window, cx));
             empty = Some(div().relative().size_full().child(view)
                 .when_some(preview, |this, preview| this.child(library::media::render_page_preview_at(fill, Some(preview), preview_left, page_width)))
                 .into_any_element());
         }
         if section == LibrarySection::Spaces && open && self.browser.active_tab().is_some() {
-            let preview = self.render_library_page_preview(cx);
+            let preview = self.render_library_page_preview(window, cx);
             empty = Some(library::media::render_page_preview_at(self.theme_empty_panel_fill(), Some(preview), preview_left, page_width));
         }
         library::render_library(
@@ -999,11 +1012,12 @@ impl BrowserWindow {
             events,
             |card, _| self.render_library_sidebar(card, cx),
             empty,
+            &spaces_scroll,
         )
     }
     /// Mount inside the presenter-owned preview rectangle (Media or Downloads).
     /// Bounds are GPUI layout coordinates, never rail/list arithmetic.
-    pub(crate) fn render_library_page_preview(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn render_library_page_preview(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let scope = self.sidebar_navigation.preview_focus_scope.get_or_insert_with(|| cx.focus_handle()).clone();
         let mut surface = div().debug_selector(|| "library-page-canvas".into()).relative().flex_none().w(self.sidebar_navigation.normal_content_size.width).h(self.sidebar_navigation.normal_content_size.height).flex().flex_col().track_focus(&scope)
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -1022,8 +1036,8 @@ impl BrowserWindow {
             }));
         if self.browser.active_split().is_some() {
             surface = surface.child(self.render_split(cx));
-        } else if self.history_is_open() {
-            surface = surface.child(self.render_history(cx));
+        } else if let Some(page) = self.render_echo_page(window, cx) {
+            surface = surface.child(page);
         } else if let Some(tab) = self.browser.active_tab().filter(|tab| browser_core::omnibox::is_internal_url(&tab.url)) {
             // Match the normal content contract for unsupported internal pages.
             surface = surface.child(div().size_full().flex().flex_col().items_center().justify_center()

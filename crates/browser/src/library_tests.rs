@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 type Log = Rc<RefCell<Vec<LibraryIntent>>>;
 struct Harness {
+    spaces_scroll: gpui::ScrollHandle,
     projection: LibraryProjection,
     log: Log,
     actions: LibraryActions,
@@ -59,6 +60,7 @@ impl Render for Harness {
                     .into_any_element()
             },
             None,
+            &self.spaces_scroll,
         ))
     }
 }
@@ -77,6 +79,7 @@ fn open<'a>(
     let log: Log = Rc::default();
     let projection = LibraryProjection::from_browser(browser, browser.spaces[0].id).unwrap();
     let (view, visual) = cx.add_window_view(|_, _| Harness {
+        spaces_scroll: gpui::ScrollHandle::new(),
         projection,
         log: log.clone(),
         actions,
