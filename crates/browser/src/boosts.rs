@@ -538,6 +538,7 @@ impl BoostEditor {
             boost.zap_selectors.pop();
         });
     }
+    pub(crate) fn boost_id(&self) -> BoostId { self.id }
     fn has_edits(boost: &Boost) -> bool {
         boost.appearance != Default::default()
             || !boost.css.is_empty()

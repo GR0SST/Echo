@@ -63,6 +63,30 @@ pub(crate) struct SiteControls {
     position: Point<Pixels>,
     focus: FocusHandle,
     pub overlay: Option<WindowHandle<Overlay>>,
+    /// When the panel opened, for its reveal.
+    opened: std::time::Instant,
+    /// The panel's full height once laid out, which the reveal grows into.
+    height: Rc<Cell<f32>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests click panels at once; the reveal test turns the animation on.
+    pub(crate) static ANIMATE_SITE_REVEAL: Cell<bool> = const { Cell::new(false) };
+}
+fn reveal_animates() -> bool {
+    #[cfg(test)] { ANIMATE_SITE_REVEAL.with(|animate| animate.get()) }
+    #[cfg(not(test))] { true }
+}
+
+const REVEAL: std::time::Duration = std::time::Duration::from_millis(220);
+
+/// The reveal's eased progress; frames keep coming until it settles.
+fn reveal_progress(opened: std::time::Instant, window: &Window) -> f32 {
+    if crate::native::prefers_reduced_motion() || !reveal_animates() { return 1.; }
+    let t = (opened.elapsed().as_secs_f32() / REVEAL.as_secs_f32()).min(1.);
+    if t < 1. { window.request_animation_frame(); }
+    1. - (1. - t).powi(5)
 }
 
 /// Where the address field's site controls button was last painted, in
@@ -131,6 +155,8 @@ impl BrowserWindow {
             position: at,
             focus: focus.clone(),
             overlay: None,
+            opened: std::time::Instant::now(),
+            height: Rc::new(Cell::new(0.)),
         });
         let main = self.main_window;
         let parent = self.native_view;
@@ -693,7 +719,6 @@ impl BrowserWindow {
     ) -> gpui::Stateful<gpui::Div> {
         let material_alive = panel.material_alive.clone();
         let material_installed = panel.material_installed.clone();
-        let parent = self.native_view.map(|view| view as usize);
         div()
             .id(id)
             .debug_selector(move || id.into())
@@ -716,9 +741,11 @@ impl BrowserWindow {
                         if !material_alive.get() {
                             return;
                         }
-                        let installed = parent.is_some_and(|view| {
-                            crate::native::set_content_backdrop(
-                                view as *mut std::ffi::c_void,
+                        // The panel's own window blurs whatever lies behind it,
+                        // so the material continues past the browser window's edge.
+                        let installed = crate::native::view_of(window).is_some_and(|view| {
+                            crate::native::set_backdrop_configured(
+                                view,
                                 "site-controls-page",
                                 Some([
                                     f32::from(bounds.origin.x) as f64,
@@ -786,6 +813,11 @@ impl BrowserWindow {
         let secure = panel.info.as_ref().is_some_and(|info| info.secure);
         let more = panel.more;
         let more_anchor = panel.more_anchor.clone();
+        // The panel drops out of its button on a fast-out curve: it fades in,
+        // settles a few points down and opens to its full height.
+        let reveal = reveal_progress(panel.opened, window);
+        let full_height = panel.height.clone();
+        let drop = px(-6. * (1. - reveal));
         let menu_position = more_anchor
             .get()
             .map(|bounds| point(bounds.center().x, bounds.center().y - px(4.)))
@@ -922,12 +954,23 @@ impl BrowserWindow {
                 gpui::MouseButton::Right,
                 cx.listener(|this, _, _, cx| this.close_site_controls(cx)),
             )
+            .opacity(reveal)
             .child(
                 self.site_panel_shell(panel, "site-controls")
                     .absolute()
                     .left(panel.position.x)
-                    .top(panel.position.y)
+                    .top(panel.position.y + drop)
                     .w(px(WIDTH))
+                    .when(reveal < 1. && full_height.get() > 0., |shell| {
+                        shell.max_h(px(full_height.get() * (0.9 + 0.1 * reveal))).overflow_hidden()
+                    })
+                    .child({
+                        let full_height = full_height.clone();
+                        gpui::canvas(move |bounds, _, _| {
+                            // Clipped frames are shorter; keep the tallest seen.
+                            full_height.set(full_height.get().max(f32::from(bounds.size.height)));
+                        }, |_, _, _, _| {}).absolute().inset_0()
+                    })
                     .p(px(PADDING))
                     .pt(px(9.))
                     .flex()
@@ -967,13 +1010,27 @@ impl BrowserWindow {
                     .child(self.render_extension_grid(cx))
                     .when(!boosts.is_empty(), |panel| {
                         panel
-                            .child(heading("Boosts"))
+                            .child(div().flex().items_center().justify_between()
+                                .child(heading("Boosts"))
+                                .child(div()
+                                    .id("site-boosts-manage")
+                                    .debug_selector(|| "site-boosts-manage".into())
+                                    .pt(px(5.))
+                                    .text_size(px(13.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(hsla(0., 0., 1., 0.45))
+                                    .cursor_pointer()
+                                    .hover(|el| el.text_color(hsla(0., 0., 1., 0.7)))
+                                    .child("Manage")
+                                    .on_click(cx.listener(|this, _, _, cx| { this.close_site_controls(cx); this.open_library_boosts(cx); }))))
                             .children(boosts.into_iter().enumerate().map(|(index, boost)| {
                                 let id = boost.id;
                                 let enabled = boost.enabled;
+                                let group = gpui::SharedString::from(format!("site-boost-row-{id:?}"));
                                 div()
                                     .id(gpui::SharedString::from(format!("site-boost-{id:?}")))
                                     .debug_selector(|| "site-boost-toggle".into())
+                                    .group(group.clone())
                                     .flex()
                                     .items_center()
                                     .h(px(33.))
@@ -990,8 +1047,9 @@ impl BrowserWindow {
                                             .flex()
                                             .items_center()
                                             .justify_center()
-                                            .bg(gpui::rgb(0xecedfe))
-                                            .text_color(hsla(0., 0., 0.2, 1.))
+                                            // White marks the site's active Boost.
+                                            .bg(if enabled { hsla(330. / 360., 0.2, 0.95, 1.) } else { hsla(0., 0., 1., 0.2) })
+                                            .text_color(if enabled { hsla(0., 0., 0.2, 1.) } else { hsla(0., 0., 1., 0.45) })
                                             .child(crate::icons::ionicon("brush", 22., 1.)),
                                     )
                                     .child(
@@ -1024,14 +1082,33 @@ impl BrowserWindow {
                                                     }),
                                             ),
                                     )
+                                    // On hover, the arrow opens this Boost in the editor.
+                                    .child(
+                                        div()
+                                            .id(gpui::SharedString::from(format!("site-boost-edit-{id:?}")))
+                                            .debug_selector(|| "site-boost-edit".into())
+                                            .size(px(26.))
+                                            .rounded(px(6.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .bg(hsla(0., 0., 1., 0.06))
+                                            .text_color(hsla(0., 0., 1., 0.6))
+                                            .opacity(0.)
+                                            .group_hover(group, |style| style.opacity(1.))
+                                            .hover(|style| style.bg(hsla(0., 0., 1., 0.12)))
+                                            .child(crate::theme_editor::chevron(true))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                let Some(tab) = this.browser.active_tab().map(|tab| tab.id) else { return; };
+                                                this.open_boost_editor(profile, id, tab, cx);
+                                            })),
+                                    )
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.edit_browser(|model| {
-                                            if let Some(boost) = model
-                                                .user_profile_mut(profile)
-                                                .and_then(|profile| profile.boosts.get_mut(id))
-                                            {
-                                                boost.enabled = !boost.enabled;
-                                            }
+                                        if let Some(boosts) = model.user_profile_mut(profile).map(|profile| &mut profile.boosts) {
+                                            boosts.set_enabled(id, !enabled);
+                                        }
                                         });
                                         this.sync_boosts(cx);
                                     }))
@@ -1234,7 +1311,7 @@ impl BrowserWindow {
                             ),
                     ),
             )
-            .child(site_arrow(arrow_at))
+            .child(site_arrow(arrow_at + point(px(0.), drop)))
             .when(more, |root| {
                 root.child(div().absolute().inset_0().on_mouse_down(
                     gpui::MouseButton::Left,
@@ -1429,7 +1506,7 @@ fn site_backdrop_config() -> crate::material::BackdropConfig {
     BackdropConfig {
         appearance: EffectAppearance::Dark,
         state: EffectState::Active,
-        blending: EffectBlending::WithinWindow,
+        blending: EffectBlending::BehindWindow,
         emphasized: false,
         effect_alpha: 1.,
         material: EffectMaterial::Popover,

@@ -245,11 +245,34 @@ fn domain(value: &str) -> Option<String> {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(from = "StoredBoosts")]
 pub struct Boosts {
     #[serde(default)]
     entries: Vec<Boost>,
     #[serde(default)]
     next_id: u64,
+}
+
+#[derive(Deserialize)]
+struct StoredBoosts {
+    #[serde(default)]
+    entries: Vec<Boost>,
+    #[serde(default)]
+    next_id: u64,
+}
+
+/// Boosts saved before a site ran one at a time keep only the newest active.
+impl From<StoredBoosts> for Boosts {
+    fn from(stored: StoredBoosts) -> Self {
+        let mut boosts = Self { entries: stored.entries, next_id: stored.next_id };
+        let mut active = std::collections::HashSet::new();
+        for boost in boosts.entries.iter_mut().rev().filter(|boost| boost.enabled) {
+            if !active.insert(boost.domain.clone()) {
+                boost.enabled = false;
+            }
+        }
+        boosts
+    }
 }
 impl Boosts {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
@@ -287,7 +310,19 @@ impl Boosts {
             zap_selectors: Vec::new(),
             appearance: BoostAppearance::default(),
         });
+        // The new Boost becomes the site's active one.
+        self.set_enabled(id, true);
         Some(id)
+    }
+    /// A site runs one Boost at a time, as in Arc: turning one on turns the
+    /// site's others off.
+    pub fn set_enabled(&mut self, id: BoostId, enabled: bool) {
+        let Some(domain) = self.get_mut(id).map(|boost| { boost.enabled = enabled; boost.domain.clone() }) else { return; };
+        if enabled {
+            for other in self.entries.iter_mut().filter(|other| other.id != id && other.domain == domain) {
+                other.enabled = false;
+            }
+        }
     }
     /// Names are presentation data; changing one never changes a Boost's rules
     /// or executable identity. The caller owns any dialog validation.
@@ -364,6 +399,24 @@ mod tests {
         );
         assert!(boosts.remove(id));
         assert_ne!(boosts.create("https://example.com").unwrap(), id);
+    }
+    #[test]
+    fn a_site_runs_one_boost_at_a_time() {
+        let mut boosts = Boosts::default();
+        let first = boosts.create("https://example.com").unwrap();
+        let other_site = boosts.create("https://other.example").unwrap();
+        let second = boosts.create("https://example.com/page").unwrap();
+        let enabled = |boosts: &Boosts, id| boosts.iter().find(|boost| boost.id == id).unwrap().enabled;
+        assert!(!enabled(&boosts, first) && enabled(&boosts, second) && enabled(&boosts, other_site));
+        boosts.set_enabled(first, true);
+        assert!(enabled(&boosts, first) && !enabled(&boosts, second) && enabled(&boosts, other_site));
+        boosts.set_enabled(first, false);
+        assert!(!enabled(&boosts, first) && !enabled(&boosts, second));
+        // Older saves with two active Boosts for a site keep the newest.
+        let mut stored = serde_json::to_value(&boosts).unwrap();
+        for entry in stored["entries"].as_array_mut().unwrap() { entry["enabled"] = true.into(); }
+        let loaded: Boosts = serde_json::from_value(stored).unwrap();
+        assert!(!enabled(&loaded, first) && enabled(&loaded, second) && enabled(&loaded, other_site));
     }
     #[test]
     fn the_dots_stay_in_the_circle_and_the_accent_turns_with_the_main_dot() {

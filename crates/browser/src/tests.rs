@@ -10416,6 +10416,44 @@ fn boost_picker_events_are_scoped_to_the_editor_page_and_undo_uses_zap_history(c
     assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().zap_selectors.is_empty()));
 }
 #[gpui::test]
+fn site_controls_run_one_boost_per_site_and_the_arrow_opens_it(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);
+    for _ in 0..2 {cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");let mut panel=boost_panel(&view,cx);panel.simulate_keystrokes("escape");cx.run_until_parked();}
+    let states=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().map(|boost|(boost.id,boost.enabled)).collect::<Vec<_>>());
+    let boosts=states(&view,cx);
+    assert_eq!(boosts.iter().map(|(_,on)|*on).collect::<Vec<_>>(),vec![false,true],"the newest Boost is the site's active one");
+    click(cx,"address-site-controls");
+    let overlay=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(overlay.into(),&cx.cx);controls.run_until_parked();
+    assert!(controls.debug_bounds("site-boosts-manage").is_some());
+    // The repeated selector lands on the last row, the second Boost.
+    view.update(cx,|view,cx|{let first=boosts[0].0;view.edit_browser(|b|b.active_user_profile_mut().boosts.set_enabled(first,true));cx.notify();});cx.run_until_parked();
+    assert_eq!(states(&view,cx).iter().map(|(_,on)|*on).collect::<Vec<_>>(),vec![true,false]);
+    // Turning the second on from its row turns the first off.
+    click(&mut controls,"site-boost-toggle");controls.run_until_parked();cx.run_until_parked();
+    assert_eq!(states(&view,cx).iter().map(|(_,on)|*on).collect::<Vec<_>>(),vec![false,true]);
+    // The arrow opens that Boost for editing without toggling it.
+    click(&mut controls,"site-boost-edit");cx.run_until_parked();
+    let editing=view.read_with(cx,|view,cx|view.boost_editor.and_then(|handle|handle.read(cx).ok().map(|editor|editor.boost_id())));
+    assert_eq!(editing,Some(boosts[1].0));
+    assert_eq!(states(&view,cx).iter().map(|(_,on)|*on).collect::<Vec<_>>(),vec![false,true]);
+}
+#[gpui::test]
+fn site_controls_drop_out_of_their_button_and_open_to_full_height(cx:&mut TestAppContext) {
+    let (view,cx)=open(cx);
+    crate::site_controls::ANIMATE_SITE_REVEAL.with(|animate|animate.set(true));
+    click(cx,"address-site-controls");
+    let overlay=view.read_with(cx,|view,_|view.site_controls.as_ref().unwrap().overlay.unwrap());let mut controls=VisualTestContext::from_window(overlay.into(),&cx.cx);controls.run_until_parked();
+    // The first frame measures the full height; the next ones grow into it.
+    controls.update(|window,_|window.refresh());controls.run_until_parked();
+    let opening=controls.debug_bounds("site-controls").unwrap();
+    std::thread::sleep(Duration::from_millis(260));controls.update(|window,_|window.refresh());controls.run_until_parked();
+    let open=controls.debug_bounds("site-controls").unwrap();
+    crate::site_controls::ANIMATE_SITE_REVEAL.with(|animate|animate.set(false));
+    assert!(opening.size.height<open.size.height,"it opens toward its full height: {opening:?} -> {open:?}");
+    assert!(opening.origin.y<open.origin.y,"it settles down out of the button");
+    assert_eq!(opening.size.width,open.size.width,"its rows keep their width while it opens");
+}
+#[gpui::test]
 fn site_boost_toggle_updates_its_enabled_badge(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
     let mut panel=boost_panel(&view,cx);panel.simulate_keystrokes("escape");cx.run_until_parked();

@@ -190,11 +190,8 @@ impl Render for BoostLibrary {
                             if let Some(profile) = profile {
                                 let _ = owner.update(cx, |view, cx| {
                                     view.edit_browser(|browser| {
-                                        if let Some(boost) = browser
-                                            .user_profile_mut(profile)
-                                            .and_then(|profile| profile.boosts.get_mut(id))
-                                        {
-                                            boost.enabled = !boost.enabled;
+                                        if let Some(boosts) = browser.user_profile_mut(profile).map(|profile| &mut profile.boosts) {
+                                            boosts.set_enabled(id, !enabled);
                                         }
                                     });
                                     view.sync_boosts(cx);
