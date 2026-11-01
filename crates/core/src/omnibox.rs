@@ -153,11 +153,21 @@ impl Resolved {
     }
 }
 
-const SCHEMES: &[&str] = &["http://", "https://", "file://", "about:", "chrome://", "browser://", "data:", "view-source:"];
+const SCHEMES: &[&str] = &["http://", "https://", "file://", "about:", "chrome://", "echo://", "data:", "view-source:"];
+
+const INTERNAL_SCHEME: &str = "echo://";
+const LEGACY_INTERNAL_SCHEME: &str = "browser://";
 
 /// Browser-owned GPUI pages must never be sent to the web engine.
 pub fn is_internal_url(url: &str) -> bool {
-    url.get(..10).is_some_and(|scheme| scheme.eq_ignore_ascii_case("browser://"))
+    url.get(..INTERNAL_SCHEME.len()).is_some_and(|scheme| scheme.eq_ignore_ascii_case(INTERNAL_SCHEME))
+}
+
+/// Browser-owned pages moved from `browser://` to `echo://`; an old address,
+/// typed or saved, keeps opening the same page.
+pub fn upgrade_internal_url(url: &str) -> Option<String> {
+    let scheme = url.get(..LEGACY_INTERNAL_SCHEME.len())?;
+    scheme.eq_ignore_ascii_case(LEGACY_INTERNAL_SCHEME).then(|| format!("{INTERNAL_SCHEME}{}", &url[LEGACY_INTERNAL_SCHEME.len()..]))
 }
 
 /// Returns `None` for blank input.
@@ -165,6 +175,9 @@ pub fn resolve(input: &str) -> Option<Resolved> {
     let input = input.trim();
     if input.is_empty() {
         return None;
+    }
+    if let Some(url) = upgrade_internal_url(input) {
+        return Some(Resolved::Url(url));
     }
     let lower = input.to_ascii_lowercase();
     if SCHEMES.iter().any(|s| lower.starts_with(s)) {
@@ -226,6 +239,18 @@ fn encode_query(query: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_pages_use_echo_and_old_addresses_keep_working() {
+        assert!(is_internal_url("echo://flags"));
+        assert!(is_internal_url("ECHO://flags"));
+        assert!(!is_internal_url("browser://flags"));
+        assert!(!is_internal_url("https://echo.example"));
+        for typed in ["browser://settings/privacy", "BROWSER://settings/privacy"] {
+            assert_eq!(resolve(typed), Some(Resolved::Url("echo://settings/privacy".into())));
+        }
+        assert_eq!(resolve("echo://flags"), Some(Resolved::Url("echo://flags".into())));
+    }
 
     #[test]
     fn profile_engine_routes_search_and_suggest_without_changing_addresses() {

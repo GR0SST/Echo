@@ -15,7 +15,7 @@ use gpui::{
     div, prelude::*, px, rgb, AnyElement, Context, Entity, Focusable, Subscription, Window,
 };
 
-pub(crate) const URL: &str = "browser://settings/searchEngines";
+pub(crate) const URL: &str = "echo://settings/searchEngines";
 gpui::actions!(
     managed_search,
     [Accept, Cancel, Next, Previous, PageDown, PageUp]
@@ -121,7 +121,7 @@ impl State {
 }
 pub(crate) const PAGE_TITLE: &str = "Settings - Manage search engines and site search";
 pub(crate) fn is_search_settings_url(value: &str) -> bool {
-    url::Url::parse(value).is_ok_and(|url| url.scheme() == "browser" && url.host_str() == Some("settings") && url.path() == "/searchEngines")
+    url::Url::parse(value).is_ok_and(|url| url.scheme() == "echo" && url.host_str() == Some("settings") && url.path() == "/searchEngines")
 }
 
 impl BrowserWindow {
@@ -209,7 +209,7 @@ impl BrowserWindow {
             return None;
         }
         let url = url::Url::parse(&self.browser.active_tab()?.url).ok()?;
-        if url.scheme() != "browser"
+        if url.scheme() != "echo"
             || url.host_str() != Some("settings")
             || url.path() != "/searchEngines"
         {

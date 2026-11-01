@@ -8,7 +8,7 @@ use gpui::{
 };
 use std::time::SystemTime;
 
-pub(crate) const HISTORY_URL: &str = "browser://history";
+pub(crate) const HISTORY_URL: &str = "echo://history";
 const CONTEXT: &str = "HistoryPage";
 actions!(history, [ViewHistory, OpenFirstResult, CancelClear]);
 

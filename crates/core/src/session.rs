@@ -40,6 +40,7 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
             }
         }
     }
+    upgrade_internal_urls(&mut value);
     let mut browser: Browser = serde_json::from_value(value)?;
     // Invalid presentation must not discard otherwise valid browsing data.
     let mut ids = std::collections::HashSet::new();
@@ -69,6 +70,18 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
     browser.validate_downloads().map_err(serde_json::Error::custom)?;
     browser.repair();
     Ok(browser)
+}
+
+/// Saved tabs, pins, archive and history may still name `browser://` pages.
+fn upgrade_internal_urls(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(url) = crate::omnibox::upgrade_internal_url(text) { *text = url; }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(upgrade_internal_urls),
+        serde_json::Value::Object(fields) => fields.values_mut().for_each(upgrade_internal_urls),
+        _ => {}
+    }
 }
 
 fn migrate_legacy(value: &mut serde_json::Value) -> Result<(), serde_json::Error> {

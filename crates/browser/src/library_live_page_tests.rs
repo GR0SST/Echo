@@ -544,8 +544,8 @@ fn history_popup_cache_rejects_external_same_tab_url_and_owner_changes_before_re
             assert_eq!(view.sidebar_navigation.controller.selected(), SidebarPage::Library);
         });
         // URL replacement may create its real native page; it must never
-        // resurrect a fake CEF History document or navigate one to browser://.
-        assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) | Call::Navigate(_, url) if url.starts_with("browser://"))));
+        // resurrect a fake CEF History document or navigate one to echo://.
+        assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) | Call::Navigate(_, url) if url.starts_with("echo://"))));
     }
 }
 

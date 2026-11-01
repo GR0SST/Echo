@@ -480,7 +480,7 @@ impl BrowserWindow {
         let details = self
             .browser
             .active_tab()
-            .and_then(|tab| tab.url.strip_prefix("browser://extensions?id="))
+            .and_then(|tab| tab.url.strip_prefix("echo://extensions?id="))
             .map(str::to_owned);
         let ids = if let Some(id) = details {
             vec![id]

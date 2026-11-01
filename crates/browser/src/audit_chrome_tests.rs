@@ -36,7 +36,7 @@ fn direct_search_settings_route_sets_metadata_and_keeps_a_custom_name(cx: &mut T
     let (view, cx, fake) = open_pages(cx);
     fake.take_calls();
     cx.simulate_keystrokes("cmd-t");
-    bar(&view, cx).simulate_input("browser://settings/searchEngines?profile=1");
+    bar(&view, cx).simulate_input("echo://settings/searchEngines?profile=1");
     bar(&view, cx).simulate_keystrokes("enter");
     cx.run_until_parked();
     let id = view.read_with(cx, |view, _| {
@@ -47,7 +47,7 @@ fn direct_search_settings_route_sets_metadata_and_keeps_a_custom_name(cx: &mut T
     });
     assert!(cx.debug_bounds("search-settings-page").is_some());
     assert!(cx.debug_bounds(test_selector(format!("settings-page-icon-{}", id.get()))).is_some());
-    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url.starts_with("browser://"))));
+    assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Create(_, url) if url.starts_with("echo://"))));
     view.update(cx, |view, cx| { view.edit_browser(|browser| browser.rename_tab(id, "My search settings")); cx.notify(); });
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
@@ -241,7 +241,7 @@ fn suggestions_disclosure_settings_and_dismiss_retain_the_source_page(cx: &mut T
     click(&mut bar(&view, cx), "suggestions-info");
     click(&mut bar(&view, cx), "suggestions-search-settings");
     cx.run_until_parked();
-    assert!(active_url(&view, cx).unwrap().starts_with("browser://settings/searchEngines"));
+    assert!(active_url(&view, cx).unwrap().starts_with("echo://settings/searchEngines"));
     assert!(!fake.take_calls().iter().any(|call| matches!(call, Call::Navigate(..) | Call::Reload(..))));
 }
 

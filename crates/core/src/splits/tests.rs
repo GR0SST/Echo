@@ -514,7 +514,7 @@ fn discarding_a_draft_removes_the_entire_protected_copy_without_changing_archive
     browser.close_tab(closed, NOW);
     browser.undo_sidebar(NOW);
     let copy = browser.copy_item_to_today(a, NOW).unwrap();
-    let draft = browser.new_tab("browser://newtab", NOW);
+    let draft = browser.new_tab("echo://newtab", NOW);
     browser.add_split(copy, draft, Placement::Right, NOW).unwrap();
     browser.add_space("Other", 20.);
     browser.switch_space(1);

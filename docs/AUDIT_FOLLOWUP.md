@@ -74,7 +74,7 @@ live Arc, preserving the owner's translation choices.
 
 Echo's three footer buttons now have handlers:
 
-- More Settings opens `browser://settings/` as GPUI in the normal owner, closing
+- More Settings opens `echo://settings/` as GPUI in the normal owner, closing
   Preferences. The observed Settings header and local profile card are rendered;
   Arc's account/synchronization section is excluded. Global navigation/search and
   account-only card navigation are unfinished; this is not a full global Settings

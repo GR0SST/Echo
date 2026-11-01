@@ -609,7 +609,7 @@ mod tests {
         for url in [
             "file:///test",
             "about:blank",
-            "browser://password-manager",
+            "echo://password-manager",
             "data:text/html,test",
         ] {
             assert!(web_origin(url).is_none());

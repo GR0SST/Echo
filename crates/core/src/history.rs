@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(browser.active_user_profile().history[1].url, "https://b");
         for url in [
             "data:text/plain,test",
-            "browser://history",
+            "echo://history",
             "about:blank",
             "file:///tmp/test",
         ] {

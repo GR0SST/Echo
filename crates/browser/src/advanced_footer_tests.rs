@@ -28,7 +28,7 @@ fn advanced_footer_resets_only_the_selected_live_profile_and_more_settings_opens
     click(&mut panel,"settings-reset-translation");
     assert!(fake.take_calls().contains(&Call::ResetTranslation(crate::pages::StorageSelection::for_profile(other))));
     click(&mut panel,"settings-more");visual.run_until_parked();
-    assert_eq!(active_url(&view,visual).as_deref(),Some("browser://settings/"));
+    assert_eq!(active_url(&view,visual).as_deref(),Some("echo://settings/"));
     assert!(visual.debug_bounds("settings-shell").is_some());
-    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(_,url) if url=="browser://settings/")));
+    assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Create(_,url) if url=="echo://settings/")));
 }

@@ -41,7 +41,7 @@ mod tests {
         let mut oversized = png(1);
         oversized.resize(MAX_FAVICON_BYTES + 1, 0);
         assert!(!browser.cache_favicon(browser.active_user_profile_id(), "https://example.com", oversized));
-        assert!(!browser.cache_favicon(browser.active_user_profile_id(), "browser://history", png(1)));
+        assert!(!browser.cache_favicon(browser.active_user_profile_id(), "echo://history", png(1)));
         for index in 0..=MAX_ICONS {
             assert!(browser.cache_favicon(browser.active_user_profile_id(), &format!("https://site{index}.example"), png(1)));
         }

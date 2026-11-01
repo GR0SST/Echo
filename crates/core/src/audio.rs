@@ -37,7 +37,7 @@ mod tests {
         browser.add_space("Work", 20.);
         browser.switch_space(1);
         let local = browser.new_tab("https://local", now);
-        let history = browser.new_tab("browser://history", now);
+        let history = browser.new_tab("echo://history", now);
         assert!(!browser.set_tab_muted(history, true));
         assert_eq!(browser.set_all_tabs_muted(true), 2);
         assert_eq!(browser.set_all_tabs_muted(true), 0);

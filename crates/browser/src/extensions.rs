@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-pub(crate) const URL: &str = "browser://extensions";
+pub(crate) const URL: &str = "echo://extensions";
 pub(crate) const STORE: &str = "https://chromewebstore.google.com/category/extensions";
 actions!(extensions, [Dismiss, ConfirmRemove]);
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -1680,7 +1680,7 @@ impl BrowserWindow {
         if let Some(id) = self
             .browser
             .active_tab()
-            .and_then(|tab| tab.url.strip_prefix("browser://extensions?id="))
+            .and_then(|tab| tab.url.strip_prefix("echo://extensions?id="))
         {
             return self.render_extension_details(
                 self.active_extensions()
@@ -1994,7 +1994,7 @@ fn extension_switch(id: impl Into<gpui::SharedString>, enabled: bool) -> gpui::S
 fn is_manager_url(url: &str) -> bool {
     url == URL
         || url
-            .strip_prefix("browser://extensions?id=")
+            .strip_prefix("echo://extensions?id=")
             .is_some_and(|id| {
                 id.len() == 32 && id.bytes().all(|byte| (b'a'..=b'p').contains(&byte))
             })

@@ -996,7 +996,7 @@ impl SettingsWindow {
             if host.is_none() { crate::new_window::open(false,cx);host=find_host(cx); }
             if let Some(host)=host {
                 let main=host.update(cx,|view,cx| {
-                    view.edit_browser(|browser| { browser.new_tab("browser://settings/",std::time::SystemTime::now()); });
+                    view.edit_browser(|browser| { browser.new_tab("echo://settings/",std::time::SystemTime::now()); });
                     if let Some(pages)=&view.pages { pages.borrow_mut().request_ui_focus(); }
                     cx.notify();view.main_window
                 });

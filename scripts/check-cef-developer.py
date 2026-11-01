@@ -124,7 +124,7 @@ profile.mkdir()
 developer = session('developer', profile, 250,
     ['load_unpacked', 'update', 'worker_inspection', 'permissions', 'pack',
      'overwrite_confirmation', 'profile_isolation'],
-    'key cmd-t; type browser://extensions; key enter; wait 2')
+    'key cmd-t; type echo://extensions; key enter; wait 2')
 crx = fixture.with_suffix('.crx')
 pem = fixture.with_suffix('.pem')
 magic, version = struct.unpack('<4sI', crx.read_bytes()[:8])

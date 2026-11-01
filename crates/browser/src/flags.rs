@@ -1,4 +1,4 @@
-//! Chromium experiments (`browser://flags`), as in Arc: each one Default,
+//! Chromium experiments (`echo://flags`), as in Arc: each one Default,
 //! Enabled or Disabled. Choices belong to this installation, not a profile,
 //! since one engine serves every profile; they apply when the engine starts,
 //! so a change asks for a relaunch.
@@ -7,7 +7,7 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, App, Context, Entity};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub(crate) const URL: &str = "browser://flags";
+pub(crate) const URL: &str = "echo://flags";
 const FILE: &str = "Flags.json";
 
 /// One experiment from the fork's flag list (`scripts/gen_flags.py`).
@@ -114,7 +114,7 @@ impl State {
 }
 
 pub(crate) fn is_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|url| url.scheme() == "browser" && url.host_str() == Some("flags"))
+    url::Url::parse(url).is_ok_and(|url| url.scheme() == "echo" && url.host_str() == Some("flags"))
 }
 
 /// Restarts Echo after it has fully quit: the profile stays locked until

@@ -143,7 +143,7 @@ fn browsing_data_direct_route_and_following_navigation_do_not_reuse_dialog_enter
     let (v, cx, _) = open_pages(cx);
     cx.update(|w, _| w.activate_window());
     cx.simulate_keystrokes("cmd-t");
-    bar(&v, cx).simulate_input("browser://settings/clearBrowserData?profile=1");
+    bar(&v, cx).simulate_input("echo://settings/clearBrowserData?profile=1");
     bar(&v, cx).simulate_keystrokes("enter");
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();

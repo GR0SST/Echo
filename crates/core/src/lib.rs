@@ -1154,6 +1154,29 @@ mod tests {
 
 
     #[test]
+    fn saved_browser_addresses_become_echo_addresses() {
+        let now = std::time::SystemTime::UNIX_EPOCH;
+        let mut browser = Browser::new();
+        let id = browser.new_tab("https://example.com", now);
+        browser.set_url(id, "https://example.com/keep");
+        let kept = browser.new_tab("https://browser.example/browser://kept", now);
+        let mut json: serde_json::Value = serde_json::from_str(&session::to_json(&browser)).unwrap();
+        fn rewrite(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::String(text) if text == "https://example.com/keep" => *text = "browser://settings/privacy".into(),
+                serde_json::Value::Array(items) => items.iter_mut().for_each(rewrite),
+                serde_json::Value::Object(fields) => fields.values_mut().for_each(rewrite),
+                _ => {}
+            }
+        }
+        rewrite(&mut json);
+        let restored = session::from_json(&json.to_string()).unwrap();
+        let url = |tab| restored.all_tabs().find(|entry| entry.id == tab).unwrap().url.clone();
+        assert_eq!(url(id), "echo://settings/privacy");
+        assert_eq!(url(kept), "https://browser.example/browser://kept");
+    }
+
+    #[test]
     fn legacy_sessions_can_rename_and_restore_their_existing_tab_labels() {
         let mut browser = Browser::new();
         let id = browser.new_tab("https://legacy", t0());

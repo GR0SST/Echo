@@ -12,7 +12,7 @@ use gpui::{
 };
 use std::{collections::BTreeSet, time::Duration};
 use zeroize::Zeroizing;
-pub(crate) const URL: &str = "browser://password-manager/passwords";
+pub(crate) const URL: &str = "echo://password-manager/passwords";
 const HELP: &str = "https://support.google.com/chrome?p=settings_password";
 gpui::actions!(password_manager, [Accept, Cancel, Next, Previous, Activate]);
 pub(crate) fn bind_keys(cx: &mut App) {
@@ -149,7 +149,7 @@ impl BrowserWindow {
         }
         let tab = self.browser.active_tab()?;
         let u = url::Url::parse(&tab.url).ok()?;
-        if u.scheme() != "browser"
+        if u.scheme() != "echo"
             || u.host_str() != Some("password-manager")
             || !(u.path() == "/passwords" || u.path().starts_with("/passwords/"))
         {
@@ -210,7 +210,7 @@ impl BrowserWindow {
                             && this
                                 .browser
                                 .active_tab()
-                                .is_some_and(|t| t.url.starts_with("browser://password-manager/"))
+                                .is_some_and(|t| t.url.starts_with("echo://password-manager/"))
                             && !this.popup_owns_focus()
                     })
                     .unwrap_or(false);

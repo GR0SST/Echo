@@ -17,7 +17,7 @@ action's identity across catalog changes and is cleared on dismissal.
 Toolbar pins appear with Show Toolbar (⌘⇧D). Context actions use the
 existing GPUI menu, including keyboard selection and profile/target guards.
 
-`browser://extensions` is a GPUI management page. The measured Arc reference
+`echo://extensions` is a GPUI management page. The measured Arc reference
 has a 56 px header, 400×160 cards, 12 px card gaps and 36 px action buttons.
 Search filters the native catalog; Escape clears and closes search. Details
 uses a real internal tab URL, with native enable/disable and confirmed removal.

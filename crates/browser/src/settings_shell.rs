@@ -1,4 +1,4 @@
-//! The frame around every `browser://settings` page, as in Arc: a header with
+//! The frame around every `echo://settings` page, as in Arc: a header with
 //! the title and a settings search, the section list on the left and the page
 //! in a column centred on the window. Narrow windows fold the list behind a
 //! menu button. Pages without a richer view of their own render here too.
@@ -62,14 +62,14 @@ impl Section {
     }
     pub(crate) fn url(self) -> &'static str {
         match self {
-            Section::You => "browser://settings/people",
-            Section::Autofill => "browser://settings/autofill",
+            Section::You => "echo://settings/people",
+            Section::Autofill => "echo://settings/autofill",
             Section::Privacy => crate::browsing_data::PRIVACY,
-            Section::SearchEngine => "browser://settings/search",
-            Section::DefaultBrowser => "browser://settings/defaultBrowser",
-            Section::Downloads => "browser://settings/downloads",
+            Section::SearchEngine => "echo://settings/search",
+            Section::DefaultBrowser => "echo://settings/defaultBrowser",
+            Section::Downloads => "echo://settings/downloads",
             Section::Extensions => crate::extensions::URL,
-            Section::About => "browser://settings/help",
+            Section::About => "echo://settings/help",
         }
     }
     fn selector(self) -> String {
@@ -78,7 +78,7 @@ impl Section {
     /// The section a settings address belongs to.
     pub(crate) fn of(url: &str) -> Option<Section> {
         let url = url::Url::parse(url).ok()?;
-        if url.scheme() != "browser" || url.host_str() != Some("settings") {
+        if url.scheme() != "echo" || url.host_str() != Some("settings") {
             return None;
         }
         Some(match url.path() {

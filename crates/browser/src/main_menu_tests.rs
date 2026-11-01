@@ -283,7 +283,7 @@ fn clear_site_menu_actions_follow_retained_library_pages_and_reject_internal_pag
     click(visual, "library-nav-spaces");
     assert!(visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCookiesAndRefresh, cx)));
     visual.simulate_keystrokes("cmd-t");
-    bar(&view, visual).simulate_input("browser://history");
+    bar(&view, visual).simulate_input("echo://history");
     bar(&view, visual).simulate_keystrokes("enter");
     fake.take_calls();
     assert!(!visual.update(|window, cx| window.is_action_available(&crate::menus::ClearCacheAndRefresh, cx)));

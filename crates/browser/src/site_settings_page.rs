@@ -12,7 +12,7 @@ use std::{
     rc::Rc,
     time::Duration,
 };
-const URL: &str = "browser://settings/content/siteDetails";
+const URL: &str = "echo://settings/content/siteDetails";
 const CONTEXT: &str = "SiteSettingsPage";
 actions!(
     site_settings_page,
@@ -86,7 +86,7 @@ pub(crate) fn site_url(origin: &str) -> Option<String> {
 }
 pub(crate) fn is_site_url(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|u| {
-        u.scheme() == "browser"
+        u.scheme() == "echo"
             && u.host_str() == Some("settings")
             && u.path() == "/content/siteDetails"
             && u.query_pairs().any(|(k, v)| {

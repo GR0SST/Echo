@@ -3,7 +3,7 @@
 ## Installed Arc reference (2026-10-25)
 
 Arc's All Site Settings… command opens `arc://settings/content/siteDetails?site=…`
-in Peek. Echo renders its corresponding `browser://settings/content/siteDetails`
+in Peek. Echo renders its corresponding `echo://settings/content/siteDetails`
 document entirely in GPUI. No Chromium WebUI is embedded.
 
 The installed reference exposes 31 permission rows on macOS. The order, labels,

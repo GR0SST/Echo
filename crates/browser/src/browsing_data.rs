@@ -6,8 +6,8 @@ use crate::{
 use browser_core::{browsing_data::BrowsingDataRange as Range, TabId, UserProfileId};
 use gpui::{div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, KeyBinding, Window};
 use std::time::{Duration, SystemTime};
-pub(crate) const PRIVACY: &str = "browser://settings/privacy";
-pub(crate) const CLEAR: &str = "browser://settings/clearBrowserData";
+pub(crate) const PRIVACY: &str = "echo://settings/privacy";
+pub(crate) const CLEAR: &str = "echo://settings/clearBrowserData";
 const LABELS: [&str; 7] = [
     "Browsing history",
     "Cookies and other site data",
@@ -68,7 +68,7 @@ impl State {
 }
 pub(crate) fn is_url(value: &str) -> bool {
     url::Url::parse(value).is_ok_and(|u| {
-        u.scheme() == "browser"
+        u.scheme() == "echo"
             && u.host_str() == Some("settings")
             && matches!(u.path(), "/privacy" | "/clearBrowserData")
     })

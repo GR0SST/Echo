@@ -18,7 +18,7 @@ impl gpui::Render for DividerDrag {
     fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement { div().size_0() }
 }
 
-pub(crate) const EMPTY_PANE_URL: &str = "browser://newtab";
+pub(crate) const EMPTY_PANE_URL: &str = "echo://newtab";
 
 #[derive(Clone)]
 pub(crate) struct SplitDraft {

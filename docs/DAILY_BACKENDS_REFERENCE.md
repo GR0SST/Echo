@@ -80,7 +80,7 @@ a 512 × 356 card, 20 px field insets, 36 px fields and pill-shaped footer butto
 The packed English resource 348 supplies `system-ui, sans-serif`; resource 20047
 supplies the shared 15 px dialog title. The captures were read-only: editors were
 cancelled and the test tab, Settings and owned browser window were closed.
-Echo uses `browser://settings/searchEngines?profile=<local profile id>` so a
+Echo uses `echo://settings/searchEngines?profile=<local profile id>` so a
 Settings selection owns its changes even without a Space assigned to that profile.
 Custom templates never inherit the previous engine's remote suggestion transport.
 Factory entries retain Echo's six existing engines and Wikipedia; Arc's owner
@@ -197,7 +197,7 @@ windows were closed and every baseline window preserved.
 ## GPUI password manager
 
 Settings → Profiles → Passwords and the Manage Passwords Command Bar action open
-`browser://password-manager/passwords`. A Settings selection is carried as an
+`echo://password-manager/passwords`. A Settings selection is carried as an
 explicit profile ID, including profiles without a Space. Invalid/deleted owners
 never fall back to the default vault. Search uses the observed `q` route parameter.
 Add/Edit, multiline encrypted notes, copy/reveal, immediate Delete and five-second

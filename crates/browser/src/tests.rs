@@ -3489,13 +3489,13 @@ fn internal_navigation_closes_the_old_engine_view_and_returns_focus_to_gpui(cx: 
     let (view, cx, fake) = open_pages(cx);
     fake.take_calls();
     cx.simulate_keystrokes("cmd-l");
-    bar(&view, cx).simulate_input("browser://history");
+    bar(&view, cx).simulate_input("echo://history");
     bar(&view, cx).simulate_keystrokes("enter");
     assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
     let calls = fake.take_calls();
     assert!(calls.contains(&Call::Close(1)));
     assert!(calls.contains(&Call::FocusUi));
-    assert!(!calls.iter().any(|call| matches!(call, Call::Create(_, url) if url.starts_with("browser://"))));
+    assert!(!calls.iter().any(|call| matches!(call, Call::Create(_, url) if url.starts_with("echo://"))));
     cx.simulate_input("search text");
     cx.simulate_keystrokes("cmd-f");
     assert!(view.read_with(cx, |w, _| w.find_bar.is_none()));
@@ -4427,7 +4427,7 @@ fn command_search_and_archive_search_preserve_group_name_and_match_secondary_url
 fn internal_pages_cannot_join_split_view_and_native_menu_uses_the_same_picker(cx: &mut TestAppContext) {
     let (view, cx, _) = open_pages(cx);
     dispatch_menu(cx, "View", "Add Split View…");
-    bar(&view, cx).simulate_input("browser://history");
+    bar(&view, cx).simulate_input("echo://history");
     assert!(view.read_with(cx, |w, cx| w.suggestions(cx).is_empty()));
     bar(&view, cx).simulate_keystrokes("escape");
     dispatch_menu(cx, "Archive", "View History");
@@ -8224,7 +8224,7 @@ fn devtools_requires_supported_engine_native_parent_and_live_internal_free_page(
     enable_recording_inspector(&view, cx, &fake);
     assert!(view.read_with(cx, |view, _| view.devtools_available()));
     view.update(cx, |view, cx| {
-        view.edit_browser(|browser| browser.navigate(browser.active_tab().unwrap().id, "browser://history"));
+        view.edit_browser(|browser| browser.navigate(browser.active_tab().unwrap().id, "echo://history"));
         view.pages.as_ref().unwrap().borrow_mut().sync(&view.browser, true);
         cx.notify();
     });
@@ -13365,13 +13365,13 @@ fn toolbar_split_opens_a_focused_command_bar_ready_for_typing(cx: &mut TestAppCo
 #[gpui::test]
 fn settings_pages_share_arcs_frame_with_sections_and_search(cx:&mut TestAppContext){
     let (view,cx)=open(cx);
-    view.update(cx,|view,cx|{let tab=view.browser.active_tab().unwrap().id;view.edit_browser(|b|b.set_url(tab,"browser://settings/"));cx.notify();});cx.run_until_parked();
+    view.update(cx,|view,cx|{let tab=view.browser.active_tab().unwrap().id;view.edit_browser(|b|b.set_url(tab,"echo://settings/"));cx.notify();});cx.run_until_parked();
     assert!(cx.debug_bounds("settings-shell").is_some());
     assert!(cx.debug_bounds("settings-profile").is_some(),"the root shows the local profile");
     for selector in ["settings-nav-You","settings-nav-Privacy","settings-nav-SearchEngine","settings-nav-Downloads","settings-nav-About"] {assert!(cx.debug_bounds(selector).is_some(),"{selector}");}
     // Sections open in place and keep the frame.
     click(cx,"settings-nav-Downloads");
-    assert_eq!(active_url(&view,cx).as_deref(),Some("browser://settings/downloads"));
+    assert_eq!(active_url(&view,cx).as_deref(),Some("echo://settings/downloads"));
     click(cx,"settings-ask-download");
     assert!(view.read_with(cx,|view,_|view.browser.active_user_profile().settings.ask_for_download_location));
     click(cx,"settings-nav-Privacy");
@@ -13386,6 +13386,6 @@ fn settings_pages_share_arcs_frame_with_sections_and_search(cx:&mut TestAppConte
     view.update_in(cx,|_,window,cx|search.read(cx).focus_handle(cx).focus(window));
     cx.simulate_input("password");cx.run_until_parked();
     click(cx,"settings-result-0");
-    assert_eq!(active_url(&view,cx).as_deref(),Some("browser://settings/autofill"));
+    assert_eq!(active_url(&view,cx).as_deref(),Some("echo://settings/autofill"));
     assert!(cx.debug_bounds("settings-password-manager").is_some());
 }
