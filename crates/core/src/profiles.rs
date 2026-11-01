@@ -46,6 +46,8 @@ pub struct UserProfile {
     #[serde(default)]
     pub boosts: crate::boosts::Boosts,
     #[serde(default)]
+    pub easels: crate::easels::Easels,
+    #[serde(default)]
     pub captures: crate::captures::Captures,
     #[serde(default)]
     pub site_settings: crate::site_settings::SiteSettings,
@@ -105,6 +107,7 @@ impl UserProfile {
             favicon_cache: Vec::new(),
             downloads: crate::downloads::CompletedDownloads::default(),
             boosts: crate::boosts::Boosts::default(),
+            easels: crate::easels::Easels::default(),
             captures: crate::captures::Captures::default(),
             site_settings: crate::site_settings::SiteSettings::default(),
             browsing_data: Default::default(),

@@ -38,6 +38,8 @@ mod settings_shell;
 mod flags;
 mod boosts;
 mod boost_library;
+mod easel;
+mod easel_library;
 mod library_archive;
 mod media_access;
 mod media_host;
@@ -173,6 +175,7 @@ pub fn init(cx: &mut App) {
     global_little::init(cx);
     peek::bind_keys(cx);
     history::bind_keys(cx);
+    easel::bind_keys(cx);
     search_settings::bind_keys(cx);
     tab_menu::bind_keys(cx);
     icon_picker::bind_keys(cx);

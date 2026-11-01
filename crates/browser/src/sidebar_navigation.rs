@@ -799,7 +799,7 @@ impl BrowserWindow {
             return;
         }
         match intent {
-            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces | LibrarySection::Boosts | LibrarySection::ArchivedTabs)) => {
+            LibraryIntent::Navigate(section @ (LibrarySection::Media | LibrarySection::Downloads | LibrarySection::Spaces | LibrarySection::Boosts | LibrarySection::Easels | LibrarySection::ArchivedTabs)) => {
                 self.retire_library_downloads_route();
                 self.invalidate_sidebar_focus();
                 self.sidebar_navigation.library_section = section;
@@ -840,6 +840,8 @@ impl BrowserWindow {
     pub(crate) fn open_library_media(&mut self,cx:&mut Context<Self>){
         self.open_library_section(LibrarySection::Media, cx);
     }
+    #[cfg(test)]
+    pub(crate) fn open_library_section_for_tests(&mut self, section: LibrarySection, cx: &mut Context<Self>) { self.open_library_section(section, cx); }
     fn open_library_section(&mut self, section: LibrarySection, cx:&mut Context<Self>){
         if crate::quit::is_quitting()||self.browser.is_private()||self.browser.is_blank(){return;}
         self.select_sidebar_page(SidebarPage::Library,cx);
@@ -985,6 +987,13 @@ impl BrowserWindow {
                 .when_some(preview, |this, preview| this.child(library::media::render_page_preview_at(fill, Some(preview), preview_left, page_width)))
                 .into_any_element());
         }
+        if section == LibrarySection::Easels {
+            let fill = self.theme_empty_panel_fill();
+            let preview = open.then(|| self.render_library_page_preview(window, cx));
+            empty = Some(div().relative().size_full().child(self.render_easel_library(colors, cx))
+                .when_some(preview, |this, preview| this.child(library::media::render_page_preview_at(fill, Some(preview), preview_left, page_width)))
+                .into_any_element());
+        }
         if section == LibrarySection::ArchivedTabs {
             let owner = cx.weak_entity();
             let fill = self.theme_empty_panel_fill();
@@ -1010,6 +1019,7 @@ impl BrowserWindow {
                 media: true,
                 downloads: true,
                 boosts: true,
+                easels: true,
                 archive: true,
                 ..Default::default()
             },

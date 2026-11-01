@@ -7571,10 +7571,9 @@ fn new_menu_offers_reference_items_and_opens_the_matching_editor(cx: &mut TestAp
     };
     click(cx, "new-space");
     let mut overlay = menu(&view, cx);
-    for item in ["new-menu-space", "new-menu-folder", "new-menu-boost", "new-menu-split", "new-menu-tab"] {
+    for item in ["new-menu-space", "new-menu-folder", "new-menu-easel", "new-menu-boost", "new-menu-split", "new-menu-tab"] {
         assert!(overlay.debug_bounds(item).is_some(), "{item}");
     }
-    assert!(overlay.debug_bounds("new-menu-easel").is_none());
     click(&mut overlay, "new-menu-tab");
     cx.run_until_parked();
     assert!(view.read_with(cx, |w, _| w.new_menu.is_none()));
@@ -13490,4 +13489,93 @@ fn settings_pages_share_arcs_frame_with_sections_and_search(cx:&mut TestAppConte
     click(cx,"settings-result-0");
     assert_eq!(active_url(&view,cx).as_deref(),Some("echo://settings/autofill"));
     assert!(cx.debug_bounds("settings-password-manager").is_some());
+}
+
+/// Easels: ⌃⇧E opens a new canvas; shapes are drawn with drags, take colors
+/// from the palette, delete with Backspace and come back with Undo; text and
+/// freehand ink are placed on the same canvas.
+#[gpui::test]
+fn easels_draw_shapes_text_and_ink(cx: &mut TestAppContext) {
+    use browser_core::easels::{Color, Content, ShapeKind};
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-shift-e");
+    cx.run_until_parked();
+    let (url, title) = view.read_with(cx, |w, _| { let tab = w.browser.active_tab().unwrap(); (tab.url.clone(), tab.title.clone()) });
+    assert!(url.starts_with("echo://easel/"), "{url}");
+    assert_eq!(title, "Untitled Easel");
+    assert!(cx.debug_bounds("easel-page").is_some());
+    assert!(cx.debug_bounds("easel-toolbar").is_some());
+    let objects = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _| {
+        let id = w.open_easel_id().unwrap();
+        w.browser.active_user_profile().easels.get(id).unwrap().objects.clone()
+    });
+    let document = cx.debug_bounds("easel-document").unwrap();
+    let at = |x: f32, y: f32| document.origin + gpui::point(gpui::px(x), gpui::px(y));
+    let drag = |cx: &mut VisualTestContext, path: &[(f32, f32)]| {
+        cx.simulate_mouse_move(at(path[0].0, path[0].1), None, Modifiers::none());
+        cx.simulate_mouse_down(at(path[0].0, path[0].1), gpui::MouseButton::Left, Modifiers::none());
+        for (x, y) in &path[1..] { cx.simulate_mouse_move(at(*x, *y), Some(gpui::MouseButton::Left), Modifiers::none()); }
+        let last = path[path.len() - 1];
+        cx.simulate_mouse_up(at(last.0, last.1), gpui::MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+    };
+    // A rectangle is selected once drawn and the tool returns to Select.
+    click(cx, "easel-tool-rectangle");
+    drag(cx, &[(200., 300.), (260., 340.), (320., 380.)]);
+    let drawn = objects(&view, cx);
+    assert_eq!(drawn.len(), 1);
+    assert!(matches!(drawn[0].content, Content::Shape { kind: ShapeKind::Rectangle, color: Color::LightGreen, .. }));
+    assert_eq!(view.read_with(cx, |w, _| (w.easel.tool(), w.easel.selected())), (crate::easel::Tool::Select, Some(drawn[0].id)));
+    click(cx, "easel-color-Red");
+    assert!(matches!(objects(&view, cx)[0].content, Content::Shape { color: Color::Red, .. }));
+    // Dragging the selection moves it.
+    let before = objects(&view, cx)[0].frame;
+    drag(cx, &[(260., 340.), (300., 360.), (360., 400.)]);
+    let after = objects(&view, cx)[0].frame;
+    assert!(after.x > before.x && after.y > before.y && after.width == before.width);
+    cx.simulate_keystrokes("backspace");
+    cx.run_until_parked();
+    assert!(objects(&view, cx).is_empty());
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    assert_eq!(objects(&view, cx).len(), 1);
+    // Text goes where the text tool clicks.
+    click(cx, "easel-tool-text");
+    drag(cx, &[(500., 120.)]);
+    assert!(cx.debug_bounds("easel-text-editor").is_some());
+    cx.simulate_input("Hello");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(objects(&view, cx).iter().any(|object| matches!(&object.content, Content::Text { string, .. } if string == "Hello")));
+    // The pen keeps drawing after a stroke.
+    click(cx, "easel-tool-pen");
+    drag(cx, &[(100., 500.), (140., 520.), (180., 510.), (220., 540.)]);
+    assert!(objects(&view, cx).iter().any(|object| matches!(&object.content, Content::Shape { kind: ShapeKind::Freehand, points, .. } if points.len() == 4)));
+    assert_eq!(view.read_with(cx, |w, _| w.easel.tool()), crate::easel::Tool::Pen);
+    // Tool keys switch tools while no text is being typed.
+    cx.simulate_keystrokes("o");
+    assert_eq!(view.read_with(cx, |w, _| w.easel.tool()), crate::easel::Tool::Circle);
+}
+
+/// Renaming from the title retitles the tab; Library lists Easels and opens them.
+#[gpui::test]
+fn easels_rename_from_their_title_and_open_from_library(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-shift-e");
+    cx.run_until_parked();
+    click(cx, "easel-title");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Plans");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.active_tab().unwrap().title.clone()), "Plans");
+    let first = view.read_with(cx, |w, _| w.open_easel_id().unwrap());
+    cx.simulate_keystrokes("ctrl-shift-e");
+    cx.run_until_parked();
+    assert_ne!(view.read_with(cx, |w, _| w.open_easel_id().unwrap()), first);
+    view.update(cx, |w, cx| w.open_library_section_for_tests(crate::library::LibrarySection::Easels, cx));
+    cx.run_until_parked();
+    // Newest first: the renamed Easel is the second card.
+    click(cx, "easel-library-card-1");
+    assert_eq!(view.read_with(cx, |w, _| w.open_easel_id()), Some(first));
 }

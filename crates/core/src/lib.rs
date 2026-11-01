@@ -37,6 +37,7 @@ pub mod save_page;
 pub mod documents;
 pub mod profiles;
 pub mod boosts;
+pub mod easels;
 pub mod downloads;
 pub mod browsing_data;
 pub use profiles::UserProfileId;

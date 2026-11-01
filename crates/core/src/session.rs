@@ -66,6 +66,7 @@ pub fn from_json(json: &str) -> Result<Browser, serde_json::Error> {
     }
     for profile in browser.user_profiles() {
         profile.boosts.validate().map_err(serde_json::Error::custom)?;
+        profile.easels.validate().map_err(serde_json::Error::custom)?;
     }
     browser.validate_downloads().map_err(serde_json::Error::custom)?;
     browser.repair();

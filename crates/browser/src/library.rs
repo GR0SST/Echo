@@ -27,7 +27,7 @@ impl LibrarySection {
         match self {
             Self::Media => crate::pages::PageViewport::LibraryMedia,
             Self::Downloads => crate::pages::PageViewport::LibraryDownloads,
-            Self::Boosts => crate::pages::PageViewport::LibraryBoosts,
+            Self::Boosts | Self::Easels => crate::pages::PageViewport::LibraryBoosts,
             Self::ArchivedTabs => crate::pages::PageViewport::LibraryArchive,
             Self::Spaces => crate::pages::PageViewport::LibrarySpaces,
             _ => crate::pages::PageViewport::Hidden,
@@ -126,7 +126,7 @@ impl LibraryProjection {
     }
 }
 
-/// Opt in only after wiring a real action. Easels is always presentation-only.
+/// Opt in only after wiring a real action.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LibraryActions {
     pub profile: bool,
@@ -135,6 +135,7 @@ pub(crate) struct LibraryActions {
     pub media: bool,
     pub downloads: bool,
     pub boosts: bool,
+    pub easels: bool,
     pub archive: bool,
 }
 impl LibraryActions {
@@ -145,7 +146,7 @@ impl LibraryActions {
             LibrarySection::Downloads => self.downloads,
             LibrarySection::Boosts => self.boosts,
             LibrarySection::ArchivedTabs => self.archive,
-            LibrarySection::Easels => false,
+            LibrarySection::Easels => self.easels,
         }
     }
 }

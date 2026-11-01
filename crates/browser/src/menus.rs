@@ -283,6 +283,7 @@ fn build_with_sidebar_undo(undo: Option<&'static str>, redo: Option<&'static str
                 MenuItem::action("New Space…", window::NewSpace),
                 MenuItem::action("Edit Theme…", EditTheme),
                 MenuItem::action("New Folder…", window::NewFolder),
+                MenuItem::action("New Easel", window::NewEasel),
                 MenuItem::action("New Boost", window::NewBoost),
                 MenuItem::action("Rename Space…", RenameSpace),
                 MenuItem::action("Change Profile", ChangeProfile),

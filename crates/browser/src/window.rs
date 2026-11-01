@@ -110,6 +110,7 @@ actions!(
         CopyUrlAsQuote,
         CapturePage,
         NewBoost,
+        NewEasel,
         NewFolder,
         CollapseAllFolders,
         ExpandAllFolders,
@@ -222,6 +223,7 @@ window_shortcuts! {
     "cmd-shift-n" => crate::menus::NewIncognitoWindow,
     "ctrl-shift-=" => AddSplit,
     "ctrl-shift--" => CloseSplitPane,
+    "ctrl-shift-e" => NewEasel,
     "cmd-shift-t" => RestoreTab,
     "cmd-shift-k" => ClearToday,
     "ctrl-tab" => crate::tab_switcher::NextRecentItem,
@@ -442,6 +444,7 @@ pub enum Command {
     AddExtension,
     ExtensionAction([u8;32], browser_core::UserProfileId),
     NewBoost,
+    NewEasel,
     AddSplit(Option<browser_core::splits::Placement>),
     CloseSplitPane,
     SplitAxis(browser_core::splits::Axis),
@@ -875,6 +878,7 @@ pub struct BrowserWindow {
     pub(crate) search_settings: crate::search_settings::State,
     pub(crate) settings_shell: crate::settings_shell::State,
     pub(crate) flags: crate::flags::State,
+    pub(crate) easel: crate::easel::State,
     pub(crate) tab_menu: Option<crate::tab_menu::TabMenu>,
     pub(crate) navigation_history: crate::navigation_history::NavigationHistory,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
@@ -1256,6 +1260,7 @@ impl BrowserWindow {
             search_settings: crate::search_settings::State::new(cx),
             settings_shell: crate::settings_shell::State::new(cx),
             flags: crate::flags::State::new(cx),
+            easel: crate::easel::State::new(cx),
             pages,
             pending_engine_events: Default::default(),
             engine_shortcut_pending: false,
@@ -2153,6 +2158,7 @@ impl BrowserWindow {
                 (Command::LightAppearance, "Switch to Light Mode", "switch to light mode|light mode|light appearance", true),
                 (Command::DarkAppearance, "Switch to Dark Mode", "switch to dark mode|dark mode|dark appearance|night mode", true),
                 (Command::NewBoost, "New Boost", "new boost|customize page", true),
+                (Command::NewEasel, "New Easel", "new easel|create easel|whiteboard", !self.browser.is_private() && !self.browser.is_blank()),
                 (Command::NewFolder, "New Folder…", "new folder|create folder|add folder", true),
                 (Command::MoveToFolder, "Move to Folder…", "move to folder|pin to folder", active.is_some()),
                 (Command::NewFolderWithTab, "Pin to New Folder…", "pin to new folder|new folder with current tab", active.is_some()),
@@ -2546,6 +2552,7 @@ impl BrowserWindow {
         if !self.blank_allows_command(command) || !self.private_allows_command(command) { return; }
         match command {
             Command::NewBoost => self.new_boost(cx),
+            Command::NewEasel => self.new_easel(cx),
             Command::NewFolder => self.create_folder_inline(None, None, cx),
             Command::NewFolderWithTab => { if let Some(id) = self.browser.space().active_tab { self.create_folder_inline(None, Some(id), cx); } }
             Command::PinToFolder(folder) => {
@@ -2799,6 +2806,7 @@ impl BrowserWindow {
             .on_action(cx.listener(|this, _: &OpenExtensions, window, cx| this.open_extensions_picker(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleDeveloperMode, _, cx| this.toggle_developer_mode(cx)))
             .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
+            .on_action(cx.listener(|this, _: &NewEasel, _, cx|this.new_easel(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
             .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))
@@ -3832,6 +3840,7 @@ impl BrowserWindow {
                 .size(px(18.)).flex_none().flex().items_center().justify_center()
                 .text_color(gpui::rgb(0x1c73e8)).child(crate::icons::ionicon("settings-sharp", 14., 1.)).into_any_element();
         }
+        if tab.url.starts_with(browser_core::easels::URL_PREFIX) { return div().size(px(18.)).flex_none().flex().items_center().justify_center().child(crate::easel::favicon(16.)).into_any_element(); }
         if tab.url.starts_with(crate::password_manager::URL) {return div().size(px(18.)).flex_none().flex().items_center().justify_center().child(crate::password_manager::favicon()).into_any_element();}
         let icon = match self.browser.favicon(profile, &tab.url) {
             Some(png) => {
@@ -4547,6 +4556,7 @@ impl BrowserWindow {
         if self.site_settings_is_open() { return Some(self.render_site_settings_page(cx).into_any_element()); }
         if let Some(section) = self.simple_settings_section() { return Some(self.render_simple_settings(section, cx).into_any_element()); }
         if self.flags_is_open() { return Some(self.render_flags(cx)); }
+        if let Some(easel) = self.render_easel(cx) { return Some(easel); }
         None
     }
 
@@ -4653,6 +4663,7 @@ impl BrowserWindow {
             size((viewport.width - px(left + CONTENT_INSET)).max(px(0.)), (viewport.height - px(CONTENT_INSET * 2.)).max(px(0.))));
         let panel_mask = crate::space_theme::rounded_theme_mask(panel_bounds, CONTENT_CORNER_RADIUS, window.scale_factor());
         let echo_page = if virtual_page { None } else { self.render_echo_page(window, cx) };
+        let easel_open = !virtual_page && self.easel_is_open();
         let internal = self.browser.active_tab().is_some_and(|tab| omnibox::is_internal_url(&tab.url));
         // The page view covers the card; text only shows when there is no page.
         let placeholder = if virtual_page || split_open || echo_page.is_some() || (self.browser.is_private() && self.browser.active_tab().is_none()) { None } else if internal { Some(("Page not found".into(), self.browser.active_tab().unwrap().url.clone())) } else { match (self.browser.active_tab(), &self.pages) {
@@ -4694,7 +4705,10 @@ impl BrowserWindow {
                     .relative()
                     // The loading backing sits one pixel inside the native page so
                     // its antialiased corners never fringe past the page's own mask.
-                    .when(has_page && !split_open, |this| this.child(div().debug_selector(|| "page-card-backing".into())
+                    .when(easel_open, |this| this.child(div().debug_selector(|| "easel-canvas".into()).absolute().inset_0()
+                        .when(self.theme_background_blurred != Some(true), |canvas| canvas.child(self.theme_surface_mask(panel_bounds, viewport, panel_mask.clone())))
+                        .child(div().absolute().inset_0().rounded(px(CONTENT_CORNER_RADIUS)).bg(self.theme_empty_panel_fill()))))
+                    .when(has_page && !split_open && !easel_open, |this| this.child(div().debug_selector(|| "page-card-backing".into())
                         .absolute().inset(px(1.)).rounded(px(CONTENT_CORNER_RADIUS - 1.))
                         .bg(if self.browser.is_private() { hsla(210. / 360., 0.035, 0.15, 1.) } else { gpui::white() })))
                     .when(!has_page, |this| this.child(div().debug_selector(|| "empty-space-canvas".into()).absolute().inset_0()
@@ -5318,6 +5332,7 @@ impl Render for BrowserWindow {
         self.tab_split_sides.get_mut().retain(|id, _| open.contains(id));
         for space in &self.browser.spaces { self.sidebar_scrolls.entry(space.id).or_default(); }
         if self.page_content_visible() && self.setup.is_none() && self.user_profile_dialog.is_none() && self.live_folders.sheet.is_none() { self.sync_history_focus(window, cx); }
+        self.sync_easel(cx);
         if self.tab_menu.as_ref().is_some_and(|menu| !self.menu_is_current(menu)) {
             self.close_tab_menu(cx);
         }
@@ -5506,6 +5521,7 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.change_page_zoom(-1, cx)))
             .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.change_page_zoom(0, cx)))
             .on_action(cx.listener(|this, _: &NewBoost, _, cx|this.new_boost(cx)))
+            .on_action(cx.listener(|this, _: &NewEasel, _, cx|this.new_easel(cx)))
             .when(!self.browser.is_blank(), |this| this.on_action(cx.listener(|this, _: &NewFolder, window, cx| this.open_command_action(Command::NewFolder, window, cx))))
             .on_action(cx.listener(|this, _: &CollapseAllFolders, _, cx| this.run_command(Command::CollapseAllFolders, cx)))
             .on_action(cx.listener(|this, _: &ExpandAllFolders, _, cx| this.run_command(Command::ExpandAllFolders, cx)))

@@ -26,23 +26,23 @@ pub(crate) fn bind_keys(cx: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Item { Space, Folder, Boost, Split, Tab }
+pub(crate) enum Item { Space, Folder, Easel, Boost, Split, Tab }
 
 /// Rows in order; `true` draws a separator above the row.
-const ITEMS: [(Item, bool); 5] = [(Item::Space, false), (Item::Folder, false), (Item::Boost, true), (Item::Split, true), (Item::Tab, false)];
+const ITEMS: [(Item, bool); 6] = [(Item::Space, false), (Item::Folder, false), (Item::Easel, true), (Item::Boost, false), (Item::Split, true), (Item::Tab, false)];
 
 impl Item {
     fn label(self) -> &'static str {
-        match self { Self::Space => "New Space", Self::Folder => "New Folder", Self::Boost => "New Boost", Self::Split => "New Split", Self::Tab => "New Tab" }
+        match self { Self::Space => "New Space", Self::Folder => "New Folder", Self::Easel => "New Easel", Self::Boost => "New Boost", Self::Split => "New Split", Self::Tab => "New Tab" }
     }
     fn selector(self) -> &'static str {
-        match self { Self::Space => "new-menu-space", Self::Folder => "new-menu-folder", Self::Boost => "new-menu-boost", Self::Split => "new-menu-split", Self::Tab => "new-menu-tab" }
+        match self { Self::Space => "new-menu-space", Self::Folder => "new-menu-folder", Self::Easel => "new-menu-easel", Self::Boost => "new-menu-boost", Self::Split => "new-menu-split", Self::Tab => "new-menu-tab" }
     }
     fn icon(self) -> Icon {
-        match self { Self::Space => Icon::NewSpace, Self::Folder => Icon::Folder, Self::Boost => Icon::Boost, Self::Split => Icon::Split, Self::Tab => Icon::NewTab }
+        match self { Self::Space => Icon::NewSpace, Self::Folder => Icon::Folder, Self::Easel => Icon::Library, Self::Boost => Icon::Boost, Self::Split => Icon::Split, Self::Tab => Icon::NewTab }
     }
     fn shortcut(self) -> Option<&'static str> {
-        match self { Self::Split => Some("⌃⇧="), Self::Tab => Some("⌘T"), _ => None }
+        match self { Self::Easel => Some("⌃⇧E"), Self::Split => Some("⌃⇧="), Self::Tab => Some("⌘T"), _ => None }
     }
 }
 
@@ -124,6 +124,7 @@ impl BrowserWindow {
         match item {
             Item::Space => self.begin_space_creation(self.browser.space().id, cx),
             Item::Folder => self.open_folder_creator(None, None, window, cx),
+            Item::Easel => self.new_easel(cx),
             Item::Boost => self.new_boost(cx),
             Item::Split => self.open_command_action(Command::AddSplit(None), window, cx),
             Item::Tab => self.open_command_bar(Target::NewTab, "", window, cx),
@@ -164,7 +165,7 @@ impl BrowserWindow {
                         cx.notify();
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.confirm_new_menu(item, window, cx); }))
-                    .child(crate::icons::new_menu_control(item.icon(), if menu.selected==Some(index){accent.into()}else{fill.into()}))
+                    .child(if item == Item::Easel { crate::easel::menu_icon() } else { crate::icons::new_menu_control(item.icon(), if menu.selected==Some(index){accent.into()}else{fill.into()}) })
                     .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(item.label()))
                     .when_some(item.shortcut(), |this, shortcut| this.child(div().text_size(px(12.)).text_color(hsla(menu_hue,1.,if dark {0.85} else {0.7},0.6)).child(shortcut))))
         });
