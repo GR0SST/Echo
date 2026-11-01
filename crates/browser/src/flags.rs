@@ -221,7 +221,8 @@ impl BrowserWindow {
                         .when(menu_open, |anchor| {
                             let id = flag.id.clone();
                             let owner = cx.entity().downgrade();
-                            anchor.child(
+                            // Later rows paint after this one; keep the menu above them.
+                            anchor.child(gpui::deferred(
                                 div()
                                     .absolute()
                                     .top(px(34.))
@@ -247,7 +248,7 @@ impl BrowserWindow {
                                             .child(label)
                                             .on_click(move |_, _, cx| { let _ = owner.update(cx, |this, cx| this.set_flag(&id, value, cx)); })
                                     })),
-                            )
+                            ).with_priority(1))
                         }),
                 )
         }).collect::<Vec<_>>();
