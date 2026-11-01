@@ -1377,12 +1377,19 @@ impl Pages {
             let mut store = self.store.borrow_mut();
             let PageStore { engine, pages, .. } = &mut *store;
             let remains_visible = |id: TabId| self.wanted.iter().any(|intent| intent.tab == id);
-            if !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture) {
+            if !self.peek_mode {
                 // Only a video with sound follows the user out: muted
                 // decorative loops (GitHub's hero, for one) stay in their tab.
-                // A site blocked from it in its controls stays in its tab too.
-                let site_blocks = |page: &Page| engine.site_info(page.view).is_some_and(|info| info.permissions.iter()
-                    .any(|setting| setting.kind == engine::PermissionKind::AutomaticPictureInPicture && setting.value == engine::PermissionValue::Block));
+                // A site's own Allow or Block in its controls wins over the
+                // global "leave a video tab" setting.
+                let global = browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture);
+                let site_blocks = |page: &Page| {
+                    let explicit = browser_core::site_settings::SiteSettings::origin(&page.url)
+                        .and_then(|origin| engine.profile_site_settings(&StorageSelection::for_profile(page.identity.profile), &origin))
+                        .and_then(|rows| rows.into_iter().find(|row| row.kind == engine::PermissionKind::AutomaticPictureInPicture))
+                        .filter(|row| match row.uses_default { Some(uses_default) => !uses_default, None => row.value != row.default_value });
+                    match explicit { Some(row) => row.value != engine::PermissionValue::Allow, None => !global }
+                };
                 let eligible = |id: TabId, page: &Page| page.owner == self.host && page.visible
                     && !remains_visible(id) && page.state.media.playing && page.state.media.video
                     && page.state.audible && !page.state.media.picture_in_picture && !site_blocks(page);

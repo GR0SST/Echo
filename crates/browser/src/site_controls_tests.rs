@@ -662,3 +662,30 @@ fn a_permission_request_slides_a_hidden_sidebar_out_and_keeps_it_until_answered(
     cx.run_until_parked();
     assert!(fake.take_calls().contains(&Call::PermissionResponse(1, request.id, engine::PermissionDecision::Allow)));
 }
+
+#[gpui::test]
+fn a_sites_own_picture_in_picture_choice_wins_over_the_global_setting(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let origin = install_site_info(&view, cx, &fake, true);
+    view.update(cx, |view, cx| {
+        view.edit_browser(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::AutomaticPictureInPicture, false));
+        cx.notify();
+    });
+    let mut media = playing_media();
+    media.video = true;
+    fake.send(cx, Event::MediaStateChanged { view: page(1), state: media });
+    fake.send(cx, Event::AudioStateChanged { view: page(1), audible: true });
+    // With the global setting off, the site's row reads Blocked.
+    click(cx, "address-site-controls");
+    let mut controls = panel(&view, cx);
+    assert!(controls.debug_bounds("site-automatic-pip").is_some());
+    controls.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    set_explicit(&view, cx, &fake, &origin, engine::PermissionKind::AutomaticPictureInPicture, engine::PermissionValue::Allow);
+    fake.take_calls();
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("https://other.example");
+    bar(&view, cx).simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::PictureInPicture(1, true)), "the site's own Allow wins");
+}

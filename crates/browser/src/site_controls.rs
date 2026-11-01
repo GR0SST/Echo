@@ -892,8 +892,12 @@ impl BrowserWindow {
         let pip_row = site_rows.iter().find(|row| row.kind == engine::PermissionKind::AutomaticPictureInPicture);
         // Arc always offers this one.
         let show_pip = true;
-        let pip_allowed = !pip_row.is_some_and(|row| row.value == engine::PermissionValue::Block)
-            && self.browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture);
+        // The site's own choice wins; otherwise the global "Enable Picture in
+        // Picture when you leave a video tab" setting decides.
+        let pip_allowed = match pip_row.filter(|row| explicitly_set(row)) {
+            Some(row) => row.value == engine::PermissionValue::Allow,
+            None => self.browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture),
+        };
         let tile = |id: &'static str| {
             div()
                 .id(id)
