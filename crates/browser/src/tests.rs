@@ -10433,6 +10433,8 @@ fn boost_code_numbers_its_lines_and_scrolls_long_lines_sideways(cx:&mut TestAppC
     let offset=|view:&Entity<BrowserWindow>,panel:&mut VisualTestContext|view.read_with(panel,|view,cx|view.boost_editor.and_then(|editor|editor.read(cx).ok().map(|editor|editor.code_scroll.offset().x))).unwrap();
     panel.simulate_input("body {");panel.simulate_keystrokes("enter");panel.simulate_input(&format!("  background: {};","x".repeat(160)));panel.run_until_parked();
     assert!(offset(&view,&mut panel)<gpui::px(0.),"typing at the end of a long line scrolls after the caret");
+    let max=view.read_with(&panel,|view,cx|view.boost_editor.and_then(|editor|editor.read(cx).ok().map(|editor|editor.code_scroll.max_offset()))).unwrap();
+    assert!(max.width>gpui::px(0.),"the code is wider than its view, so it scrolls: {max:?}");
     assert!(panel.debug_bounds("boost-code-scrollbar").is_some());
     // Dragging the scrollbar to its start shows the line's start again.
     let track=panel.debug_bounds("boost-code-scrollbar").unwrap();
@@ -10443,6 +10445,7 @@ fn boost_code_numbers_its_lines_and_scrolls_long_lines_sideways(cx:&mut TestAppC
     assert_eq!(offset(&view,&mut panel),gpui::px(0.),"a caret back at the start brings the view back");
     assert_eq!(panel.debug_bounds("boost-code-lines").unwrap().size.height,gpui::px(54.),"one number per line");
     let code=panel.debug_bounds("boost-code-horizontal").unwrap();
+    panel.simulate_mouse_move(code.center(),None,Modifiers::none());panel.run_until_parked();
     panel.simulate_event(gpui::ScrollWheelEvent{position:code.center(),delta:gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.),gpui::px(-40.))),..Default::default()});panel.run_until_parked();
     assert_eq!(offset(&view,&mut panel),gpui::px(0.),"a vertical swipe never scrolls sideways");
     panel.simulate_event(gpui::ScrollWheelEvent{position:code.center(),delta:gpui::ScrollDelta::Pixels(gpui::point(gpui::px(-200.),gpui::px(0.))),..Default::default()});panel.run_until_parked();

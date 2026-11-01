@@ -115,7 +115,10 @@ fn follow_caret(input: &Entity<TextInput>, handle: &gpui::ScrollHandle, followed
     let (Some(caret), view) = (input.read(cx).caret.get(), handle.bounds()) else { return; };
     let offset = handle.offset();
     let at = (caret.origin.x - view.origin.x - offset.x, caret.origin.y - offset.y);
-    if followed.replace(Some(at)) == Some(at) { return; }
+    // Scrolling moves the caret on screen by exactly the scroll, up to float
+    // rounding; only a real caret move (typing, arrows) is followed.
+    let moved = followed.replace(Some(at)).is_none_or(|(x, y)| (x - at.0).abs() > px(0.5) || (y - at.1).abs() > px(0.5));
+    if !moved { return; }
     let margin = px(16.);
     let shift = if caret.right() > view.right() - margin {
         view.right() - margin - caret.right()
@@ -1161,14 +1164,21 @@ impl Render for BoostEditor {
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
-                        .py(px(12.))
                         .font_family("Menlo")
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .child(
                             div()
+                                .id("boost-code-lines-row")
                                 .flex()
                                 .items_start()
+                                .min_h_full()
+                                .py(px(12.))
+                                // A press below the last line still puts the caret in the code.
+                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                    let input = if this.javascript { &this.js } else { &this.css };
+                                    input.read(cx).focus_handle(cx).focus(window);
+                                }))
                                 // Line numbers stay put while the code scrolls sideways.
                                 .child(
                                     div()
@@ -1186,6 +1196,7 @@ impl Render for BoostEditor {
                                     div()
                                         .id("boost-code-horizontal")
                                         .debug_selector(|| "boost-code-horizontal".into())
+                                        .flex()
                                         .flex_1()
                                         .min_w_0()
                                         .overflow_x_scroll()

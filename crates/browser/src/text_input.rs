@@ -873,9 +873,12 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let code = self.multiline && !self.form_multiline;
         div()
             .flex()
-            .w_full()
+            // Code grows with its longest line so a scrolling host can scroll it.
+            .when(code, |root| root.flex_none().min_w_full())
+            .when(!code, |root| root.w_full())
             .key_context(if self.multiline {if self.form_multiline {"TextInput FormTextArea"} else {"TextInput CodeInput"}} else { CONTEXT })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)

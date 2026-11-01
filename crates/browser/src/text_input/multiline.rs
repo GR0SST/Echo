@@ -41,8 +41,11 @@ impl Element for CodeElement {
         }).fold(px(0.), |widest, width| widest.max(width));
         style.size.width = (longest + px(8.)).into();
         style.min_size.width = relative(1.).into();
+        style.flex_shrink = 0.;
+        // Exactly its lines: extra height would let the host scroll a few
+        // points up and down during a sideways swipe.
         style.size.height =
-            (window.line_height() * input.content.split('\n').count().max(25) as f32).into();
+            (window.line_height() * input.content.split('\n').count() as f32).into();
         (window.request_layout(style, [], cx), ())
     }
     fn prepaint(
