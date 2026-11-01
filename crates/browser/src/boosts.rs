@@ -540,6 +540,19 @@ impl BoostEditor {
             cx.notify();
         } else if selector.is_empty() {
             self.undo_zap(cx);
+        } else if self.code {
+            // In code the eyedropper picks the element into the open editor
+            // instead of zapping it, then puts itself away.
+            if self.javascript {
+                let snippet = format!("document.querySelector({})", serde_json::to_string(&selector).unwrap());
+                self.js.update(cx, |input, cx| input.insert_at_caret(&snippet, 0, cx));
+            } else {
+                let lead = if self.css.read(cx).text().is_empty() || self.css.read(cx).text().ends_with('\n') { "" } else { "\n" };
+                let snippet = format!("{lead}{selector} {{\n  \n}}\n");
+                self.css.update(cx, |input, cx| input.insert_at_caret(&snippet, 3, cx));
+            }
+            self.stop_picker(cx);
+            cx.notify();
         } else {
             self.edit(cx, |boost| {
                 if !boost.zap_selectors.contains(&selector) {
@@ -550,6 +563,9 @@ impl BoostEditor {
     }
     pub(crate) fn undo_last_zap(&mut self, cx: &mut Context<Self>) {
         self.undo_zap(cx);
+    }
+    fn restore_zap(&mut self, selector: String, cx: &mut Context<Self>) {
+        self.edit(cx, |boost| boost.zap_selectors.retain(|zapped| *zapped != selector));
     }
     fn undo_zap(&mut self, cx: &mut Context<Self>) {
         self.edit(cx, |boost| {
@@ -945,6 +961,7 @@ impl Render for BoostEditor {
             .map(|boost| boost.appearance.clone())
             .unwrap_or_default();
         let changed = appearance != Default::default();
+        let zaps = boost.as_ref().map(|boost| boost.zap_selectors.clone()).unwrap_or_default();
         let target = if self.code { CODE_WIDTH } else { SIMPLE_WIDTH };
         // The content is laid out once at its mode's width; only the panel's
         // clip widens or narrows around it, from the right edge.
@@ -1045,6 +1062,54 @@ impl Render for BoostEditor {
                             self.css.clone()
                         }),
                 )
+                // Zapped elements stay listed here, each one restorable.
+                .when(!zaps.is_empty(), |root| {
+                    root.child(
+                        div()
+                            .id("boost-zaps")
+                            .debug_selector(|| "boost-zaps".into())
+                            .flex_none()
+                            .max_h(px(132.))
+                            .overflow_y_scroll()
+                            .border_t_1()
+                            .border_color(rgb(0xe9e9e9))
+                            .bg(rgb(0xffffff))
+                            .px(px(12.))
+                            .py(px(8.))
+                            .child(div().pb(px(4.)).font_weight(gpui::FontWeight::SEMIBOLD).child("Zapped Elements"))
+                            .children(zaps.into_iter().enumerate().map(|(index, selector)| {
+                                let restore = selector.clone();
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .h(px(24.))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .font_family("Menlo")
+                                            .text_size(px(11.))
+                                            .text_color(rgb(0x555555))
+                                            .child(selector),
+                                    )
+                                    .child(
+                                        Self::control_hover(
+                                            if index == 0 { "boost-zap-restore" } else { "boost-zap-restore-more" },
+                                            0xdedee1,
+                                        )
+                                        .id(gpui::SharedString::from(format!("boost-zap-restore-{index}")))
+                                        .px(px(8.))
+                                        .h(px(20.))
+                                        .rounded(px(5.))
+                                        .text_size(px(11.))
+                                        .child("Restore")
+                                        .on_click(cx.listener(move |this, _, _, cx| this.restore_zap(restore.clone(), cx))),
+                                    )
+                            })),
+                    )
+                })
                 .child(
                     div()
                         .h(px(68.))

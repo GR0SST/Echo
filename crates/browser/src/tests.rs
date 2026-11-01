@@ -10397,6 +10397,28 @@ fn new_boost_command_creates_profile_owned_boost_and_measured_panel(cx:&mut Test
     panel.simulate_keystrokes("escape");cx.run_until_parked();assert!(view.read_with(cx,|view,_|view.boost_editor.is_none()));
 }
 #[gpui::test]
+fn boost_code_lists_zaps_to_restore_and_its_eyedropper_writes_selectors(cx:&mut TestAppContext){
+    let fake=FakeEngine::default();let (view,cx)=open_with(cx,Some(Box::new(fake.clone())));
+    cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
+    let boost=|view:&Entity<BrowserWindow>,cx:&mut VisualTestContext|view.read_with(cx,|view,_|view.browser.active_user_profile().boosts.iter().next().unwrap().clone());
+    let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-zap");
+    for selector in ["#advert",".banner"] {fake.send(cx,Event::BoostZap{view:page(1),selector:selector.into()});}
+    cx.run_until_parked();
+    click(&mut panel,"boost-zap");
+    click(&mut panel,"boost-code");let mut panel=boost_panel(&view,cx);
+    assert!(panel.debug_bounds("boost-zaps").is_some(),"zapped elements are listed in code");
+    click(&mut panel,"boost-zap-restore");panel.run_until_parked();
+    assert_eq!(boost(&view,cx).zap_selectors,vec![".banner"]);
+    // The eyedropper in code writes the element's selector into the open editor.
+    click(&mut panel,"boost-code-picker");
+    fake.send(cx,Event::BoostZap{view:page(1),selector:"main > h1".into()});cx.run_until_parked();
+    assert_eq!(boost(&view,cx).css,"main > h1 {\n  \n}\n");
+    assert_eq!(boost(&view,cx).zap_selectors,vec![".banner"],"nothing new is zapped");
+    let mut panel=boost_panel(&view,cx);click(&mut panel,"boost-tab-js");click(&mut panel,"boost-code-picker");
+    fake.send(cx,Event::BoostZap{view:page(1),selector:"#nav".into()});cx.run_until_parked();
+    assert_eq!(boost(&view,cx).javascript,"document.querySelector(\"#nav\")");
+}
+#[gpui::test]
 fn boost_code_mode_widens_and_narrows_the_panel_from_its_right_edge(cx:&mut TestAppContext) {
     let (view,cx)=open(cx);cx.simulate_keystrokes("cmd-t");bar(&view,cx).simulate_input("New Boost");bar(&view,cx).simulate_keystrokes("enter");
     crate::boosts::ANIMATE_BOOST_RESIZE.with(|animate|animate.set(true));

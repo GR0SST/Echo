@@ -254,6 +254,22 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Inserts `text` at the caret as one undoable edit and leaves the caret
+    /// `caret_back` bytes before its end. A whole-text selection (left by
+    /// `set_text`) is kept, with the insert going after it.
+    pub(crate) fn insert_at_caret(&mut self, text: &str, caret_back: usize, cx: &mut Context<Self>) {
+        let before = self.edit_state();
+        let range = if self.selected_range == (0..self.content.len()) { self.content.len()..self.content.len() } else { self.selected_range.clone() };
+        self.content = (self.content[..range.start].to_owned() + text + &self.content[range.end..]).into();
+        let caret = range.start + text.len() - caret_back.min(text.len());
+        self.selected_range = caret..caret;
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.record_edit(before);
+        cx.emit(Changed);
+        cx.notify();
+    }
+
     /// Initialize a value without a replace-all selection.
     pub(crate) fn set_text_at_end(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.set_text(text, cx);
