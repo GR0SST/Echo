@@ -476,6 +476,9 @@ impl WebEngine for FakeEngine {
     }
     fn set_site_permission(&mut self,view:ViewId,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool{
         {let mut state=self.0.borrow_mut();let Some(info)=state.site_infos.get_mut(&raw(view)).filter(|info|info.origin==origin) else{return false;};let Some(setting)=info.permissions.iter_mut().find(|setting|setting.kind==kind)else{return false;};setting.value=value;}
+        // The live page and its profile's site settings are the same store.
+        {let state=self.0.borrow();let mut settings=state.profile_settings.borrow_mut();
+            for ((_,row_origin),rows) in settings.iter_mut() { if row_origin==origin { if let Some(row)=rows.iter_mut().find(|row|row.kind==kind) { row.value=value; row.uses_default=Some(false); } } }}
         self.call(Call::SitePermission(raw(view),origin.into(),kind,value));true
     }
     fn clear_site_data(&mut self,view:ViewId,origin:&str,kind:engine::ClearSiteData)->bool{

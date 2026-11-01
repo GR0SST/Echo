@@ -351,6 +351,29 @@ impl BrowserWindow {
         }
     }
 
+    /// A Settings row press: allow or block `kind` for the panel's site.
+    fn set_site_permission_from_controls(&mut self, scope: &SiteScope, kind: engine::PermissionKind, allow: bool, cx: &mut Context<Self>) {
+        if !self.site_scope_is_current(scope) {
+            return;
+        }
+        let Some(origin) = scope.origin.as_ref() else {
+            return;
+        };
+        let value = if allow { engine::PermissionValue::Allow } else { engine::PermissionValue::Block };
+        if !self.pages.as_ref().is_some_and(|pages| pages.borrow_mut().set_site_permission(scope.tab, origin, kind, value)) {
+            return;
+        }
+        self.edit_profile(|model| {
+            if let Some(profile) = model.user_profile_mut(scope.profile) {
+                profile.site_settings.record_permission(origin, core_permission(kind));
+            }
+        });
+        let info = self.pages.as_ref().and_then(|pages| pages.borrow().site_info(scope.tab));
+        if let Some(panel) = &mut self.site_controls {
+            panel.info = info;
+        }
+        cx.notify();
+    }
     fn site_menu_action(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(scope) = self
             .site_controls
@@ -491,6 +514,29 @@ impl BrowserWindow {
             }
         });
         self.close_site_controls(cx);
+        // The request opens from the address in the sidebar. A hidden sidebar
+        // slides out first and stays until the request is answered.
+        if !self.sidebar_visible && !self.page_toolbar_shown() && self.floating_sidebar.is_none() {
+            self.reveal_sidebar(window, cx);
+            if let Some(floating) = &mut self.floating_sidebar {
+                floating.entered = true;
+            }
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(crate::window::FLOATING_SIDEBAR_SLIDE + std::time::Duration::from_millis(40)).await;
+                let _ = this.update_in(cx, |this, window, cx| this.open_permission_request(request, tab, window, cx));
+            }).detach();
+            return;
+        }
+        self.open_permission_request(request, tab, window, cx);
+    }
+
+    fn open_permission_request(&mut self, request: engine::PermissionRequest, tab: browser_core::TabId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser.active_tab().map(|active| active.id) != Some(tab) {
+            if let Some(pages) = &self.pages {
+                pages.borrow_mut().respond_permission(tab, request.id, engine::PermissionDecision::Dismiss);
+            }
+            return;
+        }
         self.toggle_site_controls(window, cx);
         if let Some(panel) = &mut self.site_controls {
             panel.permission_request = Some(request);
@@ -831,31 +877,23 @@ impl BrowserWindow {
             );
         let arrow_at = point(arrow_x - px(9.), panel.position.y - px(8.));
         let scope = panel.scope.clone();
-        let permissions: Vec<_> = self
-            .browser
-            .user_profile(scope.profile)
-            .into_iter()
-            .flat_map(|profile| {
-                profile
-                    .site_settings
-                    .permissions(scope.origin.as_deref().unwrap_or(""))
-            })
-            .filter_map(|permission| {
-                panel
-                    .info
-                    .as_ref()?
-                    .permissions
-                    .iter()
-                    .find(|setting| core_permission(setting.kind) == permission)
-                    .cloned()
-            })
-            .filter(|setting| {
-                matches!(
-                    setting.value,
-                    engine::PermissionValue::Allow | engine::PermissionValue::Block
-                )
-            })
+        // Arc lists what differs from the defaults for this site: each permission
+        // the site was explicitly allowed or blocked, then Developer Mode, then
+        // automatic Picture-in-Picture once the site plays video.
+        let site_rows = scope.origin.as_deref().and_then(|origin| {
+            self.pages.as_ref()?.try_borrow().ok()?.profile_site_settings(scope.profile, self.browser.is_private(), origin)
+        }).unwrap_or_default();
+        let permissions: Vec<_> = site_rows
+            .iter()
+            .filter(|row| row.uses_default == Some(false) && row.kind != engine::PermissionKind::AutomaticPictureInPicture
+                && matches!(row.value, engine::PermissionValue::Allow | engine::PermissionValue::Block))
+            .map(|row| engine::SitePermission { kind: row.kind, value: row.value })
             .collect();
+        let pip_row = site_rows.iter().find(|row| row.kind == engine::PermissionKind::AutomaticPictureInPicture);
+        let plays_video = self.pages.as_ref().and_then(|pages| pages.try_borrow().ok()?.owned_media(scope.tab)).is_some_and(|media| media.video);
+        let show_pip = plays_video || pip_row.is_some_and(|row| row.uses_default == Some(false));
+        let pip_allowed = !pip_row.is_some_and(|row| row.value == engine::PermissionValue::Block)
+            && self.browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture);
         let tile = |id: &'static str| {
             div()
                 .id(id)
@@ -895,6 +933,58 @@ impl BrowserWindow {
                 .line_height(px(21.))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(text)
+        };
+        let has_permission_rows = !permissions.is_empty();
+        let permission_rows = {
+            let scope = scope.clone();
+            let rows = permissions
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, permission)| {
+                                    let kind = permission.kind;
+                                    let enabled =
+                                        permission.value == engine::PermissionValue::Allow;
+                                    let scope = scope.clone();
+                                    div()
+                                        .id(gpui::SharedString::from(format!(
+                                            "site-permission-{kind:?}"
+                                        )))
+                                        .debug_selector(move || format!("site-permission-{kind:?}"))
+                                        .h(px(33.))
+                                        .mt(px(if index == 0 { 0. } else { 10. }))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .rounded(px(6.))
+                                        .cursor_pointer()
+                                        .hover(|el| el.bg(hsla(0., 0., 1., 0.08)))
+                                        .child(permission_icon_tile(enabled))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .flex()
+                                                .flex_col()
+                                                .text_size(px(14.))
+                                                .line_height(px(17.))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(permission_label(kind))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .line_height(px(14.))
+                                                        .font_weight(gpui::FontWeight::NORMAL)
+                                                        .text_color(hsla(0., 0., 1., 0.45))
+                                                        .child(if enabled {
+                                                            "Allowed"
+                                                        } else {
+                                                            "Blocked"
+                                                        }),
+                                                ),
+                                        )
+                                        .on_click(cx.listener(move |this, _, _, cx| this.set_site_permission_from_controls(&scope, kind, !enabled, cx)))
+                                }).collect::<Vec<_>>();
+            rows
         };
         div()
             .id("site-controls-backdrop")
@@ -1102,13 +1192,24 @@ impl BrowserWindow {
                                     }))
                             }))
                     })
-                    .child(heading("Settings"))
+                    .child(div().flex().items_center().justify_between()
+                        .child(heading("Settings"))
+                        .child(div()
+                            .id("site-settings-more")
+                            .debug_selector(|| "site-settings-more".into())
+                            .pt(px(5.))
+                            .text_size(px(13.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(hsla(0., 0., 1., 0.45))
+                            .cursor_pointer()
+                            .hover(|el| el.text_color(hsla(0., 0., 1., 0.7)))
+                            .child("More")
+                            .on_click(cx.listener(|this, _, _, cx| this.open_all_site_settings(cx)))))
+                    .children(permission_rows)
                     .child(div().id("site-developer-mode").debug_selector(|| "site-developer-mode".into())
-                        .h(px(33.)).flex().items_center().gap(px(8.)).rounded(px(6.)).cursor_pointer()
+                        .h(px(33.)).when(has_permission_rows, |row| row.mt(px(10.))).flex().items_center().gap(px(8.)).rounded(px(6.)).cursor_pointer()
                         .hover(|row| row.bg(hsla(0.,0.,1.,0.08)))
-                        .child(div().size(px(32.)).flex_none().rounded_full().flex().items_center().justify_center()
-                            .bg(if self.developer_mode_enabled() { gpui::rgb(0xecedfe).into() } else { hsla(0.,0.,1.,0.3) })
-                            .text_color(hsla(0.,0.,0.2,1.)).child(crate::icons::ionicon("hammer",18.,1.)))
+                        .child(setting_tile(self.developer_mode_enabled(), "hammer"))
                         .child(div().flex().flex_col().text_size(px(14.)).line_height(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD)
                             .child("Developer Mode").child(div().font_weight(gpui::FontWeight::NORMAL).text_color(hsla(0.,0.,1.,0.45))
                                 .child(if self.developer_mode_enabled() { "On" } else { "Off" })))
@@ -1117,112 +1218,19 @@ impl BrowserWindow {
                                 this.toggle_developer_mode(cx);
                             }
                         })))
-                    .when(!permissions.is_empty(), |panel| {
-                        panel.children(
-                            permissions
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, permission)| {
-                                    let kind = permission.kind;
-                                    let enabled =
-                                        permission.value == engine::PermissionValue::Allow;
-                                    let scope = scope.clone();
-                                    div()
-                                        .id(gpui::SharedString::from(format!(
-                                            "site-permission-{kind:?}"
-                                        )))
-                                        .debug_selector(move || format!("site-permission-{kind:?}"))
-                                        .h(px(33.))
-                                        .mt(px(if index == 0 { 0. } else { 10. }))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.))
-                                        .rounded(px(6.))
-                                        .cursor_pointer()
-                                        .hover(|el| el.bg(hsla(0., 0., 1., 0.08)))
-                                        .child(
-                                            div()
-                                                .size(px(32.))
-                                                .flex_none()
-                                                .rounded_full()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .bg(if enabled {
-                                                    gpui::rgb(0xecedfe).into()
-                                                } else {
-                                                    hsla(0., 0., 1., 0.3)
-                                                })
-                                                .text_color(hsla(0., 0., 0.2, 1.))
-                                                .child(crate::icons::ionicon(
-                                                    "settings-sharp",
-                                                    18.,
-                                                    1.,
-                                                )),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .flex()
-                                                .flex_col()
-                                                .text_size(px(14.))
-                                                .line_height(px(17.))
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .child(permission_label(kind))
-                                                .child(
-                                                    div()
-                                                        .text_size(px(12.))
-                                                        .line_height(px(14.))
-                                                        .font_weight(gpui::FontWeight::NORMAL)
-                                                        .text_color(hsla(0., 0., 1., 0.45))
-                                                        .child(if enabled {
-                                                            "Allowed"
-                                                        } else {
-                                                            "Blocked"
-                                                        }),
-                                                ),
-                                        )
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            if !this.site_scope_is_current(&scope) {
-                                                return;
-                                            }
-                                            let Some(origin) = scope.origin.as_ref() else {
-                                                return;
-                                            };
-                                            let value = if enabled {
-                                                engine::PermissionValue::Block
-                                            } else {
-                                                engine::PermissionValue::Allow
-                                            };
-                                            if !this.pages.as_ref().is_some_and(|pages| {
-                                                pages.borrow_mut().set_site_permission(
-                                                    scope.tab, origin, kind, value,
-                                                )
-                                            }) {
-                                                return;
-                                            }
-                                            this.edit_profile(|model| {
-                                                if let Some(profile) =
-                                                    model.user_profile_mut(scope.profile)
-                                                {
-                                                    profile.site_settings.record_permission(
-                                                        origin,
-                                                        core_permission(kind),
-                                                    );
-                                                }
-                                            });
-                                            let info = this.pages.as_ref().and_then(|pages| {
-                                                pages.borrow().site_info(scope.tab)
-                                            });
-                                            if let Some(panel) = &mut this.site_controls {
-                                                panel.info = info;
-                                            }
-                                            cx.notify();
-                                        }))
-                                }),
-                        )
-                    })
+                    .when(show_pip, |panel| panel.child(
+                        div().id("site-automatic-pip").debug_selector(|| "site-automatic-pip".into())
+                            .h(px(33.)).mt(px(10.)).flex().items_center().gap(px(8.)).rounded(px(6.)).cursor_pointer()
+                            .hover(|row| row.bg(hsla(0.,0.,1.,0.08)))
+                            .child(permission_icon_tile(pip_allowed))
+                            .child(div().flex_1().min_w_0().flex().flex_col().text_size(px(14.)).line_height(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(div().truncate().child("Automatic Picture-In-Picture"))
+                                .child(div().text_size(px(12.)).line_height(px(14.)).font_weight(gpui::FontWeight::NORMAL).text_color(hsla(0.,0.,1.,0.45))
+                                    .child(if pip_allowed { "Allowed" } else { "Blocked" })))
+                            .on_click(cx.listener({
+                                let scope = scope.clone();
+                                move |this, _, _, cx| this.set_site_permission_from_controls(&scope, engine::PermissionKind::AutomaticPictureInPicture, !pip_allowed, cx)
+                            }))))
                     .child(
                         div()
                             .mt(px(15.))
@@ -1423,6 +1431,21 @@ pub(crate) fn core_permission(
         engine::PermissionKind::LoopbackNetwork => C::LoopbackNetwork,
     }
 }
+/// Arc's setting tile: a white circle when on, a dim one when off.
+fn setting_tile(on: bool, icon: &'static str) -> gpui::Div {
+    div()
+        .size(px(32.))
+        .flex_none()
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(if on { hsla(330. / 360., 0.2, 0.95, 1.) } else { hsla(0., 0., 1., 0.2) })
+        .text_color(if on { hsla(0., 0., 0.2, 1.) } else { hsla(0., 0., 1., 0.45) })
+        .child(crate::icons::ionicon(icon, 18., 1.))
+}
+fn permission_icon_tile(allowed: bool) -> gpui::Div { setting_tile(allowed, "settings-sharp") }
+
 pub(crate) fn permission_label(kind: engine::PermissionKind) -> &'static str {
     match kind {
         engine::PermissionKind::Camera => "Camera",

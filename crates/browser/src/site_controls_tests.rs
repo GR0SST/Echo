@@ -25,7 +25,29 @@ fn install_site_info(
                 .collect(),
         },
     );
+    let profile = view.read_with(cx, |view, _| view.browser.active_user_profile_id());
+    fake.0.borrow().profile_settings.borrow_mut().insert(
+        (crate::pages::StorageSelection::for_profile(profile), origin.clone()),
+        engine::PermissionKind::ALL
+            .into_iter()
+            .map(|kind| engine::SiteSetting {
+                kind,
+                value: engine::PermissionValue::Ask,
+                default_value: engine::PermissionValue::Ask,
+                uses_default: Some(true),
+            })
+            .collect(),
+    );
     origin
+}
+/// Marks `kind` as explicitly set for the site, as a past choice would.
+fn set_explicit(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext, fake: &FakeEngine, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) {
+    let profile = view.read_with(cx, |view, _| view.browser.active_user_profile_id());
+    let state = fake.0.borrow();
+    let mut settings = state.profile_settings.borrow_mut();
+    let row = settings.get_mut(&(crate::pages::StorageSelection::for_profile(profile), origin.to_string())).unwrap().iter_mut().find(|row| row.kind == kind).unwrap();
+    row.value = value;
+    row.uses_default = Some(false);
 }
 fn panel(view: &Entity<BrowserWindow>, cx: &mut VisualTestContext) -> VisualTestContext {
     let overlay = view.read_with(cx, |view, _| {
@@ -83,17 +105,14 @@ fn site_permission_toggle_uses_the_profile_origin_and_updates_the_live_engine(
         .find(|setting| setting.kind == engine::PermissionKind::Camera)
         .unwrap()
         .value = engine::PermissionValue::Block;
-    view.update(cx, |view, cx| {
-        view.edit_browser(|model| {
-            model
-                .active_user_profile_mut()
-                .site_settings
-                .record_permission(&origin, browser_core::site_settings::Permission::Camera);
-        });
-        cx.notify();
-    });
+    set_explicit(&view, cx, &fake, &origin, engine::PermissionKind::Camera, engine::PermissionValue::Block);
     click(cx, "address-site-controls");
     let mut controls = panel(&view, cx);
+    // Only what differs from the defaults is listed.
+    assert!(controls.debug_bounds("site-permission-Camera").is_some());
+    assert!(controls.debug_bounds("site-permission-Microphone").is_none());
+    assert!(controls.debug_bounds("site-settings-more").is_some());
+    assert!(controls.debug_bounds("site-automatic-pip").is_none(), "no video, no Picture-in-Picture row");
     fake.take_calls();
     click(&mut controls, "site-permission-Camera");
     assert!(fake.take_calls().contains(&Call::SitePermission(
@@ -596,4 +615,50 @@ fn full_page_capture_rejects_a_same_url_document_replacement_before_completion(c
     finish_full_page(&view,cx,&fake,request,full_page_png());
     assert!(view.read_with(cx,|v,_|v.capture.is_none() && v.toast.is_none()));
     assert_eq!(cx.update(|_,cx|cx.read_from_clipboard()).unwrap().text(),Some("Unchanged".into()));
+}
+
+#[gpui::test]
+fn site_controls_offer_automatic_picture_in_picture_once_the_site_plays_video(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    let origin = install_site_info(&view, cx, &fake, true);
+    let mut media = playing_media();
+    media.video = true;
+    fake.send(cx, Event::MediaStateChanged { view: page(1), state: media });
+    click(cx, "address-site-controls");
+    let mut controls = panel(&view, cx);
+    assert!(controls.debug_bounds("site-automatic-pip").is_some());
+    fake.take_calls();
+    click(&mut controls, "site-automatic-pip");
+    assert!(fake.take_calls().contains(&Call::SitePermission(
+        1,
+        origin,
+        engine::PermissionKind::AutomaticPictureInPicture,
+        engine::PermissionValue::Block
+    )));
+    // "More" opens the site's full settings.
+    click(&mut controls, "site-settings-more");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.site_controls.is_none()));
+}
+
+#[gpui::test]
+fn a_permission_request_slides_a_hidden_sidebar_out_and_keeps_it_until_answered(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    cx.simulate_keystrokes("cmd-s");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| !view.sidebar_visible));
+    let request = permission_request(&view, cx, 20, engine::PermissionKind::Location);
+    fake.send(cx, Event::PermissionRequested { view: page(1), request: request.clone() });
+    assert!(view.read_with(cx, |view, _| view.floating_sidebar.is_some()), "the sidebar slides out for the request");
+    cx.executor().advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    let mut prompt = panel(&view, cx);
+    assert!(prompt.debug_bounds("site-permission-prompt").is_some());
+    // Well past the hide grace, the sidebar is still there while the request waits.
+    cx.executor().advance_clock(std::time::Duration::from_millis(2000));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.floating_sidebar.as_ref().is_some_and(|floating| !floating.closing)));
+    click(&mut prompt, "site-permission-allow");
+    cx.run_until_parked();
+    assert!(fake.take_calls().contains(&Call::PermissionResponse(1, request.id, engine::PermissionDecision::Allow)));
 }

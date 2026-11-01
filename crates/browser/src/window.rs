@@ -82,7 +82,7 @@ const SIDEBAR_DISMISS_BUFFER: f32 = 100.0;
 pub(crate) const FLOATING_SIDEBAR_INSET: f32 = 6.0;
 /// Room for the floating sidebar's shadow inside its window.
 const FLOATING_SIDEBAR_SHADOW: f32 = 18.0;
-const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
+pub(crate) const FLOATING_SIDEBAR_SLIDE: Duration = Duration::from_millis(180);
 /// The docked Space drifts right this far as Library covers it (reference).
 const LIBRARY_SIDEBAR_DRIFT: f32 = 16.;
 /// Reference frames: the Space stays readable for the first part of the
@@ -753,7 +753,7 @@ struct MouseTracking {
 pub struct FloatingSidebar {
     pub overlay: Option<WindowHandle<Overlay>>,
     /// The pointer has been over it; leaving then hides it.
-    entered: bool,
+    pub(crate) entered: bool,
     pub(crate) closing: bool,
     height: f32,
     _pointer_task: Option<Task<()>>,
@@ -3188,7 +3188,7 @@ impl BrowserWindow {
                     cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(FLOATING_SIDEBAR_GRACE).await;
                         let _ = this.update(cx, |this, cx| {
-                            if this.floating_sidebar.as_ref().is_some_and(|f| !f.entered) {
+                            if this.floating_sidebar.as_ref().is_some_and(|f| !f.entered) && this.site_controls.is_none() {
                                 this.close_floating_sidebar(cx);
                             }
                         });
@@ -3206,7 +3206,8 @@ impl BrowserWindow {
         if (0. ..=right).contains(&x) && (0. ..=floating.height).contains(&y) { floating.entered = true; }
         if floating.entered && (x > right + SIDEBAR_DISMISS_BUFFER || y < 0. || y > floating.height)
             // A held sidebar drag keeps the panel open until it is released.
-            && self.tab_menu.is_none() && self.command_bar.is_none() && !self.tab_drag_active && !cx.has_active_drag() {
+            // So does the site's panel opened from its address, and a pending permission request.
+            && self.tab_menu.is_none() && self.command_bar.is_none() && self.site_controls.is_none() && !self.tab_drag_active && !cx.has_active_drag() {
             self.close_floating_sidebar(cx);
         }
     }

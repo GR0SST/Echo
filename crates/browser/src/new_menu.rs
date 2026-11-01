@@ -133,14 +133,27 @@ impl BrowserWindow {
     pub(crate) fn render_new_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(menu) = &self.new_menu else { return div().into_any_element(); };
         let dark = self.theme_is_dark();
-        let fill = gpui::rgb(if dark {0x050627} else {0xfdfdff});
+        // The default theme keeps the menu's blue; a chosen Space theme lends
+        // its own hue at the same strength and lightness.
+        let surface = self.theme_surface_for(self.browser.space());
+        let hue = surface.picked.then(|| {
+            let color = surface.theme.colors[0];
+            gpui::Hsla::from(gpui::Rgba { r: color.red, g: color.green, b: color.blue, a: 1. }).h
+        });
+        let tinted = |rgb: u32| -> gpui::Hsla {
+            let mut color: gpui::Hsla = gpui::rgb(rgb).into();
+            if let Some(hue) = hue { color.h = hue; }
+            color
+        };
+        let menu_hue = hue.unwrap_or(0.67);
+        let fill = tinted(if dark {0x050627} else {0xfdfdff});
         let ink = if dark {1.} else {0.};
-        let accent = gpui::rgb(if dark {0x2e3391} else {0xd3d4ff});
+        let accent = tinted(if dark {0x2e3391} else {0xd3d4ff});
         let rows = ITEMS.iter().enumerate().map(|(index, (item, separated))| {
             let item = *item;
             div().flex().flex_col()
                 .when(*separated, |this| this.child(div().h(px(SEPARATOR_HEIGHT)).flex().items_center().px(px(8.))
-                    .child(div().w_full().h(px(1.)).bg(hsla(0.67, 1., 0.75, 0.35)))))
+                    .child(div().w_full().h(px(1.)).bg(hsla(menu_hue, 1., 0.75, 0.35)))))
                 .child(div().id(item.selector()).debug_selector(move || item.selector().into())
                     .h(px(ROW_HEIGHT)).px(px(8.)).flex().items_center().gap(px(10.)).rounded(px(8.))
                     .when(menu.selected == Some(index), |this| this.bg(accent))
@@ -151,9 +164,9 @@ impl BrowserWindow {
                         cx.notify();
                     }))
                     .on_click(cx.listener(move |this, _, window, cx| { cx.stop_propagation(); this.confirm_new_menu(item, window, cx); }))
-                    .child(crate::icons::new_menu_control(item.icon(), if menu.selected==Some(index){accent}else{fill}))
+                    .child(crate::icons::new_menu_control(item.icon(), if menu.selected==Some(index){accent.into()}else{fill.into()}))
                     .child(div().flex_1().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child(item.label()))
-                    .when_some(item.shortcut(), |this, shortcut| this.child(div().text_size(px(12.)).text_color(hsla(0.67,1.,if dark {0.85} else {0.7},0.6)).child(shortcut))))
+                    .when_some(item.shortcut(), |this, shortcut| this.child(div().text_size(px(12.)).text_color(hsla(menu_hue,1.,if dark {0.85} else {0.7},0.6)).child(shortcut))))
         });
         div().id("new-menu-backdrop").debug_selector(|| "new-menu-backdrop".into()).size_full()
             .key_context(CONTEXT).track_focus(&menu.focus)

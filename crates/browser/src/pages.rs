@@ -1380,9 +1380,12 @@ impl Pages {
             if !self.peek_mode && browser.settings.enabled(browser_core::settings::Toggle::AutomaticPictureInPicture) {
                 // Only a video with sound follows the user out: muted
                 // decorative loops (GitHub's hero, for one) stay in their tab.
+                // A site blocked from it in its controls stays in its tab too.
+                let site_blocks = |page: &Page| engine.site_info(page.view).is_some_and(|info| info.permissions.iter()
+                    .any(|setting| setting.kind == engine::PermissionKind::AutomaticPictureInPicture && setting.value == engine::PermissionValue::Block));
                 let eligible = |id: TabId, page: &Page| page.owner == self.host && page.visible
                     && !remains_visible(id) && page.state.media.playing && page.state.media.video
-                    && page.state.audible && !page.state.media.picture_in_picture;
+                    && page.state.audible && !page.state.media.picture_in_picture && !site_blocks(page);
                 // Prefer the previous focused source. When a non-video Split
                 // pane was focused, its unique visible playing sibling is the
                 // source being left. Multiple unselected videos are ambiguous.
