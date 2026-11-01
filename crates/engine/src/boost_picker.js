@@ -15,6 +15,8 @@
   };
   const move = event => {
     if (!event.isTrusted || event.target === marker) return;
+    // The root and body are the whole page, never one element to pick.
+    if (event.target === document.documentElement || event.target === document.body) { target = null; marker.style.display = 'none'; return; }
     target = event.target;
     const bounds = target.getBoundingClientRect();
     Object.assign(marker.style,{display:'block',left:bounds.left+'px',top:bounds.top+'px',width:bounds.width+'px',height:bounds.height+'px'});
