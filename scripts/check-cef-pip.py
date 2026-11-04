@@ -121,7 +121,7 @@ try:
     def geometry():
         b=window['kCGWindowBounds']; assert (b['Width'],b['Height'])==(224,126),b
         return int(b['X']),int(b['Y'])
-    x,y=geometry(); center=(x+112,y+63)
+    x,y=geometry(); center=(x+30,y+85)
     def check(point=None):
         px,py=point or center
         for row in windows():
@@ -161,7 +161,7 @@ try:
     def reveal():
         check(); mouse(f'c:{center[0]},{center[1]}'); key(48); time.sleep(.4); shot('tab-reveal.png')
     def press(offset, name):
-        point=(x+offset,y+17); check(point); mouse(f'm:{point[0]},{point[1]}'); time.sleep(.3); shot(f'before-{name}.png')
+        point=(x+offset,y+30); check(point); mouse(f'm:{point[0]},{point[1]}'); time.sleep(.3); shot(f'before-{name}.png')
         # Capturing a screenshot can outlast Chromium's controls idle timer on
         # a busy machine. Move immediately before the click so the photographed
         # control is still revealed when the actual input arrives. These are
@@ -170,12 +170,12 @@ try:
         # Stay inside PiP and give Chromium one event-loop turn to reveal again.
         check(point); mouse(f'm:{point[0]+2},{point[1]+2}','w:50',f'm:{point[0]},{point[1]}',f'c:{point[0]},{point[1]}')
         until(lambda:not any(w.get('kCGWindowNumber')==window['kCGWindowNumber'] for w in windows()),3,f'{name} did not close owned PiP')
-    reveal(); press(184,'return'); result['return_passed']=True
+    reveal(); press(30,'return'); result['return_passed']=True
     manual=until(pip_windows,40,'Manual HTML PiP did not reopen'); assert len(manual)==1,manual
     time.sleep(.7); window=next(w for w in windows() if w['kCGWindowNumber']==manual[0]['kCGWindowNumber'])
-    x,y=geometry(); center=(x+112,y+63); result['manual_bounds']=window['kCGWindowBounds']
+    x,y=geometry(); center=(x+30,y+85); result['manual_bounds']=window['kCGWindowBounds']
     assert result['manual_bounds']==result['automatic_bounds'],'PiP re-entry moved or resized the window'
-    reveal(); press(208,'close'); result['close_passed']=True
+    reveal(); press(194,'close'); result['close_passed']=True
     assert driver.wait(timeout=100)==0,'Echo did not exit cleanly'
     text=(evidence/'engine.log').read_text(); assert '[quit] CEF Complete' in text
     cef_text=(evidence/'cef.log').read_text(errors='replace')

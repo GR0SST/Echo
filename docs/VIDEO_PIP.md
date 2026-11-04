@@ -1,58 +1,59 @@
 # Native video Picture-in-Picture presentation
 
 Echo uses Chromium's video surface and native always-on-top window. The engine
-passes `--echo-video-only-pip`; `patches/cef154/video-pip.patch` changes only the
+passes `--echo-pip-controls`; `patches/cef154/video-pip.patch` replaces only the
 presentation of that window. Other CEF embedders retain the upstream behavior.
 The patch applies on every platform; the existing isolated AppKit shim supplies
-macOS's measured 224 × 126 initial geometry and remembered position.
+macOS's 224 x 126 initial geometry and remembered position.
 
 ## Arc reference
 
-A guarded Arc 1.170 session in the shared **Echo Test** Space played the public
-Big Buck Bunny clip and switched to another tab, opening automatic PiP. A bounded
-five-second screen recording moved the pointer from the center to the top-left
-of its 224 × 126 floating window. Every recorded frame showed video only:
-no origin, favicon, gradient, timeline or buttons. The PiP accessibility window
-also exposed no buttons. This agrees with audit `new06-pip`.
+The hover controls were measured from the owner's Arc screenshot and a matching
+live Arc 1.170 frame at 542 x 305 (`www.youtube.com`, automatic PiP):
 
-Public source (cached locally for repeatable native playback):
-https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.240p.vp9.webm
+| Element | Geometry at 542 x 305 |
+| --- | --- |
+| Back to Tab, Minimize, Close | 28 px tall pills, 16 px from the edges, 8 px gap, 12 pt semibold, white at about 10% |
+| Origin | centered on the window, 13 pt semibold, no favicon |
+| Play/pause | two 12 x 70 px rounded bars, 16 px apart, centered |
+| Back/forward 15 seconds | 33-36 px rings with a bold "15", 78 px from the center |
+| Progress | 5 px rounded bar, 16 px from the sides, 13 px from the bottom |
 
-Reference evidence in the media agent's worktree:
-`target/parity/media-pip/arc-pip-hover-chrome-r4.mov`,
-`arc-pip-chrome-r4-filmstrip.png`, `arc-pip-chrome-r4-hover.png`.
-The native scripts use the shared screen lock, a 115-second hard timeout, the
-Arc ownership/Space guards, and archive their opened test tabs before closing
-the owned browser window.
+The idle window shows video only.
+
+**Earlier conclusion withdrawn:** previous sessions recorded that Arc shows no
+hover controls. Those checks teleported the pointer, which does not reliably
+trigger hover tracking. Do not use teleporting pointer input as evidence that a
+hover state is absent. Echo's own hover qualification glides the pointer with
+real `mouseMoved` events.
 
 ## Behavior and limits
 
-Pointer entry, movement and initial native focus keep the video unobstructed.
-The invisible control container cannot consume clicks; Chromium's existing
-window drag and resize hit testing continues to work. Keyboard input reveals
-Chromium's existing controls. They stay mouse-usable until the pointer leaves
-the window, preserving Echo's existing semantic return-button bridge. Leaving
-the window restores the video-only presentation. This
-keyboard fallback is an accessibility accommodation, not verified Arc parity.
+Hovering fades in the controls and a dimming scrim through Chromium's existing
+animation; leaving the window fades them out. They stay visible while the pointer
+rests inside. The controls are painted from fixed vector geometry, not stock icons
+or font glyphs. The rest of the window remains a drag and resize area.
 
-The Developer-mode canonical candidate also removes a visibility race in this
-fallback: Echo reveals controls synchronously before dispatching the key and
-keeps them visible while the keyboard-reveal flag is set. Chromium's fade target
-otherwise allowed photographed controls to disagree with hit testing. Pointer
-exit still clears that flag. The native harness raises the owned PiP window,
-verifies keyboard focus and uses normal Views clicks; its strict visibility
-guard is unchanged. Two consecutive complete checks and the subsequent fresh
-canonical check passed on framework
-`c9d3ae396593a3f8333c1017c9f3b9c6b64d9394285c1504257461bec9092829`.
+- Back to Tab keeps Chromium's localized accessible name, which the macOS return
+  bridge matches to select the retained source tab.
+- Minimize closes the window and leaves playback running. Close also pauses.
+- Back/forward seek 15 seconds, as do the Left/Right keys. Space toggles playback.
+- Clicking or dragging the progress bar seeks.
+- Video calls keep Chromium's own call controls.
 
-The sidebar hover header retains the two-window PiP icon for audio-only sources,
-as in audit `old18-mini-pip`. It requests PiP only for a retained video source;
-its page identity and document epoch guards still reject stale requests.
+These choices are not verified against Arc and should be compared when possible:
 
-The observed Arc session did not reveal floating hover controls. Their exact
-appearance and interaction, Arc's floating-window context menu and drag-up
-seeking remain unqualified; do not interpret this patch as completing all of
-section 17. Stock downloaded CEF ignores the switch and keeps its own toolbar.
+- The scrim strength (black at 45%) and the hovered/pressed pill brightness.
+- The paused-state play glyph, for which no Arc frame exists.
+- Below 440 px wide, pills drop their labels; the origin hides when it no longer
+  fits. Center controls scale with height down to 45%. Arc's small-window layout
+  was not captured.
+- What Arc's Minimize does beyond closing the window.
+
+Arc's floating-window context menu and drag-up seeking remain unimplemented; do
+not read this patch as completing section 17. Stock downloaded CEF ignores the
+switch and keeps its own toolbar. The sidebar hover header retains the two-window
+PiP icon for audio-only sources and requests PiP only for a retained video source.
 
 ## Build
 
@@ -73,6 +74,9 @@ now combines every patch in `echo-extensions-dist` and reruns native PiP against
 its exact framework. Superseded packages are removed after all canonical gates pass.
 
 ## Original PiP qualification
+
+Historical: this section qualified the withdrawn video-only presentation. Its
+framework hash and hover-frame conclusions no longer describe the current patch.
 
 Final native framework SHA-256:
 `53ff7e0695104c6dfce463216d0f4e88eed44a7582d2a52d5ca3ec9027b744bf`.

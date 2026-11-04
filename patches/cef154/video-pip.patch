@@ -1,8 +1,13 @@
 diff --git a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
-index 0fbb40d24f2ce7bec54e87a2223bd78c580d9058..64b58e7d6ec05103b65fd76cd4151f09a400146f 100644
+index 0fbb40d24f2ce7bec54e87a2223bd78c580d9058..8f5887fd3c6fba3cc6deb3402ad4ade04bf1e47b 100644
 --- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
 +++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
-@@ -8,6 +8,7 @@
+@@ -4,10 +4,12 @@
+ 
+ #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
+ 
++#include <algorithm>
+ #include <memory>
  #include <string>
  
  #include "base/check.h"
@@ -10,87 +15,661 @@ index 0fbb40d24f2ce7bec54e87a2223bd78c580d9058..64b58e7d6ec05103b65fd76cd4151f09
  #include "base/feature_list.h"
  #include "base/functional/bind.h"
  #include "base/memory/ptr_util.h"
-@@ -103,6 +104,12 @@
+@@ -18,6 +20,7 @@
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+ #include "build/build_config.h"
++#include "cc/paint/paint_flags.h"
+ #include "chrome/browser/media/media_engagement_service.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_tracker.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+@@ -56,11 +59,13 @@
+ #include "media/base/video_util.h"
+ #include "services/media_session/public/cpp/media_image_manager.h"
+ #include "third_party/blink/public/mojom/picture_in_picture/picture_in_picture.mojom.h"
++#include "third_party/skia/include/core/SkPathBuilder.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/mojom/ui_base_types.mojom-shared.h"
++#include "ui/accessibility/ax_enums.mojom.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/compositor/compositor.h"
+ #include "ui/compositor/layer_surface.h"
+@@ -68,10 +73,14 @@
+ #include "ui/display/screen.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/favicon_size.h"
++#include "ui/gfx/font_list.h"
+ #include "ui/gfx/geometry/resize_utils.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/text_constants.h"
++#include "ui/gfx/text_utils.h"
++#include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/background.h"
++#include "ui/views/controls/button/button.h"
+ #include "ui/views/controls/image_view.h"
+ #include "ui/views/controls/label.h"
+ #include "ui/views/widget/widget_delegate.h"
+@@ -101,6 +110,304 @@
+ #include "chrome/browser/ui/views/overlay/video_overlay_window_native_widget_mac.h"
+ #endif  // BUILDFLAG(IS_MAC)
  
- namespace {
- 
-+// Echo keeps the measured video-only pointer presentation. Keyboard users
-+// retain Chromium's transport and window controls. Other embedders are unchanged.
-+bool EchoVideoOnlyPip() {
-+  return base::CommandLine::ForCurrentProcess()->HasSwitch("echo-video-only-pip");
++// Echo's hover controls. Everything is painted from fixed geometry measured at
++// a 542x305 window, so no platform font glyph or stock icon shapes a control.
++// Other embedders never pass the switch and keep Chromium's presentation.
++static bool EchoPipControls() {
++  return base::CommandLine::ForCurrentProcess()->HasSwitch("echo-pip-controls");
 +}
 +
++enum class EchoPipGlyph { kBackToTab, kMinimize, kClose, kReplay, kForward, kPlayPause };
++
++class EchoPipButton : public views::Button {
++  METADATA_HEADER(EchoPipButton, views::Button)
++
++ public:
++  EchoPipButton(PressedCallback callback,
++                EchoPipGlyph glyph,
++                std::u16string label,
++                const std::u16string& accessible_name)
++      : views::Button(std::move(callback)),
++        glyph_(glyph),
++        label_(std::move(label)) {
++    SetFocusBehavior(FocusBehavior::ALWAYS);
++    SetInstallFocusRingOnFocus(true);
++    GetViewAccessibility().SetName(accessible_name);
++  }
++
++  void SetPlaying(bool playing) {
++    playing_ = playing;
++    GetViewAccessibility().SetName(playing ? u"Pause" : u"Play");
++    SchedulePaint();
++  }
++
++  void SetShowLabel(bool show_label) {
++    show_label_ = show_label;
++    SchedulePaint();
++  }
++
++  int PillWidth(bool with_label) const {
++    constexpr int kTextOffset = 29;
++    constexpr int kRightPadding = 11;
++    constexpr int kCompactWidth = 28;
++    return with_label ? kTextOffset + gfx::GetStringWidth(label_, PillFont()) +
++                            kRightPadding
++                      : kCompactWidth;
++  }
++
++  void PaintButtonContents(gfx::Canvas* canvas) override {
++    switch (glyph_) {
++      case EchoPipGlyph::kBackToTab:
++      case EchoPipGlyph::kMinimize:
++      case EchoPipGlyph::kClose:
++        PaintPill(canvas);
++        break;
++      case EchoPipGlyph::kReplay:
++      case EchoPipGlyph::kForward:
++        PaintSeek(canvas);
++        break;
++      case EchoPipGlyph::kPlayPause:
++        PaintPlayPause(canvas);
++        break;
++    }
++  }
++
++ protected:
++  void StateChanged(ButtonState old_state) override { SchedulePaint(); }
++
++ private:
++  static gfx::FontList PillFont() {
++    return gfx::FontList().Derive(-1, gfx::Font::NORMAL,
++                                  gfx::Font::Weight::SEMIBOLD);
++  }
++
++  void PaintPill(gfx::Canvas* canvas) {
++    constexpr float kRadius = 6.f;
++    constexpr int kIconBox = 10;
++    constexpr int kIconInset = 11;
++    constexpr int kTextOffset = 29;
++    const uint8_t alpha = GetState() == STATE_PRESSED   ? 66
++                          : GetState() == STATE_HOVERED ? 46
++                                                        : 26;
++    cc::PaintFlags fill;
++    fill.setAntiAlias(true);
++    fill.setColor(SkColorSetA(SK_ColorWHITE, alpha));
++    canvas->DrawRoundRect(gfx::RectF(0, 0, width(), height()), kRadius, fill);
++
++    const float left =
++        show_label_ ? kIconInset : (width() - kIconBox) / 2.f;
++    const float top = (height() - kIconBox) / 2.f;
++    const auto point = [&](float x, float y) {
++      return SkPoint::Make(left + x, top + y);
++    };
++    SkPathBuilder path;
++    switch (glyph_) {
++      case EchoPipGlyph::kBackToTab:
++        path.moveTo(point(9.5f, 9.5f)).lineTo(point(1, 1));
++        path.moveTo(point(1, 6.5f)).lineTo(point(1, 1)).lineTo(point(6.5f, 1));
++        break;
++      case EchoPipGlyph::kMinimize:
++        path.moveTo(point(0.5f, 5)).lineTo(point(9.5f, 5));
++        break;
++      default:
++        path.moveTo(point(0.5f, 0.5f)).lineTo(point(9.5f, 9.5f));
++        path.moveTo(point(9.5f, 0.5f)).lineTo(point(0.5f, 9.5f));
++        break;
++    }
++    cc::PaintFlags stroke;
++    stroke.setAntiAlias(true);
++    stroke.setColor(SK_ColorWHITE);
++    stroke.setStyle(cc::PaintFlags::kStroke_Style);
++    stroke.setStrokeWidth(1.25f);
++    stroke.setStrokeCap(cc::PaintFlags::kRound_Cap);
++    stroke.setStrokeJoin(cc::PaintFlags::kRound_Join);
++    canvas->DrawPath(path.detach(), stroke);
++
++    if (show_label_) {
++      canvas->DrawStringRectWithFlags(
++          label_, PillFont(), SK_ColorWHITE,
++          gfx::Rect(kTextOffset, 0, width() - kTextOffset, height()),
++          gfx::Canvas::TEXT_ALIGN_LEFT | gfx::Canvas::NO_SUBPIXEL_RENDERING);
++    }
++  }
++
++  void PaintSeek(gfx::Canvas* canvas) {
++    const float scale = width() / 44.f;
++    const float radius = 15.f * scale;
++    const float cx = width() / 2.f;
++    const float cy = height() / 2.f + 1.5f * scale;
++    const float dir = glyph_ == EchoPipGlyph::kReplay ? 1.f : -1.f;
++
++    cc::PaintFlags stroke;
++    stroke.setAntiAlias(true);
++    stroke.setColor(SK_ColorWHITE);
++    stroke.setStyle(cc::PaintFlags::kStroke_Style);
++    stroke.setStrokeWidth(3.5f * scale);
++    SkPathBuilder ring;
++    ring.arcTo(SkRect::MakeLTRB(cx - radius, cy - radius, cx + radius,
++                                cy + radius),
++               -90.f, dir * 315.f, true);
++    canvas->DrawPath(ring.detach(), stroke);
++
++    SkPathBuilder head;
++    head.moveTo(cx - dir * 6.5f * scale, cy - radius)
++        .lineTo(cx + dir * 1.5f * scale, cy - radius - 5.5f * scale)
++        .lineTo(cx + dir * 1.5f * scale, cy - radius + 5.5f * scale)
++        .close();
++    cc::PaintFlags fill;
++    fill.setAntiAlias(true);
++    fill.setColor(SK_ColorWHITE);
++    canvas->DrawPath(head.detach(), fill);
++
++    const gfx::FontList base;
++    const int size = std::max(8, static_cast<int>(13.f * scale + 0.5f));
++    const gfx::FontList font = base.Derive(size - base.GetFontSize(),
++                                           gfx::Font::NORMAL,
++                                           gfx::Font::Weight::BOLD);
++    canvas->DrawStringRectWithFlags(
++        u"15", font, SK_ColorWHITE,
++        gfx::Rect(0, static_cast<int>(1.5f * scale), width(), height()),
++        gfx::Canvas::TEXT_ALIGN_CENTER | gfx::Canvas::NO_SUBPIXEL_RENDERING);
++  }
++
++  void PaintPlayPause(gfx::Canvas* canvas) {
++    const float scale = height() / 80.f;
++    const float cx = width() / 2.f;
++    const float cy = height() / 2.f;
++    cc::PaintFlags fill;
++    fill.setAntiAlias(true);
++    fill.setColor(SK_ColorWHITE);
++    if (playing_) {
++      const float bar = 12.f * scale;
++      const float gap = 16.f * scale;
++      const float tall = 70.f * scale;
++      canvas->DrawRoundRect(
++          gfx::RectF(cx - gap / 2 - bar, cy - tall / 2, bar, tall), bar / 2,
++          fill);
++      canvas->DrawRoundRect(gfx::RectF(cx + gap / 2, cy - tall / 2, bar, tall),
++                            bar / 2, fill);
++      return;
++    }
++    SkPathBuilder triangle;
++    triangle.moveTo(cx - 19.f * scale, cy - 30.f * scale)
++        .lineTo(cx + 27.f * scale, cy)
++        .lineTo(cx - 19.f * scale, cy + 30.f * scale)
++        .close();
++    const SkPath path = triangle.detach();
++    canvas->DrawPath(path, fill);
++    fill.setStyle(cc::PaintFlags::kStroke_Style);
++    fill.setStrokeWidth(9.f * scale);
++    fill.setStrokeJoin(cc::PaintFlags::kRound_Join);
++    canvas->DrawPath(path, fill);
++  }
++
++  const EchoPipGlyph glyph_;
++  const std::u16string label_;
++  bool playing_ = true;
++  bool show_label_ = true;
++};
++
++BEGIN_METADATA(EchoPipButton)
++END_METADATA
++
++class EchoPipProgress : public views::View {
++  METADATA_HEADER(EchoPipProgress, views::View)
++
++ public:
++  EchoPipProgress(base::RepeatingCallback<void(bool)> drag_changed,
++                  base::RepeatingCallback<void(double)> seek)
++      : drag_changed_(std::move(drag_changed)), seek_(std::move(seek)) {
++    GetViewAccessibility().SetRole(ax::mojom::Role::kSlider);
++    GetViewAccessibility().SetName(u"Playback position");
++  }
++
++  void SetMediaPosition(const media_session::MediaPosition& position) {
++    position_ = position;
++    if (position_.playback_rate() > 0) {
++      ticker_.Start(FROM_HERE, base::Milliseconds(250),
++                    base::BindRepeating(&EchoPipProgress::SchedulePaint,
++                                        base::Unretained(this)));
++    } else {
++      ticker_.Stop();
++    }
++    SchedulePaint();
++  }
++
++  void OnPaint(gfx::Canvas* canvas) override {
++    constexpr float kBarHeight = 5.f;
++    const float top = (height() - kBarHeight) / 2.f;
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setColor(SkColorSetA(SK_ColorWHITE, 77));
++    canvas->DrawRoundRect(gfx::RectF(0, top, width(), kBarHeight),
++                          kBarHeight / 2, flags);
++    const double duration = position_.duration().InSecondsF();
++    const double fraction =
++        dragging_ ? drag_fraction_
++                  : (duration > 0
++                         ? position_.GetPosition().InSecondsF() / duration
++                         : 0.0);
++    const float filled =
++        static_cast<float>(std::clamp(fraction, 0.0, 1.0)) * width();
++    if (filled > 0) {
++      flags.setColor(SK_ColorWHITE);
++      canvas->DrawRoundRect(gfx::RectF(0, top, filled, kBarHeight),
++                            kBarHeight / 2, flags);
++    }
++  }
++
++  bool OnMousePressed(const ui::MouseEvent& event) override {
++    if (!event.IsOnlyLeftMouseButton() || !position_.duration().is_positive()) {
++      return false;
++    }
++    dragging_ = true;
++    UpdateDrag(event);
++    drag_changed_.Run(true);
++    return true;
++  }
++
++  bool OnMouseDragged(const ui::MouseEvent& event) override {
++    UpdateDrag(event);
++    return true;
++  }
++
++  void OnMouseReleased(const ui::MouseEvent& event) override {
++    UpdateDrag(event);
++    seek_.Run(drag_fraction_);
++    EndDrag();
++  }
++
++  void OnMouseCaptureLost() override { EndDrag(); }
++
++ private:
++  void UpdateDrag(const ui::MouseEvent& event) {
++    drag_fraction_ = width() > 0
++                         ? std::clamp(static_cast<double>(event.x()) / width(),
++                                      0.0, 1.0)
++                         : 0.0;
++    SchedulePaint();
++  }
++
++  void EndDrag() {
++    if (!dragging_) {
++      return;
++    }
++    dragging_ = false;
++    drag_changed_.Run(false);
++    SchedulePaint();
++  }
++
++  base::RepeatingCallback<void(bool)> drag_changed_;
++  base::RepeatingCallback<void(double)> seek_;
++  media_session::MediaPosition position_;
++  base::RepeatingTimer ticker_;
++  bool dragging_ = false;
++  double drag_fraction_ = 0;
++};
++
++BEGIN_METADATA(EchoPipProgress)
++END_METADATA
++
+ namespace {
+ 
  // Lower bound size of the window is a fixed value to allow for minimal sizes
- // on UI affordances, such as buttons.
- constexpr gfx::Size kMinWindowSize(284, 160);
-@@ -602,6 +609,10 @@ void VideoOverlayWindowViews::OnNativeWidgetSizeChanged(
- }
- 
- void VideoOverlayWindowViews::OnKeyEvent(ui::KeyEvent* event) {
-+  if (event->type() == ui::EventType::kKeyPressed ||
-+      event->key_code() == ui::VKEY_TAB) {
-+    echo_keyboard_controls_ = true;
-+  }
-   // Every time a user uses a keyboard to interact on the window, restart the
-   // timer to automatically hide the controls.
-   hide_controls_timer_.Reset();
-@@ -669,6 +680,7 @@ void VideoOverlayWindowViews::OnMouseEvent(ui::MouseEvent* event) {
-           progress_view_drag_state_ ==
-               global_media_controls::DragState::kDragEnded;
-       if (should_update_control_visibility) {
-+        echo_keyboard_controls_ = false;
-         UpdateControlsVisibility(false);
-       }
-       break;
-@@ -776,6 +788,14 @@ bool VideoOverlayWindowViews::AreControlsVisible() const {
- 
- void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
-                                                        bool should_animate) {
-+  const bool echo_pip = EchoVideoOnlyPip();
-+  const bool video_only = echo_pip && !echo_keyboard_controls_;
-+  if (echo_pip) {
-+    // Reveal before dispatching the key, so visibility, focus and hit testing
-+    // agree. Keep keyboard controls usable until the pointer leaves the window.
-+    is_visible = echo_keyboard_controls_;
-+    should_animate = false;
-+  }
-   if (is_moving_) {
-     // If we've already queued a visibility change for the same visibility, then
-     // only animate if both should animate (which matches what would have
-@@ -800,7 +820,8 @@ void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
- 
-   // If the overlay view is shown, then the other controls are always hidden.
-   const bool wanted_visibility =
--      !IsOverlayViewShown() && force_controls_visible_.value_or(is_visible);
-+      !video_only && !IsOverlayViewShown() &&
-+      force_controls_visible_.value_or(is_visible);
- 
-   // The title and scrim can be hidden if the overlay window is trusted or meets
-   // the user interaction criteria.
-@@ -820,11 +841,11 @@ void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
+@@ -633,11 +940,13 @@ void VideoOverlayWindowViews::OnKeyEvent(ui::KeyEvent* event) {
+       TogglePlayPause();
+       event->SetHandled();
+     } else if (event->key_code() == ui::VKEY_LEFT &&
+-               replay_10_seconds_button_->IsDrawn()) {
++               (echo_controls_active_ ? !is_live_
++                                      : replay_10_seconds_button_->IsDrawn())) {
+       Replay10Seconds();
+       event->SetHandled();
+     } else if (event->key_code() == ui::VKEY_RIGHT &&
+-               forward_10_seconds_button_->IsDrawn()) {
++               (echo_controls_active_ ? !is_live_
++                                      : forward_10_seconds_button_->IsDrawn())) {
+       Forward10Seconds();
+       event->SetHandled();
+     }
+@@ -820,11 +1129,13 @@ void VideoOverlayWindowViews::UpdateControlsVisibility(bool is_visible,
    //   * We are in the initial "show" period, or
    //   * The overlay window does not meet the user interaction criteria and is
    //   not trusted for media playback
--  const bool title_is_visible =
-+  const bool title_is_visible = !video_only && (
++  // Echo's origin belongs to the hover controls: the idle window is video only.
+   const bool title_is_visible =
        force_title_and_scrim_visible_.has_value()
            ? force_title_and_scrim_visible_.value()
-           : wanted_visibility || initial_title_hide_timer_.IsRunning() ||
+-          : wanted_visibility || initial_title_hide_timer_.IsRunning() ||
 -                !can_hide_title_and_scrim;
-+                !can_hide_title_and_scrim);
++          : wanted_visibility ||
++                (!EchoPipControls() && (initial_title_hide_timer_.IsRunning() ||
++                                        !can_hide_title_and_scrim));
  
    if (should_animate) {
      // Animate the title and top scrim.
+@@ -1012,6 +1323,18 @@ bool VideoOverlayWindowViews::ControlsHitTestContainsPoint(
+   if (!AreControlsVisible()) {
+     return false;
+   }
++  if (echo_controls_active_) {
++    const views::View* const controls[] = {
++        echo_back_to_tab_.get(), echo_minimize_.get(), echo_close_.get(),
++        echo_replay_.get(),      echo_play_pause_.get(), echo_forward_.get(),
++        echo_progress_.get()};
++    for (const views::View* control : controls) {
++      if (control->IsDrawn() && control->GetMirroredBounds().Contains(point)) {
++        return true;
++      }
++    }
++    return false;
++  }
+   if (GetBackToTabControlsBounds().Contains(point) ||
+       GetSkipAdControlsBounds().Contains(point) ||
+       GetCloseControlsBounds().Contains(point) ||
+@@ -1068,7 +1391,9 @@ void VideoOverlayWindowViews::SetUpViews() {
+ 
+   auto controls_scrim_view = std::make_unique<views::View>();
+   controls_scrim_view->SetBackground(
+-      views::CreateSolidBackground(kColorPipWindowScrimFull));
++      EchoPipControls()
++          ? views::CreateSolidBackground(SkColorSetA(SK_ColorBLACK, 115))
++          : views::CreateSolidBackground(kColorPipWindowScrimFull));
+ 
+   auto controls_container_view = std::make_unique<views::View>();
+   auto title_view = std::make_unique<views::View>();
+@@ -1396,6 +1721,154 @@ void VideoOverlayWindowViews::SetUpViews() {
+   resize_handle_view_ =
+       controls_container_view_->AddChildView(std::move(resize_handle_view));
+ #endif
++
++  if (EchoPipControls()) {
++    origin_->SetEnabledColor(SK_ColorWHITE);
++    origin_->SetFontList(gfx::FontList().Derive(0, gfx::Font::NORMAL,
++                                                gfx::Font::Weight::SEMIBOLD));
++    origin_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++    // The window manager's return action keeps Chromium's localized name: the
++    // embedder identifies this control semantically to restore the source tab.
++    echo_back_to_tab_ =
++        controls_container_view_->AddChildView(std::make_unique<EchoPipButton>(
++            base::BindRepeating([] {
++              PictureInPictureWindowManager::GetInstance()
++                  ->ExitPictureInPictureViaWindowUi(
++                      PictureInPictureWindowManager::UiBehavior::
++                          kCloseWindowAndFocusOpener);
++            }),
++            EchoPipGlyph::kBackToTab, u"Back to Tab",
++            l10n_util::GetStringUTF16(
++                IDS_PICTURE_IN_PICTURE_BACK_TO_TAB_CONTROL_TEXT)));
++    echo_minimize_ =
++        controls_container_view_->AddChildView(std::make_unique<EchoPipButton>(
++            base::BindRepeating([] {
++              PictureInPictureWindowManager::GetInstance()
++                  ->ExitPictureInPictureViaWindowUi(
++                      PictureInPictureWindowManager::UiBehavior::
++                          kCloseWindowOnly);
++            }),
++            EchoPipGlyph::kMinimize, u"Minimize", u"Minimize"));
++    echo_close_ =
++        controls_container_view_->AddChildView(std::make_unique<EchoPipButton>(
++            base::BindRepeating(
++                &VideoOverlayWindowViews::CloseAndPauseIfAvailable,
++                base::Unretained(this)),
++            EchoPipGlyph::kClose, u"Close", u"Close"));
++    echo_replay_ = playback_controls_container_view_->AddChildView(
++        std::make_unique<EchoPipButton>(
++            base::BindRepeating(&VideoOverlayWindowViews::Replay10Seconds,
++                                base::Unretained(this)),
++            EchoPipGlyph::kReplay, std::u16string(), u"Back 15 seconds"));
++    echo_play_pause_ = playback_controls_container_view_->AddChildView(
++        std::make_unique<EchoPipButton>(
++            base::BindRepeating(&VideoOverlayWindowViews::TogglePlayPause,
++                                base::Unretained(this)),
++            EchoPipGlyph::kPlayPause, std::u16string(), u"Pause"));
++    echo_forward_ = playback_controls_container_view_->AddChildView(
++        std::make_unique<EchoPipButton>(
++            base::BindRepeating(&VideoOverlayWindowViews::Forward10Seconds,
++                                base::Unretained(this)),
++            EchoPipGlyph::kForward, std::u16string(), u"Forward 15 seconds"));
++    echo_progress_ = playback_controls_container_view_->AddChildView(
++        std::make_unique<EchoPipProgress>(
++            base::BindRepeating(
++                [](VideoOverlayWindowViews* overlay, bool dragging) {
++                  overlay->OnProgressDragStateChanged(
++                      dragging
++                          ? global_media_controls::DragState::kDragStarted
++                          : global_media_controls::DragState::kDragEnded);
++                },
++                base::Unretained(this)),
++            base::BindRepeating(
++                &VideoOverlayWindowViews::SeekForProgressBarInteraction,
++                base::Unretained(this))));
++  }
++}
++
++void VideoOverlayWindowViews::LayoutEchoControls() {
++  constexpr int kEdge = 16;
++  constexpr int kPillHeight = 28;
++  constexpr int kPillGap = 8;
++  constexpr int kLabelsMinWidth = 440;
++  constexpr int kOriginMinWidth = 60;
++  constexpr int kProgressHitHeight = 15;
++  constexpr int kProgressBottom = 8;  // Leaves 13 px below the 5 px bar.
++
++  const gfx::Size size = GetBounds().size();
++
++  // Chromium's presentation stays built but inert, so nothing else changes.
++  views::View* const stock_controls[] = {
++      minimize_button_.get(),          back_to_tab_button_.get(),
++      close_controls_view_.get(),      replay_10_seconds_button_.get(),
++      play_pause_controls_view_.get(), forward_10_seconds_button_.get(),
++      previous_track_controls_view_.get(), next_track_controls_view_.get(),
++      progress_view_.get(),            timestamp_.get(),
++      live_status_.get(),              live_caption_button_.get(),
++      favicon_view_.get(),             controls_top_scrim_view_.get(),
++      controls_bottom_scrim_view_.get()};
++  for (views::View* control : stock_controls) {
++    control->SetVisible(false);
++  }
++  if (toggle_mute_button_) {
++    toggle_mute_button_->SetVisible(false);
++  }
++  hang_up_button_->SetVisible(false);
++  toggle_camera_button_->SetVisible(false);
++  toggle_microphone_button_->SetVisible(false);
++  vc_controls_container_view_->SetVisible(false);
++  playback_controls_container_view_->SetSize(size);
++  playback_controls_container_view_->SetVisible(show_playback_controls_);
++  title_view_->SetBoundsRect(gfx::Rect(size));
++
++  const bool labels = size.width() >= kLabelsMinWidth;
++  EchoPipButton* const pills[] = {echo_back_to_tab_.get(), echo_minimize_.get(),
++                                  echo_close_.get()};
++  for (EchoPipButton* pill : pills) {
++    pill->SetVisible(true);
++    pill->SetShowLabel(labels);
++    pill->SetSize({pill->PillWidth(labels), kPillHeight});
++  }
++  echo_back_to_tab_->SetPosition({kEdge, kEdge});
++  echo_close_->SetPosition(
++      {size.width() - kEdge - echo_close_->width(), kEdge});
++  echo_minimize_->SetPosition(
++      {echo_close_->x() - kPillGap - echo_minimize_->width(), kEdge});
++
++  // The origin stays centered on the window, not between its neighbours.
++  const int half_width =
++      std::min(size.width() / 2 - echo_back_to_tab_->bounds().right() - kPillGap,
++               echo_minimize_->x() - kPillGap - size.width() / 2);
++  origin_->SetVisible(half_width * 2 >= kOriginMinWidth);
++  origin_->SetBoundsRect(gfx::Rect(size.width() / 2 - half_width, kEdge,
++                                   std::max(half_width * 2, 0), kPillHeight));
++
++  // Center controls keep their proportions on small windows.
++  const float scale =
++      std::clamp(size.height() / 305.f, 0.45f, 1.f);
++  const auto scaled = [scale](int value) {
++    return static_cast<int>(value * scale + 0.5f);
++  };
++  const gfx::Point center(size.width() / 2, size.height() / 2);
++  const gfx::Size play_size(scaled(64), scaled(80));
++  const gfx::Size seek_size(scaled(44), scaled(44));
++  echo_play_pause_->SetBounds(center.x() - play_size.width() / 2,
++                              center.y() - play_size.height() / 2,
++                              play_size.width(), play_size.height());
++  echo_replay_->SetBounds(center.x() - scaled(78) - seek_size.width() / 2,
++                          center.y() - seek_size.height() / 2,
++                          seek_size.width(), seek_size.height());
++  echo_forward_->SetBounds(center.x() + scaled(78) - seek_size.width() / 2,
++                           center.y() - seek_size.height() / 2,
++                           seek_size.width(), seek_size.height());
++  echo_play_pause_->SetVisible(show_play_pause_button_);
++  echo_replay_->SetVisible(!is_live_);
++  echo_forward_->SetVisible(!is_live_);
++
++  echo_progress_->SetBounds(kEdge,
++                            size.height() - kProgressBottom - kProgressHitHeight,
++                            size.width() - 2 * kEdge, kProgressHitHeight);
++  echo_progress_->SetVisible(!is_live_);
+ }
+ 
+ void VideoOverlayWindowViews::OnRootViewReady() {
+@@ -1491,6 +1964,27 @@ void VideoOverlayWindowViews::OnUpdateControlsBounds() {
+   UpdateResizeHandleBounds(quadrant);
+ #endif
+ 
++  // Meet-style calls keep Chromium's own controls; Echo replaces the rest.
++  echo_controls_active_ = EchoPipControls() && !show_toggle_camera_button_ &&
++                          !show_toggle_microphone_button_ &&
++                          !show_hang_up_button_;
++  if (echo_controls_active_) {
++    LayoutEchoControls();
++    return;
++  }
++  if (echo_back_to_tab_) {
++    echo_back_to_tab_->SetVisible(false);
++    echo_minimize_->SetVisible(false);
++    echo_close_->SetVisible(false);
++    minimize_button_->SetVisible(true);
++    back_to_tab_button_->SetVisible(true);
++    close_controls_view_->SetVisible(true);
++    favicon_view_->SetVisible(true);
++    origin_->SetVisible(true);
++    controls_top_scrim_view_->SetVisible(true);
++    controls_bottom_scrim_view_->SetVisible(true);
++  }
++
+   constexpr int kTopControlsHeight = 34;
+   constexpr int kBottomControlsHeight = 64;
+   constexpr int kTopScrimHeight = 160;
+@@ -1836,6 +2330,9 @@ void VideoOverlayWindowViews::UpdateNaturalSize(const gfx::Size& natural_size) {
+ void VideoOverlayWindowViews::SetPlaybackState(PlaybackState playback_state) {
+   playback_state_for_testing_ = playback_state;
+   play_pause_controls_view_->SetPlaybackState(playback_state);
++  if (echo_play_pause_) {
++    echo_play_pause_->SetPlaying(playback_state == kPlaying);
++  }
+ }
+ 
+ void VideoOverlayWindowViews::SetPlayPauseButtonVisibility(bool is_visible) {
+@@ -1940,6 +2437,9 @@ void VideoOverlayWindowViews::SetMediaPosition(
+     const media_session::MediaPosition& position) {
+   position_ = position;
+   progress_view_->UpdateProgress(position);
++  if (echo_progress_) {
++    echo_progress_->SetMediaPosition(position);
++  }
+   UpdateTimestampLabel(position_.GetPosition(), position_.duration());
+ }
+ 
+@@ -2184,12 +2684,16 @@ void VideoOverlayWindowViews::TogglePlayPause() {
+ 
+ void VideoOverlayWindowViews::Replay10Seconds() {
+   controller_->SeekTo(
+-      std::max(base::Seconds(0), position_.GetPosition() - kSeekTime));
++      std::max(base::Seconds(0),
++               position_.GetPosition() -
++                   (EchoPipControls() ? base::Seconds(15) : kSeekTime)));
+ }
+ 
+ void VideoOverlayWindowViews::Forward10Seconds() {
+   controller_->SeekTo(
+-      std::min(position_.GetPosition() + kSeekTime, position_.duration()));
++      std::min(position_.GetPosition() +
++                   (EchoPipControls() ? base::Seconds(15) : kSeekTime),
++               position_.duration()));
+ }
+ 
+ void VideoOverlayWindowViews::CloseAndPauseIfAvailable() {
 diff --git a/chrome/browser/ui/views/overlay/video_overlay_window_views.h b/chrome/browser/ui/views/overlay/video_overlay_window_views.h
-index 222a5167b5e719403268e672372acd809a043263..221dc2f51dfbc612b31202fe438d751c1f386694 100644
+index 222a5167b5e719403268e672372acd809a043263..dc12852aecd7310b1cdc8dd6aa8f69fe17b3342a 100644
 --- a/chrome/browser/ui/views/overlay/video_overlay_window_views.h
 +++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.h
-@@ -585,6 +585,9 @@ class VideoOverlayWindowViews : public content::VideoOverlayWindow,
+@@ -37,6 +37,8 @@ class FrameSinkId;
+ }  // namespace viz
+ 
+ class BackToTabLabelButton;
++class EchoPipButton;
++class EchoPipProgress;
+ class CloseImageButton;
+ class HangUpButton;
+ class OverlayControlsFadeAnimation;
+@@ -585,6 +587,19 @@ class VideoOverlayWindowViews : public content::VideoOverlayWindow,
    // True if the playback controls should be visible.
    bool show_playback_controls_ = true;
  
-+  // Pointer presentation is video-only for Echo; keyboard controls remain usable.
-+  bool echo_keyboard_controls_ = false;
++  // Lays out Echo's hover controls. Only called when `echo_controls_active_`.
++  void LayoutEchoControls();
++
++  // Echo's hover controls, created only when the embedder opts in.
++  raw_ptr<EchoPipButton> echo_back_to_tab_ = nullptr;
++  raw_ptr<EchoPipButton> echo_minimize_ = nullptr;
++  raw_ptr<EchoPipButton> echo_close_ = nullptr;
++  raw_ptr<EchoPipButton> echo_replay_ = nullptr;
++  raw_ptr<EchoPipButton> echo_play_pause_ = nullptr;
++  raw_ptr<EchoPipButton> echo_forward_ = nullptr;
++  raw_ptr<EchoPipProgress> echo_progress_ = nullptr;
++  bool echo_controls_active_ = false;
 +
    base::WeakPtrFactory<VideoOverlayWindowViews> weak_factory_{this};
  };

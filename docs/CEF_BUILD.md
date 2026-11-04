@@ -106,7 +106,7 @@ The current recipe applies every top-level patch in
 2. `cef.patch` — its CEF bridge and loader.
 3. `extensions-bridge.patch` — Alloy actions, profile services and install prompts.
 4. `shutdown-durability.patch` — bounded background shutdown, helper reaping and storage recovery.
-5. `video-pip.patch` — the final video-only pointer presentation and keyboard fallback.
+5. `video-pip.patch` — Echo's hover controls for the video PiP window.
 6. `browsing-data-bridge.patch` — profile-scoped browsing-data deletion callbacks.
 
 The extension patch is rebased over the receipt checkpoint. Both headers and
@@ -862,6 +862,6 @@ its screenshot was inspected. Evidence:
 ## Video PiP presentation
 
 The source recipe also applies `patches/cef154/video-pip.patch`. Echo opts into
-video-only pointer presentation through an engine-owned command-line switch;
-upstream keyboard controls remain available. See [native PiP reference and
+its hover controls through an engine-owned command-line switch; other embedders
+keep upstream's. See [native PiP reference and
 qualification](VIDEO_PIP.md) for evidence and remaining interaction gaps.

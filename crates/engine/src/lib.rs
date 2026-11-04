@@ -2326,7 +2326,7 @@ wrap_app! {
                     Some(&CefString::from("echo-shutdown-marker")),
                     Some(&CefString::from(self.shutdown_marker.as_str())),
                 );
-                command_line.append_switch(Some(&CefString::from("echo-video-only-pip")));
+                command_line.append_switch(Some(&CefString::from("echo-pip-controls")));
                 // Show the newest page frame instead of waiting up to four
                 // frames for each resized surface: pointer-rate resizes
                 // (DevTools divider, window edges) queued seconds of stale

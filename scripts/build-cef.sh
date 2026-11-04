@@ -54,7 +54,7 @@ if [[ "$MODE" == all || "$MODE" == sync ]]; then
   if [[ -f "$DOWNLOAD/chromium/src/cef/include/echo_cef_extensions_v1.h" ||
         -f "$DOWNLOAD/chromium/src/cef/include/echo_cef_download_v1.h" ||
         -f "$DOWNLOAD/chromium/src/content/public/common/shutdown_timeouts.h" ]] ||
-      rg -q 'echo_keyboard_controls_' "$DOWNLOAD/chromium/src/chrome/browser/ui/views/overlay/video_overlay_window_views.h" 2>/dev/null; then
+      rg -q 'echo_controls_active_' "$DOWNLOAD/chromium/src/chrome/browser/ui/views/overlay/video_overlay_window_views.h" 2>/dev/null; then
     echo "Refusing to sync over custom sources; use release for an incremental build or prepare a separate fresh checkout" >&2
     exit 1
   fi
