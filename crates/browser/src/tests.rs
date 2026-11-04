@@ -3599,6 +3599,25 @@ fn history_fills_the_whole_page_card_without_side_gutters(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn reopening_history_starts_without_the_previous_search(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-y");
+    cx.run_until_parked();
+    cx.simulate_input("no such page");
+    assert_eq!(view.read_with(cx, |w, cx| w.history_page.input.read(cx).text().to_string()), "no such page");
+    // Leave for another tab, then come back to the same History tab.
+    let history = view.read_with(cx, |w, _| w.browser.space().active_tab).unwrap();
+    let other = view.read_with(cx, |w, _| w.browser.space().today.iter().find(|tab| Some(tab.id) != w.browser.space().active_tab).map(|tab| tab.id)).unwrap();
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.activate_tab(other, std::time::SystemTime::now())); cx.notify(); });
+    cx.run_until_parked();
+    view.update(cx, |w, cx| { w.edit_browser(|browser| browser.activate_tab(history, std::time::SystemTime::now())); cx.notify(); });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, cx| w.history_page.input.read(cx).text().to_string()), "");
+    assert!(cx.update(|window, cx| view.read(cx).history_page.input.read(cx).focus_handle(cx).is_focused(window)));
+}
+
+#[gpui::test]
 fn history_row_menu_filters_by_site_without_opening_the_row(cx: &mut TestAppContext) {
     let (view, cx, fake) = open_pages(cx);
     record_history_fixture(&fake, cx);

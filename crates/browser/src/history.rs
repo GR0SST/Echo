@@ -8,7 +8,7 @@ use gpui::{
     Focusable, KeyBinding, Rgba, Subscription, Window,
 };
 use std::collections::HashSet;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub(crate) const HISTORY_URL: &str = "echo://history";
 const CONTEXT: &str = "HistoryPage";
@@ -103,7 +103,10 @@ impl BrowserWindow {
         if self.history_is_open() {
             let tab = self.browser.space().active_tab;
             if self.history_page.last_tab != tab {
+                // A search belongs to one visit: a stale query would show an
+                // empty page. Returning from a popup keeps `last_tab`, and the query.
                 self.history_page.last_tab = tab;
+                self.history_page.input.update(cx, |input, cx| input.set_text("", cx));
                 self.focus_history_search(window, cx);
             }
         } else {
@@ -362,6 +365,7 @@ impl BrowserWindow {
         let count = entries.len();
         let today = Local::now().date_naive();
         let mut cards: Vec<(NaiveDate, Vec<AnyElement>)> = Vec::new();
+        let searching = !self.history_page.input.read(cx).text().trim().is_empty();
         for (index, entry) in entries.iter().take(self.history_page.limit).enumerate() {
             let day = DateTime::<Local>::from(entry.visited_at).date_naive();
             let row = self.render_history_row(index, entry, owner, c, cx);
@@ -369,12 +373,21 @@ impl BrowserWindow {
                 Some((current, rows)) if *current == day => rows.push(row),
                 _ => cards.push((day, vec![row])),
             }
+            let next = entries.get(index + 1).filter(|_| index + 1 < self.history_page.limit);
+            if !searching && next.is_some_and(|next| has_time_gap(entry.visited_at, next.visited_at)) {
+                if let Some((_, rows)) = cards.last_mut() {
+                    // Chrome's tick between browsing sessions, under the time column.
+                    rows.push(div().ml(px(77.0)).h(px(15.0)).w(px(1.0)).bg(c.time_gap).into_any_element());
+                }
+            }
         }
         let has_history = !self.browser.active_user_profile().history.is_empty();
         let selection = self.history_page.selected.len();
         let search_focused = self.history_page.input.read(cx).focus_handle(cx).is_focused(window);
         // Chrome folds its side bar away when the page gets narrow.
-        let page_width = f32::from(window.viewport_size().width) - self.sidebar_width() * self.sidebar_amount();
+        let page_width = f32::from(window.viewport_size().width)
+            - self.sidebar_width() * self.sidebar_amount()
+            - crate::pages::CONTENT_INSET;
         let wide = page_width >= 900.0;
         let clear = |cx: &mut Context<Self>| {
             div()
@@ -436,38 +449,46 @@ impl BrowserWindow {
                 .child(
                     div()
                         .flex_none()
-                        .when(wide, |title| title.w(px(256.0)))
-                        .pl(px(24.0))
+                        .when(wide, |title| title.w(px(SIDE_BAR_WIDTH)))
+                        .pl(px(20.0))
                         .pr(px(16.0))
-                        .text_size(px(22.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("History"),
+                        .flex()
+                        .items_center()
+                        .gap(px(22.0))
+                        .child(gpui::img(echo_logo()).flex_none().size(px(24.0)))
+                        .child(div().text_size(px(22.0)).font_weight(FontWeight::MEDIUM).child("History")),
                 )
                 .child(
-                    // The field starts at the card column's edge, as in Chrome.
-                    div().flex_1().min_w_0().px(px(20.0)).flex().justify_center().child(
-                        div().w_full().max_w(px(968.0)).child(
+                    div().flex_1().min_w_0().px(px(CONTENT_PADDING)).flex().justify_center().child(
+                        div().w_full().max_w(px(CARD_MAX_WIDTH)).child(
                             div()
                                 .id("history-search")
                                 .debug_selector(|| "history-search".into())
+                                .when(wide, |field| field.ml(px(search_field_offset(page_width))))
                                 .w_full()
                                 .max_w(px(700.0))
-                                .h(px(44.0))
-                                .px(px(14.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(10.0))
+                                .p(px(2.0))
                                 .rounded(px(22.0))
-                                .bg(c.field)
+                                // The ring sits outside the fill and only shows on focus.
                                 .border_2()
-                                .border_color(if search_focused { c.ring } else { c.field })
-                                .text_size(px(13.0))
+                                .border_color(if search_focused { c.ring } else { gpui::transparent_black().into() })
                                 // The whole field is the target, including its icon and padding.
                                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                     this.history_page.input.read(cx).focus_handle(cx).focus(window);
                                 }))
-                                .child(div().flex_none().text_color(c.secondary).child(crate::icons::control_sized(crate::icons::Icon::Search, 16.)))
-                                .child(self.history_page.input.clone()),
+                                .child(
+                                    div()
+                                        .h(px(36.0))
+                                        .px(px(12.0))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(10.0))
+                                        .rounded(px(18.0))
+                                        .bg(c.field)
+                                        .text_size(px(13.0))
+                                        .child(div().flex_none().text_color(c.secondary).child(crate::icons::control_sized(crate::icons::Icon::Search, 16.)))
+                                        .child(self.history_page.input.clone()),
+                                ),
                         ),
                     ),
                 )
@@ -478,7 +499,7 @@ impl BrowserWindow {
         let confirm = |message: &'static str, cancel: AnyElement, accept: AnyElement| {
             div()
                 .w_full()
-                .max_w(px(960.0))
+                .max_w(px(CARD_MAX_WIDTH))
                 .mb(px(16.0))
                 .p(px(16.0))
                 .rounded(px(12.0))
@@ -545,6 +566,7 @@ impl BrowserWindow {
             .flex_col()
             .bg(c.page)
             .text_color(c.text)
+            .font_family(".SystemUIFont")
             .on_action(cx.listener(|this, _: &OpenFirstResult, window, cx| {
                 let first = this
                     .filtered_history(cx)
@@ -569,7 +591,7 @@ impl BrowserWindow {
                     .when(wide, |page| page.child(
                         div()
                             .flex_none()
-                            .w(px(256.0))
+                            .w(px(SIDE_BAR_WIDTH))
                             .pt(px(8.0))
                             .text_size(px(13.0))
                             .font_weight(FontWeight::MEDIUM)
@@ -609,7 +631,7 @@ impl BrowserWindow {
                             .h_full()
                             .overflow_y_scroll()
                             .pt(px(24.0))
-                            .px(px(24.0))
+                            .px(px(CONTENT_PADDING))
                             .flex()
                             .flex_col()
                             .items_center()
@@ -618,7 +640,7 @@ impl BrowserWindow {
                             .children(cards.into_iter().map(|(day, rows)| {
                                 div()
                                     .w_full()
-                                    .max_w(px(960.0))
+                                    .max_w(px(CARD_MAX_WIDTH))
                                     .flex_none()
                                     .mb(px(16.0))
                                     .pb(px(8.0))
@@ -704,6 +726,7 @@ struct Palette {
     nav_selected: Rgba,
     nav_selected_text: Rgba,
     selected_row: Rgba,
+    time_gap: Rgba,
 }
 
 impl Palette {
@@ -727,6 +750,7 @@ impl Palette {
                 nav_selected: rgb(0x93b3f2),
                 nav_selected_text: rgb(0x202124),
                 selected_row: rgba(0x93b3f229),
+                time_gap: rgb(0x9aa0a6),
             }
         } else {
             Self {
@@ -747,9 +771,39 @@ impl Palette {
                 nav_selected: rgb(0xe9f0fd),
                 nav_selected_text: rgb(0x3265cb),
                 selected_row: rgba(0x2656c91f),
+                time_gap: rgb(0x888888),
             }
         }
     }
+}
+
+const SIDE_BAR_WIDTH: f32 = 256.0;
+const CONTENT_PADDING: f32 = 24.0;
+const CARD_MAX_WIDTH: f32 = 960.0;
+/// Chrome separates visits further apart than this within a day.
+const BROWSING_GAP: Duration = Duration::from_secs(15 * 60);
+
+fn has_time_gap(current: SystemTime, next: SystemTime) -> bool {
+    let same_day = DateTime::<Local>::from(current).date_naive() == DateTime::<Local>::from(next).date_naive();
+    same_day && current.duration_since(next).is_ok_and(|gap| gap > BROWSING_GAP)
+}
+
+/// How far the search box starts from the card column's left edge. On wide pages
+/// its 36 px fill shares the cards' edge. Once cards reach their padding, the fill
+/// stays 13 px to their left, which is 11 px past the side bar.
+fn search_field_offset(page_width: f32) -> f32 {
+    const RING: f32 = 4.0;
+    const NARROW_INSET: f32 = 13.0;
+    let spare = ((page_width - SIDE_BAR_WIDTH - CONTENT_PADDING * 2. - CARD_MAX_WIDTH) / 2.).max(0.);
+    (spare - NARROW_INSET).min(0.) - RING
+}
+
+fn echo_logo() -> std::sync::Arc<gpui::Image> {
+    static LOGO: std::sync::OnceLock<std::sync::Arc<gpui::Image>> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| std::sync::Arc::new(gpui::Image::from_bytes(
+        gpui::ImageFormat::Png,
+        include_bytes!("../assets/echo-icon.png").to_vec(),
+    ))).clone()
 }
 
 /// A day card's heading: "Today - Wednesday, November 4, 2026".
@@ -764,11 +818,13 @@ fn day_title(day: NaiveDate, today: NaiveDate) -> String {
     }
 }
 
-/// The host a row shows next to its title. Non-web addresses show in full.
+/// The host a row shows next to its title, without "www.". Non-web addresses
+/// show in full.
 fn host(url: &str) -> String {
     let Some((_, rest)) = url.split_once("://") else { return url.into() };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    authority.rsplit('@').next().unwrap_or(authority).to_string()
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    host.strip_prefix("www.").unwrap_or(host).to_string()
 }
 
 #[cfg(test)]
@@ -785,8 +841,33 @@ mod format_tests {
     }
 
     #[test]
+    fn time_gaps_follow_chrome_and_stay_within_a_day() {
+        let noon = DateTime::parse_from_rfc3339("2026-11-04T12:00:00Z").unwrap();
+        let local_noon = noon.with_timezone(&Local);
+        let base: SystemTime = local_noon.into();
+        let start_of_day: SystemTime = local_noon.date_naive().and_hms_opt(0, 30, 0).unwrap()
+            .and_local_timezone(Local).unwrap().into();
+        let minutes = |m: u64| Duration::from_secs(m * 60);
+        assert!(!has_time_gap(start_of_day + minutes(15), start_of_day));
+        assert!(has_time_gap(start_of_day + minutes(16), start_of_day));
+        assert!(!has_time_gap(start_of_day, start_of_day - minutes(120)));
+        assert!(!has_time_gap(base - minutes(120), base));
+    }
+
+    #[test]
+    fn search_fill_matches_chrome_on_wide_and_narrow_pages() {
+        // Fill left, from the page edge, measured from Arc at both widths.
+        let card_left = |page: f32| SIDE_BAR_WIDTH + CONTENT_PADDING + ((page - SIDE_BAR_WIDTH - CONTENT_PADDING * 2. - CARD_MAX_WIDTH) / 2.).max(0.);
+        let fill_left = |page: f32| card_left(page) + search_field_offset(page) + 4.;
+        assert_eq!(fill_left(1148.0), SIDE_BAR_WIDTH + 11.0);
+        // A wide page: the fill shares the cards' left edge.
+        assert_eq!(fill_left(1700.0), card_left(1700.0));
+    }
+
+    #[test]
     fn host_strips_only_the_address_around_it() {
-        assert_eq!(host("https://user:pw@www.example.com:8080/a?b#c"), "www.example.com:8080");
+        assert_eq!(host("https://user:pw@www.example.com:8080/a?b#c"), "example.com:8080");
+        assert_eq!(host("https://wwwexample.com/"), "wwwexample.com");
         assert_eq!(host("https://example.com?x=/y"), "example.com");
         assert_eq!(host("data:text/plain,hello"), "data:text/plain,hello");
     }
