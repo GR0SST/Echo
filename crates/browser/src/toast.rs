@@ -461,6 +461,7 @@ impl BrowserWindow {
         let download_undo = toast.download_undo;
         let compact = toast.compact;
         let undo_hint = toast.undo_hint;
+        let colors = toast_colors(self.browser.space().theme.as_ref(), compact);
         let (scale, opacity, _) = toast.progress(now, crate::native::prefers_reduced_motion());
         if scale < 0.001 { return div().size_full().into_any_element(); }
         let actionable = toast.action.is_some();
@@ -482,11 +483,11 @@ impl BrowserWindow {
             .px(px(12. * scale))
             .rounded(px(12. * scale))
             .border_1()
-            .border_color(hsla(0.76, 0.5, 0.4, 0.25))
+            .border_color(colors.border)
             .bg(linear_gradient(180.,
-                linear_color_stop(rgb(if compact { 0x402a69 } else { 0x28154e }), 0.),
-                linear_color_stop(rgb(if compact { 0x301e4e } else { 0x201140 }), 1.)))
-            .text_color(gpui::white())
+                linear_color_stop(colors.top, 0.),
+                linear_color_stop(colors.bottom, 1.)))
+            .text_color(colors.ink)
             .font_family(".SystemUIFont")
             .font_weight(FontWeight::SEMIBOLD)
             .text_size(px(if compact { 13. } else { 14. } * scale))
@@ -497,17 +498,17 @@ impl BrowserWindow {
             .when(undo_hint, |this| this.child(div().flex_1().min_w_0().flex().items_center().gap(px(4. * scale))
                 .child(div().flex_1().min_w_0().truncate().child(undo_before.trim_end().to_string()))
                 .child(div().debug_selector(|| "toast-undo-shortcut".into()).px(px(6. * scale)).h(px(28. * scale))
-                    .flex().items_center().rounded(px(4. * scale)).bg(hsla(0., 0., 1., 0.1)).child("⌘Z"))
+                    .flex().items_center().rounded(px(4. * scale)).bg(colors.control.opacity(colors.control.a / 2.)).child("⌘Z"))
                 .child(undo_after.trim_start().to_string())))
             .when(screenshot,|this|this.child(div().id("toast-screenshot-save").debug_selector(||"toast-screenshot-save".into())
                 .cursor_pointer().w(px(48.*scale)).h(px(28.*scale)).flex_none().rounded(px(6.*scale))
-                .bg(hsla(0.,0.,1.,0.2)).flex().items_center().justify_center().child("Save")
+                .bg(colors.control).flex().items_center().justify_center().child("Save")
                 .on_click(move |_,_,cx| {let _=save_owner.update(cx,|this,cx|this.save_screenshot_toast(generation,cx));})))
             .when(copied_link || screenshot, |this| this.child(
                 div().id("toast-share").debug_selector(move || if download_undo { "toast-download-undo".into() } else if screenshot {"toast-screenshot-share".into()} else { "toast-share".into() }).cursor_pointer()
                     .on_click(move |_, _, cx| { let _ = owner.update(cx, |this, cx| this.activate_toast_action(generation, cx)); })
                     .w(px(32. * scale)).h(px(28. * scale)).flex_none().rounded(px(6. * scale))
-                    .bg(hsla(0., 0., 1., 0.2)).flex().items_center().justify_center()
+                    .bg(colors.control).flex().items_center().justify_center()
                     .child(crate::icons::control_sized(if download_undo { crate::icons::Icon::Restore } else { crate::icons::Icon::Share }, 18. * scale))));
         div().size_full().flex().items_start().justify_center().pt(px(PAD_Y))
             .opacity(opacity).child(surface).into_any_element()
@@ -525,5 +526,117 @@ impl BrowserWindow {
             self.show_toast(format!("{} Tab {} “{space}”", if before { "Un-Pinned" } else { "Pinned" }, if before { "from" } else { "to" }), cx);
         }
         cx.notify();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ToastColors {
+    top: gpui::Hsla,
+    bottom: gpui::Hsla,
+    border: gpui::Hsla,
+    ink: gpui::Hsla,
+    control: gpui::Hsla,
+}
+
+/// A toast wears its Space's theme; a Space with no picked theme keeps the
+/// default purple. Arc shades a dark theme color down and tints a light one up,
+/// so neither reads at full strength. Factors are measured from Arc toasts.
+fn toast_colors(theme: Option<&browser_core::themes::SpaceTheme>, compact: bool) -> ToastColors {
+    let Some(colors) = theme.filter(|theme| theme.valid()).map(|theme| &theme.colors) else {
+        return ToastColors {
+            top: rgb(if compact { 0x402a69 } else { 0x28154e }).into(),
+            bottom: rgb(if compact { 0x301e4e } else { 0x201140 }).into(),
+            border: hsla(0.76, 0.5, 0.4, 0.25),
+            ink: gpui::white(),
+            control: hsla(0., 0., 1., 0.2),
+        };
+    };
+    use browser_core::themes::ThemeColor;
+    let (first, last) = (colors[0], colors[colors.len() - 1]);
+    let light = (relative_luminance(first) + relative_luminance(last)) / 2. > 0.35;
+    let stop = |c: ThemeColor, shade: f32, tint: f32| -> ThemeColor {
+        let adjust = |v: f32| if light { v + (1. - v) * tint } else { v * shade };
+        ThemeColor { red: adjust(c.red), green: adjust(c.green), blue: adjust(c.blue) }
+    };
+    let (top, bottom) = (stop(first, 0.72, 0.55), stop(last, 0.55, 0.38));
+    let fill = |c: ThemeColor| -> gpui::Hsla { gpui::Rgba { r: c.red, g: c.green, b: c.blue, a: 1. }.into() };
+    ToastColors {
+        top: fill(top),
+        bottom: fill(bottom),
+        border: hsla(0., 0., 0., 0.3),
+        ink: if light { gpui::black() } else { gpui::white() },
+        control: hsla(0., 0., 1., if light { 0.55 } else { 0.2 }),
+    }
+}
+
+fn relative_luminance(color: browser_core::themes::ThemeColor) -> f32 {
+    let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * linear(color.red) + 0.7152 * linear(color.green) + 0.0722 * linear(color.blue)
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    use browser_core::themes::{SpaceTheme, ThemeColor};
+
+    fn theme(colors: &[(f32, f32, f32)]) -> SpaceTheme {
+        SpaceTheme {
+            colors: colors.iter().map(|&(red, green, blue)| ThemeColor { red, green, blue }).collect(),
+            ..SpaceTheme::from_hue(0.)
+        }
+    }
+
+    fn bytes(rgb: u32) -> (f32, f32, f32) {
+        (((rgb >> 16) & 255) as f32 / 255., ((rgb >> 8) & 255) as f32 / 255., (rgb & 255) as f32 / 255.)
+    }
+
+    /// Channels of `actual` within `tolerance` (0-255) of the expected color.
+    fn near(actual: gpui::Hsla, expected: u32, tolerance: f32) -> bool {
+        let actual = gpui::Rgba::from(actual);
+        let (r, g, b) = bytes(expected);
+        [(actual.r, r), (actual.g, g), (actual.b, b)].iter().all(|(a, e)| (a - e).abs() * 255. <= tolerance)
+    }
+
+    #[test]
+    fn a_space_without_a_theme_keeps_the_default_purple() {
+        let default = toast_colors(None, false);
+        assert_eq!(default.top, gpui::Hsla::from(rgb(0x28154e)));
+        assert_eq!(default.bottom, gpui::Hsla::from(rgb(0x201140)));
+        assert_eq!(default.ink, gpui::white());
+        assert_eq!(default.control, hsla(0., 0., 1., 0.2));
+        assert_eq!(toast_colors(None, true).top, gpui::Hsla::from(rgb(0x402a69)));
+    }
+
+    #[test]
+    fn an_invalid_theme_falls_back_to_the_default() {
+        assert_eq!(toast_colors(Some(&theme(&[])), false), toast_colors(None, false));
+    }
+
+    #[test]
+    fn a_light_theme_matches_the_arc_reference() {
+        // Arc: window edge #ccc863, toast #ebe7b5 to #e1dc9d with black text.
+        let colors = toast_colors(Some(&theme(&[bytes(0xccc863)])), false);
+        assert!(near(colors.top, 0xebe7b5, 6.), "{:?}", gpui::Rgba::from(colors.top));
+        assert!(near(colors.bottom, 0xe1dc9d, 6.), "{:?}", gpui::Rgba::from(colors.bottom));
+        assert_eq!(colors.ink, gpui::black());
+        assert_eq!(colors.control, hsla(0., 0., 1., 0.55));
+    }
+
+    #[test]
+    fn a_dark_theme_matches_the_arc_reference() {
+        // Arc: window edge #bf1f3a, toast #891f1f to #691716 with white text.
+        // Arc also pulls this red's hue slightly; only its strength is matched.
+        let colors = toast_colors(Some(&theme(&[bytes(0xbf1f3a)])), false);
+        assert!(near(colors.top, 0x891f1f, 12.), "{:?}", gpui::Rgba::from(colors.top));
+        assert!(near(colors.bottom, 0x691716, 12.), "{:?}", gpui::Rgba::from(colors.bottom));
+        assert_eq!(colors.ink, gpui::white());
+        assert_eq!(colors.control, hsla(0., 0., 1., 0.2));
+    }
+
+    #[test]
+    fn a_multi_color_theme_runs_from_its_first_to_its_last_color() {
+        let colors = toast_colors(Some(&theme(&[(0.4, 0.1, 0.5), (0.2, 0.2, 0.2), (0.5, 0.1, 0.1)])), false);
+        assert!(near(colors.top, 0x491240, 200.) && gpui::Rgba::from(colors.top).b > gpui::Rgba::from(colors.top).r);
+        assert!(gpui::Rgba::from(colors.bottom).r > gpui::Rgba::from(colors.bottom).b);
     }
 }
