@@ -3570,6 +3570,7 @@ fn history_deletion_and_confirmation_preserve_tabs_and_can_be_cancelled(cx: &mut
     record_history_fixture(&fake, cx);
     cx.simulate_keystrokes("cmd-y");
     let tabs = today_urls(&view, cx);
+    click(cx, "history-menu-0");
     click(cx, "history-remove-0");
     assert_eq!(view.read_with(cx, |w, _| w.browser.active_user_profile().history.len()), 1);
     assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
@@ -3584,6 +3585,54 @@ fn history_deletion_and_confirmation_preserve_tabs_and_can_be_cancelled(cx: &mut
     assert!(view.read_with(cx, |w, _| w.browser.active_user_profile().history.is_empty()));
     assert_eq!(today_urls(&view, cx), tabs);
     assert!(view.read_with(cx, |w, _| w.browser.archive.is_empty()));
+}
+
+#[gpui::test]
+fn history_fills_the_whole_page_card_without_side_gutters(cx: &mut TestAppContext) {
+    let (_view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-y");
+    cx.run_until_parked();
+    let surface = cx.debug_bounds("page-surface").unwrap();
+    let page = cx.debug_bounds("history-page").unwrap();
+    assert_eq!((page.origin.x, page.size.width), (surface.origin.x, surface.size.width));
+}
+
+#[gpui::test]
+fn history_row_menu_filters_by_site_without_opening_the_row(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-y");
+    click(cx, "history-menu-0");
+    assert!(cx.debug_bounds("history-from-site-0").is_some());
+    click(cx, "history-from-site-0");
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
+    assert_eq!(view.read_with(cx, |w, cx| w.history_page.input.read(cx).text().to_string()), "example.com");
+    assert!(!view.read_with(cx, |w, _| w.history_row_menu_is_open()));
+}
+
+#[gpui::test]
+fn history_selection_deletes_only_ticked_rows_after_confirmation(cx: &mut TestAppContext) {
+    let (view, cx, fake) = open_pages(cx);
+    record_history_fixture(&fake, cx);
+    cx.simulate_keystrokes("cmd-y");
+    let count = |view: &gpui::Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _| w.browser.active_user_profile().history.len());
+    let before = count(&view, cx);
+    click(cx, "history-select-0");
+    assert_eq!(view.read_with(cx, |w, _| w.history_selection_len()), 1);
+    // Ticking is not opening: the page stays on History.
+    assert_eq!(active_url(&view, cx).as_deref(), Some(crate::history::HISTORY_URL));
+    click(cx, "history-delete-selected");
+    click(cx, "history-selected-cancel");
+    assert_eq!(count(&view, cx), before);
+    click(cx, "history-delete-selected");
+    click(cx, "history-selected-confirm");
+    assert_eq!(count(&view, cx), before - 1);
+    assert_eq!(view.read_with(cx, |w, _| w.history_selection_len()), 0);
+    click(cx, "history-select-0");
+    click(cx, "history-selection-cancel");
+    assert_eq!(count(&view, cx), before - 1);
+    assert_eq!(view.read_with(cx, |w, _| w.history_selection_len()), 0);
 }
 
 #[gpui::test]

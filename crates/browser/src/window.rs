@@ -3811,7 +3811,7 @@ impl BrowserWindow {
 
     pub(crate) fn render_favicon(&self, tab: &Tab, hue: f32) -> AnyElement { self.render_favicon_on(tab, hue, self.browser.is_private()) }
 
-    fn render_command_page_icon(&self, url: &str, tab: Option<TabId>, dark: bool) -> AnyElement {
+    pub(crate) fn render_command_page_icon(&self, url: &str, tab: Option<TabId>, dark: bool) -> AnyElement {
         if let Some(tab) = tab.and_then(|id| self.browser.all_tabs().find(|tab| tab.id == id && tab.custom_icon.is_some())) {
             return self.render_favicon_on(tab, self.accent(), dark);
         }
@@ -4549,7 +4549,7 @@ impl BrowserWindow {
     /// normal content and Library's retained preview alike.
     pub(crate) fn render_echo_page(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.extensions_is_open() { return Some(self.render_extensions(cx).into_any_element()); }
-        if self.history_is_open() { return Some(self.render_history(cx).into_any_element()); }
+        if self.history_is_open() { return Some(self.render_history(window, cx).into_any_element()); }
         if self.search_settings_owner().is_some() { return Some(self.render_search_settings(window, cx).into_any_element()); }
         if self.password_manager_is_open() { return Some(self.render_password_manager(window, cx).into_any_element()); }
         if self.browsing_data_is_open() { return Some(self.render_browsing_data(cx).into_any_element()); }
@@ -4721,7 +4721,7 @@ impl BrowserWindow {
                     .child(div().debug_selector(|| "page-document-surface".into()).absolute().left_0().right_0().bottom_0()
                         .top(px(if has_page && self.page_toolbar_shown() && !split_open { self.page_toolbar_height() } else { 0. }))
                         .flex().flex_col().items_center().justify_center().gap_2()
-                        .when(!split_open, |this| this.px_8())
+                        .when(!split_open && !self.history_is_open(), |this| this.px_8())
                     .children((!virtual_page && !split_open).then(||self.browser.active_tab()).flatten().and_then(|tab|self.render_crashed_tab(tab.id,cx)))
                     .when(split_open, |this| this.child(self.render_split(cx)))
                     .children(echo_page)
