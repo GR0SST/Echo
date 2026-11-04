@@ -552,13 +552,14 @@ fn toast_colors(theme: Option<&browser_core::themes::SpaceTheme>, compact: bool)
         };
     };
     use browser_core::themes::ThemeColor;
-    let (first, last) = (colors[0], colors[colors.len() - 1]);
-    let light = (relative_luminance(first) + relative_luminance(last)) / 2. > 0.35;
-    let stop = |c: ThemeColor, shade: f32, tint: f32| -> ThemeColor {
+    // A multi-color theme uses its primary color; the toast's gradient is only falloff.
+    let primary = colors[0];
+    let light = relative_luminance(primary) > 0.35;
+    let stop = |shade: f32, tint: f32| -> ThemeColor {
         let adjust = |v: f32| if light { v + (1. - v) * tint } else { v * shade };
-        ThemeColor { red: adjust(c.red), green: adjust(c.green), blue: adjust(c.blue) }
+        ThemeColor { red: adjust(primary.red), green: adjust(primary.green), blue: adjust(primary.blue) }
     };
-    let (top, bottom) = (stop(first, 0.72, 0.55), stop(last, 0.55, 0.38));
+    let (top, bottom) = (stop(0.72, 0.55), stop(0.55, 0.38));
     let fill = |c: ThemeColor| -> gpui::Hsla { gpui::Rgba { r: c.red, g: c.green, b: c.blue, a: 1. }.into() };
     ToastColors {
         top: fill(top),
@@ -634,9 +635,9 @@ mod color_tests {
     }
 
     #[test]
-    fn a_multi_color_theme_runs_from_its_first_to_its_last_color() {
-        let colors = toast_colors(Some(&theme(&[(0.4, 0.1, 0.5), (0.2, 0.2, 0.2), (0.5, 0.1, 0.1)])), false);
-        assert!(near(colors.top, 0x491240, 200.) && gpui::Rgba::from(colors.top).b > gpui::Rgba::from(colors.top).r);
-        assert!(gpui::Rgba::from(colors.bottom).r > gpui::Rgba::from(colors.bottom).b);
+    fn a_multi_color_theme_uses_only_its_primary_color() {
+        let primary = (0.4, 0.1, 0.5);
+        let multi = toast_colors(Some(&theme(&[primary, (0.2, 0.2, 0.2), (0.9, 0.9, 0.1)])), false);
+        assert_eq!(multi, toast_colors(Some(&theme(&[primary])), false));
     }
 }
