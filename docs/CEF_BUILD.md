@@ -2,6 +2,11 @@
 
 This recipe builds the exact CEF used by Echo with H.264/AAC enabled. Sources,
 toolchain downloads, intermediate objects and distributions live outside Echo.
+On a fresh clone, `scripts/build-from-source.sh` does everything: it fetches the
+pinned depot_tools, syncs the pinned sources, applies the patch stack, compiles,
+packages and bundles Echo against the result. The recorded reference toolchain is
+Xcode 27.2 and Rust 1.96.0. `scripts/fetch-cef-fixtures.sh` fetches the media
+fixture the native gates need. `scripts/build-cef.sh tools` prepares only the tools.
 `cargo run -p bundle` automatically prefers
 `~/Documents/Bot/cef-src/echo-extensions-dist` on macOS arm64 when present.
 `scripts/with-cef.sh cargo test` uses the same automatic selection. Missing local

@@ -46,7 +46,7 @@ S.run(['cp', '-cR', str(Path(a.bundle).resolve()), str(app)], check=True)
 framework = 'Chromium Embedded Framework.framework/Chromium Embedded Framework'
 expected = hashlib.sha256((Path(a.cef_dist).resolve() / framework).read_bytes()).hexdigest()
 assert hashlib.sha256((app / 'Contents/Frameworks' / framework).read_bytes()).hexdigest() == expected, 'PiP bundle differs from canonical CEF'
-fixture = Path.home() / 'Documents/Bot/cef-src/fixtures/sintel-trailer.mp4'
+fixture = Path.home() / 'Library/Caches/EchoCEFQualification/fixtures/sintel-trailer.mp4'
 video = fixture.read_bytes()
 assert hashlib.sha256(video).hexdigest() == 'b670602fa00934ca27c4351bb0efe7ea7a07fae57284e44226025eeed7c51254'
 events = []; events_lock = threading.Lock()

@@ -117,7 +117,7 @@ profile.mkdir()
     'settings': {'theme_appearance': 'Dark'},
     'spaces': [{'id': i, 'user_profile_id': i, 'name': name, 'hue': 250,
                 'pinned': [], 'today': [{'id': i + 2, 'title': 'Developer acceptance',
-                    'url': 'https://www.rfc-editor.org/rfc/rfc2606.html',
+                    'url': 'https://www.iana.org/help/example-domains',
                     'last_active': {'secs_since_epoch': int(time.time()), 'nanos_since_epoch': 0}}],
                 'active_tab': i + 2}
                for i, name in [(1, 'Echo Test'), (2, 'Echo Test Isolation')]]}))

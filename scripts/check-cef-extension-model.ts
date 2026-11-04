@@ -15,7 +15,7 @@ const owned=await realpath(await mkdtemp(join(tmpdir(),'echo-model-check-')));
 const profile=join(owned,'profile');await mkdir(profile);
 await Bun.write(join(profile,'session.json'),JSON.stringify({format_version:2,next_id:4,default_user_profile_id:1,next_user_profile_id:2,
   active_space:0,archive:[],profiles:{'1':{id:1,name:'Echo Test',archive_after:null}},settings:{theme_appearance:'Dark'},
-  spaces:[{id:1,user_profile_id:1,name:'Echo Test',hue:250,pinned:[],today:[{id:2,title:'Model acceptance',url:'https://www.rfc-editor.org/rfc/rfc2606.html',
+  spaces:[{id:1,user_profile_id:1,name:'Echo Test',hue:250,pinned:[],today:[{id:2,title:'Model acceptance',url:'https://www.iana.org/help/example-domains',
     last_active:{secs_since_epoch:Math.floor(Date.now()/1000),nanos_since_epoch:0}}],active_tab:2}]}));
 const app=join(owned,'Echo Model Check.app');
 const copy=Bun.spawn(['cp','-cR',resolve(process.env.ECHO_CEF_TEST_BUNDLE ?? join(root,'target/bundle/Echo.app')),app]);if(await copy.exited)throw Error('Cannot freeze model acceptance app');

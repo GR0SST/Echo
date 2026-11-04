@@ -10,7 +10,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   chrome.tabs.onCreated.addListener(listeners.created);chrome.tabs.onUpdated.addListener(listeners.updated);chrome.tabs.onRemoved.addListener(listeners.removed);chrome.tabs.onActivated.addListener(listeners.activated);chrome.windows.onFocusChanged.addListener(listeners.focus);
   try{
    await pause(4000);
-   const [original]=await chrome.tabs.query({active:true,currentWindow:true});assert(original?.url?.startsWith('https://www.rfc-editor.org/'),'HTTPS owner resolved');
+   const [original]=await chrome.tabs.query({active:true,currentWindow:true});assert(original?.url?.startsWith('https://www.iana.org/'),'HTTPS owner resolved');
    assert((await chrome.tabs.get(original.id)).windowId===original.windowId,'get identity matches query');
    const window=await chrome.windows.getCurrent({populate:true});assert(window.id===original.windowId&&window.tabs.some(tab=>tab.id===original.id),'window projection matches owner');
    for(const url of ['javascript:void(0)','chrome://crash/']) {

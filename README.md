@@ -36,17 +36,44 @@ cargo run -p bundle
 open target/bundle/Echo.app
 ```
 
-On macOS arm64, bundling automatically prefers
-`~/Documents/Bot/cef-src/echo-extensions-dist` when present. This local build
-provides H.264/AAC, extension and browsing-data bridges, bounded background
-shutdown with recovery, and video-only PiP.
-`scripts/build-cef.sh release` stages the complete ordered patch stack;
-`bun scripts/check-cef-canonical.ts` qualifies it and publishes the canonical
-distribution. If absent,
-Cargo uses the downloaded prebuilt, so CI and other machines need no local CEF.
+That build uses the stock prebuilt CEF, so it lacks Echo's engine patches: H.264/AAC,
+extension and browsing-data bridges, bounded background shutdown with recovery,
+and the Picture-in-Picture hover controls.
+
+### Build the full Echo from source
+
+Everything needed to reproduce the project's own build is in this repository: pinned
+CEF and Chromium revisions, the ordered patch stack in `patches/cef154` and the
+build scripts. On macOS arm64 with Xcode, [Bun](https://bun.sh) and Python 3:
+
+```sh
+scripts/build-from-source.sh
+open target/bundle/Echo.app
+```
+
+The first run downloads the pinned sources and compiles Chromium. Expect several
+hours and roughly 100 GB of free disk space. Sources and output stay outside the
+clone, in `~/Documents/Bot/cef-src` (override with `ECHO_CEF_SOURCE`). Later runs
+are incremental.
+
+To make that CEF the default for plain `cargo run -p bundle`, qualify and publish it.
+This drives the mouse and keyboard, so leave the machine alone while it runs. It
+also needs `cliclick`, GNU `timeout` as `gtimeout`, `ffmpeg` and network access:
+
+```sh
+scripts/fetch-cef-fixtures.sh
+bun scripts/check-cef-canonical.ts
+```
+
+Bundling prefers the published `~/Documents/Bot/cef-src/echo-extensions-dist` when
+present, and otherwise falls back to the downloaded prebuilt.
 `scripts/drive.sh` runs the assembled bundle with the same selected framework.
 `ECHO_CEF_DIST` selects another local distribution; an explicit `CEF_PATH`
 also overrides automatic selection. See [CEF_BUILD.md](docs/CEF_BUILD.md).
+
+If a build fails with `'dispatch/dispatch.h' file not found`, a non-Apple `clang`
+(such as Homebrew's LLVM) is first on `PATH`. Use `scripts/with-cef.sh cargo ...`,
+which sets the SDK path, or remove it from `PATH`.
 
 The first build downloads CEF binaries into `third_party/cef` and may take a
 while. Building Echo with these prebuilt binaries does not require a Chromium

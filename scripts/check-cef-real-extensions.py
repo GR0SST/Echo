@@ -42,7 +42,7 @@ shot = lambda label: f'shotstack {RUNTIME / (label + ".png")}'
 action = lambda title: f'key cmd-t; type Extension {title}; wait 1; key enter; wait 3'
 script = '; '.join([
     'activate; resize 1000 760; position 100 1300; require-focus; key ctrl-1',
-    'key cmd-t; type https://www.rfc-editor.org/rfc/rfc2606.html; key enter; wait 6',
+    'key cmd-t; type https://www.iana.org/help/example-domains; key enter; wait 6',
     action('Dark Reader'), shot('reader-popup'), 'click 272 106; wait 2; key cmd-w; wait 1', shot('reader-light'),
     action('Dark Reader'), 'click 220 106; wait 2; key cmd-w; wait 1', shot('reader-dark'),
     action('uBlock Origin Lite'), shot('ubol-popup'),

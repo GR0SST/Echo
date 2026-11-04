@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:-release}"
-case "$MODE" in all|sync|build|distrib|release) ;; *) echo "Usage: $0 [release|sync|build|distrib|all]" >&2; exit 2;; esac
+case "$MODE" in all|sync|build|distrib|release|tools) ;; *) echo "Usage: $0 [release|sync|build|distrib|all|tools]" >&2; exit 2;; esac
 if [[ "${2:-}" != --locked ]]; then
   # Serialize sync, generation, compilation and packaging across worktrees.
   # Keep the wrapper in memory: another worktree may update this file during
@@ -15,9 +15,21 @@ DOWNLOAD="${ECHO_CEF_SOURCE:-$HOME/Documents/Bot/cef-src}"
 mkdir -p "$DOWNLOAD"
 DOWNLOAD="$(cd "$DOWNLOAD" && pwd -P)"
 case "$DOWNLOAD/" in "$ROOT/"*) echo "CEF sources must be outside the Echo checkout" >&2; exit 1;; esac
+for tool in bun curl git python3 shasum xcodebuild; do
+  command -v "$tool" >/dev/null || { echo "Missing required tool: $tool (see docs/CEF_BUILD.md)" >&2; exit 1; }
+done
+# A fresh clone has no depot_tools: fetch the pinned revision next to the sources.
+DEPOT_TOOLS_COMMIT=b1c2e86792a7f2b6576c181b7327ddd53b1a42a8
 COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
 TOOLS="${ECHO_DEPOT_TOOLS:-$(dirname "$COMMON")/depot_tools}"
-[[ -x "$TOOLS/gclient" ]] || { echo "Set ECHO_DEPOT_TOOLS to the existing depot_tools directory" >&2; exit 1; }
+if [[ -z "${ECHO_DEPOT_TOOLS:-}" && ! -x "$TOOLS/gclient" ]]; then
+  TOOLS="$DOWNLOAD/depot_tools"
+  if [[ ! -x "$TOOLS/gclient" ]]; then
+    git clone --no-checkout https://chromium.googlesource.com/chromium/tools/depot_tools.git "$TOOLS"
+    git -C "$TOOLS" checkout --detach "$DEPOT_TOOLS_COMMIT"
+  fi
+fi
+[[ -x "$TOOLS/gclient" ]] || { echo "ECHO_DEPOT_TOOLS has no gclient: $TOOLS" >&2; exit 1; }
 export PATH="$TOOLS:$PATH" DEPOT_TOOLS_UPDATE=0 PYTHONUNBUFFERED=1 CEF_ARCHIVE_FORMAT=tar.bz2
 export GN_OUT_CONFIGS=Release_GN_arm64
 # Keep official release optimization, but avoid PGO/LTO and debug-symbol disk costs.
@@ -48,13 +60,17 @@ if [[ ! -f "$AUTOMATE" ]]; then
   curl -fL --retry 3 "https://raw.githubusercontent.com/chromiumembedded/cef/$AUTOMATE_COMMIT/tools/automate/automate-git.py" -o "$AUTOMATE"
 fi
 echo "$AUTOMATE_SHA256  $AUTOMATE" | shasum -a 256 -c -
+[[ "$MODE" != tools ]] || { echo "Tools ready: $TOOLS"; exit 0; }
+# The first build on a machine has no checkout yet: sync the pinned sources once.
+SYNC=0
+if [[ "$MODE" == all || "$MODE" == sync ]] || [[ "$MODE" == release && ! -d "$DOWNLOAD/chromium/src/cef" ]]; then SYNC=1; fi
 ARGS=("--download-dir=$DOWNLOAD" "--depot-tools-dir=$TOOLS" --no-depot-tools-update
   --branch=8037 "--checkout=$CEF_COMMIT" --no-chromium-history --arm64-build --no-debug-build)
-if [[ "$MODE" == all || "$MODE" == sync ]]; then
+if [[ "$SYNC" == 1 ]]; then
   if [[ -f "$DOWNLOAD/chromium/src/cef/include/echo_cef_extensions_v1.h" ||
         -f "$DOWNLOAD/chromium/src/cef/include/echo_cef_download_v1.h" ||
         -f "$DOWNLOAD/chromium/src/content/public/common/shutdown_timeouts.h" ]] ||
-      rg -q 'echo_controls_active_' "$DOWNLOAD/chromium/src/chrome/browser/ui/views/overlay/video_overlay_window_views.h" 2>/dev/null; then
+      grep -q 'echo_controls_active_' "$DOWNLOAD/chromium/src/chrome/browser/ui/views/overlay/video_overlay_window_views.h" 2>/dev/null; then
     echo "Refusing to sync over custom sources; use release for an incremental build or prepare a separate fresh checkout" >&2
     exit 1
   fi

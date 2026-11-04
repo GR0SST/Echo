@@ -71,7 +71,7 @@ Real Store removal/reinstallation of uBlock Origin Lite 2026.1021.1354 passed:
 `qualify/store-removed.png`, `store-install-prompt.png`, `store-installed.png`
 and their engine logs. The final Store page showed Remove from Chrome.
 Dark Reader 4.9.133 and uBOL subsequently operated on
-`https://www.rfc-editor.org/rfc/rfc2606.html`.
+`https://www.iana.org/help/example-domains`.
 
 `qualify/settings-action-shortcut.png` shows recording the uBOL action shortcut.
 `shortcuts-and-isolation-engine.log` records persisted Alt+8 (action) and Alt+9

@@ -54,7 +54,7 @@ fi
 APP_STATUS=0
 wait "$PID" || APP_STATUS=$?
 cat "$LOG"
-if rg -q '^\[automation\] aborted:' "$LOG"; then
+if grep -q '^\[automation\] aborted:' "$LOG"; then
   exit 1
 fi
 
