@@ -346,6 +346,29 @@ fn little_window_banner(page: gpui::Rgba) -> gpui::Div {
             .child(div().size_full().bg(gpui::linear_gradient(180., gpui::linear_color_stop(rgb(0xf0d3cf), 0.), gpui::linear_color_stop(rgb(0xe4b9b6), 1.)))))
         .child(wave)
 }
+/// Advanced rows' symbols, after Arc's SF Symbols.
+#[derive(Clone, Copy)]
+enum Glyph {
+    Control(Icon),
+    Ion(&'static str),
+    /// A small window with an address field of dots.
+    UrlBar,
+    /// A framed play button.
+    PictureInPicture,
+}
+impl Glyph {
+    fn render(self) -> AnyElement {
+        let frame = || div().border(px(1.5)).border_color(rgb(0xffffff)).rounded(px(2.5)).flex().items_center().justify_center();
+        match self {
+            Glyph::Control(icon) => icons::control_sized(icon, 16.),
+            Glyph::Ion(name) => icons::ionicon(name, 14., 1.),
+            Glyph::UrlBar => frame().w(px(14.)).h(px(9.)).gap(px(1.5))
+                .children((0..3).map(|_| div().size(px(1.8)).rounded_full().bg(rgb(0xffffff))))
+                .into_any_element(),
+            Glyph::PictureInPicture => frame().size(px(12.)).child(icons::ionicon("play", 7., 1.)).into_any_element(),
+        }
+    }
+}
 fn rule() -> gpui::Div {
     div().h(px(1.)).w_full().bg(rgb(0x3e3f41))
 }
@@ -897,7 +920,7 @@ impl SettingsWindow {
         &self,
         label: &'static str,
         toggle: Toggle,
-        icon: Icon,
+        icon: Glyph,
         color: u32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -918,7 +941,7 @@ impl SettingsWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icons::control_sized(icon, 16.)),
+                    .child(icon.render()),
             )
             .child(
                 div()
@@ -941,13 +964,13 @@ impl SettingsWindow {
                 (
                     "Play Echo sound effects",
                     Toggle::SoundEffects,
-                    Icon::SoundEffects,
+                    Glyph::Control(Icon::SoundEffects),
                     0x0091ff,
                 ),
                 (
                     "Haptic feedback when reordering tabs",
                     Toggle::HapticFeedback,
-                    Icon::HapticFeedback,
+                    Glyph::Control(Icon::HapticFeedback),
                     0x0091ff,
                 ),
             ],
@@ -955,20 +978,20 @@ impl SettingsWindow {
                 (
                     "When opening Echo, restore windows from previous session",
                     Toggle::RestoreWindows,
-                    Icon::Restore,
-                    0x23ce4b,
+                    Glyph::Ion("browsers-outline"),
+                    0x31d158,
                 ),
                 (
                     "Allow window dragging from the top of webpages",
                     Toggle::DragWebpages,
-                    Icon::NewTab,
-                    0x23ce4b,
+                    Glyph::Ion("browsers"),
+                    0x31d158,
                 ),
                 (
                     "Show full URL when Toolbar is enabled",
                     Toggle::FullToolbarUrl,
-                    Icon::SiteControls,
-                    0xff434d,
+                    Glyph::UrlBar,
+                    0xff4246,
                 ),
 
             ],
@@ -976,20 +999,20 @@ impl SettingsWindow {
                 (
                     "Enable Picture in Picture when you leave a video tab",
                     Toggle::AutomaticPictureInPicture,
-                    Icon::Split,
-                    0xd326eb,
+                    Glyph::PictureInPicture,
+                    0xdb33f2,
                 ),
                 (
                     "Allow websites to get your theme data",
                     Toggle::ThemeData,
-                    Icon::Tidy,
-                    0xd326eb,
+                    Glyph::Ion("color-palette"),
+                    0xdb33f2,
                 ),
                 (
                     "Enable Boosts on websites you visit",
                     Toggle::Boosts,
-                    Icon::Boost,
-                    0xd326eb,
+                    Glyph::Ion("brush"),
+                    0xdb33f2,
                 ),
             ],
         ];
@@ -1008,7 +1031,6 @@ impl SettingsWindow {
                         ))
                 )
             }))
-            .child(self.media_permissions(cx))
             .child(
                 div()
                     .flex()

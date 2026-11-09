@@ -73,7 +73,7 @@ fn fixture(dir: &std::path::Path, name: &str, color: [u8; 4]) -> MediaItem {
     }
 }
 #[gpui::test]
-fn media_permissions_prompt_only_on_entry_persist_and_revoke_without_scanning_unknown_folders(
+fn media_permissions_prompt_only_on_entry_and_persist_without_scanning_unknown_folders(
     cx: &mut TestAppContext,
 ) {
     let (view, visual, _) = open_media_pages(cx);
@@ -105,21 +105,11 @@ fn media_permissions_prompt_only_on_entry_persist_and_revoke_without_scanning_un
         vec![dir.path().to_path_buf()]
     );
     assert!(entity.read_with(visual, |v, _| v.test_media_scanning()));
+    // Arc has no folder list in Advanced settings; Echo matches it.
     visual.simulate_keystrokes("cmd-,");
     let (_, mut settings) = settings_window(visual);
     click(&mut settings, "settings-tab-Advanced");
-    click(&mut settings, "settings-media-Downloads");
-    visual.run_until_parked();
-    assert_eq!(
-        view.read_with(visual, |v, _| v
-            .profile
-            .handle
-            .media_access(profile)
-            .unwrap()
-            .grant(MediaFolder::Downloads)),
-        FolderGrant::Denied
-    );
-    assert!(!entity.read_with(visual, |v, _| v.test_media_scanning()));
+    assert!(settings.debug_bounds("settings-media-Downloads").is_none());
 }
 #[gpui::test]
 fn media_late_native_approval_cannot_restore_a_revoked_profile_grant(cx: &mut TestAppContext) {
