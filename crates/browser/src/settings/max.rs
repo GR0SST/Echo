@@ -75,6 +75,8 @@ pub(super) struct State {
     status: String,
     busy: Option<Cancellation>,
     models: Vec<Model>,
+    /// The model dropdown for OpenAI/Anthropic is open.
+    model_menu: bool,
     _changed: Vec<Subscription>,
 }
 impl Drop for State {
@@ -124,6 +126,7 @@ impl State {
             status: String::new(),
             busy: None,
             models: Vec::new(),
+            model_menu: false,
             _changed: vec![changed, workspace_changed],
         }
     }
@@ -299,6 +302,7 @@ impl SettingsWindow {
     fn max_select_provider(&mut self, provider: Provider, cx: &mut Context<Self>) {
         self.max.cancel();
         self.max.models.clear();
+        self.max.model_menu = false;
         self.max.status.clear();
         let config = self.profile.edit_settings(|b| {
             let settings = &mut b.settings.max;
@@ -390,6 +394,11 @@ impl SettingsWindow {
                             b.settings.max.provider = config;
                         });
                         this.max.status = "API key saved in the system keychain".into();
+                        if this.profile.read_settings(|b| b.settings.max.provider.provider) != Provider::OpenAiCompatible {
+                            this.max.models.clear();
+                            this.max.model_menu = true;
+                            this.max_models(cx);
+                        }
                     }
                     Err(error) => this.max.status = error.into(),
                 }
@@ -402,6 +411,19 @@ impl SettingsWindow {
             }
         })
         .detach();
+    }
+    #[cfg(test)]
+    pub(crate) fn set_max_models_for_test(&mut self, models: Vec<(&str, &str)>) {
+        self.max.models = models.into_iter().map(|(id, name)| Model { id: id.into(), name: name.into() }).collect();
+    }
+    fn max_use_model(&mut self, id: String, cx: &mut Context<Self>) {
+        self.profile.edit_settings(|b| b.settings.max.provider.model = id.clone());
+        self.max.model.update(cx, |field, cx| field.set_text(id, cx));
+        self.max.model_menu = false;
+        if self.profile.read_settings(|b| b.settings.max.provider.provider) == Provider::OpenAiCompatible {
+            self.max.models.clear();
+        }
+        cx.notify();
     }
     fn max_models(&mut self, cx: &mut Context<Self>) {
         let config = self
@@ -424,8 +446,9 @@ impl SettingsWindow {
                 this.max.busy = None;
                 match result {
                     Ok(models) => {
+                        let compatible = this.profile.read_settings(|b| b.settings.max.provider.provider) == Provider::OpenAiCompatible;
                         this.max.models = models;
-                        this.max.status = "Choose a model below, or enter its ID".into();
+                        this.max.status = if compatible { "Choose a model below, or enter its ID" } else { "" }.into();
                     }
                     Err(error) => this.max.status = error.to_string(),
                 }
@@ -477,6 +500,7 @@ impl SettingsWindow {
                         this.max.status=if account.plan_enabled{"Connected to ChatGPT. Choose a model to continue."}else{"Signed in. ChatGPT plan permission was not granted; reconnect or use an API key."}.into();
                         let config=this.profile.read_settings(|b|b.settings.max.provider.clone());
                         this.max.model.update(cx,|field,cx|field.set_text(config.model,cx));
+                        if account.plan_enabled {this.max.models.clear();this.max.model_menu=true;this.max_models(cx);}
                     }
                     Err(error)=>this.max.status=error.to_string(),
                 }cx.notify();
@@ -711,37 +735,103 @@ impl SettingsWindow {
                 );
             }
         }
-        providers = providers
-            .child(line(colors))
-            .child(
-                row()
-                    .child("Model")
-                    .child(field(colors, &self.max.model, "max-model")),
-            )
-            .child(
-                row().justify_end().child(
-                    button(colors, cx, "max-load-models", "Load Models")
-                        .on_click(cx.listener(|this, _, _, cx| this.max_models(cx))),
-                ),
-            );
-        for (index, model) in self.max.models.iter().take(24).enumerate() {
-            let id = model.id.clone();
-            providers = providers.child(
-                row().child(model.name.clone()).child(
-                    button(colors,
-                        cx,
-                        SharedString::from(format!("max-model-{index}")),
-                        "Use Model",
-                    )
+        let connected = match settings.provider.authentication {
+            Authentication::ChatGpt => !settings.provider.chatgpt_account_id.is_empty(),
+            Authentication::ApiKey => !settings.provider.api_key_id.is_empty(),
+            Authentication::Disconnected => false,
+        };
+        if provider == Provider::OpenAiCompatible {
+            // Any server can host any model: type its ID or load the list.
+            providers = providers
+                .child(line(colors))
+                .child(row().child("Model").child(field(colors, &self.max.model, "max-model")))
+                .child(
+                    row().justify_end().child(
+                        button(colors, cx, "max-load-models", "Load Models")
+                            .on_click(cx.listener(|this, _, _, cx| this.max_models(cx))),
+                    ),
+                );
+            for (index, model) in self.max.models.iter().take(24).enumerate() {
+                let id = model.id.clone();
+                providers = providers.child(
+                    row().child(model.name.clone()).child(
+                        button(colors, cx, SharedString::from(format!("max-model-{index}")), "Use Model")
+                            .on_click(cx.listener(move |this, _, _, cx| this.max_use_model(id.clone(), cx))),
+                    ),
+                );
+            }
+        } else {
+            // OpenAI (ChatGPT or key) and Anthropic: pick from the account's models.
+            let current = settings.provider.model.clone();
+            let label = if !connected {
+                "Connect an account first".to_string()
+            } else if current.is_empty() {
+                "Choose a model".to_string()
+            } else {
+                self.max.models.iter().find(|m| m.id == current).map_or(current.clone(), |m| m.name.clone())
+            };
+            let open = self.max.model_menu && connected;
+            let mut model_row = row().relative().child("Model").child(
+                button(colors, cx, "max-model-menu", label)
+                    .debug_selector(|| "max-model-menu".into())
+                    .min_w(px(220.))
+                    .justify_between()
+                    .when(!connected, |b| b.opacity(0.5))
+                    .child(icons::ionicon("chevron-expand-outline", 12., 1.))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.max
-                            .model
-                            .update(cx, |field, cx| field.set_text(id.clone(), cx));
-                        this.max.models.clear();
+                        if !connected {
+                            return;
+                        }
+                        this.max.model_menu = !this.max.model_menu;
+                        if this.max.model_menu && this.max.models.is_empty() && this.max.busy.is_none() {
+                            this.max_models(cx);
+                        }
                         cx.notify();
                     })),
-                ),
             );
+            if open {
+                let list = div()
+                    .id("max-model-list")
+                    .debug_selector(|| "max-model-list".into())
+                    .absolute()
+                    // Opens upward: the row sits at the bottom of the scrolled page.
+                    .bottom(px(34.))
+                    .right(px(0.))
+                    .w(px(260.))
+                    .max_h(px(240.))
+                    .overflow_y_scroll()
+                    .p(px(4.))
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(colors.rgb(0x636565))
+                    .bg(colors.rgb(0x343636))
+                    .shadow_lg()
+                    .occlude()
+                    .when(self.max.models.is_empty(), |list| {
+                        list.child(div().px(px(8.)).py(px(4.)).text_color(colors.rgb(0xaaaeb0)).child(if self.max.busy.is_some() { "Loading models…" } else { "No models available" }))
+                    })
+                    .children(self.max.models.iter().enumerate().map(|(index, model)| {
+                        let id = model.id.clone();
+                        let selected = model.id == current;
+                        div()
+                            .id(("max-model-choice", index))
+                            .debug_selector(move || format!("max-model-choice-{index}"))
+                            .h(px(24.))
+                            .px(px(8.))
+                            .rounded(px(4.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .cursor_pointer()
+                            .hover(|r| r.bg(colors.rgb(0x2c374b)))
+                            .child(div().w(px(12.)).when(selected, |c| c.child("✓")))
+                            .child(div().flex_1().min_w_0().truncate().child(model.name.clone()))
+                            .on_click(cx.listener(move |this, _, _, cx| this.max_use_model(id.clone(), cx)))
+                    }));
+                // Paint above the rows below it so they cannot take its clicks.
+                model_row = model_row.child(gpui::deferred(list).with_priority(1));
+            }
+            providers = providers.child(line(colors)).child(model_row);
         }
         if self.max.busy.is_some() {
             providers = providers.child(row().justify_end().child(

@@ -11768,6 +11768,35 @@ fn max_sign_out_disconnects_even_if_credentials_are_unavailable(cx:&mut TestAppC
 }
 
 #[gpui::test]
+fn max_model_is_a_dropdown_for_accounts_and_a_field_for_compatible_providers(cx: &mut TestAppContext) {
+    use echo_ai::{Authentication, Provider};
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (preferences, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Max");
+    scroll(&mut settings, "settings-scroll", gpui::TouchPhase::Moved, 0., -2000.);
+    settings.run_until_parked();
+    // Not connected: the dropdown is shown but does nothing.
+    assert!(settings.debug_bounds("max-model").is_none(), "no Model ID field for OpenAI");
+    click(&mut settings, "max-model-menu");
+    assert!(settings.debug_bounds("max-model-list").is_none());
+    // Signed in with ChatGPT: choose from the account's models.
+    view.update(cx, |w, cx| { w.edit_profile(|b| { b.settings.max.provider.authentication = Authentication::ChatGpt; b.settings.max.provider.chatgpt_account_id = "account".into(); }); cx.notify(); });
+    preferences.update(&mut settings, |p, cx| { p.set_max_models_for_test(vec![("gpt-a", "GPT A"), ("gpt-b", "GPT B")]); cx.notify(); });
+    click(&mut settings, "max-model-menu");
+    assert!(settings.debug_bounds("max-model-list").is_some());
+    click(&mut settings, "max-model-choice-1");
+    assert_eq!(view.read_with(cx, |w, _| w.browser.settings.max.provider.model.clone()), "gpt-b");
+    // Compatible keeps the free-form Model ID and Load Models.
+    click(&mut settings, "max-provider-OpenAiCompatible");
+    scroll(&mut settings, "settings-scroll", gpui::TouchPhase::Moved, 0., -2000.);
+    settings.run_until_parked();
+    assert_eq!(view.read_with(cx, |w, _| w.browser.settings.max.provider.provider), Provider::OpenAiCompatible);
+    assert!(settings.debug_bounds("max-model").is_some());
+    assert!(settings.debug_bounds("max-load-models").is_some());
+}
+
+#[gpui::test]
 fn max_anthropic_workspace_survives_provider_switches(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-,");
