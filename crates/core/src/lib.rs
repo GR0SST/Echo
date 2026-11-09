@@ -19,6 +19,7 @@ pub mod bulk_archive;
 pub mod archive_query;
 pub mod preferences;
 pub mod settings;
+pub mod payments;
 pub mod shortcuts;
 pub mod max;
 pub mod routing;
