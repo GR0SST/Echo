@@ -34,7 +34,7 @@ case "$(uname -s)" in
       SIGN+=(--signAppIdentity "$APPLE_DEVELOPER_ID")
       [[ -z "${APPLE_INSTALLER_ID:-}" ]] || SIGN+=(--signInstallIdentity "$APPLE_INSTALLER_ID")
       [[ -z "${APPLE_NOTARY_PROFILE:-}" ]] || SIGN+=(--notaryProfile "$APPLE_NOTARY_PROFILE")
-      SIGN+=(--signEntitlements config/release-entitlements.plist)
+      SIGN+=(--signEntitlements config/release.entitlements)
       [[ -n "${APPLE_INSTALLER_ID:-}" ]] || echo "Installer signing skipped: APPLE_INSTALLER_ID is not configured."
       [[ -n "${APPLE_NOTARY_PROFILE:-}" ]] || echo "Notarization skipped: APPLE_NOTARY_PROFILE is not configured."
     else
@@ -55,7 +55,12 @@ ECHO_CEF_DIST="$(bun scripts/check-release-cef.ts "${ECHO_CEF_DIST:?Set ECHO_CEF
 export ECHO_CEF_DIST CEF_PATH="$ECHO_CEF_DIST"
 cargo run --locked -p bundle -- --release
 if [[ "$(uname -s)" == Darwin ]]; then
-  cmp -s "$ECHO_CEF_DIST/Chromium Embedded Framework.framework/Chromium Embedded Framework" "$PACK/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" || { echo 'Bundled CEF differs from the qualified distribution.' >&2; exit 1; }
+  cmp -s "$ECHO_CEF_DIST/Chromium Embedded Framework.framework/Chromium Embedded Framework" "$PACK/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" || { echo 'Bundled CEF differs from the qualified distribution.' >&2; exit 1; }  # vpk's --deep signing skips loose dylibs in the framework's Libraries
+  # folder; notarization rejects them, so sign them first.
+  if [[ -n "${APPLE_DEVELOPER_ID:-}" ]]; then
+    find "$PACK/Contents/Frameworks" -path '*/Libraries/*' -name '*.dylib' -type f -print0 |
+      xargs -0 codesign --force --timestamp --options runtime --sign "$APPLE_DEVELOPER_ID"
+  fi
 fi
 OUT="${ECHO_RELEASE_CACHE:-target/update-packages}/$CHANNEL/$PLATFORM"
 mkdir -p "$OUT" "$OUTPUT_ROOT"

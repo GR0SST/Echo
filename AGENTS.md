@@ -171,3 +171,38 @@ See `README.md`. In short:
 - Keep LICENSE files and third-party notices.
 - Don't use Arc / The Browser Company trademarks, logos or assets: we copy
   the functionality and UX, not the brand.
+
+## Releases
+
+Details live in `docs/UPDATES.md`; this is the checklist. Only release when
+the owner asks. Published versions are immutable: never reuse a version.
+
+1. Bump `version` in the root `Cargo.toml` (semver, higher than the last
+   release; check `gh release list -R GR0SST/Echo`). Commit and push.
+2. Environment (macOS release host):
+   ```sh
+   export PATH="$HOME/.local/bin:$PATH" VPK="$HOME/.local/bin/vpk"   # vpk 1.2.161
+   export DOTNET_ROOT="$(brew --prefix dotnet)/libexec"
+   export SDKROOT="$(xcrun --show-sdk-path)" BINDGEN_EXTRA_CLANG_ARGS="-isysroot $SDKROOT"
+   export ECHO_UPDATE_URL=https://updates.echo-browser.app/
+   export APPLE_DEVELOPER_ID='Developer ID Application: Volodymyr Yaremko (4JXH32W2F9)'
+   export APPLE_NOTARY_PROFILE=echo-notary
+   ```
+   `SDKROOT`/`BINDGEN_EXTRA_CLANG_ARGS` are needed when gpui's bindgen
+   cannot find `dispatch/dispatch.h`. There is no Developer ID Installer
+   identity, so the `.pkg` is unsigned; the DMG is the user-facing download.
+   The update signing key is `~/.config/echo/update-signing.key`; never copy
+   it anywhere else.
+3. Build, sign, notarize and sign the update manifest. Keep the release root
+   and `target/update-packages/` between releases (deltas come from them):
+   `scripts/release.sh X.Y.Z ~/Documents/Bot/echo-releases/stable stable`
+4. DMG (background `crates/bundle/assets/dmg-background*.png`), signed,
+   notarized and stapled, written to `target/dmg/`, outside the release root:
+   `scripts/make-dmg.sh X.Y.Z ~/Documents/Bot/echo-releases/stable`
+5. Publish to the static update host (artifacts first, manifest last):
+   `scripts/publish-release.sh ~/Documents/Bot/echo-releases/stable`
+   Then check `https://updates.echo-browser.app/manifest.json` returns 200.
+6. GitHub release with the DMG:
+   `gh release create vX.Y.Z target/dmg/Echo-X.Y.Z-aarch64.dmg -R GR0SST/Echo --title "Echo X.Y.Z" --notes "..."`
+7. Verify: install from the DMG, open Echo, run “Check for Updates…” from
+   the Command Bar; it must say Echo is up to date (or offer the new version).
