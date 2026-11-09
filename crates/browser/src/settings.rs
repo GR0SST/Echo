@@ -341,7 +341,7 @@ fn little_window_banner(page: gpui::Rgba) -> gpui::Div {
         if let Ok(path) = field.build() { window.paint_path(path, page); }
     }).absolute().left_0().right_0().bottom_0().h(px(10.));
     div().relative().h(px(134.)).overflow_hidden().bg(rgb(0xd98a8b)).px(px(60.)).pt(px(46.))
-        .child(div().h(px(130.)).rounded_t(px(9.)).overflow_hidden().border_1().border_color(rgb(0x3a3640)).bg(rgb(0xe9c3c0))
+        .child(div().h(px(130.)).rounded_t(px(9.)).overflow_hidden()
             .child(gpui::img(TOOLBAR.clone()).w_full().h(px(564. * 46. / 1000.)))
             .child(div().size_full().bg(gpui::linear_gradient(180., gpui::linear_color_stop(rgb(0xf0d3cf), 0.), gpui::linear_color_stop(rgb(0xe4b9b6), 1.)))))
         .child(wave)
