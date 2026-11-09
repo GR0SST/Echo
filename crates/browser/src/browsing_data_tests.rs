@@ -5,7 +5,7 @@ fn data(
     cx: &mut VisualTestContext,
     profile: browser_core::UserProfileId,
 ) {
-    v.update_in(cx, |v, w, cx| v.open_browsing_data(profile, w, cx));
+    v.update_in(cx, |v, w, cx| v.open_browsing_data(profile, false, w, cx));
     cx.run_until_parked();
     click(cx, "delete-browsing-data-row");
     cx.run_until_parked();
@@ -210,13 +210,23 @@ fn browsing_data_settings_entry_keeps_the_selected_unused_profile(cx: &mut TestA
     assert!(active_url(&v, cx).is_some_and(|u| u
         == format!(
             "{}?profile={}",
-            crate::browsing_data::PRIVACY,
+            crate::browsing_data::CLEAR,
             serde_json::to_string(&other).unwrap()
         )));
+    assert!(cx.debug_bounds("data-dialog").is_some(), "Clear Browsing Data opens its dialog");
     assert_ne!(
         v.read_with(cx, |v, _| v.browser.active_user_profile_id()),
         other
     );
+    // Privacy and Security opens the same profile's page without the dialog.
+    click(&mut settings, "settings-privacy");
+    cx.run_until_parked();
+    assert!(active_url(&v, cx).is_some_and(|u| u
+        == format!(
+            "{}?profile={}",
+            crate::browsing_data::PRIVACY,
+            serde_json::to_string(&other).unwrap()
+        )));
 }
 
 #[gpui::test]

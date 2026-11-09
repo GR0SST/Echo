@@ -12425,6 +12425,26 @@ fn native_pip_return_intent_precedes_the_renderer_exit_in_one_batch(cx:&mut Test
 }
 
 #[gpui::test]
+fn profile_settings_dropdowns_are_right_aligned_with_their_menus(cx: &mut TestAppContext) {
+    let (_view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    let right = |b: gpui::Bounds<gpui::Pixels>| b.origin.x + b.size.width;
+    let edge = right(settings.debug_bounds("settings-button-Search Settings…").unwrap());
+    for selector in ["settings-popup-Search engine", "settings-popup-Archive tabs after", "settings-popup-New documents", "settings-popup-Download location"] {
+        let button = settings.debug_bounds(selector).unwrap();
+        assert!((right(button) - edge).abs() < gpui::px(1.), "{selector} is flush right");
+        // Its menu lists folders through a native API the test platform lacks.
+        if selector.ends_with("Download location") { continue; }
+        click(&mut settings, selector);
+        let menu = settings.debug_bounds("settings-popup-menu").unwrap();
+        assert!((menu.origin.x - button.origin.x).abs() < gpui::px(16.), "{selector} menu opens over its button: {menu:?} vs {button:?}");
+        click(&mut settings, selector);
+    }
+}
+
+#[gpui::test]
 fn automatic_updates_toggle_persists_and_gates_background_checks(cx: &mut TestAppContext) {
     use browser_core::settings::Toggle;
     let (view, cx) = open(cx);

@@ -595,7 +595,7 @@ impl SettingsWindow {
             }))
             .child(div().flex_1().min_w_0().child(label))
             .child(
-                div().w(px(178.)).flex_none().flex().justify_center().child(
+                div().w(px(178.)).flex_none().flex().justify_end().child(
                     self.settings_button(value)
                         .id(SharedString::from(format!("popup-{label}")))
                         .debug_selector(|| format!("settings-popup-{label}"))
@@ -799,8 +799,11 @@ impl SettingsWindow {
                             .when(label=="Passwords",|row|row.debug_selector(||"settings-passwords".into()).cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{
                                 if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::password_manager::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,cx);}
                             })))
+                            .when(label=="Privacy and Security",|row|row.debug_selector(||"settings-privacy".into()).cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{
+                                if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::browsing_data::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,false,cx);}
+                            })))
                             .when(label=="Clear Browsing Data",|row|row.debug_selector(||"settings-clear-browsing-data".into()).cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{
-                                if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::browsing_data::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,cx);}
+                                if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::browsing_data::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,true,cx);}
                             })))
                             .min_h(px(34.))
                             .justify_start()
@@ -1116,9 +1119,18 @@ impl SettingsWindow {
             Popup::Downloads => 438.,
             Popup::LittleArchive => 423.,
             Popup::ShortcutPriority => 420.,
+        } + match popup {
+            // Buttons sit flush right in their 178 px column; the measured
+            // offsets above were for centered buttons.
+            Popup::Search => (178. - 137.) / 2.,
+            Popup::Archive => (178. - 154.) / 2.,
+            Popup::Documents | Popup::LittleArchive => (178. - 150.) / 2.,
+            Popup::Downloads => (178. - 138.) / 2.,
+            Popup::ShortcutPriority => 0.,
         };
         div()
             .id("settings-popup-menu")
+            .debug_selector(|| "settings-popup-menu".into())
             .font_weight(gpui::FontWeight::NORMAL)
             .flex()
             .flex_col()

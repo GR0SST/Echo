@@ -425,9 +425,12 @@ impl BrowserWindow {
         .detach();
         cx.notify();
     }
+    /// `dialog` opens Clear Browsing Data over the page, as Arc's
+    /// settings/clearBrowserData route does; otherwise just Privacy and security.
     pub(crate) fn open_browsing_data(
         &mut self,
         profile: UserProfileId,
+        dialog: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -441,7 +444,8 @@ impl BrowserWindow {
         self.close_command_bar(cx);
         self.close_tab_menu(cx);
         let location = format!(
-            "{PRIVACY}?profile={}",
+            "{}?profile={}",
+            if dialog { CLEAR } else { PRIVACY },
             serde_json::to_string(&profile).unwrap()
         );
         let tab = self.edit_browser(|b| b.new_tab(location, SystemTime::now()));
@@ -1030,14 +1034,16 @@ pub(crate) fn open_from_settings(
     profile: crate::profile::ProfileHandle,
     owner: Option<gpui::WeakEntity<BrowserWindow>>,
     selected: UserProfileId,
+    dialog: bool,
     cx: &mut gpui::App,
 ) {
-    cx.defer(move |cx| open_from_settings_now(profile, owner, selected, true, cx));
+    cx.defer(move |cx| open_from_settings_now(profile, owner, selected, dialog, true, cx));
 }
 fn open_from_settings_now(
     profile: crate::profile::ProfileHandle,
     owner: Option<gpui::WeakEntity<BrowserWindow>>,
     selected: UserProfileId,
+    dialog: bool,
     create: bool,
     cx: &mut gpui::App,
 ) {
@@ -1069,10 +1075,10 @@ fn open_from_settings_now(
         });
     if let Some(target) = target {
         let _ = target.update(cx, |this, window, cx| {
-            this.open_browsing_data(selected, window, cx)
+            this.open_browsing_data(selected, dialog, window, cx)
         });
     } else if create {
         crate::new_window::open(false, cx);
-        cx.defer(move |cx| open_from_settings_now(profile, None, selected, false, cx));
+        cx.defer(move |cx| open_from_settings_now(profile, None, selected, dialog, false, cx));
     }
 }
