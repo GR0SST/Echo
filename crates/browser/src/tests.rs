@@ -12425,11 +12425,29 @@ fn native_pip_return_intent_precedes_the_renderer_exit_in_one_batch(cx:&mut Test
 }
 
 #[gpui::test]
+fn automatic_updates_toggle_persists_and_gates_background_checks(cx: &mut TestAppContext) {
+    use browser_core::settings::Toggle;
+    let (view, cx) = open(cx);
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    let enabled = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |view, _| view.profile.handle.read_settings(|b| b.settings.enabled(Toggle::AutomaticUpdates)));
+    assert!(enabled(cx));
+    let row = settings.debug_bounds("settings-toggle-AutomaticUpdates").expect("Automatically update row");
+    let warn = settings.debug_bounds("settings-toggle-WarnBeforeQuitting").unwrap();
+    assert!(row.origin.y < warn.origin.y, "Arc lists the update row above Warn before quitting");
+    click(&mut settings, "settings-toggle-AutomaticUpdates");
+    assert!(!enabled(cx));
+    assert!(!cx.update(|_, cx| crate::updates::automatic(cx)));
+    click(&mut settings, "settings-toggle-AutomaticUpdates");
+    assert!(enabled(cx));
+    assert!(cx.update(|_, cx| crate::updates::automatic(cx)));
+}
+
+#[gpui::test]
 fn preview_preferences_sheet_keeps_seven_choices_and_dismisses_without_changing_other_settings(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     cx.simulate_keystrokes("cmd-,");
     let (preferences, mut settings) = settings_window(cx);
-    assert!(settings.debug_bounds("settings-toggle-AutomaticUpdates").is_none());
     click(&mut settings, "settings-button-Previews Settings…");
     let warn_before = view.read_with(cx, |view,_| view.profile.handle.read_settings(|b| b.settings.enabled(browser_core::settings::Toggle::WarnBeforeQuitting)));
     click(&mut settings, "settings-toggle-WarnBeforeQuitting");

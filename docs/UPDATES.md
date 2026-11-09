@@ -172,7 +172,9 @@ reads “Check for Updates…”; the 270 × 350 status window shows product/ver
 Arc's available-update sidebar banner was absent in the current installation.
 “Restart and Update” was confirmed in bundle strings; the banner's exact colors,
 spacing and animation remain **unqualified** pending a live reference. Do not
-claim full update visual parity. The auto-update setting is also still missing.
+claim full update visual parity. Settings → General → “Automatically update my
+Echo” (default on) gates the background check; when off, only the manual
+“Check for Updates…” route contacts the update host.
 
 ## Verification
 

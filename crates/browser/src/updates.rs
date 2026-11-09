@@ -37,7 +37,7 @@ pub(crate) fn init(cx: &mut App) {
         loop {
             if cx
                 .update(|cx| {
-                    if !crate::quit::is_quitting() {
+                    if !crate::quit::is_quitting() && automatic(cx) {
                         check(cx);
                     }
                 })
@@ -51,6 +51,18 @@ pub(crate) fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+/// "Automatically update my Echo": off leaves only the manual
+/// "Check for Updates…" route; no background request is made.
+pub(crate) fn automatic(cx: &mut App) -> bool {
+    crate::new_window::normal_source(cx)
+        .map(|normal| {
+            normal.profile.read_settings(|b| {
+                b.settings
+                    .enabled(browser_core::settings::Toggle::AutomaticUpdates)
+            })
+        })
+        .unwrap_or(true)
 }
 pub(crate) fn request_check(cx: &mut App) {
     check(cx);

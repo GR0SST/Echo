@@ -543,7 +543,7 @@ impl SettingsWindow {
     }
     fn general(&self, cx: &mut Context<Self>) -> AnyElement {
         div().w(px(556.)).flex().flex_col().gap(px(8.))
-            .child(self.settings_group().child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
+            .child(self.settings_group().child(self.toggle_row("Automatically update my Echo", Toggle::AutomaticUpdates, cx)).child(self.settings_rule()).child(self.toggle_row("Warn before quitting", Toggle::WarnBeforeQuitting, cx)))
             .when(self.default_browser == DefaultState::Other, |body| body.child(
                 self.settings_group().child(row().min_h(px(42.))
                     .child("Echo isn‘t your default browser.")
