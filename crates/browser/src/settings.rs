@@ -320,6 +320,32 @@ fn row() -> gpui::Div {
         .min_h(px(35.))
         .gap(px(10.))
 }
+/// Links' banner: a real Little Echo toolbar over a nearly empty page,
+/// cut by a wave like Arc's, on a pink field.
+fn little_window_banner(page: gpui::Rgba) -> gpui::Div {
+    static TOOLBAR: std::sync::LazyLock<std::sync::Arc<gpui::Image>> = std::sync::LazyLock::new(|| {
+        std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, include_bytes!("../assets/little-echo-toolbar.png").to_vec()))
+    });
+    let wave = gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let origin = bounds.origin;
+        let w = f32::from(bounds.size.width);
+        let h = f32::from(bounds.size.height);
+        let mut field = gpui::PathBuilder::fill();
+        field.move_to(origin + gpui::point(px(0.), px(h)));
+        for x in 0..=684 {
+            let y = 5. + 2.5 * (x as f32 * std::f32::consts::TAU / 22.).sin();
+            field.line_to(origin + gpui::point(px(x as f32 * w / 684.), px(y)));
+        }
+        field.line_to(origin + gpui::point(px(w), px(h)));
+        field.close();
+        if let Ok(path) = field.build() { window.paint_path(path, page); }
+    }).absolute().left_0().right_0().bottom_0().h(px(10.));
+    div().relative().h(px(134.)).overflow_hidden().bg(rgb(0xd98a8b)).px(px(60.)).pt(px(46.))
+        .child(div().h(px(130.)).rounded_t(px(9.)).overflow_hidden().border_1().border_color(rgb(0x3a3640)).bg(rgb(0xe9c3c0))
+            .child(gpui::img(TOOLBAR.clone()).w_full().h(px(564. * 46. / 1000.)))
+            .child(div().size_full().bg(gpui::linear_gradient(180., gpui::linear_color_stop(rgb(0xf0d3cf), 0.), gpui::linear_color_stop(rgb(0xe4b9b6), 1.)))))
+        .child(wave)
+}
 fn rule() -> gpui::Div {
     div().h(px(1.)).w_full().bg(rgb(0x3e3f41))
 }
@@ -852,9 +878,7 @@ impl SettingsWindow {
             browser_core::settings::LittleWindowArchive::TwelveHours => "12 hours",
         };
         div().flex().flex_col()
-            .child(div().h(px(134.)).overflow_hidden().bg(colors.rgb(0xd28586)).px(px(60.)).pt(px(46.))
-                .child(div().h(px(130.)).rounded_t(px(8.)).bg(colors.rgb(0xe6d1cc)).border_1().border_color(colors.rgb(0xbcb7bd))
-                    .child(div().h(px(25.)).bg(colors.rgb(0xbab9c5)).rounded_t(px(8.)).flex().items_center().justify_between().px(px(10.)).text_size(px(10.)).text_color(colors.rgb(0x555761)).child("Work").child("echo.local").child("Open in Work"))))
+            .child(little_window_banner(colors.rgb(0x292b2d)))
             .child(div().px(px(64.)).py(px(24.)).flex().flex_col().gap(px(24.))
                 .child(div().px(px(10.)).child("Little Echo is a smaller, simpler Echo window. It’s perfect for quick lookups and reading funny tweets your friends send you."))
                 .child(self.settings_group().child(self.toggle_row("Open Little Echo when I press ⌥⌘N in any app", Toggle::LittleWindowShortcut, cx)).child(self.settings_rule())
