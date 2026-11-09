@@ -1360,7 +1360,9 @@ impl Pages {
             let mut store = self.store.borrow_mut();
             for profile in browser.user_profiles().filter(|profile| !browser.is_private() || profile.id() == browser.active_user_profile_id()) {
                 let storage = if browser.is_private() { StorageSelection::Current } else { StorageSelection::for_profile(profile.id()) };
-                let boosts = profile.boosts.iter().filter(|boost| boost.enabled).map(|boost| engine::SiteBoost {
+                // Advanced → "Enable Boosts on websites you visit" switches every Boost off.
+                let allowed = browser.settings.enabled(browser_core::settings::Toggle::Boosts);
+                let boosts = profile.boosts.iter().filter(|boost| allowed && boost.enabled).map(|boost| engine::SiteBoost {
                     domain: boost.domain().into(), css: boost.stylesheet(), javascript: boost.javascript.clone(),
                 }).collect();
                 store.engine.set_site_boosts(&storage, boosts);
@@ -1456,8 +1458,9 @@ impl Pages {
         let mut store = self.store.borrow_mut();
         let store = &mut *store;
         for page in store.pages.values_mut().filter(|page| page.owner == self.host) {
-            let size = browser.user_profile(page.identity.profile).and_then(|profile| profile.boosts.iter()
-                .find(|boost| boost.matches(&page.url) && boost.appearance.size != 0))
+            let allowed = browser.settings.enabled(browser_core::settings::Toggle::Boosts);
+            let size = browser.user_profile(page.identity.profile).filter(|_| allowed).and_then(|profile| profile.boosts.iter()
+                .find(|boost| boost.enabled && boost.matches(&page.url) && boost.appearance.size != 0))
                 .map(|boost| (100 + i16::from(boost.appearance.size.clamp(-5, 10)) * 10) as u16);
             let wanted = size.or(page.boost_zoom.map(|_| 100));
             if let Some(percent) = wanted.filter(|percent| page.boost_zoom != Some(*percent) || size.is_none()) {

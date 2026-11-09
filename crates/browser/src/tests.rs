@@ -10248,6 +10248,13 @@ fn boosts_are_sent_to_their_profile_engine_context_and_disabled_rules_are_remove
         if let Some(pages) = &view.pages { pages.borrow_mut().sync(&view.browser, true); }
         assert!(fake.0.borrow().boosts[&StorageSelection::Default][0].css.contains(".ad { display: none !important; }"));
         assert!(fake.0.borrow().boosts[&StorageSelection::for_profile(other)].is_empty());
+        // Advanced → Enable Boosts off removes every Boost; on restores them.
+        view.edit_browser(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::Boosts, false));
+        if let Some(pages) = &view.pages { pages.borrow_mut().sync(&view.browser, true); }
+        assert!(fake.0.borrow().boosts[&StorageSelection::Default].is_empty());
+        view.edit_browser(|browser| browser.settings.set_enabled(browser_core::settings::Toggle::Boosts, true));
+        if let Some(pages) = &view.pages { pages.borrow_mut().sync(&view.browser, true); }
+        assert_eq!(fake.0.borrow().boosts[&StorageSelection::Default].len(), 1);
         view.edit_browser(|browser| browser.active_user_profile_mut().boosts.get_mut(id).unwrap().enabled = false);
         if let Some(pages) = &view.pages { pages.borrow_mut().sync(&view.browser, true); }
         assert!(fake.0.borrow().boosts[&StorageSelection::Default].is_empty());
