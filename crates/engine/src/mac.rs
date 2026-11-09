@@ -544,6 +544,9 @@ unsafe fn bind_scroll_descendants(view:*mut AnyObject,id:i32){unsafe{
   if !SCROLL_ORIGINALS.with_borrow(|all|all.contains_key(&key)){
    if let Some(method)=class.instance_method(sel!(scrollWheel:)){
     SCROLL_ORIGINALS.with_borrow_mut(|all|{all.insert(key,method.implementation());});
+    // A transparent NSView defaults to moving the window, so page content
+    // under the titlebar would drag it. Page window drag is opt-in (host policy).
+    add_method(class as *const AnyClass as *mut AnyClass,sel!(mouseDownCanMoveWindow),std::mem::transmute::<extern "C-unwind" fn(*mut AnyObject,Sel)->Bool,Imp>(page_cannot_move_window),"c@:\0");
     add_method(class as *const AnyClass as *mut AnyClass,sel!(scrollWheel:),std::mem::transmute::<extern "C-unwind" fn(*mut AnyObject,Sel,*mut AnyObject),Imp>(page_scroll_event),"v@:@\0");
    }
   }
@@ -552,6 +555,7 @@ unsafe fn bind_scroll_descendants(view:*mut AnyObject,id:i32){unsafe{
  let children:*mut AnyObject=msg_send![view,subviews];let count:usize=msg_send![children,count];
  for index in 0..count{let child:*mut AnyObject=msg_send![children,objectAtIndex:index];bind_scroll_descendants(child,id);}
 }}
+extern "C-unwind" fn page_cannot_move_window(_:*mut AnyObject,_:Sel)->Bool{Bool::NO}
 extern "C-unwind" fn page_scroll_event(view:*mut AnyObject,sel:Sel,event:*mut AnyObject){unsafe{
  let id=SCROLL_TARGETS.with_borrow(|all|all.get(&(view as usize)).copied());
  if let Some(id)=id{
