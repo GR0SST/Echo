@@ -206,28 +206,12 @@ fn field(
         .child(entity.clone())
 }
 // Original Echo artwork: folded ribbons, rather than the reference's brand marks.
+/// Soft abstract artwork behind the white "Max" title.
 fn banner_art() -> impl IntoElement {
-    gpui::canvas(|_, _, _| (), |bounds, _, window, _| {
-        let origin = bounds.origin;
-        let w = f32::from(bounds.size.width);
-        let mut field = gpui::PathBuilder::fill();
-        field.move_to(origin);
-        field.line_to(origin + point(px(w), px(0.)));
-        for x in (0..=684).rev() {
-            let y = 122.5 + 2.5 * (x as f32 * std::f32::consts::TAU / 22.).sin();
-            field.line_to(origin + point(px(x as f32 * w / 684.), px(y)));
-        }
-        field.close();
-        if let Ok(path) = field.build() { window.paint_path(path, rgb(0x5148dd)); }
-        for (x,y,size) in [(18.,18.,22.), (94.,70.,28.), (208.,24.,12.), (452.,20.,25.), (570.,73.,17.), (663.,91.,29.)] {
-            let mut ribbon = gpui::PathBuilder::stroke(px(2.5));
-            for (i,(dx,dy)) in [(0.,0.),(size,0.),(0.,size),(size,size)].into_iter().enumerate() {
-                let p = origin + point(px(x+dx),px(y+dy));
-                if i==0 { ribbon.move_to(p); } else { ribbon.line_to(p); }
-            }
-            if let Ok(path) = ribbon.build() { window.paint_path(path, rgb(0xffbaa8)); }
-        }
-    }).absolute().inset_0()
+    static ART: std::sync::LazyLock<Arc<gpui::Image>> = std::sync::LazyLock::new(|| {
+        Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, include_bytes!("../../assets/max-banner.png").to_vec()))
+    });
+    gpui::img(ART.clone()).absolute().inset_0().size_full()
 }
 fn preview(index: usize, _icon: &'static str) -> gpui::Div {
     let colors = [0xd8d1ef, 0x72bed4, 0xb9c9ef, 0xd2c5ef, 0x9cd3cf, 0x71a0d5];
