@@ -12888,6 +12888,21 @@ fn update_banner_click_cannot_quit_without_a_verified_package(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn update_card_offers_automatic_updates_and_restart(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    assert!(cx.debug_bounds("update-card").is_none());
+    cx.cx.update(|app| { app.global_mut::<crate::updates::Updates>().status = crate::updates::Status::Ready("0.2.0".into()); app.refresh_windows(); });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("update-card").is_some());
+    let automatic = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _| w.profile.handle.read_settings(|b| b.settings.enabled(browser_core::settings::Toggle::AutomaticUpdates)));
+    assert!(automatic(&view, cx));
+    click(cx, "update-automatic");
+    assert!(!automatic(&view, cx));
+    click(cx, "update-automatic");
+    assert!(automatic(&view, cx));
+}
+
+#[gpui::test]
 fn update_window_keyboard_close_keeps_the_browser_open(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     dispatch_menu(cx, "Echo", "Check for Updates…");

@@ -151,32 +151,50 @@ pub(crate) fn banner_visible(cx: &App) -> bool {
     cx.try_global::<Updates>()
         .is_some_and(|s| matches!(s.status, Status::Ready(_) | Status::Downloads))
 }
-pub(crate) fn banner(cx: &App) -> gpui::AnyElement {
-    let text = label(cx);
-    let visible = cx
-        .try_global::<Updates>()
-        .is_some_and(|s| matches!(s.status, Status::Ready(_) | Status::Downloads));
-    div()
-        .when(visible, |d| {
-            d.child(
-                div()
-                    .id("update-banner")
-                    .debug_selector(|| "update-banner".into())
-                    .mx(px(8.))
-                    .mb(px(6.))
-                    .px(px(10.))
-                    .py(px(8.))
-                    .rounded(px(8.))
-                    .bg(rgb(0xc9e4ff))
-                    .text_color(rgb(0x183958))
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(0xb9dafb)))
-                    .on_click(|_, _, cx| restart(cx))
-                    .child(text),
-            )
-        })
-        .into_any_element()
+impl crate::window::BrowserWindow {
+    /// Arc's sidebar update card: a title band, the Automatic Updates check
+    /// box, and a Restart and Update button painted in the Space's colour.
+    pub(crate) fn render_update_card(&self, cx: &mut gpui::Context<Self>) -> gpui::AnyElement {
+        use gpui::{hsla, linear_color_stop, linear_gradient};
+        let text = label(cx);
+        let hue = self.accent();
+        let automatic = self.profile.handle.read_settings(|b| b.settings.enabled(browser_core::settings::Toggle::AutomaticUpdates));
+        let base = hsla(hue, 0.55, 0.42, 1.);
+        let glow = hsla((hue + 0.06).fract(), 0.85, 0.62, 1.);
+        let ink = hsla(0., 0., 0., 0.55);
+        let check = div().size(px(18.)).flex_none().flex().items_center().justify_center()
+            .rounded(px(4.)).border_1().border_color(hsla(0., 0., 0., 0.45))
+            .when(automatic, |d| d.child(crate::icons::control_sized(crate::icons::Icon::Check, 13.)));
+        div()
+            .debug_selector(|| "update-card".into())
+            .mx(px(8.)).mb(px(8.)).rounded(px(14.)).overflow_hidden()
+            .bg(hsla(0.69, 0.3, 0.96, 0.96)).shadow_sm()
+            .child(div().h(px(32.)).flex().items_center().justify_center()
+                .bg(hsla(0.69, 0.06, 0.88, 1.)).text_size(px(13.)).text_color(hsla(0., 0., 0., 0.9))
+                .child("New Echo Version Available"))
+            .child(div().id("update-automatic").debug_selector(|| "update-automatic".into())
+                .h(px(34.)).flex().items_center().justify_center().gap(px(10.)).cursor_pointer()
+                .text_size(px(13.)).text_color(ink).child(check).child("Automatic Updates")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.edit_profile(|b| {
+                        let on = b.settings.enabled(browser_core::settings::Toggle::AutomaticUpdates);
+                        b.settings.set_enabled(browser_core::settings::Toggle::AutomaticUpdates, !on);
+                    });
+                    cx.notify();
+                })))
+            .child(div().px(px(8.)).pb(px(8.)).child(div()
+                .id("update-banner").debug_selector(|| "update-banner".into())
+                .relative().h(px(28.)).rounded(px(7.)).overflow_hidden().cursor_pointer()
+                .flex()
+                // Two mirrored ramps give Arc's bright centre glow.
+                .child(div().flex_1().h_full().bg(linear_gradient(90., linear_color_stop(base, 0.), linear_color_stop(glow, 1.))))
+                .child(div().flex_1().h_full().bg(linear_gradient(90., linear_color_stop(glow, 0.), linear_color_stop(base, 1.))))
+                .child(div().absolute().inset_0().flex().items_center().justify_center()
+                    .text_size(px(13.)).text_color(gpui::white()).child(text))
+                .hover(|s| s.opacity(0.92))
+                .on_click(|_, _, cx| restart(cx))))
+            .into_any_element()
+    }
 }
 pub(crate) struct UpdateWindow {
     focus: gpui::FocusHandle,

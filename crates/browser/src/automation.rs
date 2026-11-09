@@ -743,6 +743,14 @@ pub fn start(script: String, mut view: WeakEntity<BrowserWindow>, ns_view: *mut 
                 "quit" => {
                     let _ = cx.update(|cx| crate::quit::request(cx));
                 }
+                // Shows the sidebar update card without a real package; its
+                // button still refuses to restart, as nothing is verified.
+                "update-ready" => {
+                    let _ = cx.update(|cx| {
+                        cx.global_mut::<crate::updates::Updates>().status = crate::updates::Status::Ready("0.0.0".into());
+                        cx.refresh_windows();
+                    });
+                }
                 // The Boost editor is its own window, out of reach of native
                 // input aimed at the browser window; these drive it directly.
                 "boost-code" | "boost-type" | "boost-scroll" | "boost-press" | "boost-state" => {
