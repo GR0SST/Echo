@@ -840,6 +840,7 @@ pub struct BrowserWindow {
     pub(crate) passwords: crate::password_flow::PasswordFlow,
     pub(crate) password_manager: crate::password_manager::State,
     pub(crate) browsing_data: crate::browsing_data::State,
+    pub(crate) payments: crate::payments_page::State,
     pub(crate) user_profile_dialog: Option<crate::user_profiles::ProfileDialogHost>,
     pub(crate) setup: Option<crate::setup::SetupHost>,
     pub(crate) tab_rename: Option<crate::inline_rename::TabRename>,
@@ -1035,6 +1036,9 @@ impl BrowserWindow {
                         if let Err(error) = crate::password_store::Vault::open(&root, &key).and_then(|vault| vault.destroy_retired()) {
                             eprintln!("Retired password vault cleanup deferred: {error}");
                         }
+                        if let Err(error) = crate::payment_store::Vault::open(&root, &key).and_then(|vault| vault.destroy_retired()) {
+                            eprintln!("Retired payment methods cleanup deferred: {error}");
+                        }
                         if let Err(error) = crate::import_credentials::reclaim_retired_legacy(&root, &key) {
                             eprintln!("Retired compatibility credential cleanup deferred: {error}");
                         }
@@ -1226,6 +1230,7 @@ impl BrowserWindow {
             passwords: Default::default(),
             password_manager: crate::password_manager::State::new(cx),
             browsing_data: crate::browsing_data::State::new(cx),
+            payments: crate::payments_page::State::new(cx),
             user_profile_dialog: None,
             setup: None,
             tab_rename: None,
@@ -3837,7 +3842,7 @@ impl BrowserWindow {
     }
     fn render_favicon_styled(&self, tab: &Tab, profile: browser_core::UserProfileId, dark: bool, media: bool) -> AnyElement {
         if let Some(icon) = &tab.custom_icon { return crate::icons::glyph(icon); }
-        if crate::search_settings::is_search_settings_url(&tab.url) || crate::browsing_data::is_url(&tab.url) {
+        if crate::search_settings::is_search_settings_url(&tab.url) || crate::browsing_data::is_url(&tab.url) || crate::payments_page::is_url(&tab.url) {
             return div().debug_selector(|| format!("settings-page-icon-{}", tab.id.get()))
                 .size(px(18.)).flex_none().flex().items_center().justify_center()
                 .text_color(gpui::rgb(0x1c73e8)).child(crate::icons::ionicon("settings-sharp", 14., 1.)).into_any_element();
@@ -4555,6 +4560,7 @@ impl BrowserWindow {
         if self.search_settings_owner().is_some() { return Some(self.render_search_settings(window, cx).into_any_element()); }
         if self.password_manager_is_open() { return Some(self.render_password_manager(window, cx).into_any_element()); }
         if self.browsing_data_is_open() { return Some(self.render_browsing_data(cx).into_any_element()); }
+        if self.payments_owner().is_some() { return Some(self.render_payments(window, cx)); }
         if self.site_settings_is_open() { return Some(self.render_site_settings_page(cx).into_any_element()); }
         if self.notifications_page_is_open() { return Some(self.render_notifications_page(cx)); }
         if let Some(section) = self.simple_settings_section() { return Some(self.render_simple_settings(section, cx).into_any_element()); }
@@ -5307,6 +5313,7 @@ impl Render for BrowserWindow {
         self.sync_search_settings();
         self.sync_password_manager(cx);
         self.sync_browsing_data(window,cx);
+        self.sync_payments(cx);
         self.start_max_title_jobs(cx);
         self.sync_site_settings(window,cx);
         self.sync_notifications_page(cx);

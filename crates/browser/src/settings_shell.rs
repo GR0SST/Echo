@@ -83,7 +83,7 @@ impl Section {
         }
         Some(match url.path() {
             "" | "/" | "/people" => Section::You,
-            "/autofill" => Section::Autofill,
+            "/autofill" | "/payments" => Section::Autofill,
             "/privacy" | "/clearBrowserData" | "/content" => Section::Privacy,
             path if path.starts_with("/content/") => Section::Privacy,
             "/search" | "/searchEngines" => Section::SearchEngine,
@@ -97,7 +97,7 @@ impl Section {
     fn simple(url: &str) -> Option<Section> {
         let section = Section::of(url)?;
         let path = url::Url::parse(url).ok()?.path().to_owned();
-        let own_page = matches!(path.as_str(), "/privacy" | "/clearBrowserData" | "/searchEngines") || path.starts_with("/content");
+        let own_page = matches!(path.as_str(), "/privacy" | "/clearBrowserData" | "/searchEngines" | "/payments") || path.starts_with("/content");
         (!own_page).then_some(section)
     }
 }
@@ -106,6 +106,7 @@ impl Section {
 const INDEX: &[(Section, &str, &str)] = &[
     (Section::You, "Profile", "Your local profile name and picture"),
     (Section::Autofill, "Password Manager", "Saved passwords and passkeys"),
+    (Section::Autofill, "Payment methods", "Saved cards and payment preferences"),
     (Section::Privacy, "Delete browsing data", "Delete history, cookies, cache, and more"),
     (Section::Privacy, "Site settings", "Controls what information sites can use and show"),
     (Section::Privacy, "Cookies", "Clear cookies and site data"),
@@ -320,6 +321,13 @@ impl BrowserWindow {
                     .cursor_pointer()
                     .child(icons::ionicon("chevron-forward-outline", 16., 1.))
                     .on_click(cx.listener(|this, _, _, cx| this.open_settings_url(crate::password_manager::URL, cx))),
+            ).child(
+                row(1, "Payment methods", None)
+                    .id("settings-payment-methods")
+                    .debug_selector(|| "settings-payment-methods".into())
+                    .cursor_pointer()
+                    .child(icons::ionicon("chevron-forward-outline", 16., 1.))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_settings_url(crate::payments_page::URL, cx))),
             )),
             Section::SearchEngine => {
                 let engine = self.browser.active_user_profile().settings.search.default_name().to_owned();
@@ -453,7 +461,7 @@ fn row_with(index: usize, leading: Option<AnyElement>, title: impl Into<gpui::Sh
         )
 }
 
-fn switch(on: bool) -> gpui::Div {
+pub(crate) fn switch(on: bool) -> gpui::Div {
     div()
         .w(px(36.))
         .h(px(20.))

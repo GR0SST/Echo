@@ -104,6 +104,8 @@ mod password_flow_tests;
 mod password_manager_tests;
 #[path="browsing_data_tests.rs"]
 mod browsing_data_tests;
+#[path = "payments_page_tests.rs"]
+mod payments_page_tests;
 #[path = "tab_switcher_tests.rs"]
 mod tab_switcher_tests;
 

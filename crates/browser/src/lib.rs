@@ -58,6 +58,8 @@ mod welcome;
 mod browser_registration;
 mod import_credentials;
 mod password_store;
+mod payment_store;
+mod payments_page;
 mod password_prompt;
 mod password_flow;
 mod password_accounts;
@@ -195,6 +197,7 @@ pub fn init(cx: &mut App) {
     password_prompt::bind_keys(cx);
     password_manager::bind_keys(cx);
     browsing_data::bind_keys(cx);
+    payments_page::bind_keys(cx);
     space_creation_view::bind_keys(cx);
     downloads_view::bind_keys(cx);
     shortcuts::init(cx);
