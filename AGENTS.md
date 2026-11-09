@@ -202,7 +202,9 @@ the owner asks. Published versions are immutable: never reuse a version.
 5. Publish to the static update host (artifacts first, manifest last):
    `scripts/publish-release.sh ~/Documents/Bot/echo-releases/stable`
    Then check `https://updates.echo-browser.app/manifest.json` returns 200.
-6. GitHub release with the DMG:
-   `gh release create vX.Y.Z target/dmg/Echo-X.Y.Z-aarch64.dmg -R GR0SST/Echo --title "Echo X.Y.Z" --notes "..."`
+6. GitHub release with the DMG, plus a copy named `Echo-aarch64.dmg`: the
+   landing page links to `releases/latest/download/Echo-aarch64.dmg`.
+   `cp target/dmg/Echo-X.Y.Z-aarch64.dmg target/dmg/Echo-aarch64.dmg`
+   `gh release create vX.Y.Z target/dmg/Echo-X.Y.Z-aarch64.dmg target/dmg/Echo-aarch64.dmg -R GR0SST/Echo --title "Echo X.Y.Z" --notes "..."`
 7. Verify: install from the DMG, open Echo, run “Check for Updates…” from
    the Command Bar; it must say Echo is up to date (or offer the new version).
