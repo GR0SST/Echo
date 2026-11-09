@@ -1240,3 +1240,16 @@ pub(crate) fn start_extension_window_drag(window: &mut gpui::Window, cx: &mut gp
     #[cfg(target_os = "macos")]
     let _ = window;
 }
+
+#[cfg(all(target_os = "macos", not(test)))]
+mod page_window_drag;
+/// Where a press may move the window ("Allow window dragging from the top
+/// of webpages"); the policy is `crate::page_window_drag`. AppKit performs
+/// it. Windows and Linux page surfaces are native child windows whose input
+/// does not pass through this host yet, so there it is a no-op.
+pub(crate) fn set_page_window_drag_regions(view: *mut c_void, regions: &[[f64; 4]]) {
+    #[cfg(all(target_os = "macos", not(test)))]
+    page_window_drag::set_regions(view, regions);
+    #[cfg(not(all(target_os = "macos", not(test))))]
+    let _ = (view, regions);
+}

@@ -13808,3 +13808,24 @@ fn easels_rename_from_their_title_and_open_from_library(cx: &mut TestAppContext)
     click(cx, "easel-library-card-1");
     assert_eq!(view.read_with(cx, |w, _| w.open_easel_id()), Some(first));
 }
+
+#[gpui::test]
+fn dragging_the_window_from_the_top_of_webpages_follows_the_live_setting(cx: &mut TestAppContext) {
+    use browser_core::settings::Toggle;
+    let (view, cx, fake) = open_pages(cx);
+    let published = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| view.read_with(cx, |w, _| w.page_window_drag.borrow().published().to_vec());
+    let frame = view.read_with(cx, |w, _| w.pages.as_ref().unwrap().borrow().surface_bounds()[0]);
+    assert!(frame.y < crate::page_window_drag::BAND_HEIGHT, "{frame:?}");
+    assert!(published(&view, cx).is_empty(), "off by default, as in Arc");
+    view.update(cx, |view, cx| { view.edit_browser(|browser| browser.settings.set_enabled(Toggle::DragWebpages, true)); cx.notify(); });
+    cx.run_until_parked();
+    let band = [frame.x, frame.y, frame.width, crate::page_window_drag::BAND_HEIGHT - frame.y];
+    assert_eq!(published(&view, cx), vec![band], "the existing tab gets the band without a restart");
+    fake.send(cx, Event::StatusChanged { view: page(1), text: "https://example.com/link".into() });
+    assert!(published(&view, cx).is_empty(), "a press on a link keeps the page's link drag");
+    fake.send(cx, Event::StatusChanged { view: page(1), text: String::new() });
+    assert_eq!(published(&view, cx), vec![band]);
+    view.update(cx, |view, cx| { view.edit_browser(|browser| browser.settings.set_enabled(Toggle::DragWebpages, false)); cx.notify(); });
+    cx.run_until_parked();
+    assert!(published(&view, cx).is_empty());
+}

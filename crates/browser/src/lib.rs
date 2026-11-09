@@ -93,6 +93,7 @@ mod folder_drag;
 mod inline_rename;
 mod inline_folder_rename;
 mod link_status;
+mod page_window_drag;
 mod page_zoom;
 mod navigation_history;
 mod page_loading;

@@ -915,6 +915,8 @@ pub struct BrowserWindow {
     pub(crate) native_view: Option<*mut c_void>,
     /// Native mouse tracking around the page, see `native::track_mouse_outside`.
     mouse_tracking: Rc<RefCell<MouseTracking>>,
+    /// "Allow window dragging from the top of webpages", see `page_window_drag`.
+    pub(crate) page_window_drag: Rc<RefCell<crate::page_window_drag::PageWindowDrag>>,
     pub pager: Pager,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) native_action_focus: FocusHandle,
@@ -1293,6 +1295,7 @@ impl BrowserWindow {
             main_window: window.window_handle(),
             native_view: crate::native::view_of(window),
             mouse_tracking: Rc::default(),
+            page_window_drag: Rc::default(),
             focus_handle: cx.focus_handle(),
             native_action_focus: cx.focus_handle(),
             print_generation: 0,
@@ -4573,9 +4576,16 @@ impl BrowserWindow {
         if self.page_fullscreen.is_some() { return None; }
         self.render_document_viewport_canvas()
     }
+    /// Arc offers the band only in browser windows, never over fullscreen pages.
+    fn page_window_drag_enabled(&self) -> bool {
+        self.page_fullscreen.is_none() && self.transient.is_none() && self.peek_owner.is_none()
+            && self.browser.settings.enabled(browser_core::settings::Toggle::DragWebpages)
+    }
     fn render_document_viewport_canvas(&self) -> Option<AnyElement> {
         let native_view = self.native_view;
         let mouse_tracking = self.mouse_tracking.clone();
+        let page_window_drag = self.page_window_drag.clone();
+        let drag_enabled = self.page_window_drag_enabled();
         self.pages.clone().and_then(|pages| {
                         let generation = pages.try_borrow().ok()?.viewport_generation();
                         // Reports the card's bounds so the native page view can sit on it.
@@ -4594,7 +4604,12 @@ impl BrowserWindow {
                                     Err(_) => None,
                                 };
                                 let tracking = mouse_tracking.clone();
+                                let page_window_drag = page_window_drag.clone();
                                 let update_tracking = move |surfaces: Vec<engine::Bounds>| {
+                                    page_window_drag.borrow_mut().update(native_view, |drag| {
+                                        drag.enabled = drag_enabled;
+                                        drag.pages = surfaces.iter().map(|rect| [rect.x, rect.y, rect.width, rect.height]).collect();
+                                    });
                                     if let Some(view) = native_view {
                                         let holes: Vec<_> = surfaces.into_iter().map(|rect| [rect.x, rect.y, rect.width, rect.height]).collect();
                                         let mut tracking = tracking.borrow_mut();

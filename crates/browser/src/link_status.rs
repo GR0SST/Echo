@@ -23,6 +23,9 @@ impl BrowserWindow {
             let pages = pages.borrow();
             pages.tab_for(view).filter(|tab| pages.is_visible(*tab))
         }) else { return; };
+        // A press on a link keeps the page's own link drag (Arc).
+        let link_hovered = !text.is_empty();
+        self.page_window_drag.borrow_mut().update(self.native_view, |drag| drag.link_hovered = link_hovered);
         if text.is_empty() {
             if self.link_status.as_ref().is_some_and(|status| status.tab == tab) { self.close_link_status(cx); }
             return;
