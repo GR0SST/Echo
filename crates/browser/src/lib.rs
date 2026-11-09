@@ -34,6 +34,7 @@ mod feedback;
 mod page_swipe;
 mod site_controls;
 mod site_settings_page;
+mod notifications_page;
 mod settings_shell;
 mod flags;
 mod boosts;
@@ -183,6 +184,7 @@ pub fn init(cx: &mut App) {
     navigation_history::bind_keys(cx);
     extensions::bind_keys(cx);
     site_settings_page::bind_keys(cx);
+    notifications_page::bind_keys(cx);
     boosts::bind_keys(cx);
     capture::bind_keys(cx);
     new_menu::bind_keys(cx);

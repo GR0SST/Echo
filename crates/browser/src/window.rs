@@ -883,6 +883,7 @@ pub struct BrowserWindow {
     pub(crate) navigation_history: crate::navigation_history::NavigationHistory,
     pub(crate) site_controls: Option<crate::site_controls::SiteControls>,
     pub(crate) site_settings_page: crate::site_settings_page::State,
+    pub(crate) notifications_page: crate::notifications_page::State,
     pub(crate) capture: Option<crate::capture::Capture>,
     pub(crate) site_controls_anchor: crate::site_controls::Anchor,
     pub(crate) new_menu: Option<crate::new_menu::NewMenu>,
@@ -1269,6 +1270,7 @@ impl BrowserWindow {
             navigation_history: Default::default(),
             site_controls: None,
             site_settings_page: Default::default(),
+            notifications_page: Default::default(),
             capture: None,
             site_controls_anchor: Default::default(),
             new_menu: None,
@@ -4554,6 +4556,7 @@ impl BrowserWindow {
         if self.password_manager_is_open() { return Some(self.render_password_manager(window, cx).into_any_element()); }
         if self.browsing_data_is_open() { return Some(self.render_browsing_data(cx).into_any_element()); }
         if self.site_settings_is_open() { return Some(self.render_site_settings_page(cx).into_any_element()); }
+        if self.notifications_page_is_open() { return Some(self.render_notifications_page(cx)); }
         if let Some(section) = self.simple_settings_section() { return Some(self.render_simple_settings(section, cx).into_any_element()); }
         if self.flags_is_open() { return Some(self.render_flags(cx)); }
         if let Some(easel) = self.render_easel(cx) { return Some(easel); }
@@ -5306,6 +5309,7 @@ impl Render for BrowserWindow {
         self.sync_browsing_data(window,cx);
         self.start_max_title_jobs(cx);
         self.sync_site_settings(window,cx);
+        self.sync_notifications_page(cx);
         if self.peek_owner.is_some() { return self.render_peek(window, cx); }
         self.sync_parked_peeks(window.viewport_size(), cx);
         self.sync_library_geometry(window.viewport_size(), cx);

@@ -802,6 +802,9 @@ impl SettingsWindow {
                             .when(label=="Privacy and Security",|row|row.debug_selector(||"settings-privacy".into()).cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{
                                 if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::browsing_data::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,false,cx);}
                             })))
+                            .when(label=="Notifications",|row|row.debug_selector(||"settings-notifications".into()).on_click(cx.listener(move|this,_,_,cx|{
+                                if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::notifications_page::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,cx);}
+                            })))
                             .when(label=="Clear Browsing Data",|row|row.debug_selector(||"settings-clear-browsing-data".into()).cursor_pointer().on_click(cx.listener(move|this,_,_,cx|{
                                 if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::browsing_data::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,true,cx);}
                             })))

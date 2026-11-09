@@ -386,6 +386,7 @@ struct FakeState {
     snapshots: Vec<engine::PageSnapshot>,
     site_infos: std::collections::HashMap<u64,engine::SiteInfo>,
     profile_settings: Rc<RefCell<std::collections::HashMap<(crate::pages::StorageSelection,String),Vec<engine::SiteSetting>>>>,
+    permission_exceptions: Rc<RefCell<std::collections::HashMap<crate::pages::StorageSelection,engine::PermissionExceptions>>>,
     permission_requests: std::collections::HashSet<(u64,engine::PermissionRequestId)>,
     script_calls: Vec<(ViewId,String)>,
     script_value: Option<String>,
@@ -463,6 +464,19 @@ impl WebEngine for FakeEngine {
     fn site_info(&self, view:ViewId)->Option<engine::SiteInfo>{self.0.borrow().site_infos.get(&raw(view)).cloned()}
     fn reset_translation_prompts(&mut self, storage: &crate::pages::StorageSelection) -> bool {
         self.call(Call::ResetTranslation(storage.clone()));true
+    }
+    fn permission_exceptions(&self,storage:&crate::pages::StorageSelection,_kind:engine::PermissionKind)->Option<engine::PermissionExceptions> {
+        Some(self.0.borrow().permission_exceptions.borrow().get(storage).cloned().unwrap_or(engine::PermissionExceptions{default:engine::PermissionValue::Ask,..Default::default()}))
+    }
+    fn set_default_permission(&mut self,storage:&crate::pages::StorageSelection,kind:engine::PermissionKind,value:engine::PermissionValue)->bool {
+        let current=self.permission_exceptions(storage,kind).unwrap();
+        self.0.borrow().permission_exceptions.borrow_mut().insert(storage.clone(),engine::PermissionExceptions{default:value,..current});true
+    }
+    fn set_permission_exception(&mut self,storage:&crate::pages::StorageSelection,origin:&str,kind:engine::PermissionKind,value:engine::PermissionValue)->bool {
+        let mut current=self.permission_exceptions(storage,kind).unwrap();
+        current.allowed.retain(|o|o!=origin);current.blocked.retain(|o|o!=origin);
+        match value{engine::PermissionValue::Allow=>current.allowed.push(origin.into()),engine::PermissionValue::Block=>current.blocked.push(origin.into()),_=>{}}
+        self.0.borrow().permission_exceptions.borrow_mut().insert(storage.clone(),current);true
     }
     fn profile_site_settings(&self,storage:&crate::pages::StorageSelection,origin:&str)->Option<Vec<engine::SiteSetting>> {
         self.0.borrow().profile_settings.borrow().get(&(storage.clone(),origin.into())).cloned()
@@ -12422,6 +12436,46 @@ fn native_pip_return_intent_precedes_the_renderer_exit_in_one_batch(cx:&mut Test
     cx.executor().advance_clock(Duration::from_millis(50));cx.run_until_parked();
     assert_eq!(view.read_with(cx,|w,_|w.browser.active_tab().unwrap().id),source);
     assert!(!fake.take_calls().iter().any(|call|matches!(call,Call::Navigate(..))));
+}
+
+#[gpui::test]
+fn settings_notifications_row_opens_a_working_notifications_page(cx: &mut TestAppContext) {
+    let (v, cx, fake) = open_pages(cx);
+    let profile = v.read_with(cx, |v, _| v.browser.active_user_profile_id());
+    let storage = crate::pages::StorageSelection::for_profile(profile);
+    let exceptions = || fake.0.borrow().permission_exceptions.borrow().get(&storage).cloned().unwrap_or_default();
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Profiles");
+    click(&mut settings, "settings-notifications");
+    cx.run_until_parked();
+    assert_eq!(active_url(&v, cx), Some(crate::notifications_page::url(profile)));
+    assert!(cx.debug_bounds("notifications-page").is_some());
+    click(cx, "notifications-block");
+    assert_eq!(exceptions().default, engine::PermissionValue::Block);
+    click(cx, "notifications-ask");
+    assert_eq!(exceptions().default, engine::PermissionValue::Ask);
+    click(cx, "notifications-add-allowed");
+    assert!(cx.debug_bounds("notifications-add-sheet").is_some());
+    cx.simulate_input("calendar.google.com");
+    click(cx, "notifications-add-confirm");
+    assert!(!v.read_with(cx, |v, _| v.notifications_add_open()));
+    assert_eq!(exceptions().allowed, ["https://calendar.google.com:443"]);
+    click(cx, "notifications-menu-https://calendar.google.com:443");
+    click(cx, "notifications-Block-https://calendar.google.com:443");
+    assert!(exceptions().allowed.is_empty());
+    assert_eq!(exceptions().blocked, ["https://calendar.google.com:443"]);
+    click(cx, "notifications-menu-https://calendar.google.com:443");
+    click(cx, "notifications-Remove-https://calendar.google.com:443");
+    assert!(exceptions().blocked.is_empty());
+    // An invalid site cannot be added; Escape closes the sheet.
+    click(cx, "notifications-add-blocked");
+    cx.simulate_input("not a site");
+    click(cx, "notifications-add-confirm");
+    assert!(v.read_with(cx, |v, _| v.notifications_add_open()), "an invalid site keeps the sheet open");
+    cx.simulate_keystrokes("escape");
+    assert!(!v.read_with(cx, |v, _| v.notifications_add_open()));
+    assert!(exceptions().blocked.is_empty());
 }
 
 #[gpui::test]

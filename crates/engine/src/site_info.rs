@@ -492,9 +492,83 @@ impl crate::StorageContext {
     }
 }
 
+/// A permission's profile-wide default and its per-site exceptions, as shown
+/// on a settings page such as Notifications.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PermissionExceptions {
+    pub default: PermissionValue,
+    /// Exact origins (`https://host:port`) allowed, in preference order.
+    pub allowed: Vec<String>,
+    pub blocked: Vec<String>,
+}
+impl Default for PermissionValue {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+/// Origin exceptions from a `profile.content_settings.exceptions.*` preference.
+/// Wildcard patterns are skipped: they cannot be edited as one site.
+pub(crate) fn parse_exceptions(exceptions: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+    let (mut allowed, mut blocked) = (Vec::new(), Vec::new());
+    let Some(entries) = exceptions.as_object() else {
+        return (allowed, blocked);
+    };
+    for (key, value) in entries {
+        let Some((primary, secondary)) = key.split_once(',') else { continue };
+        if secondary != "*" || primary.contains("[*.]") || web_origin(primary).is_none() {
+            continue;
+        }
+        match value.get("setting").and_then(|v| v.as_i64()) {
+            Some(1) => allowed.push(primary.to_owned()),
+            Some(2) => blocked.push(primary.to_owned()),
+            _ => {}
+        }
+    }
+    (allowed, blocked)
+}
+impl crate::StorageContext {
+    pub fn permission_exceptions(&self, kind: PermissionKind) -> Option<PermissionExceptions> {
+        if cef::currently_on(cef::ThreadId::UI) == 0 || !self.is_ready() {
+            return None;
+        }
+        let default = PermissionValue::from_cef(self.context.content_setting(None, None, kind.cef_type()));
+        let pref = CefString::from(format!("profile.content_settings.exceptions.{}", kind.preference_name()).as_str());
+        let (allowed, blocked) = self
+            .context
+            .preference(Some(&pref))
+            .and_then(|mut value| {
+                let json = CefString::from(&cef::write_json(Some(&mut value), cef::JsonWriterOptions::DEFAULT)).to_string();
+                serde_json::from_str::<serde_json::Value>(&json).ok()
+            })
+            .map(|value| parse_exceptions(&value))
+            .unwrap_or_default();
+        Some(PermissionExceptions { default, allowed, blocked })
+    }
+    /// The profile-wide default; `Ask` or `Block` for prompt-based permissions.
+    pub fn set_default_permission(&self, kind: PermissionKind, value: PermissionValue) -> bool {
+        if cef::currently_on(cef::ThreadId::UI) == 0 || !self.is_ready() || !matches!(value, PermissionValue::Ask | PermissionValue::Block | PermissionValue::Allow) || !kind.accepts(value) {
+            return false;
+        }
+        self.context.set_content_setting(None, None, kind.cef_type(), value.cef_value());
+        true
+    }
+}
+
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+    #[test]
+    fn exception_lists_keep_exact_origins_and_skip_wildcards() {
+        let (allowed, blocked) = parse_exceptions(&serde_json::json!({
+            "https://calendar.google.com:443,*": {"setting": 1},
+            "https://spam.example:443,*": {"setting": 2},
+            "https://[*.]wild.example,*": {"setting": 1},
+            "https://ask.example:443,*": {"setting": 3},
+            "broken": {"setting": 1}
+        }));
+        assert_eq!(allowed, ["https://calendar.google.com:443"]);
+        assert_eq!(blocked, ["https://spam.example:443"]);
+    }
     #[test]
     fn permission_choices_and_default_labels_do_not_guess_from_equal_values() {
         assert!(!PermissionKind::Javascript.accepts(PermissionValue::Ask));

@@ -84,6 +84,9 @@ pub trait WebEngine {
     fn reset_translation_prompts(&mut self, _storage: &StorageSelection) -> bool { false }
     fn profile_site_settings(&self, _storage: &StorageSelection, _origin: &str) -> Option<Vec<engine::SiteSetting>> { None }
     fn set_profile_site_setting(&mut self, _storage: &StorageSelection, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
+    fn permission_exceptions(&self, _storage: &StorageSelection, _kind: engine::PermissionKind) -> Option<engine::PermissionExceptions> { None }
+    fn set_default_permission(&mut self, _storage: &StorageSelection, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
+    fn set_permission_exception(&mut self, storage: &StorageSelection, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool { self.set_profile_site_setting(storage, origin, kind, value) }
 
     fn set_site_permission(&mut self, _view: ViewId, _origin: &str, _kind: engine::PermissionKind, _value: engine::PermissionValue) -> bool { false }
     fn clear_site_data(&mut self, _view: ViewId, _origin: &str, _kind: engine::ClearSiteData) -> bool { false }
@@ -305,6 +308,12 @@ impl WebEngine for Chromium {
     }
     fn set_profile_site_setting(&mut self, storage: &StorageSelection, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
         self.resolve_storage(storage).is_ok_and(|context|context.set_site_setting(origin,kind,value))
+    }
+    fn permission_exceptions(&self, storage: &StorageSelection, kind: engine::PermissionKind) -> Option<engine::PermissionExceptions> {
+        self.resolve_storage(storage).ok()?.permission_exceptions(kind)
+    }
+    fn set_default_permission(&mut self, storage: &StorageSelection, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
+        self.resolve_storage(storage).is_ok_and(|context|context.set_default_permission(kind,value))
     }
 
     fn set_site_permission(&mut self, view: ViewId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool { self.engine.set_site_permission(view, origin, kind, value) }
@@ -1198,6 +1207,16 @@ impl Pages {
     pub(crate) fn profile_site_settings(&self, profile: UserProfileId, private: bool, origin: &str) -> Option<Vec<engine::SiteSetting>> {
         let storage=if private {StorageSelection::Current} else {StorageSelection::for_profile(profile)};
         self.store.borrow().engine.profile_site_settings(&storage,origin)
+    }
+    pub(crate) fn permission_exceptions(&self, profile: UserProfileId, kind: engine::PermissionKind) -> Option<engine::PermissionExceptions> {
+        self.store.borrow().engine.permission_exceptions(&StorageSelection::for_profile(profile),kind)
+    }
+    pub(crate) fn set_default_permission(&mut self, profile: UserProfileId, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
+        self.store.borrow_mut().engine.set_default_permission(&StorageSelection::for_profile(profile),kind,value)
+    }
+    /// Allow/Block one origin, or `Default` to remove its exception.
+    pub(crate) fn set_permission_exception(&mut self, profile: UserProfileId, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
+        self.store.borrow_mut().engine.set_permission_exception(&StorageSelection::for_profile(profile),origin,kind,value)
     }
     pub(crate) fn set_profile_site_setting(&mut self, profile: UserProfileId, private: bool, origin: &str, kind: engine::PermissionKind, value: engine::PermissionValue) -> bool {
         let storage=if private {StorageSelection::Current} else {StorageSelection::for_profile(profile)};
