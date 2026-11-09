@@ -21,6 +21,7 @@ impl Colors {
                 0x3e3f41 => 0xe7e7e7,
                 0x3c3e3e => 0xe6e6e6,
                 0x34383c => 0xeef4fe,
+                0x2c374b => 0xe2ebfa,
                 0x393b3b => 0xe4e4e4,
                 0x393b3d => 0xececec,
                 0x484a4a => 0xe0e0e0,

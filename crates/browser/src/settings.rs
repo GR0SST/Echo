@@ -787,11 +787,11 @@ impl SettingsWindow {
             .child(
                 self.settings_group().py(px(3.)).children(
                     [
-                        ("Privacy and Security", Icon::Lock, 0x198deb),
-                        ("Passwords", Icon::SiteControls, 0x27b943),
-                        ("Credit Cards", Icon::Library, 0xe2bc13),
-                        ("Notifications", Icon::Info, 0xec8b25),
-                        ("Clear Browsing Data", Icon::Close, 0xf34747),
+                        ("Privacy and Security", "lock-closed", 0x198deb),
+                        ("Passwords", "key", 0x27b943),
+                        ("Credit Cards", "card", 0xe2bc13),
+                        ("Notifications", "notifications", 0xec8b25),
+                        ("Clear Browsing Data", "trash", 0xf34747),
                     ]
                     .into_iter()
                     .map(|(label, icon, color)| {
@@ -806,6 +806,12 @@ impl SettingsWindow {
                                 if this.selected_profile==password_owner && this.profile.read_settings(|b|b.user_profile(password_owner).is_some()) {crate::browsing_data::open_from_settings(this.profile.clone(),this.owner.clone(),password_owner,true,cx);}
                             })))
                             .min_h(px(34.))
+                            // Arc's hover: a blue-gray fill inset 5 px from the card edge.
+                            .mx(px(-4.))
+                            .px(px(4.))
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .hover(move |row| row.bg(colors.rgb(0x2c374b)))
                             .justify_start()
                             .gap(px(8.))
                             .child(
@@ -817,7 +823,7 @@ impl SettingsWindow {
                                     .items_center()
                                     .justify_center()
                                     .text_color(colors.rgb(0xffffff))
-                                    .child(icons::control(icon)),
+                                    .child(icons::ionicon(icon, 15., 1.)),
                             )
                             .child(div().flex_1().min_w_0().child(label))
                             .child(
