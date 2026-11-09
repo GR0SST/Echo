@@ -94,8 +94,59 @@ pub fn top_domain(prefix: &str) -> Option<(&'static str, &'static str)> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SiteSearch { Wikipedia, ChatGpt, Configured(u64) }
+pub enum SiteSearch { Wikipedia, ChatGpt, Configured(u64), Catalog(usize) }
+
+/// A site Arc can search without configuration: Tab after its name (or the
+/// first letters of it) scopes the Command Bar to the site's own search.
+pub struct CatalogSite { pub name: &'static str, pub domain: &'static str, pub template: &'static str, pub color: u32 }
+/// Arc's built-in site-search catalog, in Arc's order. Wikipedia stays a
+/// managed provider, so it is not repeated here.
+pub const SITE_CATALOG: &[CatalogSite] = &[
+    CatalogSite { name: "YouTube", domain: "youtube.com", template: "https://www.youtube.com/results?search_query=%s", color: 0xff0033 },
+    CatalogSite { name: "Google Drive", domain: "drive.google.com", template: "https://drive.google.com/drive/search?q=%s", color: 0x1fa463 },
+    CatalogSite { name: "Gmail", domain: "mail.google.com", template: "https://mail.google.com/mail/ca/u/0/#apps/%s", color: 0xea4335 },
+    CatalogSite { name: "Google Maps", domain: "maps.google.com", template: "https://www.google.com/maps/search/%s", color: 0x34a853 },
+    CatalogSite { name: "Google Calendar", domain: "calendar.google.com", template: "https://calendar.google.com/calendar/u/0/r/search?q=%s", color: 0x4285f4 },
+    CatalogSite { name: "Google Docs", domain: "docs.google.com", template: "https://docs.google.com/document/u/0/?q=%s", color: 0x4285f4 },
+    CatalogSite { name: "Dropbox", domain: "dropbox.com", template: "https://www.dropbox.com/search/personal?&query=%s", color: 0x0061fe },
+    CatalogSite { name: "Amazon", domain: "amazon.com", template: "https://www.amazon.com/s?k=%s", color: 0xff9900 },
+    CatalogSite { name: "GitHub", domain: "github.com", template: "https://github.com/search?q=%s", color: 0x24292f },
+    CatalogSite { name: "Figma", domain: "figma.com", template: "https://www.figma.com/files/search?q=%s", color: 0xa259ff },
+    CatalogSite { name: "X", domain: "x.com", template: "https://x.com/search?q=%s", color: 0x000000 },
+    CatalogSite { name: "Twitter", domain: "twitter.com", template: "https://twitter.com/search?q=%s", color: 0x1d9bf0 },
+    CatalogSite { name: "Reddit", domain: "reddit.com", template: "https://www.reddit.com/search/?q=%s", color: 0xff4500 },
+    CatalogSite { name: "SoundCloud", domain: "soundcloud.com", template: "https://soundcloud.com/search?q=%s", color: 0xff5500 },
+    CatalogSite { name: "Asana", domain: "asana.com", template: "https://app.asana.com/0/search?q=%s", color: 0xf06a6a },
+    CatalogSite { name: "LinkedIn", domain: "linkedin.com", template: "https://linkedin.com/search/results/all/?keywords=%s", color: 0x0a66c2 },
+    CatalogSite { name: "Apple Music", domain: "music.apple.com", template: "https://music.apple.com/us/search?term=%s", color: 0xfa243c },
+    CatalogSite { name: "Spotify", domain: "open.spotify.com", template: "https://open.spotify.com/search/%s", color: 0x1db954 },
+];
+/// ChatGPT's measured Arc pill and selection fill.
+pub const CHATGPT_COLOR: u32 = 0x64ab9c;
+/// Arc's pill for configured engines and sites without a catalog color.
+pub const SITE_SEARCH_COLOR: u32 = 0xffa000;
+
 impl SiteSearch {
+    /// The site whose name, domain or shortcut begins with what was typed
+    /// (two letters or more), so Tab can scope before the name is complete.
+    /// An exact keyword always wins over a prefix match.
+    pub fn for_prefix(typed: &str, preferences: &CommandBarSearchPreferences, chatgpt: bool) -> Option<Self> {
+        let typed = typed.trim();
+        if typed.chars().count() < 2 || typed.contains(char::is_whitespace) || typed.len() > 256 { return None; }
+        if let Some(site) = Self::for_profile(typed, preferences).filter(|s| chatgpt || *s != Self::ChatGpt) { return Some(site); }
+        let lower = typed.to_lowercase();
+        let starts = |candidate: &str| {
+            let candidate = candidate.to_lowercase();
+            candidate.starts_with(&lower) || candidate.strip_prefix("www.").is_some_and(|c| c.starts_with(&lower))
+        };
+        if chatgpt && starts("chatgpt") { return Some(Self::ChatGpt); }
+        if let Some(p) = preferences.providers.iter().find(|p| p.active && starts(&p.shortcut)) { return Some(Self::Configured(p.id)); }
+        SITE_CATALOG.iter().position(|site| starts(site.name) || starts(site.domain)).map(Self::Catalog)
+    }
+    /// The pill and selected-row fill while this scope is active.
+    pub fn color(self) -> u32 {
+        match self { Self::ChatGpt => CHATGPT_COLOR, Self::Catalog(index) => SITE_CATALOG.get(index).map_or(SITE_SEARCH_COLOR, |s| s.color), _ => SITE_SEARCH_COLOR }
+    }
     pub fn from_keyword(keyword: &str) -> Option<Self> {
         match keyword.trim().to_ascii_lowercase().as_str() {
             "wikipedia" | "wikipedia.org" | "www.wikipedia.org" => Some(Self::Wikipedia),
@@ -108,17 +159,23 @@ impl SiteSearch {
             match Self::from_keyword(keyword) {
                 Some(Self::Wikipedia) => preferences.provider(7).filter(|p| p.active && p.shortcut == "wikipedia").map(|p|Self::Configured(p.id)),
                 Some(Self::ChatGpt) => Some(Self::ChatGpt),
-                _ => None,
+                _ => {
+                    let keyword = keyword.trim().to_lowercase();
+                    let keyword = keyword.strip_prefix("www.").unwrap_or(&keyword);
+                    SITE_CATALOG.iter().position(|s| s.name.eq_ignore_ascii_case(keyword) || s.domain == keyword).map(Self::Catalog)
+                }
             }
         })
     }
     pub fn name(self, preferences: &CommandBarSearchPreferences) -> Option<&str> {
         match self { Self::Wikipedia => Some("Wikipedia"), Self::ChatGpt => Some("ChatGPT"),
+            Self::Catalog(index) => SITE_CATALOG.get(index).map(|s| s.name),
             Self::Configured(id) => preferences.provider(id).filter(|p|p.active).map(|p|p.name.as_str()) }
     }
     pub fn search(self, query: &str, preferences: &CommandBarSearchPreferences) -> Option<Resolved> {
         let url = match self {
             Self::Configured(id) => return preferences.provider(id)?.search(query),
+            Self::Catalog(index) => SITE_CATALOG.get(index)?.template.replace("%s", &encode_query(query)),
             Self::Wikipedia => format!("https://en.wikipedia.org/w/index.php?search={}", encode_query(query)),
             Self::ChatGpt => {
                 // Arc's native handoff opens this URL; the website prefills its
@@ -322,6 +379,20 @@ mod chatgpt_tests {
     #[test]
     fn chatgpt_handoff_matches_arc_and_keeps_the_whole_question_in_one_parameter() {
         assert_eq!(SiteSearch::from_keyword("ChatGPT"), Some(SiteSearch::ChatGpt));
+        let defaults = CommandBarSearchPreferences::default();
+        let youtube = SiteSearch::for_prefix("yo", &defaults, true).unwrap();
+        assert_eq!(youtube.name(&defaults), Some("YouTube"));
+        assert_eq!(youtube.color(), 0xff0033);
+        assert_eq!(youtube.search("lo fi beats", &defaults).unwrap().url(), "https://www.youtube.com/results?search_query=lo+fi+beats");
+        assert_eq!(SiteSearch::for_profile("youtube.com", &defaults), Some(youtube));
+        assert_eq!(SiteSearch::for_prefix("ch", &defaults, true), Some(SiteSearch::ChatGpt));
+        assert_eq!(SiteSearch::ChatGpt.color(), CHATGPT_COLOR);
+        assert_ne!(SiteSearch::for_prefix("ch", &defaults, false), Some(SiteSearch::ChatGpt));
+        assert_eq!(SiteSearch::for_prefix("go", &defaults, true).and_then(|s| s.name(&defaults)), Some("Google"));
+        assert_eq!(SiteSearch::for_prefix("gi", &defaults, true).and_then(|s| s.name(&defaults)), Some("GitHub"));
+        assert_eq!(SiteSearch::for_prefix("y", &defaults, true), None);
+        assert_eq!(SiteSearch::for_prefix("yo tube", &defaults, true), None);
+        assert_eq!(SiteSearch::for_prefix("zzqq", &defaults, true), None);
         let preferences=CommandBarSearchPreferences::default();
         assert_eq!(SiteSearch::ChatGpt.search("What is the Rust programming language?",&preferences).unwrap().url(), "https://chat.openai.com/?q=What%20is%20the%20Rust%20programming%20language?");
         let resolved = SiteSearch::ChatGpt.search("a&b=#c+%? 日本語",&preferences).unwrap();

@@ -74,9 +74,10 @@ impl BrowserWindow {
         let profile=self.browser.active_user_profile_id();
         let Some(bar) = &mut self.command_bar else { return false; };
         if !matches!(bar.target, Target::NewTab | Target::Tab(_)) || bar.site_search.is_some() { return false; }
-        let keyword=bar.input.read(cx).text();
-        let site=if chatgpt_enabled && keyword.trim().eq_ignore_ascii_case("chatgpt") {Some(SiteSearch::ChatGpt)}
-            else {SiteSearch::for_profile(keyword,preferences)};
+        // What was typed, not the selected inline domain completion: "yo"
+        // scopes to YouTube even while "youtube.com" is being suggested.
+        let input=bar.input.read(cx);
+        let site=SiteSearch::for_prefix(input.completion_prefix().unwrap_or(input.text()),preferences,chatgpt_enabled);
         let Some(site) = site else { return false; };
         if site == SiteSearch::ChatGpt && !chatgpt_enabled { return false; }
         bar.site_search = Some(site);

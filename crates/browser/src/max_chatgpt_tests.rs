@@ -179,3 +179,43 @@ fn chatgpt_ordinary_query_row_respects_feature_changes_and_does_not_replace_url_
     bar(&view, cx).simulate_keystrokes("escape");
     assert_eq!(active_url(&view, cx), before);
 }
+#[gpui::test]
+fn first_letters_offer_tab_site_search_without_arrow_keys(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |w, _| {
+        w.edit_profile(|b| {
+            b.settings
+                .max
+                .set_enabled(echo_ai::MaxFeature::ChatGptCommandBar, true)
+        })
+    });
+    let scope = |view: &Entity<BrowserWindow>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |w, _| w.command_bar.as_ref().unwrap().site_search)
+    };
+    // "ch" names ChatGPT: the hint shows at once and Tab scopes in green.
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("ch");
+    assert!(bar(&view, cx).debug_bounds("chatgpt-tab-hint").is_some());
+    bar(&view, cx).simulate_keystrokes("tab");
+    assert_eq!(scope(&view, cx), Some(browser_core::omnibox::SiteSearch::ChatGpt));
+    assert_eq!(scope(&view, cx).unwrap().color(), browser_core::omnibox::CHATGPT_COLOR);
+    bar(&view, cx).simulate_keystrokes("backspace");
+    assert_eq!(scope(&view, cx), None);
+    bar(&view, cx).simulate_keystrokes("escape");
+    // "yo" names YouTube, even while the address completion reads youtube.com.
+    cx.simulate_keystrokes("cmd-t");
+    bar(&view, cx).simulate_input("yo");
+    assert!(bar(&view, cx).debug_bounds("site-search-tab-hint").is_some());
+    bar(&view, cx).simulate_keystrokes("tab");
+    let site = scope(&view, cx).unwrap();
+    assert_eq!(view.read_with(cx, |w, _| site.name(&w.browser.active_user_profile().settings.search).map(str::to_owned)).as_deref(), Some("YouTube"));
+    assert_eq!(site.color(), 0xff0033);
+    assert_eq!(bar_text(&view, cx).as_deref(), Some(""));
+    assert!(bar(&view, cx).debug_bounds("site-search-pill").is_some());
+    bar(&view, cx).simulate_input("lofi beats");
+    bar(&view, cx).simulate_keystrokes("enter");
+    assert_eq!(
+        active_url(&view, cx).as_deref(),
+        Some("https://www.youtube.com/results?search_query=lofi+beats")
+    );
+}

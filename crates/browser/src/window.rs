@@ -4911,10 +4911,17 @@ impl BrowserWindow {
         let chatgpt_keyword = matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none()
             && self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar))
             && bar.query(cx).trim().eq_ignore_ascii_case("chatgpt");
-        let site_hint = (matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_keyword)
-            .then(|| omnibox::SiteSearch::for_profile(bar.input.read(cx).text(), &self.browser.active_user_profile().settings.search))
-            .flatten().and_then(|site| site.name(&self.browser.active_user_profile().settings.search));
-        let scope_color = if bar.site_search == Some(omnibox::SiteSearch::ChatGpt) { 0x64ab9c } else { 0xffa000 };
+        // Arc offers Tab as soon as the first letters name a site.
+        let tab_site = (matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && bar.navigation_query.is_none())
+            .then(|| {
+                let input = bar.input.read(cx);
+                omnibox::SiteSearch::for_prefix(input.completion_prefix().unwrap_or(input.text()), &self.browser.active_user_profile().settings.search,
+                    self.profile.handle.read_settings(|b| b.settings.max.enabled(echo_ai::MaxFeature::ChatGptCommandBar)))
+            }).flatten();
+        let chatgpt_hint = chatgpt_keyword || tab_site == Some(omnibox::SiteSearch::ChatGpt);
+        let site_hint = tab_site.filter(|site| *site != omnibox::SiteSearch::ChatGpt && !chatgpt_keyword)
+            .and_then(|site| site.name(&self.browser.active_user_profile().settings.search));
+        let scope_color = bar.site_search.map_or(omnibox::SITE_SEARCH_COLOR, omnibox::SiteSearch::color);
         let accent = self.accent();
         // Arc's split draft uses the ordinary window-wide Command Bar, even
         // when its empty pane is only 220 px wide.
@@ -5251,14 +5258,14 @@ impl BrowserWindow {
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .line_height(px(28.0))
                                 .child(bar.input.clone()))
-                            .when(chatgpt_keyword, |this| this.child(div().debug_selector(|| "chatgpt-tab-hint".into())
+                            .when(chatgpt_hint, |this| this.child(div().debug_selector(|| "chatgpt-tab-hint".into())
                                 .flex().items_center().gap(px(9.)).text_size(px(13.)).text_color(hsla(0.,0.,ink,0.4))
                                 .child("Ask ChatGPT").child(div().px(px(4.)).py(px(2.)).rounded(px(3.)).bg(hsla(0.,0.,ink,0.08)).child("Tab"))))
                             .when_some(site_hint, |this, name| this.child(div().debug_selector(|| "site-search-tab-hint".into())
                                 .flex().items_center().gap(px(9.)).text_size(px(13.)).text_color(hsla(0.,0.,ink,0.4))
                                 .child(format!("Search {name}"))
                                 .child(div().px(px(4.)).py(px(2.)).rounded(px(3.)).bg(hsla(0.,0.,ink,0.08)).child("Tab"))))
-                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_keyword && site_hint.is_none() && !bar.suggestions_privacy, |this| this.child(div()
+                            .when(matches!(bar.target, Target::NewTab | Target::Tab(_)) && bar.site_search.is_none() && !chatgpt_hint && site_hint.is_none() && !bar.suggestions_privacy, |this| this.child(div()
                                 .id("suggestions-info").debug_selector(|| "suggestions-info".into())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(bar) = &mut this.command_bar { bar.suggestions_privacy = !bar.suggestions_privacy; }
