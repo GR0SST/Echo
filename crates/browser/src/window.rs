@@ -4624,10 +4624,15 @@ impl BrowserWindow {
         })
     }
 
+    /// The Toolbar's address: the host, or the full URL when Advanced →
+    /// "Show full URL when Toolbar is enabled" is on.
+    pub(crate) fn toolbar_address_text(&self) -> String {
+        self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default()
+    }
     fn render_top_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.developer_mode_enabled() { return self.render_developer_toolbar(cx); }
         let state = self.browser.active_tab().and_then(|tab| self.pages.as_ref()?.try_borrow().ok().map(|pages| pages.state(tab.id))).unwrap_or_default();
-        let text = self.browser.active_tab().map(|tab| if self.browser.settings.enabled(browser_core::settings::Toggle::FullToolbarUrl) { tab.url.clone() } else { address_host(&tab.url) }).unwrap_or_default();
+        let text = self.toolbar_address_text();
         // The bar takes the page's top color, starting white and easing into it.
         // An Easel's bar shows the Space theme through it, as its page does.
         let (background, ink) = if self.easel_is_open() { let dark = self.theme_is_dark(); (crate::easel::veil(dark), if dark { 1. } else { 0. }) } else { toolbar_tint(state.top_color) };

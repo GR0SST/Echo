@@ -12477,6 +12477,24 @@ fn native_pip_return_intent_precedes_the_renderer_exit_in_one_batch(cx:&mut Test
 }
 
 #[gpui::test]
+fn advanced_full_url_toggle_switches_the_toolbar_address(cx: &mut TestAppContext) {
+    use browser_core::settings::Toggle;
+    let (view, cx) = open(cx);
+    view.update(cx, |v, cx| {
+        v.edit_browser(|b| { b.settings.set_enabled(Toggle::ShowToolbar, true); b.new_tab("https://news.example.com/a/b?c=1", std::time::SystemTime::now()); });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |v, _| v.toolbar_address_text()), "news.example.com");
+    cx.simulate_keystrokes("cmd-,");
+    let (_, mut settings) = settings_window(cx);
+    click(&mut settings, "settings-tab-Advanced");
+    click(&mut settings, "settings-toggle-FullToolbarUrl");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |v, _| v.toolbar_address_text()), "https://news.example.com/a/b?c=1");
+}
+
+#[gpui::test]
 fn settings_notifications_row_opens_a_working_notifications_page(cx: &mut TestAppContext) {
     let (v, cx, fake) = open_pages(cx);
     let profile = v.read_with(cx, |v, _| v.browser.active_user_profile_id());
