@@ -16,7 +16,8 @@ id=$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 8)
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=15)
 ssh "${ssh_opts[@]}" "$host" "umask 077; mkdir /srv/echo-updates/incoming/$id"
 # Staging is not in a web root. No --delete ever targets published files.
-rsync -rlt --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= --safe-links \
+# Finder litters opened folders with .DS_Store; the host rejects dotfiles.
+rsync -rlt --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= --safe-links --exclude=.DS_Store \
     -e 'ssh -o BatchMode=yes -o ConnectTimeout=15' \
     "$release_dir/" "$host:/srv/echo-updates/incoming/$id/"
 ssh "${ssh_opts[@]}" "$host" "/usr/local/libexec/echo-promote-release $channel $id $keep"
