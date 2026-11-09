@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.1.1"
 publish = false
 
 # GPUI's zed-async-tar still needs xattr 0.2. Preserve its API while using the

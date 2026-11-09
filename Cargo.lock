@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -834,7 +834,7 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bundle"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cef",
  "semver",
@@ -1369,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cssparser 0.36.0",
  "echo_ai",
@@ -2120,7 +2120,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "echo_ai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",
@@ -2140,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "echo_github"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "core",
  "echo_ai",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "echo_media"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "block2",
  "core",
@@ -2168,7 +2168,7 @@ dependencies = [
 
 [[package]]
 name = "echo_updater"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -2264,7 +2264,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "cef",
@@ -3673,7 +3673,7 @@ checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 
 [[package]]
 name = "importer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes",
  "cbc",
