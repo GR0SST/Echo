@@ -95,6 +95,22 @@ fn max_download_renames_completed_file_and_toast_undo_is_local(cx: &mut TestAppC
     assert_eq!(requests.0.lock().unwrap().len(), 1);
 }
 #[gpui::test]
+fn max_download_accepts_fenced_json_reply(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let requests = Arc::new(ProviderRequests::default());
+    cx.update(|_, cx| cx.set_global(crate::max::InferenceService(requests.clone())));
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("doc_8f3a2c91_final_v2.txt");
+    std::fs::write(&original, b"q3").unwrap();
+    record(&view, cx, original.clone());
+    cx.run_until_parked();
+    let reply = requests.0.lock().unwrap()[0].1.clone();
+    reply.complete(Ok("```json\n{\"stem\":\"Q3 Revenue Summary\"}\n```".into()));
+    cx.run_until_parked();
+    assert!(dir.path().join("Q3 Revenue Summary.txt").exists());
+    assert!(!original.exists());
+}
+#[gpui::test]
 fn max_download_late_hidden_record_and_disabled_feature_do_not_move_files(cx: &mut TestAppContext) {
     let (view, cx) = open(cx);
     let requests = Arc::new(ProviderRequests::default());

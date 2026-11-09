@@ -125,6 +125,10 @@ impl BrowserWindow {
                 let current = job.current(this, cx);
                 let snapshot = job.snapshot.clone();
                 this.max.instant = None;
+                match &answer {
+                    Ok(links) => eprintln!("[max] Instant Links: {} link(s){}", links.len(), if current { "" } else { ", discarded: the Space changed" }),
+                    Err(error) => eprintln!("[max] Instant Links failed: {error}"),
+                }
                 if current {
                     match answer {
                         Ok(links) => {

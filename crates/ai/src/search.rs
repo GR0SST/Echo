@@ -17,10 +17,12 @@ fn request(config: &ProviderConfig, query: &str) -> (&'static str, Value) {
             json!({"model":config.model,"max_tokens":2048,"system":instructions,"messages":[{"role":"user","content":query}],"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}],"tool_choice":{"type":"auto"}}),
         )
     } else {
-        (
-            "responses",
-            json!({"model":config.model,"store":false,"instructions":instructions,"input":query,"tools":[{"type":"web_search"}],"tool_choice":"required","max_tool_calls":1,"include":["web_search_call.action.sources"]}),
-        )
+        let mut body = json!({"model":config.model,"store":false,"stream":config.provider == Provider::OpenAi,"instructions":instructions,"input":[{"role":"user","content":query}],"tools":[{"type":"web_search"}],"tool_choice":"required","include":["web_search_call.action.sources"]});
+        // ChatGPT sign-in rejects max_tool_calls; API keys keep the one-search cap.
+        if config.authentication != crate::Authentication::ChatGpt {
+            body["max_tool_calls"] = json!(1);
+        }
+        ("responses", body)
     }
 }
 impl Client {
@@ -71,8 +73,43 @@ impl Client {
             http
         };
         let mut response = http.send_json(body).map_err(|_| AiError::Network)?;
-        status(response.status().as_u16())?;
+        let code = response.status().as_u16();
+        if !(200..300).contains(&code) {
+            // The provider's error message names the cause (unsupported tool or
+            // model, quota). It never contains the credential.
+            let detail = response.body_mut().with_config().limit(16 * 1024).read_to_string().unwrap_or_default();
+            eprintln!("[ai] web search: HTTP {code}: {}", detail.chars().take(600).collect::<String>());
+        }
+        status(code)?;
         cancel.check()?;
+        if config.provider == Provider::OpenAi {
+            // ChatGPT sign-in accepts only streamed responses; the final
+            // response.completed event carries the same object as a plain reply.
+            let mut reader = std::io::BufReader::new(response.body_mut().with_config().limit(4 * 1024 * 1024).reader());
+            // Streamed items; ChatGPT sign-in sends response.completed with an
+            // empty output and delivers each item only as output_item.done.
+            let mut items: Vec<Value> = Vec::new();
+            while let Some(data) = crate::sse::read_event(&mut reader, cancel)? {
+                let Ok(event) = serde_json::from_str::<Value>(&data) else { continue };
+                if event["type"] == "response.output_item.done" { items.push(event["item"].clone()); }
+                match event.get("type").and_then(Value::as_str) {
+                    Some("response.completed") => {
+                        let mut response = event["response"].clone();
+                        if response["output"].as_array().is_none_or(|output| output.is_empty()) {
+                            response["output"] = Value::Array(items);
+                        }
+                        return sources(config.provider, &response);
+                    }
+                    Some("response.incomplete") => return Err(AiError::Incomplete),
+                    Some("response.failed" | "error") => {
+                        eprintln!("[ai] web search: provider error: {}", event.get("response").map_or(&event, |r| &r["error"]));
+                        return Err(AiError::Provider);
+                    }
+                    _ => {}
+                }
+            }
+            return Err(AiError::Incomplete);
+        }
         let value: Value = response
             .body_mut()
             .with_config()
@@ -85,6 +122,7 @@ impl Client {
 }
 fn sources(provider: Provider, value: &Value) -> Result<Vec<WebLink>, AiError> {
     if value.get("error").is_some_and(|v| !v.is_null()) {
+        eprintln!("[ai] web search: provider error: {}", value["error"]);
         return Err(AiError::Provider);
     }
     let mut candidates = Vec::new();

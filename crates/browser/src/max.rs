@@ -46,6 +46,15 @@ impl Inference for Direct {
         })
     }
 }
+/// A model's JSON reply. Models sometimes wrap it in a Markdown code fence
+/// or add a sentence around it; take the outermost object.
+pub(crate) fn reply_json(text: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(text.trim()).ok().or_else(|| {
+        let start = text.find('{')?;
+        let end = text.rfind('}')?;
+        serde_json::from_str(text.get(start..=end)?).ok()
+    })
+}
 pub(crate) struct InferenceService(pub Arc<dyn Inference>);
 impl gpui::Global for InferenceService {}
 pub(crate) fn request(

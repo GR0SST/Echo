@@ -94,11 +94,11 @@ pub(crate) fn start(handle: ProfileHandle, id: CompletedDownloadId, cx: &mut App
             },Cancellation::default()))
         }).ok().flatten();
         let Some(worker)=worker else {return;};
-        let Ok(text)=worker.await else {return;};
-        let Ok(value)=serde_json::from_str::<serde_json::Value>(&text) else {return;};
+        let text=match worker.await { Ok(text)=>text, Err(error)=>{eprintln!("[max] Tidy Downloads failed: {error}");return;} };
+        let Some(value)=crate::max::reply_json(&text) else {eprintln!("[max] Tidy Downloads: unexpected reply: {}",text.chars().take(200).collect::<String>());return;};
         if value.as_object().is_none_or(|o|o.len()!=1) {return;}
         let Some(stem)=value["stem"].as_str() else {return;};
-        let Some(plan)=DownloadRenamePlan::new(record.clone(),stem) else {return;};
+        let Some(plan)=DownloadRenamePlan::new(record.clone(),stem) else {eprintln!("[max] Tidy Downloads: unusable name {stem:?}");return;};
         let Some(hold)=cx.update(|cx|valid(&handle,&record,&config).then(||lease(cx))).ok().flatten() else {return;};
         let mover=proof.clone();
         let moved=cx.background_executor().spawn(async move {mover.rename(&plan)}).await;
