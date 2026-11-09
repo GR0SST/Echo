@@ -30,7 +30,7 @@ for VERSION in 0.1.0 0.2.0; do
 done
 cargo run --locked -p echo_updater --bin echo-release -- sign "$WORK/keys/private" "$WORK/releases" stable "$PLATFORM" "$WORK/host/manifest.json"
 # Require actual deltas; both downloads and reconstructed full package are signed.
-find "$WORK/releases" -name '*-delta.nupkg' | rg -q .
+find "$WORK/releases" -name '*-delta.nupkg' | grep -q .
 # Pick an ephemeral port and keep one static server for the entire installation.
 cat > "$WORK/server.ts" <<'TS'
 import { join } from "node:path";
@@ -56,6 +56,6 @@ env HOME="$WORK/home" "$APP/Contents/MacOS/Echo" >"$WORK/client.log" 2>&1
 for _ in {1..60}; do [[ -f "$ECHO_E2E_RESULT" ]] && break; sleep 1; done
 [[ "$(cat "$ECHO_E2E_RESULT")" == 0.2.0 ]]
 [[ ! -e "$WORK/home/Library/Caches/velopack/Echo/packages/.betaId" ]]
-rg -- '-delta.nupkg' "$WORK/http.log"
-! rg -i '\?(.*(id|user)|.*version)|cookie:' "$WORK/http.log"
+grep -e '-delta.nupkg' "$WORK/http.log"
+! grep -iE '\?(.*(id|user)|.*version)|cookie:' "$WORK/http.log"
 echo "PASS: authenticated old build upgraded by delta and restarted as 0.2.0."
